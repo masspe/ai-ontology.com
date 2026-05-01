@@ -1,0 +1,13 @@
+[package]
+name = "ontology-index"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ontology-graph = { workspace = true }
+serde = { workspace = true }
+parking_lot = { workspace = true }
+ahash = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
