@@ -1,0 +1,140 @@
+use ontology_graph::{ConceptId, Subgraph};
+use ontology_index::{HybridIndex, RetrievalRequest, ScoredConcept};
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use tracing::debug;
+
+use crate::model::{LanguageModel, LlmRequest, LlmResponse, Message};
+use crate::prompt::PromptBuilder;
+
+/// End-to-end answer returned by the pipeline. Includes the retrieved
+/// context so callers can render citations / "show your work" UIs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RagAnswer {
+    pub query: String,
+    pub answer: String,
+    pub retrieved: Vec<ScoredConcept>,
+    pub subgraph: Subgraph,
+    pub model: String,
+    pub stop_reason: Option<String>,
+}
+
+impl RagAnswer {
+    pub fn citations(&self) -> Vec<ConceptId> {
+        self.retrieved.iter().map(|s| s.id).collect()
+    }
+}
+
+/// Wires together a [`HybridIndex`] and a [`LanguageModel`].
+///
+/// The pipeline holds `Arc`s so it is cheap to clone and share across
+/// async tasks. Both stages are fully `Send + Sync`, so multiple concurrent
+/// requests can be handled by a single pipeline instance.
+#[derive(Clone)]
+pub struct RagPipeline {
+    pub index: Arc<HybridIndex>,
+    pub llm: Arc<dyn LanguageModel>,
+    pub max_tokens: u32,
+    pub temperature: f32,
+    pub max_context_chars: usize,
+}
+
+impl RagPipeline {
+    pub fn new(index: Arc<HybridIndex>, llm: Arc<dyn LanguageModel>) -> Self {
+        Self {
+            index,
+            llm,
+            max_tokens: 1024,
+            temperature: 0.0,
+            max_context_chars: 6000,
+        }
+    }
+
+    pub async fn answer(&self, query: impl Into<String>) -> Result<RagAnswer, crate::model::LlmError> {
+        let query = query.into();
+        let req = RetrievalRequest { query: query.clone(), ..Default::default() };
+        self.answer_with(req).await
+    }
+
+    pub async fn answer_with(
+        &self,
+        req: RetrievalRequest,
+    ) -> Result<RagAnswer, crate::model::LlmError> {
+        let (scored, subgraph) = self.index.retrieve(&req);
+        debug!(seeds = scored.len(), context_concepts = subgraph.concepts.len(), "retrieved");
+
+        let onto = self.index.graph().ontology();
+        let context = PromptBuilder::new(&onto)
+            .with_max_chars(self.max_context_chars)
+            .render(&scored, &subgraph);
+
+        let user_message = format!(
+            "Use the context below to answer the question.\n\n\
+             ---CONTEXT---\n{context}\n---END CONTEXT---\n\n\
+             Question: {q}",
+            context = context,
+            q = req.query,
+        );
+
+        let llm_req = LlmRequest {
+            system: Some(PromptBuilder::system_message().to_string()),
+            messages: vec![Message::user(user_message)],
+            max_tokens: self.max_tokens,
+            temperature: self.temperature,
+        };
+
+        let LlmResponse { content, model, stop_reason } = self.llm.generate(&llm_req).await?;
+
+        Ok(RagAnswer {
+            query: req.query,
+            answer: content,
+            retrieved: scored,
+            subgraph,
+            model,
+            stop_reason,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::EchoModel;
+    use ontology_graph::{Concept, ConceptType, Ontology, OntologyGraph, Relation, RelationType};
+
+    fn ont() -> Ontology {
+        let mut o = Ontology::new();
+        o.add_concept_type(ConceptType {
+            name: "Topic".into(), parent: None, properties: None,
+            description: "subject of study".into(),
+        });
+        o.add_relation_type(RelationType {
+            name: "related_to".into(), domain: "Topic".into(), range: "Topic".into(),
+            cardinality: Default::default(), symmetric: true, description: "".into(),
+        }).unwrap();
+        o
+    }
+
+    #[tokio::test]
+    async fn pipeline_runs_end_to_end() {
+        let g = OntologyGraph::with_arc(ont());
+        let a = g.upsert_concept(
+            Concept::new(Default::default(), "Topic", "Vector Search")
+                .with_description("approximate nearest-neighbor retrieval over embeddings"),
+        ).unwrap();
+        let b = g.upsert_concept(
+            Concept::new(Default::default(), "Topic", "RAG")
+                .with_description("retrieval augmented generation grounds LLMs"),
+        ).unwrap();
+        g.add_relation(Relation::new(Default::default(), "related_to", a, b)).unwrap();
+
+        let idx = Arc::new(HybridIndex::with_default_embedder(g.clone()));
+        idx.reindex_all();
+
+        let pipe = RagPipeline::new(idx, Arc::new(EchoModel));
+        let ans = pipe.answer("explain RAG and vector search").await.unwrap();
+        assert!(!ans.retrieved.is_empty());
+        assert!(ans.answer.starts_with("[echo]"));
+        assert!(!ans.subgraph.concepts.is_empty());
+    }
+}

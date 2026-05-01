@@ -1,0 +1,9 @@
+# Toy knowledge graph: research papers on retrieval techniques.
+Person:Alice         authored    Paper:RAG-Survey
+Person:Bob           authored    Paper:Vector-Indexing
+Person:Carol         authored    Paper:Knowledge-Graphs
+Paper:RAG-Survey         covers  Topic:Retrieval-Augmented-Generation
+Paper:Vector-Indexing    covers  Topic:Approximate-Nearest-Neighbors
+Paper:Knowledge-Graphs   covers  Topic:Knowledge-Graphs
+Topic:Retrieval-Augmented-Generation  related_to  Topic:Approximate-Nearest-Neighbors
+Topic:Retrieval-Augmented-Generation  related_to  Topic:Knowledge-Graphs
