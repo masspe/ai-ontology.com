@@ -162,6 +162,55 @@ impl OntologyGraph {
             .ok_or(GraphError::UnknownRelation(id))
     }
 
+    /// Remove a concept and every relation incident to it. Returns the
+    /// list of relation ids that were removed alongside the concept so
+    /// callers (e.g. WAL) can journal the cascade.
+    pub fn remove_concept(&self, id: ConceptId) -> GraphResult<Vec<RelationId>> {
+        let concept = self
+            .concepts
+            .remove(&id)
+            .ok_or(GraphError::UnknownConcept(id))?
+            .1;
+        let key = (concept.concept_type.clone(), concept.name.to_lowercase());
+        self.name_index.remove(&key);
+
+        let mut removed: Vec<RelationId> = Vec::new();
+        if let Some((_, adj)) = self.out_edges.remove(&id) {
+            for rid in adj { removed.push(rid); }
+        }
+        if let Some((_, adj)) = self.in_edges.remove(&id) {
+            for rid in adj { removed.push(rid); }
+        }
+        removed.sort();
+        removed.dedup();
+
+        for rid in &removed {
+            if let Some((_, rel)) = self.relations.remove(rid) {
+                // Scrub the surviving endpoint's adjacency list.
+                let other = if rel.source == id { rel.target } else { rel.source };
+                if let Some(mut adj) = self.out_edges.get_mut(&other) {
+                    adj.retain(|x| x != rid);
+                }
+                if let Some(mut adj) = self.in_edges.get_mut(&other) {
+                    adj.retain(|x| x != rid);
+                }
+            }
+        }
+        Ok(removed)
+    }
+
+    /// Remove a single relation by id. No-op if already gone.
+    pub fn remove_relation(&self, id: RelationId) -> GraphResult<()> {
+        let rel = self.relations.remove(&id).ok_or(GraphError::UnknownRelation(id))?.1;
+        if let Some(mut adj) = self.out_edges.get_mut(&rel.source) {
+            adj.retain(|x| *x != id);
+        }
+        if let Some(mut adj) = self.in_edges.get_mut(&rel.target) {
+            adj.retain(|x| *x != id);
+        }
+        Ok(())
+    }
+
     pub fn outgoing(&self, id: ConceptId) -> Vec<Relation> {
         self.out_edges
             .get(&id)
@@ -220,6 +269,23 @@ mod tests {
         g.add_relation(Relation::new(Default::default(), "authored", alice, paper)).unwrap();
         assert_eq!(g.outgoing(alice).len(), 1);
         assert_eq!(g.incoming(paper).len(), 1);
+    }
+
+    #[test]
+    fn remove_concept_cascades_relations() {
+        let g = OntologyGraph::new(toy_ontology());
+        let alice = g.upsert_concept(Concept::new(Default::default(), "Person", "Alice")).unwrap();
+        let p1 = g.upsert_concept(Concept::new(Default::default(), "Paper", "P1")).unwrap();
+        let p2 = g.upsert_concept(Concept::new(Default::default(), "Paper", "P2")).unwrap();
+        g.add_relation(Relation::new(Default::default(), "authored", alice, p1)).unwrap();
+        g.add_relation(Relation::new(Default::default(), "authored", alice, p2)).unwrap();
+        assert_eq!(g.relation_count(), 2);
+
+        let removed = g.remove_concept(alice).unwrap();
+        assert_eq!(removed.len(), 2);
+        assert_eq!(g.relation_count(), 0);
+        assert_eq!(g.outgoing(p1).len(), 0);
+        assert_eq!(g.incoming(p1).len(), 0);
     }
 
     #[test]
