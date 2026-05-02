@@ -22,7 +22,7 @@ use axum::{
     routing::{delete, get, post},
     Json, Router,
 };
-use ontology_graph::{Concept, ConceptId, OntologyGraph, Relation, RelationId};
+use ontology_graph::{Concept, ConceptId, OntologyGraph, Path as GraphPath, Relation, RelationId};
 use ontology_index::{HybridIndex, RetrievalRequest, ScoredConcept};
 use ontology_rag::{RagAnswer, RagPipeline};
 use ontology_storage::{LogRecord, Store};
@@ -49,7 +49,50 @@ pub fn build_router(state: AppState) -> Router {
         .route("/relations", post(create_relation))
         .route("/retrieve", post(retrieve))
         .route("/ask", post(ask))
+        .route("/path", post(path))
+        .route("/compact", post(compact))
         .with_state(state)
+}
+
+#[derive(Deserialize)]
+struct PathRequest {
+    from_type: String,
+    from_name: String,
+    to_type: String,
+    to_name: String,
+    #[serde(default = "default_path_depth")]
+    max_depth: u32,
+}
+
+fn default_path_depth() -> u32 { 6 }
+
+#[derive(Serialize)]
+struct PathResponse {
+    found: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path: Option<GraphPath>,
+}
+
+async fn path(
+    State(s): State<AppState>,
+    Json(req): Json<PathRequest>,
+) -> Result<Json<PathResponse>, ApiError> {
+    let src = s.graph.find_by_name(&req.from_type, &req.from_name)
+        .ok_or_else(|| ApiError::BadRequest(format!(
+            "no concept ({}) {}", req.from_type, req.from_name,
+        )))?;
+    let tgt = s.graph.find_by_name(&req.to_type, &req.to_name)
+        .ok_or_else(|| ApiError::BadRequest(format!(
+            "no concept ({}) {}", req.to_type, req.to_name,
+        )))?;
+    let p = s.graph.shortest_path(src, tgt, req.max_depth)?;
+    Ok(Json(PathResponse { found: p.is_some(), path: p }))
+}
+
+async fn compact(State(s): State<AppState>) -> Result<StatusCode, ApiError> {
+    s.store.compact(&s.graph).await
+        .map_err(|e| ApiError::Store(e.to_string()))?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 // ---------------------------------------------------------------------------

@@ -865,6 +865,7 @@ dependencies = [
 name = "ontology-storage"
 version = "0.1.0"
 dependencies = [
+ "ahash",
  "async-trait",
  "bincode",
  "ontology-graph",

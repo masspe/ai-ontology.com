@@ -40,6 +40,14 @@ pub trait Store: Send + Sync + 'static {
 
     /// Optional snapshot of the full graph for fast cold start.
     async fn snapshot(&self, _graph: &Arc<OntologyGraph>) -> StoreResult<()> { Ok(()) }
+
+    /// Atomically take a snapshot and truncate the WAL. After a successful
+    /// compact, restoring from this store applies only the new snapshot —
+    /// the log is empty. Implementations that don't have a separate WAL can
+    /// fall back to `snapshot`.
+    async fn compact(&self, graph: &Arc<OntologyGraph>) -> StoreResult<()> {
+        self.snapshot(graph).await
+    }
 }
 
 /// Convenience helpers used by callers that hold a graph + store together.

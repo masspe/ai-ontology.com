@@ -64,6 +64,11 @@ DATA=./data
 ANTHROPIC_API_KEY=... ./target/release/ontology --data $DATA \
     ask --anthropic "Who wrote about RAG?"
 ./target/release/ontology --data $DATA snapshot
+./target/release/ontology --data $DATA compact          # snapshot + truncate WAL
+./target/release/ontology --data $DATA path \
+    --from-type Person --from-name Alice \
+    --to-type   Person --to-name   Bob
+./target/release/ontology --data $DATA export out.jsonl  # round-trips through `ingest`
 
 # HTTP API
 ./target/release/ontology --data $DATA serve --bind 127.0.0.1:8080 &

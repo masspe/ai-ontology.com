@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use ontology_graph::{Ontology, OntologyGraph};
 use ontology_index::{HybridIndex, RetrievalRequest};
-use ontology_io::{ingest_records, CsvSource, JsonlSource, TripleSource};
+use ontology_io::{export_graph, ingest_records, CsvSource, JsonlSink, JsonlSource, TripleSource};
 use ontology_server::{build_router, AppState};
 use ontology_rag::{AnthropicModel, EchoModel, RagPipeline};
 use ontology_storage::{FileStore, MemoryStore, Store};
@@ -59,6 +59,25 @@ enum Cmd {
     },
     /// Take a durable snapshot of the current graph (only with --data).
     Snapshot,
+    /// Snapshot then truncate the WAL. Bounds disk usage on busy stores.
+    Compact,
+    /// Export the entire graph as a JSONL stream of tagged records.
+    Export {
+        path: PathBuf,
+    },
+    /// Find a shortest path between two named concepts.
+    Path {
+        #[arg(long)]
+        from_type: String,
+        #[arg(long)]
+        from_name: String,
+        #[arg(long)]
+        to_type: String,
+        #[arg(long)]
+        to_name: String,
+        #[arg(long, default_value_t = 6)]
+        max_depth: u32,
+    },
     /// Run the HTTP server.
     Serve {
         #[arg(long, default_value = "127.0.0.1:8080")]
@@ -185,6 +204,38 @@ async fn main() -> Result<()> {
         Cmd::Snapshot => {
             store.snapshot(&graph).await?;
             println!("snapshot written");
+        }
+        Cmd::Compact => {
+            store.compact(&graph).await?;
+            println!("compacted: snapshot written and WAL truncated");
+        }
+        Cmd::Export { path } => {
+            let mut sink = JsonlSink::create(&path).await?;
+            let stats = export_graph(&graph, &mut sink).await?;
+            println!(
+                "exported: {} concepts, {} relations -> {}",
+                stats.concepts, stats.relations, path.display(),
+            );
+        }
+        Cmd::Path { from_type, from_name, to_type, to_name, max_depth } => {
+            let src = graph.find_by_name(&from_type, &from_name)
+                .ok_or_else(|| anyhow::anyhow!(
+                    "no concept ({from_type}) {from_name}"
+                ))?;
+            let tgt = graph.find_by_name(&to_type, &to_name)
+                .ok_or_else(|| anyhow::anyhow!(
+                    "no concept ({to_type}) {to_name}"
+                ))?;
+            match graph.shortest_path(src, tgt, max_depth)? {
+                None => println!("no path within depth {max_depth}"),
+                Some(path) => {
+                    print!("{}", path.start.name);
+                    for step in &path.steps {
+                        print!(" -[{}]-> {}", step.relation.relation_type, step.concept.name);
+                    }
+                    println!("\n({} hops)", path.len());
+                }
+            }
         }
         Cmd::Serve { bind, anthropic, model } => {
             let llm: Arc<dyn ontology_rag::LanguageModel> = if anthropic {

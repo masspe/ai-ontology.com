@@ -4,7 +4,7 @@ use parking_lot::Mutex;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs::{File, OpenOptions};
-use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, BufReader};
 use tracing::{debug, warn};
 
 use crate::log::LogRecord;
@@ -70,7 +70,7 @@ impl Store for FileStore {
 
     async fn load_into(&self, graph: &Arc<OntologyGraph>) -> StoreResult<()> {
         // 1. Snapshot, if any.
-        let mut high_water: u64 = 0;
+        let mut snap_water: u64 = 0;
         if tokio::fs::try_exists(&self.snapshot_path).await.unwrap_or(false) {
             match File::open(&self.snapshot_path).await {
                 Ok(mut f) => {
@@ -78,16 +78,22 @@ impl Store for FileStore {
                     f.read_to_end(&mut buf).await?;
                     let snap: crate::snapshot::Snapshot = bincode::deserialize(&buf)
                         .map_err(|e| StoreError::Decode(e.to_string()))?;
-                    debug!(concepts = snap.concepts.len(), "restoring snapshot");
+                    snap_water = snap.high_water_seq;
+                    debug!(
+                        concepts = snap.concepts.len(),
+                        seq = snap_water,
+                        "restoring snapshot",
+                    );
                     snap.restore(graph)?;
-                    // We don't currently track snapshot seq; treat it as floor 0.
                 }
                 Err(e) => warn!(error=%e, "snapshot present but unreadable; skipping"),
             }
         }
 
-        // 2. WAL replay.
+        // 2. WAL replay — skip anything already covered by the snapshot.
+        let mut high_water = snap_water;
         if !tokio::fs::try_exists(&self.log_path).await.unwrap_or(false) {
+            *self.seq.lock() = high_water;
             return Ok(());
         }
         let f = File::open(&self.log_path).await?;
@@ -110,6 +116,11 @@ impl Store for FileStore {
             let rec: LogRecord = bincode::deserialize(&payload)
                 .map_err(|e| StoreError::Decode(e.to_string()))?;
             high_water = high_water.max(rec.seq);
+            if rec.seq <= snap_water {
+                // Already captured by the snapshot; reapplying would
+                // double-add relations and could trip duplicate-name checks.
+                continue;
+            }
             apply(graph, rec)?;
         }
         *self.seq.lock() = high_water;
@@ -117,11 +128,36 @@ impl Store for FileStore {
     }
 
     async fn snapshot(&self, graph: &Arc<OntologyGraph>) -> StoreResult<()> {
-        let snap = crate::snapshot::Snapshot::from_graph(graph);
+        let seq = *self.seq.lock();
+        let snap = crate::snapshot::Snapshot::from_graph_with_seq(graph, seq);
         let bytes = bincode::serialize(&snap).map_err(|e| StoreError::Encode(e.to_string()))?;
         let tmp = self.snapshot_path.with_extension("snap.tmp");
         tokio::fs::write(&tmp, &bytes).await?;
         tokio::fs::rename(&tmp, &self.snapshot_path).await?;
+        Ok(())
+    }
+
+    async fn compact(&self, graph: &Arc<OntologyGraph>) -> StoreResult<()> {
+        // Hold the writer lock for the entire compaction so concurrent
+        // appends can't slip in between snapshotting and truncating.
+        let mut writer = self.writer.lock().await;
+        writer.flush().await?;
+
+        let seq = *self.seq.lock();
+        let snap = crate::snapshot::Snapshot::from_graph_with_seq(graph, seq);
+        let bytes = bincode::serialize(&snap).map_err(|e| StoreError::Encode(e.to_string()))?;
+
+        // 1. Snapshot first — atomic via temp+rename.
+        let tmp = self.snapshot_path.with_extension("snap.tmp");
+        tokio::fs::write(&tmp, &bytes).await?;
+        tokio::fs::rename(&tmp, &self.snapshot_path).await?;
+
+        // 2. Truncate the WAL. After this point, replay only sees records
+        //    with seq > high_water_seq (i.e. none, until the next append).
+        writer.set_len(0).await?;
+        writer.seek(std::io::SeekFrom::Start(0)).await?;
+        writer.flush().await?;
+
         Ok(())
     }
 }

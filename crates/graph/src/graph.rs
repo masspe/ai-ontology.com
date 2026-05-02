@@ -289,6 +289,29 @@ mod tests {
     }
 
     #[test]
+    fn shortest_path_finds_two_hop_link() {
+        let g = OntologyGraph::new(toy_ontology());
+        let alice = g.upsert_concept(Concept::new(Default::default(), "Person", "Alice")).unwrap();
+        let p = g.upsert_concept(Concept::new(Default::default(), "Paper", "P")).unwrap();
+        let bob = g.upsert_concept(Concept::new(Default::default(), "Person", "Bob")).unwrap();
+        g.add_relation(Relation::new(Default::default(), "authored", alice, p)).unwrap();
+        g.add_relation(Relation::new(Default::default(), "authored", bob, p)).unwrap();
+
+        let path = g.shortest_path(alice, bob, 4).unwrap().expect("path exists");
+        assert_eq!(path.len(), 2);
+        assert_eq!(path.start.name, "Alice");
+        assert_eq!(path.steps.last().unwrap().concept.name, "Bob");
+
+        // Same node returns an empty path, not None.
+        let same = g.shortest_path(alice, alice, 4).unwrap().expect("self");
+        assert!(same.is_empty());
+
+        // Bound the depth — disconnect should report None.
+        let lone = g.upsert_concept(Concept::new(Default::default(), "Person", "Eve")).unwrap();
+        assert!(g.shortest_path(alice, lone, 4).unwrap().is_none());
+    }
+
+    #[test]
     fn schema_violation_rejected() {
         let g = OntologyGraph::new(toy_ontology());
         let a = g.upsert_concept(Concept::new(Default::default(), "Paper", "P1")).unwrap();

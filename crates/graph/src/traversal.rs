@@ -2,6 +2,7 @@ use ahash::{AHashMap, AHashSet};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 
+use crate::error::GraphResult;
 use crate::graph::OntologyGraph;
 use crate::id::{ConceptId, RelationId};
 use crate::model::{Concept, Relation};
@@ -62,7 +63,87 @@ impl Subgraph {
     pub fn is_empty(&self) -> bool { self.concepts.is_empty() }
 }
 
+/// One hop along a path: the relation, and the concept on the far side of it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PathStep {
+    pub relation: Relation,
+    pub concept: Concept,
+}
+
+/// Result of [`OntologyGraph::shortest_path`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Path {
+    pub source: ConceptId,
+    pub target: ConceptId,
+    /// `start` is the source concept. `steps[i]` is the i-th hop; the final
+    /// element's `concept` equals `target`.
+    pub start: Concept,
+    pub steps: Vec<PathStep>,
+}
+
+impl Path {
+    pub fn len(&self) -> usize { self.steps.len() }
+    pub fn is_empty(&self) -> bool { self.steps.is_empty() }
+}
+
 impl OntologyGraph {
+    /// Undirected shortest path between two concepts, bounded by `max_depth`
+    /// to keep the BFS cost predictable on very dense graphs. Returns `None`
+    /// if the target isn't reachable within the bound.
+    pub fn shortest_path(
+        &self,
+        source: ConceptId,
+        target: ConceptId,
+        max_depth: u32,
+    ) -> GraphResult<Option<Path>> {
+        let start = self.get_concept(source)?;
+        let _ = self.get_concept(target)?;
+        if source == target {
+            return Ok(Some(Path {
+                source,
+                target,
+                start,
+                steps: Vec::new(),
+            }));
+        }
+
+        let mut visited: AHashSet<ConceptId> = AHashSet::new();
+        // parent[node] = (predecessor, relation traversed to reach node)
+        let mut parent: AHashMap<ConceptId, (ConceptId, RelationId)> = AHashMap::new();
+        let mut queue: VecDeque<(ConceptId, u32)> = VecDeque::new();
+        visited.insert(source);
+        queue.push_back((source, 0));
+
+        let mut found = false;
+        'bfs: while let Some((node, depth)) = queue.pop_front() {
+            if depth >= max_depth { continue; }
+            for rel in self.outgoing(node).into_iter().chain(self.incoming(node)) {
+                let neighbor = if rel.source == node { rel.target } else { rel.source };
+                if !visited.insert(neighbor) { continue; }
+                parent.insert(neighbor, (node, rel.id));
+                if neighbor == target {
+                    found = true;
+                    break 'bfs;
+                }
+                queue.push_back((neighbor, depth + 1));
+            }
+        }
+        if !found { return Ok(None); }
+
+        // Reconstruct.
+        let mut steps_rev: Vec<PathStep> = Vec::new();
+        let mut cur = target;
+        while cur != source {
+            let (prev, rid) = parent[&cur];
+            let rel = self.get_relation(rid)?;
+            let concept = self.get_concept(cur)?;
+            steps_rev.push(PathStep { relation: rel, concept });
+            cur = prev;
+        }
+        steps_rev.reverse();
+        Ok(Some(Path { source, target, start, steps: steps_rev }))
+    }
+
     /// Breadth-first expansion bounded by `spec.max_depth` and `spec.max_nodes`.
     pub fn expand(&self, seeds: &[ConceptId], spec: &TraversalSpec) -> Subgraph {
         let mut visited: AHashSet<ConceptId> = AHashSet::new();
