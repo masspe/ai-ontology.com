@@ -90,6 +90,52 @@ async fn create_retrieve_delete_round_trip() {
 }
 
 #[tokio::test]
+async fn patch_concept_renames_and_metrics_reflect_state() {
+    let state = make_state();
+    let graph = state.graph.clone();
+    let app = build_router(state);
+
+    // Seed a concept.
+    let body = json!({ "id": 0, "concept_type": "Topic", "name": "RAG",
+        "description": "first", "properties": {} });
+    let resp = app.clone().oneshot(Request::builder()
+        .method("POST").uri("/concepts")
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string())).unwrap()).await.unwrap();
+    let id = read_body(resp.into_body()).await["id"].as_u64().unwrap();
+
+    // PATCH it.
+    let patch = json!({ "name": "Retrieval Augmented Generation", "description": "renamed" });
+    let resp = app.clone().oneshot(Request::builder()
+        .method("PATCH").uri(&format!("/concepts/{}", id))
+        .header("content-type", "application/json")
+        .body(Body::from(patch.to_string())).unwrap()).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v = read_body(resp.into_body()).await;
+    assert_eq!(v["name"], "Retrieval Augmented Generation");
+    assert_eq!(v["description"], "renamed");
+
+    // GET round-trips.
+    let resp = app.clone().oneshot(Request::builder()
+        .method("GET").uri(&format!("/concepts/{}", id))
+        .body(Body::empty()).unwrap()).await.unwrap();
+    let v = read_body(resp.into_body()).await;
+    assert_eq!(v["name"], "Retrieval Augmented Generation");
+
+    // Old name binding removed in the graph.
+    assert!(graph.find_by_name("Topic", "RAG").is_none());
+
+    // /metrics is plain-text Prometheus exposition.
+    let resp = app.oneshot(Request::builder()
+        .method("GET").uri("/metrics").body(Body::empty()).unwrap()).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+    let text = std::str::from_utf8(&bytes).unwrap();
+    assert!(text.contains("ontology_concepts 1"), "metrics body:\n{text}");
+    assert!(text.contains("# TYPE ontology_concepts gauge"));
+}
+
+#[tokio::test]
 async fn bearer_auth_blocks_missing_or_wrong_token() {
     let app = build_router_with_auth(make_state(), Some("s3cret".into()));
 

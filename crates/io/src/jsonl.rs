@@ -6,15 +6,28 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use crate::ingest::{IngestError, Sink, Source};
 use crate::record::Record;
 
-/// Reads newline-delimited JSON [`Record`]s from a file.
+/// Reads newline-delimited JSON [`Record`]s. Backed by either a file or
+/// stdin — the source is opaque to consumers.
 pub struct JsonlSource {
-    lines: Lines<BufReader<File>>,
+    lines: LinesReader,
+}
+
+enum LinesReader {
+    File(Lines<BufReader<File>>),
+    Stdin(Lines<BufReader<tokio::io::Stdin>>),
 }
 
 impl JsonlSource {
     pub async fn open(path: impl AsRef<Path>) -> Result<Self, IngestError> {
         let file = File::open(path.as_ref()).await?;
-        Ok(Self { lines: BufReader::new(file).lines() })
+        Ok(Self { lines: LinesReader::File(BufReader::new(file).lines()) })
+    }
+
+    /// Read JSONL from stdin. Useful for piping: `cat data.jsonl | ontology ingest -`.
+    pub fn stdin() -> Self {
+        Self {
+            lines: LinesReader::Stdin(BufReader::new(tokio::io::stdin()).lines()),
+        }
     }
 }
 
@@ -22,7 +35,11 @@ impl JsonlSource {
 impl Source for JsonlSource {
     async fn next(&mut self) -> Result<Option<Record>, IngestError> {
         loop {
-            let line = match self.lines.next_line().await? {
+            let line = match &mut self.lines {
+                LinesReader::File(l) => l.next_line().await?,
+                LinesReader::Stdin(l) => l.next_line().await?,
+            };
+            let line = match line {
                 Some(l) => l,
                 None => return Ok(None),
             };

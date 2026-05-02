@@ -20,11 +20,11 @@ use axum::{
     http::{HeaderValue, Request, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
-    routing::{delete, get, post},
+    routing::{get, post},
     Json, Router,
 };
 use std::sync::Arc as StdArc;
-use ontology_graph::{Concept, ConceptId, OntologyGraph, Path as GraphPath, Relation, RelationId};
+use ontology_graph::{Concept, ConceptId, ConceptPatch, OntologyGraph, Path as GraphPath, Relation, RelationId};
 use ontology_index::{HybridIndex, RetrievalRequest, ScoredConcept};
 use ontology_rag::{RagAnswer, RagPipeline};
 use ontology_storage::{LogRecord, Store};
@@ -57,8 +57,9 @@ pub fn build_router_with_auth(
 
     let protected = Router::new()
         .route("/stats", get(stats))
+        .route("/metrics", get(metrics))
         .route("/concepts", post(create_concept))
-        .route("/concepts/:id", delete(delete_concept))
+        .route("/concepts/:id", get(get_concept).patch(update_concept).delete(delete_concept))
         .route("/relations", post(create_relation))
         .route("/retrieve", post(retrieve))
         .route("/ask", post(ask))
@@ -160,6 +161,38 @@ struct Stats {
     relation_types: usize,
 }
 
+/// Prometheus-compatible plain-text metrics. Plays nicely with any
+/// scraper that speaks the 0.0.4 exposition format. Counts are gauges
+/// (instantaneous), not counters.
+async fn metrics(State(s): State<AppState>) -> ([(String, String); 1], String) {
+    let onto = s.graph.ontology();
+    let body = format!(
+        "# HELP ontology_concepts Number of concepts in the graph.\n\
+         # TYPE ontology_concepts gauge\n\
+         ontology_concepts {}\n\
+         # HELP ontology_relations Number of relations in the graph.\n\
+         # TYPE ontology_relations gauge\n\
+         ontology_relations {}\n\
+         # HELP ontology_concept_types Number of concept types in the ontology.\n\
+         # TYPE ontology_concept_types gauge\n\
+         ontology_concept_types {}\n\
+         # HELP ontology_relation_types Number of relation types in the ontology.\n\
+         # TYPE ontology_relation_types gauge\n\
+         ontology_relation_types {}\n",
+        s.graph.concept_count(),
+        s.graph.relation_count(),
+        onto.concept_types.len(),
+        onto.relation_types.len(),
+    );
+    (
+        [(
+            axum::http::header::CONTENT_TYPE.to_string(),
+            "text/plain; version=0.0.4".to_string(),
+        )],
+        body,
+    )
+}
+
 async fn stats(State(s): State<AppState>) -> Json<Stats> {
     let onto = s.graph.ontology();
     Json(Stats {
@@ -185,6 +218,26 @@ async fn create_concept(
     }
     s.index.index_concept(id)?;
     Ok(Json(CreatedConcept { id }))
+}
+
+async fn get_concept(
+    State(s): State<AppState>,
+    Path(id): Path<u64>,
+) -> Result<Json<Concept>, ApiError> {
+    let c = s.graph.get_concept(ConceptId(id))?;
+    Ok(Json(c))
+}
+
+async fn update_concept(
+    State(s): State<AppState>,
+    Path(id): Path<u64>,
+    Json(patch): Json<ConceptPatch>,
+) -> Result<Json<Concept>, ApiError> {
+    let updated = s.graph.update_concept(ConceptId(id), patch)?;
+    s.store.append(&LogRecord::update_concept(updated.clone())).await
+        .map_err(|e| ApiError::Store(e.to_string()))?;
+    s.index.index_concept(ConceptId(id))?;
+    Ok(Json(updated))
 }
 
 async fn delete_concept(
