@@ -173,6 +173,14 @@ async fn main() -> Result<()> {
                     println!("  ({}) {}  score={:.3}", c.concept_type, c.name, s.score);
                 }
             }
+            let u = &answer.usage;
+            if u.input_tokens + u.cache_creation_input_tokens + u.cache_read_input_tokens > 0 {
+                println!(
+                    "--- usage --- in={} out={} cache_write={} cache_read={}",
+                    u.input_tokens, u.output_tokens,
+                    u.cache_creation_input_tokens, u.cache_read_input_tokens,
+                );
+            }
         }
         Cmd::Snapshot => {
             store.snapshot(&graph).await?;

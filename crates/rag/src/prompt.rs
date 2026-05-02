@@ -2,14 +2,23 @@ use ontology_graph::{Ontology, Subgraph};
 use ontology_index::ScoredConcept;
 use std::fmt::Write;
 
-/// Renders retrieved context into a single text block suitable for inlining
-/// into a chat-style prompt. The renderer is intentionally conservative —
-/// deterministic ordering, bounded length, ontology-aware framing — so the
-/// LLM sees the same structure run-to-run for the same inputs.
+/// Renders retrieved context into prompt-ready text.
+///
+/// Output is split into two halves so the caller can route them to different
+/// places in the request:
+///
+/// * [`render_static_context`] — the ontology schema. Stable per-knowledge-base,
+///   so it ships as a separately-cached `system` block to the LLM.
+/// * [`render_query_context`] — ranked concepts + retrieved subgraph + edges.
+///   Volatile per-query; ships in the user message and is never cached.
+///
+/// [`render`] returns the two concatenated for callers that don't care about
+/// caching (e.g. the `EchoModel` test fake).
 pub struct PromptBuilder<'a> {
     ontology: &'a Ontology,
-    /// Soft cap on the context length, in characters. The builder stops
-    /// adding rows once exceeded.
+    /// Soft cap on the *combined* context length, in characters. The query
+    /// half stops adding rows once exceeded; the static half is always
+    /// rendered in full so the cache key stays stable.
     pub max_context_chars: usize,
 }
 
@@ -23,26 +32,42 @@ impl<'a> PromptBuilder<'a> {
         self
     }
 
-    pub fn render(&self, scored: &[ScoredConcept], subgraph: &Subgraph) -> String {
+    /// Stable per-knowledge-base context: just the ontology schema. Suitable
+    /// for placement behind a `cache_control: ephemeral` breakpoint.
+    pub fn render_static_context(&self) -> String {
         let mut out = String::new();
-
         out.push_str("# Ontology\n");
-        for ct in self.ontology.concept_types.values() {
+        // Sort by name so byte-for-byte output is stable across runs — required
+        // for the prompt cache to actually hit.
+        let mut concept_types: Vec<_> = self.ontology.concept_types.values().collect();
+        concept_types.sort_by(|a, b| a.name.cmp(&b.name));
+        for ct in concept_types {
             let _ = writeln!(
                 out, "- {} :: {}", ct.name,
                 if ct.description.is_empty() { "(no description)" } else { &ct.description },
             );
         }
-        for rt in self.ontology.relation_types.values() {
+        let mut relation_types: Vec<_> = self.ontology.relation_types.values().collect();
+        relation_types.sort_by(|a, b| a.name.cmp(&b.name));
+        for rt in relation_types {
             let _ = writeln!(
                 out, "- ({}) -[{}]-> ({}){}",
                 rt.domain, rt.name, rt.range,
                 if rt.symmetric { " [symmetric]" } else { "" },
             );
         }
+        out
+    }
 
+    /// Volatile per-query context: ranked seeds, retrieved subgraph, edges.
+    pub fn render_query_context(
+        &self,
+        scored: &[ScoredConcept],
+        subgraph: &Subgraph,
+    ) -> String {
+        let mut out = String::new();
         if !scored.is_empty() {
-            out.push_str("\n# Top concepts\n");
+            out.push_str("# Top concepts\n");
             for s in scored {
                 if let Some(c) = subgraph.concepts.iter().find(|c| c.id == s.id) {
                     let _ = writeln!(
@@ -54,7 +79,6 @@ impl<'a> PromptBuilder<'a> {
                 if out.len() >= self.max_context_chars { break; }
             }
         }
-
         out.push_str("\n# Subgraph\n");
         for c in &subgraph.concepts {
             let depth = subgraph.depth_of.get(&c.id).copied().unwrap_or(0);
@@ -74,11 +98,18 @@ impl<'a> PromptBuilder<'a> {
             }
             if out.len() >= self.max_context_chars { break; }
         }
-
         if out.len() > self.max_context_chars {
             out.truncate(self.max_context_chars);
             out.push_str("\n…[truncated]\n");
         }
+        out
+    }
+
+    /// Convenience: static + query, joined with a blank line.
+    pub fn render(&self, scored: &[ScoredConcept], subgraph: &Subgraph) -> String {
+        let mut out = self.render_static_context();
+        out.push('\n');
+        out.push_str(&self.render_query_context(scored, subgraph));
         out
     }
 
