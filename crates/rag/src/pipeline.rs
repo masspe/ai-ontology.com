@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tracing::debug;
 
-use crate::model::{LanguageModel, LlmRequest, LlmResponse, Message};
+use crate::model::{LanguageModel, LlmRequest, LlmResponse, Message, TokenUsage};
 use crate::prompt::PromptBuilder;
 
 /// End-to-end answer returned by the pipeline. Includes the retrieved
@@ -17,6 +17,11 @@ pub struct RagAnswer {
     pub subgraph: Subgraph,
     pub model: String,
     pub stop_reason: Option<String>,
+    /// Token usage including prompt-cache hits — non-zero
+    /// `usage.cache_read_input_tokens` confirms the ontology was served from
+    /// cache on this call.
+    #[serde(default)]
+    pub usage: TokenUsage,
 }
 
 impl RagAnswer {
@@ -64,26 +69,30 @@ impl RagPipeline {
         debug!(seeds = scored.len(), context_concepts = subgraph.concepts.len(), "retrieved");
 
         let onto = self.index.graph().ontology();
-        let context = PromptBuilder::new(&onto)
-            .with_max_chars(self.max_context_chars)
-            .render(&scored, &subgraph);
+        let builder = PromptBuilder::new(&onto).with_max_chars(self.max_context_chars);
+
+        // Split context: ontology is stable per-KB → cached system block.
+        // Retrieved subgraph is volatile per-query → user message.
+        let cached_ontology = builder.render_static_context();
+        let query_context = builder.render_query_context(&scored, &subgraph);
 
         let user_message = format!(
             "Use the context below to answer the question.\n\n\
-             ---CONTEXT---\n{context}\n---END CONTEXT---\n\n\
+             ---RETRIEVED---\n{ctx}\n---END RETRIEVED---\n\n\
              Question: {q}",
-            context = context,
+            ctx = query_context,
             q = req.query,
         );
 
         let llm_req = LlmRequest {
             system: Some(PromptBuilder::system_message().to_string()),
+            cached_context: Some(cached_ontology),
             messages: vec![Message::user(user_message)],
             max_tokens: self.max_tokens,
             temperature: self.temperature,
         };
 
-        let LlmResponse { content, model, stop_reason } = self.llm.generate(&llm_req).await?;
+        let LlmResponse { content, model, stop_reason, usage } = self.llm.generate(&llm_req).await?;
 
         Ok(RagAnswer {
             query: req.query,
@@ -92,6 +101,7 @@ impl RagPipeline {
             subgraph,
             model,
             stop_reason,
+            usage,
         })
     }
 }

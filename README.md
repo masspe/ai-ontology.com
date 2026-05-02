@@ -12,7 +12,7 @@ answers in retrieved subgraphs.
 | `ontology-storage` | Append-only WAL + bincode snapshots; pluggable `Store` trait. |
 | `ontology-index`   | Lexical (TF-IDF) + vector (cosine) + graph-expansion retrieval. |
 | `ontology-io`      | `Source` / `Sink` traits with JSONL and triples adapters. |
-| `ontology-rag`     | Prompt builder + `LanguageModel` trait (echo + Anthropic clients). |
+| `ontology-rag`     | Prompt builder + `LanguageModel` trait (echo + Anthropic clients with prompt caching). |
 | `ontology-server`  | axum HTTP server exposing `/concepts`, `/relations`, `/retrieve`, `/ask`. |
 | `ontology-cli`     | `ontology` binary tying it all together. |
 
@@ -77,6 +77,19 @@ curl -s -XPOST localhost:8080/retrieve -H 'content-type: application/json' \
 * `*.jsonl` / `*.ndjson` — one tagged `Record` per line.
 * `*.triples` / `*.txt`  — `Type:Name predicate Type:Name`, `#` comments.
 * `*.csv` — header row with a `name` column; `--csv-type <Type>` required.
+
+## Prompt caching
+
+The Anthropic client routes the ontology (stable per knowledge base) into a
+separately-cached `system` block via `cache_control: {"type": "ephemeral"}`,
+so repeated queries against the same KB pay roughly 10% of the input price
+for the cached prefix on subsequent requests within the TTL (5 min default).
+Verify hits via `RagAnswer.usage.cache_read_input_tokens`. The minimum
+cacheable prefix on Claude Opus 4.7 is 4096 tokens; below that the
+breakpoint is silently ignored — no error.
+
+`temperature` is automatically omitted on Claude Opus 4.7 (the API rejects
+it with a 400). Older models still receive it.
 
 ## Testing
 
