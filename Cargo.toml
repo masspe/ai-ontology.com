@@ -6,6 +6,7 @@ members = [
     "crates/index",
     "crates/io",
     "crates/rag",
+    "crates/server",
     "crates/cli",
 ]
 
@@ -32,12 +33,17 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { version = "4", features = ["derive"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 futures = "0.3"
+axum = "0.7"
+tower = "0.5"
+hyper = "1"
+http = "1"
 
 ontology-graph = { path = "crates/graph" }
 ontology-storage = { path = "crates/storage" }
 ontology-index = { path = "crates/index" }
 ontology-io = { path = "crates/io" }
 ontology-rag = { path = "crates/rag" }
+ontology-server = { path = "crates/server" }
 
 [profile.release]
 lto = "thin"

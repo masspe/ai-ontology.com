@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 
 use crate::graph::OntologyGraph;
-use crate::id::ConceptId;
+use crate::id::{ConceptId, RelationId};
 use crate::model::{Concept, Relation};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -66,6 +66,7 @@ impl OntologyGraph {
     /// Breadth-first expansion bounded by `spec.max_depth` and `spec.max_nodes`.
     pub fn expand(&self, seeds: &[ConceptId], spec: &TraversalSpec) -> Subgraph {
         let mut visited: AHashSet<ConceptId> = AHashSet::new();
+        let mut emitted_edges: AHashSet<RelationId> = AHashSet::new();
         let mut depth_of: AHashMap<ConceptId, u32> = AHashMap::new();
         let mut concepts: Vec<Concept> = Vec::new();
         let mut relations: Vec<Relation> = Vec::new();
@@ -114,7 +115,9 @@ impl OntologyGraph {
                     queue.push_back((neighbor, depth + 1));
                     if concepts.len() >= spec.max_nodes { break; }
                 }
-                relations.push(rel);
+                if emitted_edges.insert(rel.id) {
+                    relations.push(rel);
+                }
             }
         }
 

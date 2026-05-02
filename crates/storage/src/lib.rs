@@ -15,9 +15,11 @@ pub mod memory;
 pub mod file;
 pub mod store;
 pub mod snapshot;
+pub mod periodic;
 
 pub use log::{LogRecord, RecordKind};
 pub use memory::MemoryStore;
 pub use file::FileStore;
 pub use store::{Store, StoreError, StoreResult};
 pub use snapshot::Snapshot;
+pub use periodic::{spawn_snapshotter, SnapshotHandle};

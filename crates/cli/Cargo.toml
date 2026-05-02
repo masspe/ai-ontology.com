@@ -14,6 +14,8 @@ ontology-storage = { workspace = true }
 ontology-index = { workspace = true }
 ontology-io = { workspace = true }
 ontology-rag = { workspace = true }
+ontology-server = { workspace = true }
+axum = { workspace = true }
 clap = { workspace = true }
 tokio = { workspace = true }
 anyhow = { workspace = true }

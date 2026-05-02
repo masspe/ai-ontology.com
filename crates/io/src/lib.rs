@@ -12,9 +12,11 @@
 pub mod record;
 pub mod jsonl;
 pub mod triples;
+pub mod csv;
 pub mod ingest;
 
 pub use record::{Record, RecordPayload};
 pub use ingest::{ingest_records, Source, Sink};
 pub use jsonl::{JsonlSource, JsonlSink};
 pub use triples::TripleSource;
+pub use csv::CsvSource;

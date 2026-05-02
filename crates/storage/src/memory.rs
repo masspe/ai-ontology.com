@@ -46,6 +46,13 @@ pub(crate) fn apply(graph: &Arc<OntologyGraph>, r: LogRecord) -> StoreResult<()>
         }
         RecordKind::Concept(c) => { graph.upsert_concept(c)?; }
         RecordKind::Relation(rel) => { graph.add_relation(rel)?; }
+        RecordKind::DeleteConcept(id) => {
+            // Idempotent — replay over a snapshot may try to delete twice.
+            let _ = graph.remove_concept(id);
+        }
+        RecordKind::DeleteRelation(id) => {
+            let _ = graph.remove_relation(id);
+        }
     }
     Ok(())
 }

@@ -78,6 +78,12 @@ impl HybridIndex {
         Ok(())
     }
 
+    /// Drop a concept from both indexes. Called after the graph removes it.
+    pub fn forget(&self, id: ConceptId) {
+        self.lexical.remove(id);
+        self.vector.remove(id);
+    }
+
     /// Reindex every concept currently in the graph.
     pub fn reindex_all(&self) {
         for c in self.graph.all_concepts() {

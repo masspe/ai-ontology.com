@@ -2,7 +2,8 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use ontology_graph::{Ontology, OntologyGraph};
 use ontology_index::{HybridIndex, RetrievalRequest};
-use ontology_io::{ingest_records, JsonlSource, TripleSource};
+use ontology_io::{ingest_records, CsvSource, JsonlSource, TripleSource};
+use ontology_server::{build_router, AppState};
 use ontology_rag::{AnthropicModel, EchoModel, RagPipeline};
 use ontology_storage::{FileStore, MemoryStore, Store};
 use std::path::PathBuf;
@@ -22,11 +23,15 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Cmd {
-    /// Ingest data from a file. Format inferred from extension (.jsonl, .triples).
+    /// Ingest data from a file. Format inferred from extension (.jsonl,
+    /// .triples or .csv). For CSV, also pass `--csv-type <ConceptType>`.
     Ingest {
         /// Optional path to an ontology JSON file applied before records.
         #[arg(long)]
         ontology: Option<PathBuf>,
+        /// For CSV inputs: the concept type to assign every row.
+        #[arg(long)]
+        csv_type: Option<String>,
         path: PathBuf,
     },
     /// Print summary statistics.
@@ -54,6 +59,15 @@ enum Cmd {
     },
     /// Take a durable snapshot of the current graph (only with --data).
     Snapshot,
+    /// Run the HTTP server.
+    Serve {
+        #[arg(long, default_value = "127.0.0.1:8080")]
+        bind: String,
+        #[arg(long)]
+        anthropic: bool,
+        #[arg(long, default_value = "claude-opus-4-7")]
+        model: String,
+    },
 }
 
 #[tokio::main]
@@ -78,7 +92,7 @@ async fn main() -> Result<()> {
     index.reindex_all();
 
     match cli.cmd {
-        Cmd::Ingest { ontology, path } => {
+        Cmd::Ingest { ontology, csv_type, path } => {
             if let Some(p) = ontology {
                 let raw = tokio::fs::read_to_string(&p).await?;
                 let onto: Ontology = serde_json::from_str(&raw)?;
@@ -94,7 +108,12 @@ async fn main() -> Result<()> {
                     let mut src = TripleSource::open(&path).await?;
                     ingest_records(&mut src, &graph, Some(store.as_ref())).await?
                 }
-                _ => anyhow::bail!("unsupported extension; use .jsonl or .triples"),
+                Some("csv") => {
+                    let ty = csv_type.context("--csv-type required for CSV input")?;
+                    let mut src = CsvSource::open(&path, ty).await?;
+                    ingest_records(&mut src, &graph, Some(store.as_ref())).await?
+                }
+                _ => anyhow::bail!("unsupported extension; use .jsonl, .triples or .csv"),
             };
             index.reindex_all();
             println!(
@@ -158,6 +177,26 @@ async fn main() -> Result<()> {
         Cmd::Snapshot => {
             store.snapshot(&graph).await?;
             println!("snapshot written");
+        }
+        Cmd::Serve { bind, anthropic, model } => {
+            let llm: Arc<dyn ontology_rag::LanguageModel> = if anthropic {
+                let key = std::env::var("ANTHROPIC_API_KEY")
+                    .context("ANTHROPIC_API_KEY required for --anthropic")?;
+                Arc::new(AnthropicModel::new(key).with_model(model))
+            } else {
+                Arc::new(EchoModel)
+            };
+            let pipeline = Arc::new(RagPipeline::new(index.clone(), llm));
+            let state = AppState {
+                graph: graph.clone(),
+                index: index.clone(),
+                store: store.clone(),
+                pipeline,
+            };
+            let app = build_router(state);
+            let listener = tokio::net::TcpListener::bind(&bind).await?;
+            tracing::info!(addr = %bind, "server listening");
+            axum::serve(listener, app).await?;
         }
     }
 
