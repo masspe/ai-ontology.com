@@ -73,6 +73,21 @@ impl Concept {
     }
 }
 
+/// Partial update to an existing concept. Each `Some` field replaces the
+/// corresponding field; `None` leaves it untouched. `concept_type` is
+/// intentionally absent — changing it would invalidate incident edges.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ConceptPatch {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    /// When `Some`, replaces the property map wholesale. To merge instead,
+    /// fetch the concept, modify the map, and pass the merged result.
+    #[serde(default)]
+    pub properties: Option<AHashMap<String, PropertyValue>>,
+}
+
 /// A directed, typed edge between two concepts.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Relation {

@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use crate::error::{GraphError, GraphResult};
 use crate::id::{ConceptId, IdAllocator, RelationId};
-use crate::model::{Concept, Relation};
+use crate::model::{Concept, ConceptPatch, Relation};
 use crate::schema::Ontology;
 
 type AdjList = SmallVec<[RelationId; 4]>;
@@ -126,6 +126,12 @@ impl OntologyGraph {
 
         if rel.id.0 == 0 {
             rel.id = self.ids.next_relation();
+        } else if self.relations.contains_key(&rel.id) {
+            // Caller-supplied id collides with an existing relation. This
+            // happens during snapshot restore / export re-ingest when an
+            // explicit id collides with a previously-allocated materialized
+            // inverse. Reassign rather than silently overwrite.
+            rel.id = self.ids.next_relation();
         } else {
             self.ids.observe(rel.id.0);
         }
@@ -160,6 +166,56 @@ impl OntologyGraph {
             .get(&id)
             .map(|r| r.clone())
             .ok_or(GraphError::UnknownRelation(id))
+    }
+
+    /// Apply a partial update to an existing concept. Renaming updates the
+    /// name index; clearing description / replacing properties is in-place.
+    /// Returns the new concept. The concept's `concept_type` is immutable —
+    /// changing types would require revalidating every incident edge.
+    pub fn update_concept(&self, id: ConceptId, patch: ConceptPatch) -> GraphResult<Concept> {
+        let mut entry = self
+            .concepts
+            .get_mut(&id)
+            .ok_or(GraphError::UnknownConcept(id))?;
+
+        if let Some(new_name) = patch.name {
+            // Maintain (concept_type, lowercase name) → id index.
+            let old_key = (entry.concept_type.clone(), entry.name.to_lowercase());
+            let new_key = (entry.concept_type.clone(), new_name.to_lowercase());
+            if old_key != new_key {
+                if let Some(existing) = self.name_index.get(&new_key) {
+                    if *existing != id {
+                        return Err(GraphError::DuplicateConcept(
+                            new_name,
+                            entry.concept_type.clone(),
+                        ));
+                    }
+                }
+                self.name_index.remove(&old_key);
+                self.name_index.insert(new_key, id);
+            }
+            entry.name = new_name;
+        }
+        if let Some(d) = patch.description {
+            entry.description = d;
+        }
+        if let Some(props) = patch.properties {
+            // Validate against the schema's property whitelist if any.
+            let onto = self.ontology.read();
+            let ct = onto.concept_type(&entry.concept_type)?;
+            if let Some(allowed) = &ct.properties {
+                for k in props.keys() {
+                    if !allowed.iter().any(|a| a == k) {
+                        return Err(GraphError::InvalidProperty {
+                            property: k.clone(),
+                            concept_type: ct.name.clone(),
+                        });
+                    }
+                }
+            }
+            entry.properties = props;
+        }
+        Ok(entry.clone())
     }
 
     /// Remove a concept and every relation incident to it. Returns the
@@ -286,6 +342,41 @@ mod tests {
         assert_eq!(g.relation_count(), 0);
         assert_eq!(g.outgoing(p1).len(), 0);
         assert_eq!(g.incoming(p1).len(), 0);
+    }
+
+    #[test]
+    fn update_concept_renames_and_persists_index() {
+        use crate::model::{ConceptPatch, PropertyValue};
+        use ahash::AHashMap;
+        let g = OntologyGraph::new(toy_ontology());
+        let alice = g.upsert_concept(
+            Concept::new(Default::default(), "Person", "Alice")
+                .with_description("the original"),
+        ).unwrap();
+
+        // Rename + new description + properties.
+        let mut props = AHashMap::new();
+        props.insert("nickname".into(), PropertyValue::Text("Ali".into()));
+        let patched = g.update_concept(alice, ConceptPatch {
+            name: Some("Alicia".into()),
+            description: Some("renamed".into()),
+            properties: Some(props),
+        }).unwrap();
+        assert_eq!(patched.name, "Alicia");
+        assert_eq!(patched.description, "renamed");
+        assert_eq!(patched.properties.get("nickname").and_then(|v| v.as_text()), Some("Ali"));
+
+        // Old name binding cleared, new one in place.
+        assert!(g.find_by_name("Person", "Alice").is_none());
+        assert_eq!(g.find_by_name("Person", "Alicia"), Some(alice));
+
+        // Renaming onto an occupied name fails.
+        let bob = g.upsert_concept(Concept::new(Default::default(), "Person", "Bob")).unwrap();
+        let err = g.update_concept(bob, ConceptPatch {
+            name: Some("Alicia".into()),
+            ..Default::default()
+        });
+        assert!(err.is_err());
     }
 
     #[test]

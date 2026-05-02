@@ -124,21 +124,27 @@ async fn main() -> Result<()> {
                 graph.extend_ontology(|target| { *target = onto.clone(); Ok(()) })?;
                 store.append(&ontology_storage::LogRecord::ontology(onto)).await?;
             }
-            let stats = match path.extension().and_then(|s| s.to_str()) {
-                Some("jsonl") | Some("ndjson") => {
-                    let mut src = JsonlSource::open(&path).await?;
-                    ingest_records(&mut src, &graph, Some(store.as_ref())).await?
+            // `-` reads JSONL from stdin (handy for piping).
+            let stats = if path.as_os_str() == "-" {
+                let mut src = JsonlSource::stdin();
+                ingest_records(&mut src, &graph, Some(store.as_ref())).await?
+            } else {
+                match path.extension().and_then(|s| s.to_str()) {
+                    Some("jsonl") | Some("ndjson") => {
+                        let mut src = JsonlSource::open(&path).await?;
+                        ingest_records(&mut src, &graph, Some(store.as_ref())).await?
+                    }
+                    Some("triples") | Some("txt") => {
+                        let mut src = TripleSource::open(&path).await?;
+                        ingest_records(&mut src, &graph, Some(store.as_ref())).await?
+                    }
+                    Some("csv") => {
+                        let ty = csv_type.context("--csv-type required for CSV input")?;
+                        let mut src = CsvSource::open(&path, ty).await?;
+                        ingest_records(&mut src, &graph, Some(store.as_ref())).await?
+                    }
+                    _ => anyhow::bail!("unsupported extension; use .jsonl, .triples or .csv (or '-' for stdin JSONL)"),
                 }
-                Some("triples") | Some("txt") => {
-                    let mut src = TripleSource::open(&path).await?;
-                    ingest_records(&mut src, &graph, Some(store.as_ref())).await?
-                }
-                Some("csv") => {
-                    let ty = csv_type.context("--csv-type required for CSV input")?;
-                    let mut src = CsvSource::open(&path, ty).await?;
-                    ingest_records(&mut src, &graph, Some(store.as_ref())).await?
-                }
-                _ => anyhow::bail!("unsupported extension; use .jsonl, .triples or .csv"),
             };
             index.reindex_all();
             println!(

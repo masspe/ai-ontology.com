@@ -77,11 +77,18 @@ curl -s -XPOST localhost:8080/retrieve -H 'content-type: application/json' \
   -d '{"query":"retrieval augmented generation","top_k":4,"lexical_weight":0.5,"expansion":{"max_depth":2}}'
 ```
 
+## Observability
+
+`GET /metrics` returns Prometheus-format gauges (`ontology_concepts`,
+`ontology_relations`, `ontology_concept_types`, `ontology_relation_types`).
+Wire it into your Prometheus scrape config alongside the bearer token.
+
 ## Ingest formats
 
 * `*.jsonl` / `*.ndjson` — one tagged `Record` per line.
 * `*.triples` / `*.txt`  — `Type:Name predicate Type:Name`, `#` comments.
 * `*.csv` — header row with a `name` column; `--csv-type <Type>` required.
+* `-` (literal hyphen) — read JSONL from stdin: `cat data.jsonl | ontology ingest -`.
 
 ## Prompt caching
 

@@ -34,6 +34,44 @@ fn ontology() -> Ontology {
 }
 
 #[tokio::test]
+async fn export_roundtrip_preserves_symmetric_count() {
+    // Regression: the export → re-ingest cycle was dropping a symmetric
+    // edge to id collision in add_relation when a re-ingested forward
+    // happened to land on the id of an already-materialized inverse.
+    let dir = tempdir();
+    let path = dir.join("g.jsonl");
+
+    let mut o = Ontology::new();
+    o.add_concept_type(ConceptType {
+        name: "Topic".into(), parent: None, properties: None, description: "".into(),
+    });
+    o.add_relation_type(RelationType {
+        name: "related_to".into(), domain: "Topic".into(), range: "Topic".into(),
+        cardinality: Default::default(), symmetric: true, description: "".into(),
+    }).unwrap();
+
+    let g1 = OntologyGraph::with_arc(o);
+    let a = g1.upsert_concept(Concept::new(Default::default(), "Topic", "A")).unwrap();
+    let b = g1.upsert_concept(Concept::new(Default::default(), "Topic", "B")).unwrap();
+    let c = g1.upsert_concept(Concept::new(Default::default(), "Topic", "C")).unwrap();
+    g1.add_relation(Relation::new(Default::default(), "related_to", a, b)).unwrap();
+    g1.add_relation(Relation::new(Default::default(), "related_to", a, c)).unwrap();
+    let before = g1.relation_count();
+    assert_eq!(before, 4, "two symmetric edges + two materialized inverses");
+
+    let mut sink = JsonlSink::create(&path).await.unwrap();
+    ontology_io::export_graph(&g1, &mut sink).await.unwrap();
+
+    let g2 = OntologyGraph::with_arc(Ontology::new());
+    let mut src = JsonlSource::open(&path).await.unwrap();
+    ontology_io::ingest_records(&mut src, &g2, None).await.unwrap();
+    assert_eq!(g2.relation_count(), before,
+        "round-trip lost or duplicated relations");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
 async fn export_then_ingest_roundtrips() {
     let dir = tempdir();
     let path = dir.join("graph.jsonl");

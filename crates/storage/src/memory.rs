@@ -46,6 +46,20 @@ pub(crate) fn apply(graph: &Arc<OntologyGraph>, r: LogRecord) -> StoreResult<()>
         }
         RecordKind::Concept(c) => { graph.upsert_concept(c)?; }
         RecordKind::Relation(rel) => { graph.add_relation(rel)?; }
+        RecordKind::UpdateConcept(c) => {
+            // If the concept already exists, drive update_concept so the
+            // rename path cleans the name-index. Otherwise treat the update
+            // as a create (defensive — shouldn't happen in normal logs).
+            if graph.get_concept(c.id).is_ok() {
+                graph.update_concept(c.id, ontology_graph::ConceptPatch {
+                    name: Some(c.name.clone()),
+                    description: Some(c.description.clone()),
+                    properties: Some(c.properties.clone()),
+                })?;
+            } else {
+                graph.upsert_concept(c)?;
+            }
+        }
         RecordKind::DeleteConcept(id) => {
             // Idempotent — replay over a snapshot may try to delete twice.
             let _ = graph.remove_concept(id);

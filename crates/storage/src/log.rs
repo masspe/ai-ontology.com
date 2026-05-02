@@ -6,6 +6,10 @@ pub enum RecordKind {
     Ontology(Ontology),
     Concept(Concept),
     Relation(Relation),
+    /// Replaces the concept at `id` with the supplied state, including any
+    /// rename (which the live `update_concept` handles via the name-index
+    /// cleanup; replay needs the same treatment to avoid stale bindings).
+    UpdateConcept(Concept),
     DeleteConcept(ConceptId),
     DeleteRelation(RelationId),
 }
@@ -27,6 +31,9 @@ impl LogRecord {
     }
     pub fn relation(r: Relation) -> Self {
         Self { seq: 0, kind: RecordKind::Relation(r) }
+    }
+    pub fn update_concept(c: Concept) -> Self {
+        Self { seq: 0, kind: RecordKind::UpdateConcept(c) }
     }
     pub fn delete_concept(id: ConceptId) -> Self {
         Self { seq: 0, kind: RecordKind::DeleteConcept(id) }

@@ -16,6 +16,6 @@ pub mod error;
 pub use error::{GraphError, GraphResult};
 pub use id::{ConceptId, RelationId};
 pub use schema::{Ontology, ConceptType, RelationType, Cardinality};
-pub use model::{Concept, Relation, Property, PropertyValue};
+pub use model::{Concept, ConceptPatch, Property, PropertyValue, Relation};
 pub use graph::OntologyGraph;
 pub use traversal::{Subgraph, TraversalSpec, Direction, Path, PathStep};
