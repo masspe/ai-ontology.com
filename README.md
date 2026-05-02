@@ -96,6 +96,19 @@ breakpoint is silently ignored — no error.
 `temperature` is automatically omitted on Claude Opus 4.7 (the API rejects
 it with a 400). Older models still receive it.
 
+The Anthropic client retries 408 / 409 / 429 / 5xx with full-jitter
+exponential backoff (default 3 retries; configurable via
+`AnthropicModel::with_max_retries`). When the server sends a `retry-after`
+header it's honored verbatim.
+
+## Authentication
+
+`build_router_with_auth(state, Some(token))` (and `ontology serve --auth-env
+NAME`) wrap every route except `/healthz` with a bearer-token middleware.
+The CLI flag reads from a named environment variable rather than taking
+the literal value, so the token never appears in process listings or
+shell history. Comparison is constant-time.
+
 ## Testing
 
 ```bash

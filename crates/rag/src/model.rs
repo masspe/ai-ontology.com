@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 use thiserror::Error;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -129,11 +130,17 @@ impl LanguageModel for EchoModel {
 /// hits via `LlmResponse::usage.cache_read_input_tokens`. Omits sampling
 /// parameters on Claude Opus 4.7, where `temperature` / `top_p` / `top_k`
 /// are removed and 400 if sent.
+///
+/// Retries 408 / 409 / 429 and any 5xx response with exponential backoff
+/// (full jitter), up to `max_retries` times. The first retry honors a
+/// `retry-after` header if the server sent one.
 pub struct AnthropicModel {
     http: reqwest::Client,
     api_key: String,
     model: String,
     base_url: String,
+    max_retries: u32,
+    initial_backoff: Duration,
 }
 
 impl AnthropicModel {
@@ -143,6 +150,8 @@ impl AnthropicModel {
             api_key: api_key.into(),
             model: "claude-opus-4-7".into(),
             base_url: "https://api.anthropic.com".into(),
+            max_retries: 3,
+            initial_backoff: Duration::from_millis(500),
         }
     }
 
@@ -152,6 +161,14 @@ impl AnthropicModel {
 
     pub fn with_base_url(mut self, url: impl Into<String>) -> Self {
         self.base_url = url.into(); self
+    }
+
+    pub fn with_max_retries(mut self, n: u32) -> Self {
+        self.max_retries = n; self
+    }
+
+    pub fn with_initial_backoff(mut self, d: Duration) -> Self {
+        self.initial_backoff = d; self
     }
 }
 
@@ -226,6 +243,42 @@ fn supports_sampling_params(model: &str) -> bool {
     !model.starts_with("claude-opus-4-7")
 }
 
+fn is_retryable_status(status: reqwest::StatusCode) -> bool {
+    matches!(status.as_u16(), 408 | 409 | 429 | 500..=599)
+}
+
+fn jittered_backoff(base: Duration, attempt: u32) -> Duration {
+    // Full-jitter exponential backoff: random in [0, base * 2^attempt].
+    use rand_like::Lcg;
+    let cap_ms = (base.as_millis() as u64).saturating_mul(1u64 << attempt.min(8));
+    let jitter = Lcg::seed_from_time().next_u64() % cap_ms.max(1);
+    Duration::from_millis(jitter)
+}
+
+/// Tiny, dependency-free LCG used only for backoff jitter — does not need
+/// crypto strength, just enough to avoid retry storms across processes.
+mod rand_like {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    pub struct Lcg(u64);
+    impl Lcg {
+        pub fn seed_from_time() -> Self {
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_nanos() as u64)
+                .unwrap_or(0xDEAD_BEEF_CAFE_BABE);
+            Self(nanos | 1)
+        }
+        pub fn next_u64(&mut self) -> u64 {
+            // Numerical Recipes constants.
+            self.0 = self
+                .0
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            self.0
+        }
+    }
+}
+
 fn build_system_field<'a>(
     instruction: Option<&'a str>,
     cached: Option<&'a str>,
@@ -281,27 +334,61 @@ impl LanguageModel for AnthropicModel {
         };
 
         let url = format!("{}/v1/messages", self.base_url);
-        let resp = self
-            .http
-            .post(&url)
-            .header("x-api-key", &self.api_key)
-            .header("anthropic-version", "2023-06-01")
-            .header("content-type", "application/json")
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| LlmError::Http(e.to_string()))?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            return Err(LlmError::Api(format!("{status}: {text}")));
-        }
+        let mut attempt: u32 = 0;
+        let parsed: AnthropicResponse = loop {
+            let send_result = self
+                .http
+                .post(&url)
+                .header("x-api-key", &self.api_key)
+                .header("anthropic-version", "2023-06-01")
+                .header("content-type", "application/json")
+                .json(&body)
+                .send()
+                .await;
 
-        let parsed: AnthropicResponse = resp
-            .json()
-            .await
-            .map_err(|e| LlmError::Decode(e.to_string()))?;
+            match send_result {
+                Err(e) if e.is_connect() || e.is_timeout() => {
+                    if attempt >= self.max_retries {
+                        return Err(LlmError::Http(e.to_string()));
+                    }
+                    let delay = jittered_backoff(self.initial_backoff, attempt);
+                    tracing::warn!(error=%e, attempt, ?delay, "transport error; retrying");
+                    tokio::time::sleep(delay).await;
+                    attempt += 1;
+                    continue;
+                }
+                Err(e) => return Err(LlmError::Http(e.to_string())),
+                Ok(resp) => {
+                    let status = resp.status();
+                    if status.is_success() {
+                        break resp
+                            .json::<AnthropicResponse>()
+                            .await
+                            .map_err(|e| LlmError::Decode(e.to_string()))?;
+                    }
+                    if is_retryable_status(status) && attempt < self.max_retries {
+                        // Honor server-side retry-after if present.
+                        let server_hint = resp
+                            .headers()
+                            .get(reqwest::header::RETRY_AFTER)
+                            .and_then(|v| v.to_str().ok())
+                            .and_then(|s| s.parse::<u64>().ok())
+                            .map(Duration::from_secs);
+                        let delay = server_hint
+                            .unwrap_or_else(|| jittered_backoff(self.initial_backoff, attempt));
+                        tracing::warn!(%status, attempt, ?delay, "retryable api error");
+                        // Drain the body to free the connection before sleeping.
+                        let _ = resp.text().await;
+                        tokio::time::sleep(delay).await;
+                        attempt += 1;
+                        continue;
+                    }
+                    let text = resp.text().await.unwrap_or_default();
+                    return Err(LlmError::Api(format!("{status}: {text}")));
+                }
+            }
+        };
         let content = parsed
             .content
             .into_iter()

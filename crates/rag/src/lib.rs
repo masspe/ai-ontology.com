@@ -15,6 +15,9 @@ pub mod prompt;
 pub mod model;
 pub mod pipeline;
 
-pub use model::{LanguageModel, LlmRequest, LlmResponse, Message, Role, EchoModel, AnthropicModel};
+pub use model::{
+    AnthropicModel, EchoModel, LanguageModel, LlmError, LlmRequest, LlmResponse, Message,
+    Role, TokenUsage,
+};
 pub use pipeline::{RagPipeline, RagAnswer};
 pub use prompt::PromptBuilder;
