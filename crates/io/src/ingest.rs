@@ -6,6 +6,62 @@ use thiserror::Error;
 
 use crate::record::Record;
 
+/// Drains the entire graph through `sink` as a stream of `Ontology` ->
+/// `Concept`(s) -> `Relation`(s) records. The output round-trips through
+/// `ingest_records` to rebuild the same graph.
+pub async fn export_graph<S: Sink + ?Sized>(
+    graph: &Arc<OntologyGraph>,
+    sink: &mut S,
+) -> Result<ExportStats, IngestError> {
+    let mut stats = ExportStats::default();
+    sink.write(&Record::Ontology(graph.ontology())).await?;
+
+    let concepts = graph.all_concepts();
+    let ontology = graph.ontology();
+    let mut relation_ids: std::collections::HashSet<ontology_graph::RelationId> =
+        std::collections::HashSet::new();
+    // Symmetric edges materialize an inverse on insert, so the graph holds
+    // both directions. Re-ingest would materialize another inverse — emit
+    // only the canonical direction.
+    let mut seen_symmetric: std::collections::HashSet<
+        (String, ontology_graph::ConceptId, ontology_graph::ConceptId),
+    > = std::collections::HashSet::new();
+    for c in &concepts {
+        sink.write(&Record::Concept(c.clone())).await?;
+        stats.concepts += 1;
+    }
+    for c in &concepts {
+        for r in graph.outgoing(c.id) {
+            if !relation_ids.insert(r.id) { continue; }
+            let symmetric = ontology
+                .relation_types
+                .get(&r.relation_type)
+                .map(|rt| rt.symmetric)
+                .unwrap_or(false);
+            if symmetric {
+                let (a, b) = if r.source <= r.target {
+                    (r.source, r.target)
+                } else {
+                    (r.target, r.source)
+                };
+                if !seen_symmetric.insert((r.relation_type.clone(), a, b)) {
+                    continue;
+                }
+            }
+            sink.write(&Record::Relation(r)).await?;
+            stats.relations += 1;
+        }
+    }
+    sink.finish().await?;
+    Ok(stats)
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct ExportStats {
+    pub concepts: u64,
+    pub relations: u64,
+}
+
 #[derive(Debug, Error)]
 pub enum IngestError {
     #[error("io: {0}")]

@@ -18,4 +18,4 @@ pub use id::{ConceptId, RelationId};
 pub use schema::{Ontology, ConceptType, RelationType, Cardinality};
 pub use model::{Concept, Relation, Property, PropertyValue};
 pub use graph::OntologyGraph;
-pub use traversal::{Subgraph, TraversalSpec, Direction};
+pub use traversal::{Subgraph, TraversalSpec, Direction, Path, PathStep};
