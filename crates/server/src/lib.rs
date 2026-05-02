@@ -17,11 +17,13 @@
 
 use axum::{
     extract::{Path, State},
-    http::StatusCode,
+    http::{HeaderValue, Request, StatusCode},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{delete, get, post},
     Json, Router,
 };
+use std::sync::Arc as StdArc;
 use ontology_graph::{Concept, ConceptId, OntologyGraph, Path as GraphPath, Relation, RelationId};
 use ontology_index::{HybridIndex, RetrievalRequest, ScoredConcept};
 use ontology_rag::{RagAnswer, RagPipeline};
@@ -41,8 +43,19 @@ pub struct AppState {
 }
 
 pub fn build_router(state: AppState) -> Router {
-    Router::new()
-        .route("/healthz", get(healthz))
+    build_router_with_auth(state, None)
+}
+
+/// Same as [`build_router`], plus a bearer-token gate. When `bearer_token`
+/// is `Some(t)`, every route except `/healthz` requires
+/// `Authorization: Bearer <t>`. Compares with constant-time equality.
+pub fn build_router_with_auth(
+    state: AppState,
+    bearer_token: Option<String>,
+) -> Router {
+    let healthz_router = Router::new().route("/healthz", get(healthz));
+
+    let protected = Router::new()
         .route("/stats", get(stats))
         .route("/concepts", post(create_concept))
         .route("/concepts/:id", delete(delete_concept))
@@ -51,7 +64,45 @@ pub fn build_router(state: AppState) -> Router {
         .route("/ask", post(ask))
         .route("/path", post(path))
         .route("/compact", post(compact))
-        .with_state(state)
+        .with_state(state);
+
+    let protected = match bearer_token {
+        Some(token) => {
+            let token = StdArc::new(token);
+            protected.layer(middleware::from_fn(move |req, next| {
+                let token = token.clone();
+                async move { require_bearer(req, next, token).await }
+            }))
+        }
+        None => protected,
+    };
+
+    healthz_router.merge(protected)
+}
+
+async fn require_bearer(
+    req: Request<axum::body::Body>,
+    next: Next,
+    expected: StdArc<String>,
+) -> Result<Response, StatusCode> {
+    let header = req
+        .headers()
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v: &HeaderValue| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .map(|s| s.to_string());
+
+    match header {
+        Some(provided) => {
+            // Constant-time compare to avoid leaking the token via timing.
+            let a = provided.as_bytes();
+            let b = expected.as_bytes();
+            let eq = a.len() == b.len()
+                && a.iter().zip(b.iter()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0;
+            if eq { Ok(next.run(req).await) } else { Err(StatusCode::UNAUTHORIZED) }
+        }
+        None => Err(StatusCode::UNAUTHORIZED),
+    }
 }
 
 #[derive(Deserialize)]

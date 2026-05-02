@@ -3,11 +3,19 @@ use http::{Request, StatusCode};
 use ontology_graph::{ConceptType, Ontology, OntologyGraph, RelationType};
 use ontology_index::HybridIndex;
 use ontology_rag::{EchoModel, RagPipeline};
-use ontology_server::{build_router, AppState};
+use ontology_server::{build_router, build_router_with_auth, AppState};
 use ontology_storage::{MemoryStore, Store};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tower::ServiceExt;
+
+fn make_state() -> AppState {
+    let graph = OntologyGraph::with_arc(ontology());
+    let index = Arc::new(HybridIndex::with_default_embedder(graph.clone()));
+    let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
+    let pipeline = Arc::new(RagPipeline::new(index.clone(), Arc::new(EchoModel)));
+    AppState { graph, index, store, pipeline }
+}
 
 fn ontology() -> Ontology {
     let mut o = Ontology::new();
@@ -79,4 +87,37 @@ async fn create_retrieve_delete_round_trip() {
         .await.unwrap();
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
     assert_eq!(graph.concept_count(), 0);
+}
+
+#[tokio::test]
+async fn bearer_auth_blocks_missing_or_wrong_token() {
+    let app = build_router_with_auth(make_state(), Some("s3cret".into()));
+
+    // /healthz is unauthenticated.
+    let resp = app.clone().oneshot(
+        Request::builder().method("GET").uri("/healthz").body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // No Authorization header → 401.
+    let resp = app.clone().oneshot(
+        Request::builder().method("GET").uri("/stats").body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    // Wrong token → 401.
+    let resp = app.clone().oneshot(
+        Request::builder().method("GET").uri("/stats")
+            .header("authorization", "Bearer wrong")
+            .body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    // Right token → 200.
+    let resp = app.clone().oneshot(
+        Request::builder().method("GET").uri("/stats")
+            .header("authorization", "Bearer s3cret")
+            .body(Body::empty()).unwrap(),
+    ).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
 }

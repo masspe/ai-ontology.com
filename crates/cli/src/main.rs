@@ -3,7 +3,7 @@ use clap::{Parser, Subcommand};
 use ontology_graph::{Ontology, OntologyGraph};
 use ontology_index::{HybridIndex, RetrievalRequest};
 use ontology_io::{export_graph, ingest_records, CsvSource, JsonlSink, JsonlSource, TripleSource};
-use ontology_server::{build_router, AppState};
+use ontology_server::AppState;
 use ontology_rag::{AnthropicModel, EchoModel, RagPipeline};
 use ontology_storage::{FileStore, MemoryStore, Store};
 use std::path::PathBuf;
@@ -86,6 +86,12 @@ enum Cmd {
         anthropic: bool,
         #[arg(long, default_value = "claude-opus-4-7")]
         model: String,
+        /// Optional bearer token. When set, every route except /healthz
+        /// requires `Authorization: Bearer <token>`. Reads from the env
+        /// var named here, NOT the literal value, so the secret never
+        /// appears in process listings or shell history.
+        #[arg(long)]
+        auth_env: Option<String>,
     },
 }
 
@@ -237,7 +243,7 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        Cmd::Serve { bind, anthropic, model } => {
+        Cmd::Serve { bind, anthropic, model, auth_env } => {
             let llm: Arc<dyn ontology_rag::LanguageModel> = if anthropic {
                 let key = std::env::var("ANTHROPIC_API_KEY")
                     .context("ANTHROPIC_API_KEY required for --anthropic")?;
@@ -252,7 +258,14 @@ async fn main() -> Result<()> {
                 store: store.clone(),
                 pipeline,
             };
-            let app = build_router(state);
+            let bearer = match auth_env {
+                Some(env_name) => Some(
+                    std::env::var(&env_name)
+                        .with_context(|| format!("env var `{env_name}` is unset"))?,
+                ),
+                None => None,
+            };
+            let app = ontology_server::build_router_with_auth(state, bearer);
             let listener = tokio::net::TcpListener::bind(&bind).await?;
             tracing::info!(addr = %bind, "server listening");
             axum::serve(listener, app).await?;

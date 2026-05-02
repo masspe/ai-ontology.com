@@ -4,7 +4,9 @@
 //! tokio TCP server speaking the minimum HTTP needed by reqwest.
 
 use ontology_rag::{AnthropicModel, LanguageModel, LlmRequest, Message};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
@@ -99,6 +101,106 @@ async fn cached_context_serializes_with_cache_control_and_no_temperature_on_opus
     assert!(arr[0].get("cache_control").is_none());
     assert!(arr[1]["text"].as_str().unwrap().contains("Ontology"));
     assert_eq!(arr[1]["cache_control"]["type"], "ephemeral");
+}
+
+/// Server that answers 503 for the first `fail_count` connections, then 200.
+async fn run_flaky_stub(fail_count: usize) -> (u16, Arc<AtomicUsize>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let count = Arc::new(AtomicUsize::new(0));
+    let count_clone = count.clone();
+    tokio::spawn(async move {
+        loop {
+            let (mut sock, _) = match listener.accept().await {
+                Ok(p) => p,
+                Err(_) => break,
+            };
+            let n = count_clone.fetch_add(1, Ordering::SeqCst);
+            // Drain the request so the client sees a clean response.
+            let mut buf = vec![0u8; 16 * 1024];
+            let mut total = 0;
+            let mut content_length: Option<usize> = None;
+            let mut header_end: Option<usize> = None;
+            loop {
+                let r = sock.read(&mut buf[total..]).await.unwrap_or(0);
+                if r == 0 { break; }
+                total += r;
+                let view = &buf[..total];
+                if header_end.is_none() {
+                    if let Some(pos) = view.windows(4).position(|w| w == b"\r\n\r\n") {
+                        header_end = Some(pos + 4);
+                        let headers = std::str::from_utf8(&view[..pos]).unwrap_or("");
+                        for line in headers.split("\r\n") {
+                            if let Some(rest) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                                content_length = rest.trim().parse().ok();
+                            }
+                        }
+                    }
+                }
+                if let (Some(he), Some(cl)) = (header_end, content_length) {
+                    if total >= he + cl { break; }
+                }
+                if total == buf.len() { break; }
+            }
+            if n < fail_count {
+                let body = b"{\"error\":\"upstream\"}";
+                let resp = format!(
+                    "HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len(),
+                );
+                let _ = sock.write_all(resp.as_bytes()).await;
+                let _ = sock.write_all(body).await;
+            } else {
+                let body = br#"{"id":"msg_x","type":"message","role":"assistant","model":"claude-opus-4-7","stop_reason":"end_turn","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":1,"output_tokens":1,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}"#;
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len(),
+                );
+                let _ = sock.write_all(resp.as_bytes()).await;
+                let _ = sock.write_all(body).await;
+            }
+            let _ = sock.shutdown().await;
+        }
+    });
+    (port, count)
+}
+
+#[tokio::test]
+async fn retries_503_with_backoff() {
+    let (port, count) = run_flaky_stub(2).await;
+    let model = AnthropicModel::new("test-key")
+        .with_base_url(format!("http://127.0.0.1:{port}"))
+        .with_model("claude-opus-4-7")
+        .with_max_retries(3)
+        .with_initial_backoff(Duration::from_millis(5));
+
+    let resp = model.generate(&LlmRequest {
+        messages: vec![Message::user("hi")],
+        max_tokens: 8,
+        ..Default::default()
+    }).await.unwrap();
+    assert_eq!(resp.content, "ok");
+    // 2 failures + 1 success = 3 connections.
+    assert_eq!(count.load(Ordering::SeqCst), 3);
+}
+
+#[tokio::test]
+async fn surfaces_error_after_max_retries_exhausted() {
+    let (port, count) = run_flaky_stub(usize::MAX).await; // always 503
+    let model = AnthropicModel::new("test-key")
+        .with_base_url(format!("http://127.0.0.1:{port}"))
+        .with_model("claude-opus-4-7")
+        .with_max_retries(2)
+        .with_initial_backoff(Duration::from_millis(2));
+
+    let err = model.generate(&LlmRequest {
+        messages: vec![Message::user("hi")],
+        max_tokens: 8,
+        ..Default::default()
+    }).await.unwrap_err();
+    assert!(matches!(err, ontology_rag::LlmError::Api(_)));
+    // 1 initial + 2 retries = 3 attempts.
+    assert_eq!(count.load(Ordering::SeqCst), 3);
 }
 
 #[tokio::test]

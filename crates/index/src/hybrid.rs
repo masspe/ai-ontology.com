@@ -26,6 +26,13 @@ pub struct RetrievalRequest {
     /// Weight on the lexical score (0..=1). Vector weight is `1 - lexical_weight`.
     #[serde(default = "default_lex_w")]
     pub lexical_weight: f32,
+    /// Optional whitelist of concept type names. When set, ranking only
+    /// considers concepts whose type matches one of these (post-filter on
+    /// the lexical and vector pools, before fusion). Subtype inheritance
+    /// is honored — passing `["Person"]` matches any subtype of `Person`
+    /// declared in the ontology.
+    #[serde(default)]
+    pub concept_types: Vec<String>,
     /// Subgraph expansion spec applied to top-k seeds.
     #[serde(default)]
     pub expansion: TraversalSpec,
@@ -40,6 +47,7 @@ impl Default for RetrievalRequest {
             query: String::new(),
             top_k: default_top_k(),
             lexical_weight: default_lex_w(),
+            concept_types: Vec::new(),
             expansion: TraversalSpec::default(),
         }
     }
@@ -96,7 +104,10 @@ impl HybridIndex {
     pub fn rank(&self, req: &RetrievalRequest) -> Vec<ScoredConcept> {
         let lex_w = req.lexical_weight.clamp(0.0, 1.0);
         let vec_w = 1.0 - lex_w;
-        let pool = req.top_k.max(1) * 4;
+        // Pull a wider pool when type-filtering so we have candidates left
+        // after the filter trims rejects.
+        let pool_mult = if req.concept_types.is_empty() { 4 } else { 16 };
+        let pool = req.top_k.max(1) * pool_mult;
 
         let lex = self.lexical.search(&req.query, pool);
         let vec = self.vector.search(&req.query, pool);
@@ -104,14 +115,29 @@ impl HybridIndex {
         let lex_max = lex.iter().map(|(_, s)| *s).fold(0f32, f32::max).max(1e-6);
         let vec_max = vec.iter().map(|(_, s)| *s).fold(0f32, f32::max).max(1e-6);
 
+        // Build the type whitelist closure once, honoring subtype inheritance.
+        let onto = self.graph.ontology();
+        let allow_id = |id: ConceptId| -> bool {
+            if req.concept_types.is_empty() { return true; }
+            match self.graph.get_concept(id) {
+                Ok(c) => req
+                    .concept_types
+                    .iter()
+                    .any(|wanted| onto.is_subtype(&c.concept_type, wanted)),
+                Err(_) => false,
+            }
+        };
+
         let mut combined: AHashMap<ConceptId, ScoredConcept> = AHashMap::new();
         for (id, s) in &lex {
+            if !allow_id(*id) { continue; }
             let n = s / lex_max;
             combined.entry(*id).or_insert(ScoredConcept {
                 id: *id, score: 0.0, lexical: 0.0, vector: 0.0,
             }).lexical = n;
         }
         for (id, s) in &vec {
+            if !allow_id(*id) { continue; }
             let n = s / vec_max;
             combined.entry(*id).or_insert(ScoredConcept {
                 id: *id, score: 0.0, lexical: 0.0, vector: 0.0,
@@ -177,5 +203,46 @@ mod tests {
             ..Default::default()
         });
         assert_eq!(ranked.first().map(|s| s.id), Some(rag));
+    }
+
+    #[test]
+    fn concept_type_filter_excludes_other_types() {
+        // Two concept types share lexical overlap; the filter must keep
+        // only the requested type in the ranking output.
+        let mut o = ontology();
+        o.add_concept_type(ontology_graph::ConceptType {
+            name: "Person".into(), parent: None, properties: None,
+            description: "human".into(),
+        });
+        let g = OntologyGraph::with_arc(o);
+        let topic = g.upsert_concept(
+            Concept::new(Default::default(), "Topic", "Vector Search"),
+        ).unwrap();
+        let person = g.upsert_concept(
+            Concept::new(Default::default(), "Person", "Vector Search Researcher"),
+        ).unwrap();
+
+        let idx = HybridIndex::with_default_embedder(g.clone());
+        idx.reindex_all();
+
+        // Without filter: both rank.
+        let (ranked, _) = idx.retrieve(&RetrievalRequest {
+            query: "vector search".into(),
+            top_k: 5,
+            ..Default::default()
+        });
+        let ids: Vec<_> = ranked.iter().map(|s| s.id).collect();
+        assert!(ids.contains(&topic) && ids.contains(&person));
+
+        // With filter: only Topic.
+        let (ranked, _) = idx.retrieve(&RetrievalRequest {
+            query: "vector search".into(),
+            top_k: 5,
+            concept_types: vec!["Topic".into()],
+            ..Default::default()
+        });
+        let ids: Vec<_> = ranked.iter().map(|s| s.id).collect();
+        assert!(ids.contains(&topic), "Topic should rank");
+        assert!(!ids.contains(&person), "Person should be filtered out");
     }
 }
