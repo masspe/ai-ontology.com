@@ -39,12 +39,17 @@ impl OntologyGraph {
         }
     }
 
-    pub fn with_arc(ontology: Ontology) -> Arc<Self> { Arc::new(Self::new(ontology)) }
+    pub fn with_arc(ontology: Ontology) -> Arc<Self> {
+        Arc::new(Self::new(ontology))
+    }
 
-    pub fn ontology(&self) -> Ontology { self.ontology.read().clone() }
+    pub fn ontology(&self) -> Ontology {
+        self.ontology.read().clone()
+    }
 
     pub fn extend_ontology<F>(&self, f: F) -> GraphResult<()>
-    where F: FnOnce(&mut Ontology) -> GraphResult<()>,
+    where
+        F: FnOnce(&mut Ontology) -> GraphResult<()>,
     {
         let mut g = self.ontology.write();
         f(&mut g)
@@ -101,8 +106,12 @@ impl OntologyGraph {
             .map(|v| *v)
     }
 
-    pub fn concept_count(&self) -> usize { self.concepts.len() }
-    pub fn relation_count(&self) -> usize { self.relations.len() }
+    pub fn concept_count(&self) -> usize {
+        self.concepts.len()
+    }
+    pub fn relation_count(&self) -> usize {
+        self.relations.len()
+    }
 
     pub fn all_concepts(&self) -> Vec<Concept> {
         self.concepts.iter().map(|e| e.value().clone()).collect()
@@ -111,8 +120,14 @@ impl OntologyGraph {
     // ---------- relations ----------
 
     pub fn add_relation(&self, mut rel: Relation) -> GraphResult<RelationId> {
-        let src = self.concepts.get(&rel.source).ok_or(GraphError::UnknownConcept(rel.source))?;
-        let tgt = self.concepts.get(&rel.target).ok_or(GraphError::UnknownConcept(rel.target))?;
+        let src = self
+            .concepts
+            .get(&rel.source)
+            .ok_or(GraphError::UnknownConcept(rel.source))?;
+        let tgt = self
+            .concepts
+            .get(&rel.target)
+            .ok_or(GraphError::UnknownConcept(rel.target))?;
         {
             let onto = self.ontology.read();
             onto.validate_edge(&rel.relation_type, &src.concept_type, &tgt.concept_type)?;
@@ -135,7 +150,8 @@ impl OntologyGraph {
         } else {
             self.ids.observe(rel.id.0);
         }
-        drop(src); drop(tgt);
+        drop(src);
+        drop(tgt);
 
         let id = rel.id;
         let (s, t) = (rel.source, rel.target);
@@ -232,10 +248,14 @@ impl OntologyGraph {
 
         let mut removed: Vec<RelationId> = Vec::new();
         if let Some((_, adj)) = self.out_edges.remove(&id) {
-            for rid in adj { removed.push(rid); }
+            for rid in adj {
+                removed.push(rid);
+            }
         }
         if let Some((_, adj)) = self.in_edges.remove(&id) {
-            for rid in adj { removed.push(rid); }
+            for rid in adj {
+                removed.push(rid);
+            }
         }
         removed.sort();
         removed.dedup();
@@ -243,7 +263,11 @@ impl OntologyGraph {
         for rid in &removed {
             if let Some((_, rel)) = self.relations.remove(rid) {
                 // Scrub the surviving endpoint's adjacency list.
-                let other = if rel.source == id { rel.target } else { rel.source };
+                let other = if rel.source == id {
+                    rel.target
+                } else {
+                    rel.source
+                };
                 if let Some(mut adj) = self.out_edges.get_mut(&other) {
                     adj.retain(|x| x != rid);
                 }
@@ -257,7 +281,11 @@ impl OntologyGraph {
 
     /// Remove a single relation by id. No-op if already gone.
     pub fn remove_relation(&self, id: RelationId) -> GraphResult<()> {
-        let rel = self.relations.remove(&id).ok_or(GraphError::UnknownRelation(id))?.1;
+        let rel = self
+            .relations
+            .remove(&id)
+            .ok_or(GraphError::UnknownRelation(id))?
+            .1;
         if let Some(mut adj) = self.out_edges.get_mut(&rel.source) {
             adj.retain(|x| *x != id);
         }
@@ -299,12 +327,16 @@ mod tests {
     fn toy_ontology() -> Ontology {
         let mut o = Ontology::new();
         o.add_concept_type(ConceptType {
-            name: "Person".into(), parent: None,
-            properties: None, description: "a human".into(),
+            name: "Person".into(),
+            parent: None,
+            properties: None,
+            description: "a human".into(),
         });
         o.add_concept_type(ConceptType {
-            name: "Paper".into(), parent: None,
-            properties: None, description: "research paper".into(),
+            name: "Paper".into(),
+            parent: None,
+            properties: None,
+            description: "research paper".into(),
         });
         o.add_relation_type(RelationType {
             name: "authored".into(),
@@ -313,16 +345,22 @@ mod tests {
             cardinality: Default::default(),
             symmetric: false,
             description: "authorship".into(),
-        }).unwrap();
+        })
+        .unwrap();
         o
     }
 
     #[test]
     fn insert_and_traverse() {
         let g = OntologyGraph::new(toy_ontology());
-        let alice = g.upsert_concept(Concept::new(Default::default(), "Person", "Alice")).unwrap();
-        let paper = g.upsert_concept(Concept::new(Default::default(), "Paper", "On RAG")).unwrap();
-        g.add_relation(Relation::new(Default::default(), "authored", alice, paper)).unwrap();
+        let alice = g
+            .upsert_concept(Concept::new(Default::default(), "Person", "Alice"))
+            .unwrap();
+        let paper = g
+            .upsert_concept(Concept::new(Default::default(), "Paper", "On RAG"))
+            .unwrap();
+        g.add_relation(Relation::new(Default::default(), "authored", alice, paper))
+            .unwrap();
         assert_eq!(g.outgoing(alice).len(), 1);
         assert_eq!(g.incoming(paper).len(), 1);
     }
@@ -330,11 +368,19 @@ mod tests {
     #[test]
     fn remove_concept_cascades_relations() {
         let g = OntologyGraph::new(toy_ontology());
-        let alice = g.upsert_concept(Concept::new(Default::default(), "Person", "Alice")).unwrap();
-        let p1 = g.upsert_concept(Concept::new(Default::default(), "Paper", "P1")).unwrap();
-        let p2 = g.upsert_concept(Concept::new(Default::default(), "Paper", "P2")).unwrap();
-        g.add_relation(Relation::new(Default::default(), "authored", alice, p1)).unwrap();
-        g.add_relation(Relation::new(Default::default(), "authored", alice, p2)).unwrap();
+        let alice = g
+            .upsert_concept(Concept::new(Default::default(), "Person", "Alice"))
+            .unwrap();
+        let p1 = g
+            .upsert_concept(Concept::new(Default::default(), "Paper", "P1"))
+            .unwrap();
+        let p2 = g
+            .upsert_concept(Concept::new(Default::default(), "Paper", "P2"))
+            .unwrap();
+        g.add_relation(Relation::new(Default::default(), "authored", alice, p1))
+            .unwrap();
+        g.add_relation(Relation::new(Default::default(), "authored", alice, p2))
+            .unwrap();
         assert_eq!(g.relation_count(), 2);
 
         let removed = g.remove_concept(alice).unwrap();
@@ -349,46 +395,72 @@ mod tests {
         use crate::model::{ConceptPatch, PropertyValue};
         use ahash::AHashMap;
         let g = OntologyGraph::new(toy_ontology());
-        let alice = g.upsert_concept(
-            Concept::new(Default::default(), "Person", "Alice")
-                .with_description("the original"),
-        ).unwrap();
+        let alice = g
+            .upsert_concept(
+                Concept::new(Default::default(), "Person", "Alice")
+                    .with_description("the original"),
+            )
+            .unwrap();
 
         // Rename + new description + properties.
         let mut props = AHashMap::new();
         props.insert("nickname".into(), PropertyValue::Text("Ali".into()));
-        let patched = g.update_concept(alice, ConceptPatch {
-            name: Some("Alicia".into()),
-            description: Some("renamed".into()),
-            properties: Some(props),
-        }).unwrap();
+        let patched = g
+            .update_concept(
+                alice,
+                ConceptPatch {
+                    name: Some("Alicia".into()),
+                    description: Some("renamed".into()),
+                    properties: Some(props),
+                },
+            )
+            .unwrap();
         assert_eq!(patched.name, "Alicia");
         assert_eq!(patched.description, "renamed");
-        assert_eq!(patched.properties.get("nickname").and_then(|v| v.as_text()), Some("Ali"));
+        assert_eq!(
+            patched.properties.get("nickname").and_then(|v| v.as_text()),
+            Some("Ali")
+        );
 
         // Old name binding cleared, new one in place.
         assert!(g.find_by_name("Person", "Alice").is_none());
         assert_eq!(g.find_by_name("Person", "Alicia"), Some(alice));
 
         // Renaming onto an occupied name fails.
-        let bob = g.upsert_concept(Concept::new(Default::default(), "Person", "Bob")).unwrap();
-        let err = g.update_concept(bob, ConceptPatch {
-            name: Some("Alicia".into()),
-            ..Default::default()
-        });
+        let bob = g
+            .upsert_concept(Concept::new(Default::default(), "Person", "Bob"))
+            .unwrap();
+        let err = g.update_concept(
+            bob,
+            ConceptPatch {
+                name: Some("Alicia".into()),
+                ..Default::default()
+            },
+        );
         assert!(err.is_err());
     }
 
     #[test]
     fn shortest_path_finds_two_hop_link() {
         let g = OntologyGraph::new(toy_ontology());
-        let alice = g.upsert_concept(Concept::new(Default::default(), "Person", "Alice")).unwrap();
-        let p = g.upsert_concept(Concept::new(Default::default(), "Paper", "P")).unwrap();
-        let bob = g.upsert_concept(Concept::new(Default::default(), "Person", "Bob")).unwrap();
-        g.add_relation(Relation::new(Default::default(), "authored", alice, p)).unwrap();
-        g.add_relation(Relation::new(Default::default(), "authored", bob, p)).unwrap();
+        let alice = g
+            .upsert_concept(Concept::new(Default::default(), "Person", "Alice"))
+            .unwrap();
+        let p = g
+            .upsert_concept(Concept::new(Default::default(), "Paper", "P"))
+            .unwrap();
+        let bob = g
+            .upsert_concept(Concept::new(Default::default(), "Person", "Bob"))
+            .unwrap();
+        g.add_relation(Relation::new(Default::default(), "authored", alice, p))
+            .unwrap();
+        g.add_relation(Relation::new(Default::default(), "authored", bob, p))
+            .unwrap();
 
-        let path = g.shortest_path(alice, bob, 4).unwrap().expect("path exists");
+        let path = g
+            .shortest_path(alice, bob, 4)
+            .unwrap()
+            .expect("path exists");
         assert_eq!(path.len(), 2);
         assert_eq!(path.start.name, "Alice");
         assert_eq!(path.steps.last().unwrap().concept.name, "Bob");
@@ -398,15 +470,21 @@ mod tests {
         assert!(same.is_empty());
 
         // Bound the depth — disconnect should report None.
-        let lone = g.upsert_concept(Concept::new(Default::default(), "Person", "Eve")).unwrap();
+        let lone = g
+            .upsert_concept(Concept::new(Default::default(), "Person", "Eve"))
+            .unwrap();
         assert!(g.shortest_path(alice, lone, 4).unwrap().is_none());
     }
 
     #[test]
     fn schema_violation_rejected() {
         let g = OntologyGraph::new(toy_ontology());
-        let a = g.upsert_concept(Concept::new(Default::default(), "Paper", "P1")).unwrap();
-        let b = g.upsert_concept(Concept::new(Default::default(), "Paper", "P2")).unwrap();
+        let a = g
+            .upsert_concept(Concept::new(Default::default(), "Paper", "P1"))
+            .unwrap();
+        let b = g
+            .upsert_concept(Concept::new(Default::default(), "Paper", "P2"))
+            .unwrap();
         let res = g.add_relation(Relation::new(Default::default(), "authored", a, b));
         assert!(res.is_err());
     }

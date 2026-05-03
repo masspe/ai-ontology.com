@@ -12,11 +12,11 @@
 //! a bounded subgraph that's ready to ship to a language model.
 
 pub mod embed;
+pub mod hybrid;
 pub mod lexical;
 pub mod vector;
-pub mod hybrid;
 
 pub use embed::{Embedder, HashEmbedder};
+pub use hybrid::{HybridIndex, RetrievalRequest, ScoredConcept};
 pub use lexical::LexicalIndex;
 pub use vector::VectorIndex;
-pub use hybrid::{HybridIndex, RetrievalRequest, ScoredConcept};

@@ -20,7 +20,9 @@ enum LinesReader {
 impl JsonlSource {
     pub async fn open(path: impl AsRef<Path>) -> Result<Self, IngestError> {
         let file = File::open(path.as_ref()).await?;
-        Ok(Self { lines: LinesReader::File(BufReader::new(file).lines()) })
+        Ok(Self {
+            lines: LinesReader::File(BufReader::new(file).lines()),
+        })
     }
 
     /// Read JSONL from stdin. Useful for piping: `cat data.jsonl | ontology ingest -`.
@@ -65,8 +67,11 @@ impl JsonlSink {
     pub async fn create(path: impl AsRef<Path>) -> Result<Self, IngestError> {
         let path = path.as_ref().to_path_buf();
         let file = OpenOptions::new()
-            .create(true).truncate(true).write(true)
-            .open(&path).await?;
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(&path)
+            .await?;
         Ok(Self { file, path })
     }
 }

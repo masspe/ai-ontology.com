@@ -24,21 +24,39 @@ pub struct LogRecord {
 
 impl LogRecord {
     pub fn ontology(o: Ontology) -> Self {
-        Self { seq: 0, kind: RecordKind::Ontology(o) }
+        Self {
+            seq: 0,
+            kind: RecordKind::Ontology(o),
+        }
     }
     pub fn concept(c: Concept) -> Self {
-        Self { seq: 0, kind: RecordKind::Concept(c) }
+        Self {
+            seq: 0,
+            kind: RecordKind::Concept(c),
+        }
     }
     pub fn relation(r: Relation) -> Self {
-        Self { seq: 0, kind: RecordKind::Relation(r) }
+        Self {
+            seq: 0,
+            kind: RecordKind::Relation(r),
+        }
     }
     pub fn update_concept(c: Concept) -> Self {
-        Self { seq: 0, kind: RecordKind::UpdateConcept(c) }
+        Self {
+            seq: 0,
+            kind: RecordKind::UpdateConcept(c),
+        }
     }
     pub fn delete_concept(id: ConceptId) -> Self {
-        Self { seq: 0, kind: RecordKind::DeleteConcept(id) }
+        Self {
+            seq: 0,
+            kind: RecordKind::DeleteConcept(id),
+        }
     }
     pub fn delete_relation(id: RelationId) -> Self {
-        Self { seq: 0, kind: RecordKind::DeleteRelation(id) }
+        Self {
+            seq: 0,
+            kind: RecordKind::DeleteRelation(id),
+        }
     }
 }

@@ -21,6 +21,9 @@ async-trait = { workspace = true }
 tower = { workspace = true, features = ["util"] }
 hyper = { workspace = true }
 http = { workspace = true }
+futures = { workspace = true }
+parking_lot = { workspace = true }
+ahash = { workspace = true }
 
 [dev-dependencies]
 ontology-graph = { workspace = true }

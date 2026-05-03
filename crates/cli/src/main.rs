@@ -3,8 +3,8 @@ use clap::{Parser, Subcommand};
 use ontology_graph::{Ontology, OntologyGraph};
 use ontology_index::{HybridIndex, RetrievalRequest};
 use ontology_io::{export_graph, ingest_records, CsvSource, JsonlSink, JsonlSource, TripleSource};
-use ontology_server::AppState;
 use ontology_rag::{AnthropicModel, EchoModel, RagPipeline};
+use ontology_server::AppState;
 use ontology_storage::{FileStore, MemoryStore, Store};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -62,9 +62,7 @@ enum Cmd {
     /// Snapshot then truncate the WAL. Bounds disk usage on busy stores.
     Compact,
     /// Export the entire graph as a JSONL stream of tagged records.
-    Export {
-        path: PathBuf,
-    },
+    Export { path: PathBuf },
     /// Find a shortest path between two named concepts.
     Path {
         #[arg(long)]
@@ -98,8 +96,10 @@ enum Cmd {
 #[tokio::main]
 async fn main() -> Result<()> {
     fmt()
-        .with_env_filter(EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| EnvFilter::new("info,ontology=debug")))
+        .with_env_filter(
+            EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| EnvFilter::new("info,ontology=debug")),
+        )
         .with_target(false)
         .init();
 
@@ -111,18 +111,30 @@ async fn main() -> Result<()> {
     };
 
     let graph = OntologyGraph::with_arc(Ontology::new());
-    store.load_into(&graph).await.context("loading existing data")?;
+    store
+        .load_into(&graph)
+        .await
+        .context("loading existing data")?;
 
     let index = Arc::new(HybridIndex::with_default_embedder(graph.clone()));
     index.reindex_all();
 
     match cli.cmd {
-        Cmd::Ingest { ontology, csv_type, path } => {
+        Cmd::Ingest {
+            ontology,
+            csv_type,
+            path,
+        } => {
             if let Some(p) = ontology {
                 let raw = tokio::fs::read_to_string(&p).await?;
                 let onto: Ontology = serde_json::from_str(&raw)?;
-                graph.extend_ontology(|target| { *target = onto.clone(); Ok(()) })?;
-                store.append(&ontology_storage::LogRecord::ontology(onto)).await?;
+                graph.extend_ontology(|target| {
+                    *target = onto.clone();
+                    Ok(())
+                })?;
+                store
+                    .append(&ontology_storage::LogRecord::ontology(onto))
+                    .await?;
             }
             // `-` reads JSONL from stdin (handy for piping).
             let stats = if path.as_os_str() == "-" {
@@ -162,8 +174,16 @@ async fn main() -> Result<()> {
                 onto.relation_types.len(),
             );
         }
-        Cmd::Retrieve { query, top_k, depth } => {
-            let mut req = RetrievalRequest { query, top_k, ..Default::default() };
+        Cmd::Retrieve {
+            query,
+            top_k,
+            depth,
+        } => {
+            let mut req = RetrievalRequest {
+                query,
+                top_k,
+                ..Default::default()
+            };
             req.expansion.max_depth = depth;
             let (scored, subgraph) = index.retrieve(&req);
             println!("# top-{} concepts", scored.len());
@@ -175,8 +195,11 @@ async fn main() -> Result<()> {
                     );
                 }
             }
-            println!("\n# subgraph: {} concepts, {} edges",
-                subgraph.concepts.len(), subgraph.relations.len());
+            println!(
+                "\n# subgraph: {} concepts, {} edges",
+                subgraph.concepts.len(),
+                subgraph.relations.len()
+            );
             for r in &subgraph.relations {
                 let s = subgraph.concepts.iter().find(|c| c.id == r.source);
                 let t = subgraph.concepts.iter().find(|c| c.id == r.target);
@@ -185,7 +208,13 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        Cmd::Ask { query, top_k, depth, anthropic, model } => {
+        Cmd::Ask {
+            query,
+            top_k,
+            depth,
+            anthropic,
+            model,
+        } => {
             let llm: Arc<dyn ontology_rag::LanguageModel> = if anthropic {
                 let key = std::env::var("ANTHROPIC_API_KEY")
                     .context("ANTHROPIC_API_KEY required for --anthropic")?;
@@ -194,7 +223,11 @@ async fn main() -> Result<()> {
                 Arc::new(EchoModel)
             };
             let pipe = RagPipeline::new(index.clone(), llm);
-            let mut req = RetrievalRequest { query, top_k, ..Default::default() };
+            let mut req = RetrievalRequest {
+                query,
+                top_k,
+                ..Default::default()
+            };
             req.expansion.max_depth = depth;
             let answer = pipe.answer_with(req).await?;
             println!("--- answer ---\n{}\n", answer.answer);
@@ -208,8 +241,10 @@ async fn main() -> Result<()> {
             if u.input_tokens + u.cache_creation_input_tokens + u.cache_read_input_tokens > 0 {
                 println!(
                     "--- usage --- in={} out={} cache_write={} cache_read={}",
-                    u.input_tokens, u.output_tokens,
-                    u.cache_creation_input_tokens, u.cache_read_input_tokens,
+                    u.input_tokens,
+                    u.output_tokens,
+                    u.cache_creation_input_tokens,
+                    u.cache_read_input_tokens,
                 );
             }
         }
@@ -226,30 +261,44 @@ async fn main() -> Result<()> {
             let stats = export_graph(&graph, &mut sink).await?;
             println!(
                 "exported: {} concepts, {} relations -> {}",
-                stats.concepts, stats.relations, path.display(),
+                stats.concepts,
+                stats.relations,
+                path.display(),
             );
         }
-        Cmd::Path { from_type, from_name, to_type, to_name, max_depth } => {
-            let src = graph.find_by_name(&from_type, &from_name)
-                .ok_or_else(|| anyhow::anyhow!(
-                    "no concept ({from_type}) {from_name}"
-                ))?;
-            let tgt = graph.find_by_name(&to_type, &to_name)
-                .ok_or_else(|| anyhow::anyhow!(
-                    "no concept ({to_type}) {to_name}"
-                ))?;
+        Cmd::Path {
+            from_type,
+            from_name,
+            to_type,
+            to_name,
+            max_depth,
+        } => {
+            let src = graph
+                .find_by_name(&from_type, &from_name)
+                .ok_or_else(|| anyhow::anyhow!("no concept ({from_type}) {from_name}"))?;
+            let tgt = graph
+                .find_by_name(&to_type, &to_name)
+                .ok_or_else(|| anyhow::anyhow!("no concept ({to_type}) {to_name}"))?;
             match graph.shortest_path(src, tgt, max_depth)? {
                 None => println!("no path within depth {max_depth}"),
                 Some(path) => {
                     print!("{}", path.start.name);
                     for step in &path.steps {
-                        print!(" -[{}]-> {}", step.relation.relation_type, step.concept.name);
+                        print!(
+                            " -[{}]-> {}",
+                            step.relation.relation_type, step.concept.name
+                        );
                     }
                     println!("\n({} hops)", path.len());
                 }
             }
         }
-        Cmd::Serve { bind, anthropic, model, auth_env } => {
+        Cmd::Serve {
+            bind,
+            anthropic,
+            model,
+            auth_env,
+        } => {
             let llm: Arc<dyn ontology_rag::LanguageModel> = if anthropic {
                 let key = std::env::var("ANTHROPIC_API_KEY")
                     .context("ANTHROPIC_API_KEY required for --anthropic")?;

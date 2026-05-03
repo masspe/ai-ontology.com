@@ -14,34 +14,60 @@ async fn ingest_persist_retrieve_answer() {
     // Bootstrap the ontology (we own it directly here for the test).
     let mut ont = Ontology::new();
     ont.add_concept_type(ontology_graph::ConceptType {
-        name: "Person".into(), parent: None, properties: None, description: "human".into(),
+        name: "Person".into(),
+        parent: None,
+        properties: None,
+        description: "human".into(),
     });
     ont.add_concept_type(ontology_graph::ConceptType {
-        name: "Paper".into(), parent: None, properties: None, description: "paper".into(),
+        name: "Paper".into(),
+        parent: None,
+        properties: None,
+        description: "paper".into(),
     });
     ont.add_concept_type(ontology_graph::ConceptType {
-        name: "Topic".into(), parent: None, properties: None, description: "topic".into(),
+        name: "Topic".into(),
+        parent: None,
+        properties: None,
+        description: "topic".into(),
     });
     ont.add_relation_type(ontology_graph::RelationType {
-        name: "authored".into(), domain: "Person".into(), range: "Paper".into(),
-        cardinality: Default::default(), symmetric: false, description: "".into(),
-    }).unwrap();
+        name: "authored".into(),
+        domain: "Person".into(),
+        range: "Paper".into(),
+        cardinality: Default::default(),
+        symmetric: false,
+        description: "".into(),
+    })
+    .unwrap();
     ont.add_relation_type(ontology_graph::RelationType {
-        name: "covers".into(), domain: "Paper".into(), range: "Topic".into(),
-        cardinality: Default::default(), symmetric: false, description: "".into(),
-    }).unwrap();
+        name: "covers".into(),
+        domain: "Paper".into(),
+        range: "Topic".into(),
+        cardinality: Default::default(),
+        symmetric: false,
+        description: "".into(),
+    })
+    .unwrap();
 
     let graph = OntologyGraph::with_arc(ont.clone());
-    store.append(&ontology_storage::LogRecord::ontology(ont)).await.unwrap();
+    store
+        .append(&ontology_storage::LogRecord::ontology(ont))
+        .await
+        .unwrap();
 
     let triple_path = tmp.join("seed.triples");
     tokio::fs::write(
         &triple_path,
         "Person:Alice authored Paper:RAG\nPaper:RAG covers Topic:RetrievalAugmentedGeneration\n",
-    ).await.unwrap();
+    )
+    .await
+    .unwrap();
 
     let mut src = TripleSource::open(&triple_path).await.unwrap();
-    let stats = ingest_records(&mut src, &graph, Some(store.as_ref())).await.unwrap();
+    let stats = ingest_records(&mut src, &graph, Some(store.as_ref()))
+        .await
+        .unwrap();
     assert_eq!(stats.concepts, 3);
     assert_eq!(stats.relations, 2);
 
@@ -56,12 +82,15 @@ async fn ingest_persist_retrieve_answer() {
     idx.reindex_all();
 
     let pipe = RagPipeline::new(idx, Arc::new(EchoModel));
-    let ans = pipe.answer_with(RetrievalRequest {
-        query: "retrieval augmented generation".into(),
-        ..Default::default()
-    }).await.unwrap();
+    let ans = pipe
+        .answer_with(RetrievalRequest {
+            query: "retrieval augmented generation".into(),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
     assert!(!ans.retrieved.is_empty());
-    assert!(ans.subgraph.concepts.len() >= 1);
+    assert!(!ans.subgraph.concepts.is_empty());
 
     let _ = std::fs::remove_dir_all(&tmp);
 }
@@ -72,7 +101,9 @@ fn tempdir() -> std::path::PathBuf {
         "ontology-e2e-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
     ));
     std::fs::create_dir_all(&p).unwrap();
     p

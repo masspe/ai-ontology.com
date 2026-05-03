@@ -12,7 +12,9 @@ pub trait Embedder: Send + Sync + 'static {
 /// normalization. Not as good as a real model — but fast, reproducible,
 /// and good enough to demonstrate the retrieval plumbing in tests.
 #[derive(Debug, Clone)]
-pub struct HashEmbedder { dim: usize }
+pub struct HashEmbedder {
+    dim: usize,
+}
 
 impl HashEmbedder {
     pub fn new(dim: usize) -> Self {
@@ -22,11 +24,15 @@ impl HashEmbedder {
 }
 
 impl Default for HashEmbedder {
-    fn default() -> Self { Self::new(256) }
+    fn default() -> Self {
+        Self::new(256)
+    }
 }
 
 impl Embedder for HashEmbedder {
-    fn dim(&self) -> usize { self.dim }
+    fn dim(&self) -> usize {
+        self.dim
+    }
 
     fn embed(&self, text: &str) -> Vec<f32> {
         let mut v = vec![0f32; self.dim];
@@ -57,7 +63,9 @@ pub fn cosine(a: &[f32], b: &[f32]) -> f32 {
 pub(crate) fn l2_normalize(v: &mut [f32]) {
     let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt();
     if norm > 0.0 {
-        for x in v.iter_mut() { *x /= norm; }
+        for x in v.iter_mut() {
+            *x /= norm;
+        }
     }
 }
 

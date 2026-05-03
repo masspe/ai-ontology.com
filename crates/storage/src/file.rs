@@ -60,7 +60,8 @@ impl Store for FileStore {
             r.seq = *s;
         }
         let bytes = bincode::serialize(&r).map_err(|e| StoreError::Encode(e.to_string()))?;
-        let len = u32::try_from(bytes.len()).map_err(|_| StoreError::Encode("record too large".into()))?;
+        let len = u32::try_from(bytes.len())
+            .map_err(|_| StoreError::Encode("record too large".into()))?;
         let mut w = self.writer.lock().await;
         w.write_all(&len.to_be_bytes()).await?;
         w.write_all(&bytes).await?;
@@ -71,7 +72,10 @@ impl Store for FileStore {
     async fn load_into(&self, graph: &Arc<OntologyGraph>) -> StoreResult<()> {
         // 1. Snapshot, if any.
         let mut snap_water: u64 = 0;
-        if tokio::fs::try_exists(&self.snapshot_path).await.unwrap_or(false) {
+        if tokio::fs::try_exists(&self.snapshot_path)
+            .await
+            .unwrap_or(false)
+        {
             match File::open(&self.snapshot_path).await {
                 Ok(mut f) => {
                     let mut buf = Vec::new();
@@ -113,8 +117,8 @@ impl Store for FileStore {
             }
             offset += 4 + len as u64;
 
-            let rec: LogRecord = bincode::deserialize(&payload)
-                .map_err(|e| StoreError::Decode(e.to_string()))?;
+            let rec: LogRecord =
+                bincode::deserialize(&payload).map_err(|e| StoreError::Decode(e.to_string()))?;
             high_water = high_water.max(rec.seq);
             if rec.seq <= snap_water {
                 // Already captured by the snapshot; reapplying would

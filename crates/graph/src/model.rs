@@ -14,7 +14,10 @@ pub enum PropertyValue {
 
 impl PropertyValue {
     pub fn as_text(&self) -> Option<&str> {
-        match self { PropertyValue::Text(t) => Some(t), _ => None }
+        match self {
+            PropertyValue::Text(t) => Some(t),
+            _ => None,
+        }
     }
 }
 

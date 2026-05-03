@@ -2,15 +2,11 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-#[derive(
-    Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, Default,
-)]
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, Default)]
 #[serde(transparent)]
 pub struct ConceptId(pub u64);
 
-#[derive(
-    Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, Default,
-)]
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, Default)]
 #[serde(transparent)]
 pub struct RelationId(pub u64);
 
@@ -43,7 +39,9 @@ pub struct IdAllocator {
 
 impl IdAllocator {
     pub fn new(start: u64) -> Self {
-        Self { next: AtomicU64::new(start) }
+        Self {
+            next: AtomicU64::new(start),
+        }
     }
     pub fn next_concept(&self) -> ConceptId {
         ConceptId(self.next.fetch_add(1, Ordering::Relaxed))
