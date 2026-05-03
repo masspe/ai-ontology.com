@@ -1,0 +1,12 @@
+{
+  "concept_types": {
+    "Person":  { "name": "Person",  "description": "a human being" },
+    "Paper":   { "name": "Paper",   "description": "a research paper" },
+    "Topic":   { "name": "Topic",   "description": "an area of study" }
+  },
+  "relation_types": {
+    "authored":   { "name": "authored",   "domain": "Person", "range": "Paper", "cardinality": "OneToMany", "symmetric": false, "description": "writes" },
+    "covers":     { "name": "covers",     "domain": "Paper",  "range": "Topic", "cardinality": "ManyToMany", "symmetric": false, "description": "subject of" },
+    "related_to": { "name": "related_to", "domain": "Topic",  "range": "Topic", "cardinality": "ManyToMany", "symmetric": true,  "description": "neighborhood" }
+  }
+}

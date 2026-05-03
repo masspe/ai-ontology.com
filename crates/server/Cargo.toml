@@ -1,0 +1,29 @@
+[package]
+name = "ontology-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ontology-graph = { workspace = true }
+ontology-index = { workspace = true }
+ontology-rag = { workspace = true }
+ontology-io = { workspace = true }
+ontology-storage = { workspace = true }
+
+axum = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+tower = { workspace = true, features = ["util"] }
+hyper = { workspace = true }
+http = { workspace = true }
+
+[dev-dependencies]
+ontology-graph = { workspace = true }
+ontology-rag = { workspace = true }
+http-body-util = "0.1"
+tokio = { workspace = true, features = ["macros"] }
