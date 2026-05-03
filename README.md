@@ -53,6 +53,8 @@ answers in retrieved subgraphs.
 
 ## Quickstart
 
+### POSIX shell
+
 ```bash
 cargo build --release
 DATA=./data
@@ -75,6 +77,32 @@ ANTHROPIC_API_KEY=... ./target/release/ontology --data $DATA \
 curl -s localhost:8080/stats | jq
 curl -s -XPOST localhost:8080/retrieve -H 'content-type: application/json' \
   -d '{"query":"retrieval augmented generation","top_k":4,"lexical_weight":0.5,"expansion":{"max_depth":2}}'
+```
+
+### PowerShell (Windows)
+
+```powershell
+cargo build --release
+$env:DATA = ".\data"
+.\target\release\ontology.exe --data $env:DATA ingest `
+    --ontology examples/sample-ontology.json examples/sample.triples
+.\target\release\ontology.exe --data $env:DATA stats
+.\target\release\ontology.exe --data $env:DATA retrieve "retrieval augmented generation"
+.\target\release\ontology.exe --data $env:DATA ask "Who wrote about RAG?"            # echo
+$env:ANTHROPIC_API_KEY = "..."
+.\target\release\ontology.exe --data $env:DATA ask --anthropic "Who wrote about RAG?"
+.\target\release\ontology.exe --data $env:DATA snapshot
+.\target\release\ontology.exe --data $env:DATA compact          # snapshot + truncate WAL
+.\target\release\ontology.exe --data $env:DATA path `
+    --from-type Person --from-name Alice `
+    --to-type   Person --to-name   Bob
+.\target\release\ontology.exe --data $env:DATA export out.jsonl  # round-trips through `ingest`
+
+# HTTP API
+$server = Start-Process -FilePath .\target\release\ontology.exe -ArgumentList @('--data', $env:DATA, 'serve', '--bind', '127.0.0.1:8080') -PassThru
+Invoke-RestMethod http://127.0.0.1:8080/stats
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8080/retrieve -ContentType 'application/json' -Body '{"query":"retrieval augmented generation","top_k":4,"lexical_weight":0.5,"expansion":{"max_depth":2}}'
+Stop-Process -Id $server.Id
 ```
 
 ## Observability
