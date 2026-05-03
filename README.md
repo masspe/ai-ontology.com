@@ -121,3 +121,20 @@ shell history. Comparison is constant-time.
 ```bash
 cargo test --workspace
 ```
+
+## License
+
+Copyright © 2026 **Winven AI Sarl**, Route de Crassier 7, 1262 Eysins,
+VD, Switzerland.
+
+Licensed under the **GNU Lesser General Public License v3.0 or any
+later version** (LGPL-3.0-or-later). See `LICENSE` for the LGPL-3.0
+text and `LICENSE.GPL` for the referenced GPL-3.0 text. Each source
+file carries an SPDX short-form header
+(`SPDX-License-Identifier: LGPL-3.0-or-later`).
+
+In short: you can use, modify and redistribute this software,
+including in proprietary applications that link against it as a
+library. Modifications to the LGPL'd files themselves must be
+released under the same license. See the LICENSE files for the full,
+binding terms.

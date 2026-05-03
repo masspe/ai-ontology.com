@@ -2,6 +2,8 @@
   "name": "ontology-web",
   "private": true,
   "version": "0.1.0",
+  "license": "LGPL-3.0-or-later",
+  "author": "Winven AI Sarl, Route de Crassier 7, 1262 Eysins, VD, CH",
   "type": "module",
   "scripts": {
     "dev": "vite",
