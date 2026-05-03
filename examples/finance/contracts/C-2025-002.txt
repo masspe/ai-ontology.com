@@ -1,0 +1,24 @@
+Logistics Integration Agreement — Contract C-2025-002
+
+Effective date: April 1, 2025
+Term: 24 months, fixed.
+
+Parties:
+  - Globex (the "Integrator"), Wilmington, Delaware, USA.
+  - Initech (the "Customer"), Austin, Texas, USA.
+
+Scope:
+  Globex will provide an end-to-end logistics integration for Initech's
+  enterprise software supply chain. Work includes a custom REST connector
+  between Globex's TMS and Initech's procurement platform, three days of
+  on-site training in Austin, and a Q1 retainer covering planning and
+  discovery.
+
+Commercial terms:
+  Total contract value: 120,000 EUR for the first 12 months. Billed
+  quarterly. Net 45 payment terms. Renewal pricing to be negotiated 60
+  days before expiry.
+
+Signatories:
+  Bob Chen, VP Operations — Globex
+  Carol Diaz, Head of Procurement — Initech

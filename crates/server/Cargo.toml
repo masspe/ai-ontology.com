@@ -10,6 +10,8 @@ ontology-index = { workspace = true }
 ontology-rag = { workspace = true }
 ontology-io = { workspace = true }
 ontology-storage = { workspace = true }
+tower-http = { version = "0.6", features = ["cors"] }
+tempfile = "3"
 
 axum = { workspace = true }
 tokio = { workspace = true }

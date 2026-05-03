@@ -5,7 +5,7 @@
 //!
 //! - [`MemoryStore`] – non-persistent, useful for tests.
 //! - [`FileStore`] – append-only, write-ahead log on disk plus periodic
-//!   bincode snapshots. Crash-safe for the common single-writer case.
+//!   JSON snapshots. Crash-safe for the common single-writer case.
 //!
 //! The on-disk format is a sequence of length-prefixed [`LogRecord`]s,
 //! decoupled from the in-memory graph types so the schema can evolve.

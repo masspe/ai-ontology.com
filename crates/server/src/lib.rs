@@ -16,7 +16,7 @@
 //! into a larger axum app or test it with `tower::ServiceExt`.
 
 use axum::{
-    extract::{Path, State},
+    extract::{Multipart, Path, State},
     http::{HeaderValue, Request, StatusCode},
     middleware::{self, Next},
     response::{
@@ -28,9 +28,14 @@ use axum::{
 };
 use futures::stream::StreamExt;
 use ontology_graph::{
-    Concept, ConceptId, ConceptPatch, OntologyGraph, Path as GraphPath, Relation, RelationId,
+    Concept, ConceptId, ConceptPatch, Ontology, OntologyGraph, Path as GraphPath, Relation,
+    RelationId,
 };
 use ontology_index::{HybridIndex, RetrievalRequest, ScoredConcept};
+use ontology_io::{
+    ingest_records, CsvSource, IngestStats, JsonlSource, TextDocumentSource, TripleSource,
+    XlsxSource,
+};
 use ontology_rag::{RagAnswer, RagPipeline, RagStreamEvent};
 use ontology_storage::{LogRecord, Store};
 use parking_lot::Mutex as PlMutex;
@@ -41,6 +46,7 @@ use std::sync::Arc as StdArc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use thiserror::Error;
+use tower_http::cors::{Any, CorsLayer};
 use tracing::warn;
 
 /// Shared application state passed to every handler.
@@ -125,6 +131,7 @@ fn build_router_inner(
         .route("/ask/stream", post(ask_stream))
         .route("/path", post(path))
         .route("/compact", post(compact))
+        .route("/upload", post(upload))
         .with_state(state);
 
     let protected = match bearer_token {
@@ -150,6 +157,15 @@ fn build_router_inner(
 
     // Outermost — every response gets an X-Request-Id and every span gets one.
     app = app.layer(middleware::from_fn(request_id_layer));
+
+    // Permissive CORS — fine for the demo / local React dev server. In
+    // production restrict origins via CorsLayer::new().allow_origin(...).
+    app = app.layer(
+        CorsLayer::new()
+            .allow_origin(Any)
+            .allow_methods(Any)
+            .allow_headers(Any),
+    );
 
     app
 }
@@ -516,7 +532,7 @@ async fn ask_stream(
     let events = inner.map(|item| {
         let event = match &item {
             Ok(RagStreamEvent::Retrieved { .. }) => Event::default().event("retrieved"),
-            Ok(RagStreamEvent::Token(_)) => Event::default().event("token"),
+            Ok(RagStreamEvent::Token { .. }) => Event::default().event("token"),
             Ok(RagStreamEvent::End { .. }) => Event::default().event("end"),
             Err(_) => Event::default().event("error"),
         };
@@ -529,6 +545,196 @@ async fn ask_stream(
     });
 
     Ok(Sse::new(events.boxed()).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))))
+}
+
+/// Multipart-upload ingest. The form must carry exactly one `file` part
+/// (the bytes) and a `kind` field selecting the adapter:
+///
+/// | `kind`      | semantics                                                         |
+/// |-------------|-------------------------------------------------------------------|
+/// | `ontology`  | JSON `Ontology` definition. Replaces the current schema in place. |
+/// | `jsonl`     | Tagged Records (Concept / Relation / Ontology / NamedRelation).   |
+/// | `triples`   | `Type:Name predicate Type:Name` lines.                            |
+/// | `csv`       | One concept per row; needs a `concept_type` form field.           |
+/// | `xlsx`      | Same as CSV but for spreadsheets; needs `concept_type`.           |
+/// | `text`      | The whole upload becomes one Concept whose description is the     |
+/// |             | text body; needs `concept_type` (and uses the `name` form field   |
+/// |             | if present, otherwise the uploaded filename's stem).              |
+///
+/// Files are buffered to a tempfile so the existing path-based adapters
+/// (`CsvSource`, `XlsxSource`, ...) work unchanged. Returns
+/// `{ ingested: { concepts, relations, ontology_updates } }`.
+async fn upload(
+    State(s): State<AppState>,
+    mut form: Multipart,
+) -> Result<Json<UploadResponse>, ApiError> {
+    let mut kind: Option<String> = None;
+    let mut concept_type: Option<String> = None;
+    let mut name_override: Option<String> = None;
+    let mut filename: Option<String> = None;
+    let mut bytes: Option<Vec<u8>> = None;
+
+    while let Some(field) = form
+        .next_field()
+        .await
+        .map_err(|e| ApiError::BadRequest(format!("multipart: {e}")))?
+    {
+        match field.name().unwrap_or("") {
+            "kind" => {
+                kind = Some(
+                    field
+                        .text()
+                        .await
+                        .map_err(|e| ApiError::BadRequest(e.to_string()))?,
+                );
+            }
+            "concept_type" => {
+                concept_type = Some(
+                    field
+                        .text()
+                        .await
+                        .map_err(|e| ApiError::BadRequest(e.to_string()))?,
+                );
+            }
+            "name" => {
+                name_override = Some(
+                    field
+                        .text()
+                        .await
+                        .map_err(|e| ApiError::BadRequest(e.to_string()))?,
+                );
+            }
+            "file" => {
+                filename = field.file_name().map(|s| s.to_string());
+                bytes = Some(
+                    field
+                        .bytes()
+                        .await
+                        .map_err(|e| ApiError::BadRequest(e.to_string()))?
+                        .to_vec(),
+                );
+            }
+            _ => {} // ignore unknown form fields
+        }
+    }
+
+    let kind = kind.ok_or_else(|| ApiError::BadRequest("missing `kind`".into()))?;
+    let bytes = bytes.ok_or_else(|| ApiError::BadRequest("missing `file`".into()))?;
+
+    let stats = match kind.as_str() {
+        "ontology" => {
+            let onto: Ontology = serde_json::from_slice(&bytes)
+                .map_err(|e| ApiError::BadRequest(format!("ontology: {e}")))?;
+            s.graph.extend_ontology(|target| {
+                *target = onto.clone();
+                Ok(())
+            })?;
+            s.store
+                .append(&LogRecord::ontology(onto))
+                .await
+                .map_err(|e| ApiError::Store(e.to_string()))?;
+            IngestStats {
+                ontology_updates: 1,
+                ..Default::default()
+            }
+        }
+        "jsonl" | "ndjson" => {
+            let tmp = persist_temp(&bytes, "jsonl").await?;
+            let mut src = JsonlSource::open(tmp.path())
+                .await
+                .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+            ingest_records(&mut src, &s.graph, Some(s.store.as_ref()))
+                .await
+                .map_err(|e| ApiError::BadRequest(e.to_string()))?
+        }
+        "triples" => {
+            let tmp = persist_temp(&bytes, "triples").await?;
+            let mut src = TripleSource::open(tmp.path())
+                .await
+                .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+            ingest_records(&mut src, &s.graph, Some(s.store.as_ref()))
+                .await
+                .map_err(|e| ApiError::BadRequest(e.to_string()))?
+        }
+        "csv" => {
+            let ty = concept_type
+                .ok_or_else(|| ApiError::BadRequest("csv requires concept_type".into()))?;
+            let tmp = persist_temp(&bytes, "csv").await?;
+            let mut src = CsvSource::open(tmp.path(), ty)
+                .await
+                .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+            ingest_records(&mut src, &s.graph, Some(s.store.as_ref()))
+                .await
+                .map_err(|e| ApiError::BadRequest(e.to_string()))?
+        }
+        "xlsx" => {
+            let ty = concept_type
+                .ok_or_else(|| ApiError::BadRequest("xlsx requires concept_type".into()))?;
+            let tmp = persist_temp(&bytes, "xlsx").await?;
+            let mut src = XlsxSource::open(tmp.path(), ty)
+                .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+            ingest_records(&mut src, &s.graph, Some(s.store.as_ref()))
+                .await
+                .map_err(|e| ApiError::BadRequest(e.to_string()))?
+        }
+        "text" => {
+            let ty = concept_type
+                .ok_or_else(|| ApiError::BadRequest("text requires concept_type".into()))?;
+            let stem = name_override.unwrap_or_else(|| {
+                filename
+                    .as_deref()
+                    .map(std::path::Path::new)
+                    .and_then(|p| p.file_stem().and_then(|s| s.to_str()))
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| "uploaded".into())
+            });
+            // Buffer to a tempfile + reuse TextDocumentSource so we go through
+            // exactly the same code path as the CLI.
+            let dir = tempfile::tempdir().map_err(|e| ApiError::Store(e.to_string()))?;
+            let path = dir.path().join(format!("{stem}.txt"));
+            tokio::fs::write(&path, &bytes)
+                .await
+                .map_err(|e| ApiError::Store(e.to_string()))?;
+            let mut src = TextDocumentSource::from_files(ty, [path]);
+            ingest_records(&mut src, &s.graph, Some(s.store.as_ref()))
+                .await
+                .map_err(|e| ApiError::BadRequest(e.to_string()))?
+        }
+        other => return Err(ApiError::BadRequest(format!("unknown kind: {other}"))),
+    };
+
+    s.index.reindex_all();
+
+    Ok(Json(UploadResponse {
+        ingested: IngestSummary {
+            concepts: stats.concepts,
+            relations: stats.relations,
+            ontology_updates: stats.ontology_updates,
+        },
+    }))
+}
+
+async fn persist_temp(bytes: &[u8], ext: &str) -> Result<tempfile::NamedTempFile, ApiError> {
+    let tmp = tempfile::Builder::new()
+        .suffix(&format!(".{ext}"))
+        .tempfile()
+        .map_err(|e| ApiError::Store(e.to_string()))?;
+    tokio::fs::write(tmp.path(), bytes)
+        .await
+        .map_err(|e| ApiError::Store(e.to_string()))?;
+    Ok(tmp)
+}
+
+#[derive(Serialize)]
+struct UploadResponse {
+    ingested: IngestSummary,
+}
+
+#[derive(Serialize)]
+struct IngestSummary {
+    concepts: u64,
+    relations: u64,
+    ontology_updates: u64,
 }
 
 // ---------------------------------------------------------------------------

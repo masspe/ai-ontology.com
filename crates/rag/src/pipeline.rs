@@ -39,6 +39,10 @@ impl RagAnswer {
 /// 1. Exactly one `Retrieved` (the seeds + subgraph that grounds the answer).
 /// 2. Zero or more `Token` chunks as the LLM produces them.
 /// 3. Exactly one `End` carrying the final usage and stop reason.
+///
+/// `Token` is a struct variant (`{ "type": "token", "text": "…" }`) rather
+/// than a tuple variant — `#[serde(tag)]` with newtype-of-String produces
+/// surprising JSON, and the explicit `text` key plays nicer with TS types.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RagStreamEvent {
@@ -47,7 +51,9 @@ pub enum RagStreamEvent {
         scored: Vec<ScoredConcept>,
         subgraph: Subgraph,
     },
-    Token(String),
+    Token {
+        text: String,
+    },
     End {
         #[serde(default)]
         usage: TokenUsage,
@@ -192,7 +198,7 @@ impl RagPipeline {
 
         let mapped = inner.filter_map(|r| async move {
             match r {
-                Ok(StreamChunk::Text(t)) => Some(Ok(RagStreamEvent::Token(t))),
+                Ok(StreamChunk::Text(text)) => Some(Ok(RagStreamEvent::Token { text })),
                 Ok(StreamChunk::KeepAlive) => None,
                 Ok(StreamChunk::End {
                     usage,
