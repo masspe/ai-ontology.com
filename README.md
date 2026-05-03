@@ -127,14 +127,26 @@ cargo test --workspace
 Copyright © 2026 **Winven AI Sarl**, Route de Crassier 7, 1262 Eysins,
 VD, Switzerland.
 
-Licensed under the **GNU Lesser General Public License v3.0 or any
-later version** (LGPL-3.0-or-later). See `LICENSE` for the LGPL-3.0
-text and `LICENSE.GPL` for the referenced GPL-3.0 text. Each source
-file carries an SPDX short-form header
-(`SPDX-License-Identifier: LGPL-3.0-or-later`).
+This software is **dual-licensed**:
 
-In short: you can use, modify and redistribute this software,
-including in proprietary applications that link against it as a
-library. Modifications to the LGPL'd files themselves must be
-released under the same license. See the LICENSE files for the full,
-binding terms.
+1. **AGPL-3.0-or-later** — open-source track. See [`LICENSE`](./LICENSE)
+   for the full text. The Affero clause means that if you operate this
+   software (or a modified version) as a network/SaaS service, you must
+   make the corresponding source code available to every user of that
+   service.
+2. **Winven Commercial License** — proprietary track. See
+   [`LICENSE-COMMERCIAL.md`](./LICENSE-COMMERCIAL.md). Removes the
+   AGPL's copyleft and SaaS-source-disclosure obligations; bundles
+   support and indemnification. Negotiated case by case with Winven AI
+   Sarl at the address above.
+
+You may pick whichever track fits your use, but you must comply with
+the chosen one in full. Every source file carries an SPDX dual
+expression in its header:
+
+```
+SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Winven-Commercial
+```
+
+Use without an AGPL-compliant deployment **and** without a signed
+commercial agreement is a license violation.

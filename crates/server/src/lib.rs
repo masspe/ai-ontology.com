@@ -1,10 +1,10 @@
-// SPDX-License-Identifier: LGPL-3.0-or-later
+// SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Winven-Commercial
 // Copyright (C) 2026 Winven AI Sarl
 // Route de Crassier 7, 1262 Eysins, VD, CH
 //
 // This file is part of ai-ontology.com.
-// It is licensed under the GNU Lesser General Public License v3.0
-// or (at your option) any later version. See LICENSE and LICENSE.GPL.
+// Dual-licensed: AGPL-3.0-or-later OR a commercial license
+// from Winven AI Sarl. See LICENSE and LICENSE-COMMERCIAL.md.
 
 //! HTTP front-end for the ontology + RAG stack.
 //!
