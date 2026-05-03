@@ -1,0 +1,24 @@
+Software Licensing Agreement — Contract C-2025-003
+
+Effective date: July 1, 2025
+Term: 12 months.
+
+Parties:
+  - Acme Labs (the "Licensor"), Lyon, France.
+  - Initech (the "Licensee"), Austin, Texas, USA.
+
+Scope:
+  Acme Labs grants Initech a non-exclusive, non-transferable annual
+  licence to deploy Acme's industrial automation control software ("Tier
+  A" edition) on up to fifty Initech-owned production lines. The licence
+  bundles premium support: 24/7 incident response, two scheduled review
+  meetings per quarter, and prioritized hotfix delivery.
+
+Commercial terms:
+  Total contract value: 80,000 EUR for the year. Billed in two parts:
+  45,000 EUR upfront for the licence and 35,000 EUR for premium support
+  in September. Net 30 payment terms.
+
+Signatories:
+  Alice Martin, CTO — Acme Labs
+  Carol Diaz, Head of Procurement — Initech

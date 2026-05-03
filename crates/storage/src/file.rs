@@ -11,12 +11,12 @@ use crate::log::LogRecord;
 use crate::memory::apply;
 use crate::store::{Store, StoreError, StoreResult};
 
-/// Append-only log file with a sibling bincode snapshot for fast cold start.
+/// Append-only log file with a sibling JSON snapshot for fast cold start.
 ///
 /// Wire format per record:
 ///
 /// ```text
-/// [u32 length BE] [bincode-encoded LogRecord]
+/// [u32 length BE] [JSON-encoded LogRecord]
 /// ```
 ///
 /// On `load_into`, the snapshot (if present) is applied first, then any log
@@ -59,7 +59,7 @@ impl Store for FileStore {
             *s += 1;
             r.seq = *s;
         }
-        let bytes = bincode::serialize(&r).map_err(|e| StoreError::Encode(e.to_string()))?;
+        let bytes = serde_json::to_vec(&r).map_err(|e| StoreError::Encode(e.to_string()))?;
         let len = u32::try_from(bytes.len())
             .map_err(|_| StoreError::Encode("record too large".into()))?;
         let mut w = self.writer.lock().await;
@@ -80,7 +80,7 @@ impl Store for FileStore {
                 Ok(mut f) => {
                     let mut buf = Vec::new();
                     f.read_to_end(&mut buf).await?;
-                    let snap: crate::snapshot::Snapshot = bincode::deserialize(&buf)
+                    let snap: crate::snapshot::Snapshot = serde_json::from_slice(&buf)
                         .map_err(|e| StoreError::Decode(e.to_string()))?;
                     snap_water = snap.high_water_seq;
                     debug!(
@@ -118,7 +118,7 @@ impl Store for FileStore {
             offset += 4 + len as u64;
 
             let rec: LogRecord =
-                bincode::deserialize(&payload).map_err(|e| StoreError::Decode(e.to_string()))?;
+                serde_json::from_slice(&payload).map_err(|e| StoreError::Decode(e.to_string()))?;
             high_water = high_water.max(rec.seq);
             if rec.seq <= snap_water {
                 // Already captured by the snapshot; reapplying would
@@ -134,7 +134,7 @@ impl Store for FileStore {
     async fn snapshot(&self, graph: &Arc<OntologyGraph>) -> StoreResult<()> {
         let seq = *self.seq.lock();
         let snap = crate::snapshot::Snapshot::from_graph_with_seq(graph, seq);
-        let bytes = bincode::serialize(&snap).map_err(|e| StoreError::Encode(e.to_string()))?;
+        let bytes = serde_json::to_vec(&snap).map_err(|e| StoreError::Encode(e.to_string()))?;
         let tmp = self.snapshot_path.with_extension("snap.tmp");
         tokio::fs::write(&tmp, &bytes).await?;
         tokio::fs::rename(&tmp, &self.snapshot_path).await?;
@@ -149,7 +149,7 @@ impl Store for FileStore {
 
         let seq = *self.seq.lock();
         let snap = crate::snapshot::Snapshot::from_graph_with_seq(graph, seq);
-        let bytes = bincode::serialize(&snap).map_err(|e| StoreError::Encode(e.to_string()))?;
+        let bytes = serde_json::to_vec(&snap).map_err(|e| StoreError::Encode(e.to_string()))?;
 
         // 1. Snapshot first — atomic via temp+rename.
         let tmp = self.snapshot_path.with_extension("snap.tmp");

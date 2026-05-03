@@ -2,7 +2,10 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use ontology_graph::{Ontology, OntologyGraph};
 use ontology_index::{HybridIndex, RetrievalRequest};
-use ontology_io::{export_graph, ingest_records, CsvSource, JsonlSink, JsonlSource, TripleSource};
+use ontology_io::{
+    export_graph, ingest_records, CsvSource, JsonlSink, JsonlSource, TextDocumentSource,
+    TripleSource, XlsxSource,
+};
 use ontology_rag::{AnthropicModel, EchoModel, RagPipeline};
 use ontology_server::AppState;
 use ontology_storage::{FileStore, MemoryStore, Store};
@@ -23,8 +26,17 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Cmd {
-    /// Ingest data from a file. Format inferred from extension (.jsonl,
-    /// .triples or .csv). For CSV, also pass `--csv-type <ConceptType>`.
+    /// Ingest data from a file or directory.
+    ///
+    /// Format is inferred from the path's extension:
+    /// - `.jsonl` / `.ndjson` — tagged Records (Concept / Relation / Ontology / NamedRelation).
+    /// - `.triples` / `.txt`  — `Type:Name predicate Type:Name` lines.
+    /// - `.csv`               — concept rows; requires `--csv-type`.
+    /// - `.xlsx` / `.xls` / `.ods` — concept rows; requires `--xlsx-type`.
+    /// - `-`                   — read JSONL from stdin.
+    /// - directory             — every regular file becomes a Concept whose
+    ///   description is the file's text. Requires `--text-type` and accepts
+    ///   `--text-ext` (default: `txt,md`).
     Ingest {
         /// Optional path to an ontology JSON file applied before records.
         #[arg(long)]
@@ -32,6 +44,16 @@ enum Cmd {
         /// For CSV inputs: the concept type to assign every row.
         #[arg(long)]
         csv_type: Option<String>,
+        /// For XLSX/XLS/ODS inputs: the concept type to assign every row.
+        #[arg(long)]
+        xlsx_type: Option<String>,
+        /// For directory inputs: the concept type to assign each text file.
+        #[arg(long)]
+        text_type: Option<String>,
+        /// File extensions (comma-separated, no dot) to pick up when
+        /// ingesting a directory. Default: `txt,md`.
+        #[arg(long, default_value = "txt,md")]
+        text_ext: String,
         path: PathBuf,
     },
     /// Print summary statistics.
@@ -123,6 +145,9 @@ async fn main() -> Result<()> {
         Cmd::Ingest {
             ontology,
             csv_type,
+            xlsx_type,
+            text_type,
+            text_ext,
             path,
         } => {
             if let Some(p) = ontology {
@@ -136,9 +161,20 @@ async fn main() -> Result<()> {
                     .append(&ontology_storage::LogRecord::ontology(onto))
                     .await?;
             }
+
+            let is_dir = tokio::fs::metadata(&path)
+                .await
+                .map(|m| m.is_dir())
+                .unwrap_or(false);
+
             // `-` reads JSONL from stdin (handy for piping).
             let stats = if path.as_os_str() == "-" {
                 let mut src = JsonlSource::stdin();
+                ingest_records(&mut src, &graph, Some(store.as_ref())).await?
+            } else if is_dir {
+                let ty = text_type.context("--text-type required when ingesting a directory")?;
+                let exts: Vec<&str> = text_ext.split(',').map(str::trim).collect();
+                let mut src = TextDocumentSource::from_dir(ty, &path, &exts).await?;
                 ingest_records(&mut src, &graph, Some(store.as_ref())).await?
             } else {
                 match path.extension().and_then(|s| s.to_str()) {
@@ -155,7 +191,15 @@ async fn main() -> Result<()> {
                         let mut src = CsvSource::open(&path, ty).await?;
                         ingest_records(&mut src, &graph, Some(store.as_ref())).await?
                     }
-                    _ => anyhow::bail!("unsupported extension; use .jsonl, .triples or .csv (or '-' for stdin JSONL)"),
+                    Some("xlsx") | Some("xls") | Some("ods") => {
+                        let ty = xlsx_type.context("--xlsx-type required for spreadsheet input")?;
+                        let mut src = XlsxSource::open(&path, ty)?;
+                        ingest_records(&mut src, &graph, Some(store.as_ref())).await?
+                    }
+                    _ => anyhow::bail!(
+                        "unsupported extension; use .jsonl, .triples, .csv, .xlsx, '-' for stdin, \
+                         or pass a directory with --text-type"
+                    ),
                 }
             };
             index.reindex_all();

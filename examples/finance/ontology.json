@@ -1,0 +1,18 @@
+{
+  "concept_types": {
+    "Company":  { "name": "Company",  "description": "a legal entity that signs contracts and issues invoices" },
+    "Person":   { "name": "Person",   "description": "an individual, typically a contract signatory" },
+    "Contract": { "name": "Contract", "description": "a legal agreement between two or more companies" },
+    "Invoice":  { "name": "Invoice",  "description": "a billing document issued by one company to another" },
+    "LineItem": { "name": "LineItem", "description": "a single billable line on an invoice" }
+  },
+  "relation_types": {
+    "between":          { "name": "between",          "domain": "Contract", "range": "Company",  "cardinality": "ManyToMany", "symmetric": false, "description": "a contract is between two or more companies" },
+    "signed_by":        { "name": "signed_by",        "domain": "Contract", "range": "Person",   "cardinality": "ManyToMany", "symmetric": false, "description": "a contract was signed by these people" },
+    "employed_by":      { "name": "employed_by",      "domain": "Person",   "range": "Company",  "cardinality": "ManyToOne",  "symmetric": false, "description": "a person works for a company" },
+    "issued_by":        { "name": "issued_by",        "domain": "Invoice",  "range": "Company",  "cardinality": "ManyToOne",  "symmetric": false, "description": "an invoice is issued by a company" },
+    "issued_to":        { "name": "issued_to",        "domain": "Invoice",  "range": "Company",  "cardinality": "ManyToOne",  "symmetric": false, "description": "an invoice is issued to a company" },
+    "covers_contract":  { "name": "covers_contract",  "domain": "Invoice",  "range": "Contract", "cardinality": "ManyToOne",  "symmetric": false, "description": "an invoice bills a particular contract" },
+    "has_line_item":    { "name": "has_line_item",    "domain": "Invoice",  "range": "LineItem", "cardinality": "OneToMany",  "symmetric": false, "description": "an invoice contains line items" }
+  }
+}

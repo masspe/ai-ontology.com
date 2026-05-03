@@ -1,0 +1,35 @@
+{"kind":"named_relation","relation_type":"between","source_type":"Contract","source_name":"C-2025-001","target_type":"Company","target_name":"Acme Labs"}
+{"kind":"named_relation","relation_type":"between","source_type":"Contract","source_name":"C-2025-001","target_type":"Company","target_name":"Globex"}
+{"kind":"named_relation","relation_type":"signed_by","source_type":"Contract","source_name":"C-2025-001","target_type":"Person","target_name":"Alice Martin"}
+{"kind":"named_relation","relation_type":"signed_by","source_type":"Contract","source_name":"C-2025-001","target_type":"Person","target_name":"Bob Chen"}
+{"kind":"named_relation","relation_type":"between","source_type":"Contract","source_name":"C-2025-002","target_type":"Company","target_name":"Globex"}
+{"kind":"named_relation","relation_type":"between","source_type":"Contract","source_name":"C-2025-002","target_type":"Company","target_name":"Initech"}
+{"kind":"named_relation","relation_type":"signed_by","source_type":"Contract","source_name":"C-2025-002","target_type":"Person","target_name":"Bob Chen"}
+{"kind":"named_relation","relation_type":"signed_by","source_type":"Contract","source_name":"C-2025-002","target_type":"Person","target_name":"Carol Diaz"}
+{"kind":"named_relation","relation_type":"between","source_type":"Contract","source_name":"C-2025-003","target_type":"Company","target_name":"Acme Labs"}
+{"kind":"named_relation","relation_type":"between","source_type":"Contract","source_name":"C-2025-003","target_type":"Company","target_name":"Initech"}
+{"kind":"named_relation","relation_type":"signed_by","source_type":"Contract","source_name":"C-2025-003","target_type":"Person","target_name":"Alice Martin"}
+{"kind":"named_relation","relation_type":"signed_by","source_type":"Contract","source_name":"C-2025-003","target_type":"Person","target_name":"Carol Diaz"}
+{"kind":"named_relation","relation_type":"issued_by","source_type":"Invoice","source_name":"INV-1001","target_type":"Company","target_name":"Acme Labs"}
+{"kind":"named_relation","relation_type":"issued_to","source_type":"Invoice","source_name":"INV-1001","target_type":"Company","target_name":"Globex"}
+{"kind":"named_relation","relation_type":"covers_contract","source_type":"Invoice","source_name":"INV-1001","target_type":"Contract","target_name":"C-2025-001"}
+{"kind":"named_relation","relation_type":"issued_by","source_type":"Invoice","source_name":"INV-1002","target_type":"Company","target_name":"Acme Labs"}
+{"kind":"named_relation","relation_type":"issued_to","source_type":"Invoice","source_name":"INV-1002","target_type":"Company","target_name":"Globex"}
+{"kind":"named_relation","relation_type":"covers_contract","source_type":"Invoice","source_name":"INV-1002","target_type":"Contract","target_name":"C-2025-001"}
+{"kind":"named_relation","relation_type":"issued_by","source_type":"Invoice","source_name":"INV-1003","target_type":"Company","target_name":"Globex"}
+{"kind":"named_relation","relation_type":"issued_to","source_type":"Invoice","source_name":"INV-1003","target_type":"Company","target_name":"Initech"}
+{"kind":"named_relation","relation_type":"covers_contract","source_type":"Invoice","source_name":"INV-1003","target_type":"Contract","target_name":"C-2025-002"}
+{"kind":"named_relation","relation_type":"issued_by","source_type":"Invoice","source_name":"INV-1004","target_type":"Company","target_name":"Acme Labs"}
+{"kind":"named_relation","relation_type":"issued_to","source_type":"Invoice","source_name":"INV-1004","target_type":"Company","target_name":"Initech"}
+{"kind":"named_relation","relation_type":"covers_contract","source_type":"Invoice","source_name":"INV-1004","target_type":"Contract","target_name":"C-2025-003"}
+{"kind":"named_relation","relation_type":"issued_by","source_type":"Invoice","source_name":"INV-1005","target_type":"Company","target_name":"Acme Labs"}
+{"kind":"named_relation","relation_type":"issued_to","source_type":"Invoice","source_name":"INV-1005","target_type":"Company","target_name":"Initech"}
+{"kind":"named_relation","relation_type":"covers_contract","source_type":"Invoice","source_name":"INV-1005","target_type":"Contract","target_name":"C-2025-003"}
+{"kind":"named_relation","relation_type":"has_line_item","source_type":"Invoice","source_name":"INV-1001","target_type":"LineItem","target_name":"L-1001-1"}
+{"kind":"named_relation","relation_type":"has_line_item","source_type":"Invoice","source_name":"INV-1001","target_type":"LineItem","target_name":"L-1001-2"}
+{"kind":"named_relation","relation_type":"has_line_item","source_type":"Invoice","source_name":"INV-1002","target_type":"LineItem","target_name":"L-1002-1"}
+{"kind":"named_relation","relation_type":"has_line_item","source_type":"Invoice","source_name":"INV-1003","target_type":"LineItem","target_name":"L-1003-1"}
+{"kind":"named_relation","relation_type":"has_line_item","source_type":"Invoice","source_name":"INV-1003","target_type":"LineItem","target_name":"L-1003-2"}
+{"kind":"named_relation","relation_type":"has_line_item","source_type":"Invoice","source_name":"INV-1003","target_type":"LineItem","target_name":"L-1003-3"}
+{"kind":"named_relation","relation_type":"has_line_item","source_type":"Invoice","source_name":"INV-1004","target_type":"LineItem","target_name":"L-1004-1"}
+{"kind":"named_relation","relation_type":"has_line_item","source_type":"Invoice","source_name":"INV-1005","target_type":"LineItem","target_name":"L-1005-1"}

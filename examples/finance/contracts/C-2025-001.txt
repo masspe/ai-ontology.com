@@ -1,0 +1,24 @@
+Master Services Agreement — Contract C-2025-001
+
+Effective date: January 15, 2025
+Term: 12 months, with automatic renewal for additional 12-month periods
+unless either party terminates with 90 days written notice.
+
+Parties:
+  - Acme Labs (the "Provider"), registered in Lyon, France.
+  - Globex (the "Client"), registered in Wilmington, Delaware, USA.
+
+Scope:
+  Acme Labs will design, build, and integrate a sensor-based industrial
+  automation pilot at the Globex Memphis distribution hub. The pilot
+  covers the receiving dock and one outbound sortation lane. Deliverables
+  include hardware install, firmware, an API for the Globex WMS, and
+  on-site training for two operators.
+
+Commercial terms:
+  Total contract value: 50,000 EUR. Billed in two milestone invoices of
+  18,000 EUR (Q1) and 32,000 EUR (Q2). Net 30 payment terms.
+
+Signatories:
+  Alice Martin, CTO — Acme Labs
+  Bob Chen, VP Operations — Globex

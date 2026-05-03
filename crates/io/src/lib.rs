@@ -13,10 +13,14 @@ pub mod csv;
 pub mod ingest;
 pub mod jsonl;
 pub mod record;
+pub mod text;
 pub mod triples;
+pub mod xlsx;
 
 pub use csv::CsvSource;
-pub use ingest::{export_graph, ingest_records, ExportStats, Sink, Source};
+pub use ingest::{export_graph, ingest_records, ExportStats, IngestStats, Sink, Source};
 pub use jsonl::{JsonlSink, JsonlSource};
 pub use record::{Record, RecordPayload};
+pub use text::TextDocumentSource;
 pub use triples::TripleSource;
+pub use xlsx::XlsxSource;

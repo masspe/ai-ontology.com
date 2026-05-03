@@ -1,0 +1,9 @@
+{"kind":"concept","id":0,"concept_type":"Company","name":"Acme Labs","description":"R&D firm specializing in industrial automation","properties":{"country":"FR","sector":"Industrial automation"}}
+{"kind":"concept","id":0,"concept_type":"Company","name":"Globex","description":"Global logistics and supply chain","properties":{"country":"US","sector":"Logistics"}}
+{"kind":"concept","id":0,"concept_type":"Company","name":"Initech","description":"Enterprise software vendor","properties":{"country":"US","sector":"Software"}}
+{"kind":"concept","id":0,"concept_type":"Person","name":"Alice Martin","description":"CTO at Acme Labs","properties":{"role":"CTO"}}
+{"kind":"concept","id":0,"concept_type":"Person","name":"Bob Chen","description":"VP Operations at Globex","properties":{"role":"VP Operations"}}
+{"kind":"concept","id":0,"concept_type":"Person","name":"Carol Diaz","description":"Head of Procurement at Initech","properties":{"role":"Head of Procurement"}}
+{"kind":"named_relation","relation_type":"employed_by","source_type":"Person","source_name":"Alice Martin","target_type":"Company","target_name":"Acme Labs"}
+{"kind":"named_relation","relation_type":"employed_by","source_type":"Person","source_name":"Bob Chen","target_type":"Company","target_name":"Globex"}
+{"kind":"named_relation","relation_type":"employed_by","source_type":"Person","source_name":"Carol Diaz","target_type":"Company","target_name":"Initech"}
