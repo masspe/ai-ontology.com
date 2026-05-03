@@ -30,13 +30,19 @@ pub enum GraphError {
     },
 
     #[error("cardinality violated for relation `{relation}` on concept {concept}")]
-    CardinalityViolation { relation: String, concept: ConceptId },
+    CardinalityViolation {
+        relation: String,
+        concept: ConceptId,
+    },
 
     #[error("duplicate concept name `{0}` for type `{1}`")]
     DuplicateConcept(String, String),
 
     #[error("invalid property `{property}` on concept of type `{concept_type}`")]
-    InvalidProperty { property: String, concept_type: String },
+    InvalidProperty {
+        property: String,
+        concept_type: String,
+    },
 
     #[error("serialization error: {0}")]
     Serde(String),

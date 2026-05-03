@@ -24,7 +24,10 @@ pub struct PromptBuilder<'a> {
 
 impl<'a> PromptBuilder<'a> {
     pub fn new(ontology: &'a Ontology) -> Self {
-        Self { ontology, max_context_chars: 6000 }
+        Self {
+            ontology,
+            max_context_chars: 6000,
+        }
     }
 
     pub fn with_max_chars(mut self, n: usize) -> Self {
@@ -43,16 +46,25 @@ impl<'a> PromptBuilder<'a> {
         concept_types.sort_by(|a, b| a.name.cmp(&b.name));
         for ct in concept_types {
             let _ = writeln!(
-                out, "- {} :: {}", ct.name,
-                if ct.description.is_empty() { "(no description)" } else { &ct.description },
+                out,
+                "- {} :: {}",
+                ct.name,
+                if ct.description.is_empty() {
+                    "(no description)"
+                } else {
+                    &ct.description
+                },
             );
         }
         let mut relation_types: Vec<_> = self.ontology.relation_types.values().collect();
         relation_types.sort_by(|a, b| a.name.cmp(&b.name));
         for rt in relation_types {
             let _ = writeln!(
-                out, "- ({}) -[{}]-> ({}){}",
-                rt.domain, rt.name, rt.range,
+                out,
+                "- ({}) -[{}]-> ({}){}",
+                rt.domain,
+                rt.name,
+                rt.range,
                 if rt.symmetric { " [symmetric]" } else { "" },
             );
         }
@@ -60,11 +72,7 @@ impl<'a> PromptBuilder<'a> {
     }
 
     /// Volatile per-query context: ranked seeds, retrieved subgraph, edges.
-    pub fn render_query_context(
-        &self,
-        scored: &[ScoredConcept],
-        subgraph: &Subgraph,
-    ) -> String {
+    pub fn render_query_context(&self, scored: &[ScoredConcept], subgraph: &Subgraph) -> String {
         let mut out = String::new();
         if !scored.is_empty() {
             out.push_str("# Top concepts\n");
@@ -76,18 +84,34 @@ impl<'a> PromptBuilder<'a> {
                         c.concept_type, c.name, s.score, s.lexical, s.vector
                     );
                 }
-                if out.len() >= self.max_context_chars { break; }
+                if out.len() >= self.max_context_chars {
+                    break;
+                }
             }
         }
         out.push_str("\n# Subgraph\n");
         for c in &subgraph.concepts {
             let depth = subgraph.depth_of.get(&c.id).copied().unwrap_or(0);
-            let desc = if c.description.is_empty() { "" } else { &c.description };
+            let desc = if c.description.is_empty() {
+                ""
+            } else {
+                &c.description
+            };
             let _ = writeln!(
-                out, "- [{}] ({}) {}{}", depth, c.concept_type, c.name,
-                if desc.is_empty() { String::new() } else { format!(" — {desc}") },
+                out,
+                "- [{}] ({}) {}{}",
+                depth,
+                c.concept_type,
+                c.name,
+                if desc.is_empty() {
+                    String::new()
+                } else {
+                    format!(" — {desc}")
+                },
             );
-            if out.len() >= self.max_context_chars { break; }
+            if out.len() >= self.max_context_chars {
+                break;
+            }
         }
         out.push_str("\n# Edges\n");
         for r in &subgraph.relations {
@@ -96,7 +120,9 @@ impl<'a> PromptBuilder<'a> {
             if let (Some(s), Some(t)) = (s, t) {
                 let _ = writeln!(out, "- {} -[{}]-> {}", s.name, r.relation_type, t.name);
             }
-            if out.len() >= self.max_context_chars { break; }
+            if out.len() >= self.max_context_chars {
+                break;
+            }
         }
         if out.len() > self.max_context_chars {
             out.truncate(self.max_context_chars);

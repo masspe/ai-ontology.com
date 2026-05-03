@@ -46,16 +46,18 @@ impl Source for CsvSource {
                 Some(l) => l,
                 None => return Ok(None),
             };
-            if line.trim().is_empty() { continue; }
+            if line.trim().is_empty() {
+                continue;
+            }
             let row = parse_csv_row(&line);
 
             if self.header.is_none() {
                 let name_col = row
                     .iter()
                     .position(|h| h.eq_ignore_ascii_case("name"))
-                    .ok_or_else(|| IngestError::Source(
-                        "csv: expected a `name` column in the header".into()
-                    ))?;
+                    .ok_or_else(|| {
+                        IngestError::Source("csv: expected a `name` column in the header".into())
+                    })?;
                 self.name_col = Some(name_col);
                 self.header = Some(row);
                 continue;
@@ -65,7 +67,9 @@ impl Source for CsvSource {
             let name_col = self.name_col.unwrap();
             if row.len() != header.len() {
                 return Err(IngestError::Source(format!(
-                    "csv: row has {} columns, expected {}", row.len(), header.len(),
+                    "csv: row has {} columns, expected {}",
+                    row.len(),
+                    header.len(),
                 )));
             }
             let name = row.get(name_col).cloned().unwrap_or_default();
@@ -75,7 +79,9 @@ impl Source for CsvSource {
 
             let mut c = Concept::new(ConceptId(0), self.concept_type.clone(), name);
             for (i, col) in header.iter().enumerate() {
-                if i == name_col { continue; }
+                if i == name_col {
+                    continue;
+                }
                 let v = row.get(i).cloned().unwrap_or_default();
                 if col.eq_ignore_ascii_case("description") {
                     c.description = v;

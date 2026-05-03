@@ -39,7 +39,9 @@ pub trait Store: Send + Sync + 'static {
     async fn load_into(&self, graph: &Arc<OntologyGraph>) -> StoreResult<()>;
 
     /// Optional snapshot of the full graph for fast cold start.
-    async fn snapshot(&self, _graph: &Arc<OntologyGraph>) -> StoreResult<()> { Ok(()) }
+    async fn snapshot(&self, _graph: &Arc<OntologyGraph>) -> StoreResult<()> {
+        Ok(())
+    }
 
     /// Atomically take a snapshot and truncate the WAL. After a successful
     /// compact, restoring from this store applies only the new snapshot —
@@ -51,16 +53,10 @@ pub trait Store: Send + Sync + 'static {
 }
 
 /// Convenience helpers used by callers that hold a graph + store together.
-pub async fn persist_concept(
-    store: &dyn Store,
-    concept: &Concept,
-) -> StoreResult<()> {
+pub async fn persist_concept(store: &dyn Store, concept: &Concept) -> StoreResult<()> {
     store.append(&LogRecord::concept(concept.clone())).await
 }
 
-pub async fn persist_relation(
-    store: &dyn Store,
-    relation: &Relation,
-) -> StoreResult<()> {
+pub async fn persist_relation(store: &dyn Store, relation: &Relation) -> StoreResult<()> {
     store.append(&LogRecord::relation(relation.clone())).await
 }

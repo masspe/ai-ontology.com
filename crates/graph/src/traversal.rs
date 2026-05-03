@@ -7,15 +7,12 @@ use crate::graph::OntologyGraph;
 use crate::id::{ConceptId, RelationId};
 use crate::model::{Concept, Relation};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Direction {
     Outgoing,
     Incoming,
+    #[default]
     Both,
-}
-
-impl Default for Direction {
-    fn default() -> Self { Direction::Both }
 }
 
 /// Spec for an n-hop subgraph expansion around a set of seed concepts.
@@ -36,7 +33,9 @@ pub struct TraversalSpec {
     pub max_nodes: usize,
 }
 
-fn default_max_nodes() -> usize { 64 }
+fn default_max_nodes() -> usize {
+    64
+}
 
 impl Default for TraversalSpec {
     fn default() -> Self {
@@ -60,7 +59,9 @@ pub struct Subgraph {
 }
 
 impl Subgraph {
-    pub fn is_empty(&self) -> bool { self.concepts.is_empty() }
+    pub fn is_empty(&self) -> bool {
+        self.concepts.is_empty()
+    }
 }
 
 /// One hop along a path: the relation, and the concept on the far side of it.
@@ -82,8 +83,12 @@ pub struct Path {
 }
 
 impl Path {
-    pub fn len(&self) -> usize { self.steps.len() }
-    pub fn is_empty(&self) -> bool { self.steps.is_empty() }
+    pub fn len(&self) -> usize {
+        self.steps.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.steps.is_empty()
+    }
 }
 
 impl OntologyGraph {
@@ -116,10 +121,18 @@ impl OntologyGraph {
 
         let mut found = false;
         'bfs: while let Some((node, depth)) = queue.pop_front() {
-            if depth >= max_depth { continue; }
+            if depth >= max_depth {
+                continue;
+            }
             for rel in self.outgoing(node).into_iter().chain(self.incoming(node)) {
-                let neighbor = if rel.source == node { rel.target } else { rel.source };
-                if !visited.insert(neighbor) { continue; }
+                let neighbor = if rel.source == node {
+                    rel.target
+                } else {
+                    rel.source
+                };
+                if !visited.insert(neighbor) {
+                    continue;
+                }
                 parent.insert(neighbor, (node, rel.id));
                 if neighbor == target {
                     found = true;
@@ -128,7 +141,9 @@ impl OntologyGraph {
                 queue.push_back((neighbor, depth + 1));
             }
         }
-        if !found { return Ok(None); }
+        if !found {
+            return Ok(None);
+        }
 
         // Reconstruct.
         let mut steps_rev: Vec<PathStep> = Vec::new();
@@ -137,11 +152,19 @@ impl OntologyGraph {
             let (prev, rid) = parent[&cur];
             let rel = self.get_relation(rid)?;
             let concept = self.get_concept(cur)?;
-            steps_rev.push(PathStep { relation: rel, concept });
+            steps_rev.push(PathStep {
+                relation: rel,
+                concept,
+            });
             cur = prev;
         }
         steps_rev.reverse();
-        Ok(Some(Path { source, target, start, steps: steps_rev }))
+        Ok(Some(Path {
+            source,
+            target,
+            start,
+            steps: steps_rev,
+        }))
     }
 
     /// Breadth-first expansion bounded by `spec.max_depth` and `spec.max_nodes`.
@@ -171,8 +194,12 @@ impl OntologyGraph {
         };
 
         while let Some((node, depth)) = queue.pop_front() {
-            if depth >= spec.max_depth { continue; }
-            if concepts.len() >= spec.max_nodes { break; }
+            if depth >= spec.max_depth {
+                continue;
+            }
+            if concepts.len() >= spec.max_nodes {
+                break;
+            }
 
             let mut edges: Vec<Relation> = Vec::new();
             match spec.direction {
@@ -185,16 +212,29 @@ impl OntologyGraph {
             }
 
             for rel in edges {
-                if !want_rel(&rel.relation_type) { continue; }
-                let neighbor = if rel.source == node { rel.target } else { rel.source };
-                let nc = match self.get_concept(neighbor) { Ok(c) => c, Err(_) => continue };
-                if !want_concept(&nc.concept_type) { continue; }
+                if !want_rel(&rel.relation_type) {
+                    continue;
+                }
+                let neighbor = if rel.source == node {
+                    rel.target
+                } else {
+                    rel.source
+                };
+                let nc = match self.get_concept(neighbor) {
+                    Ok(c) => c,
+                    Err(_) => continue,
+                };
+                if !want_concept(&nc.concept_type) {
+                    continue;
+                }
 
                 if visited.insert(neighbor) {
                     depth_of.insert(neighbor, depth + 1);
                     concepts.push(nc);
                     queue.push_back((neighbor, depth + 1));
-                    if concepts.len() >= spec.max_nodes { break; }
+                    if concepts.len() >= spec.max_nodes {
+                        break;
+                    }
                 }
                 if emitted_edges.insert(rel.id) {
                     relations.push(rel);

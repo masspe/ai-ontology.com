@@ -9,14 +9,14 @@
 //! "subject / predicate / object" triple format. Users can plug in custom
 //! sources (e.g. Kafka, S3) by implementing the trait.
 
-pub mod record;
-pub mod jsonl;
-pub mod triples;
 pub mod csv;
 pub mod ingest;
+pub mod jsonl;
+pub mod record;
+pub mod triples;
 
-pub use record::{Record, RecordPayload};
-pub use ingest::{export_graph, ingest_records, ExportStats, Source, Sink};
-pub use jsonl::{JsonlSource, JsonlSink};
-pub use triples::TripleSource;
 pub use csv::CsvSource;
+pub use ingest::{export_graph, ingest_records, ExportStats, Sink, Source};
+pub use jsonl::{JsonlSink, JsonlSource};
+pub use record::{Record, RecordPayload};
+pub use triples::TripleSource;

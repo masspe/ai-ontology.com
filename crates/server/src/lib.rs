@@ -19,17 +19,27 @@ use axum::{
     extract::{Path, State},
     http::{HeaderValue, Request, StatusCode},
     middleware::{self, Next},
-    response::{IntoResponse, Response},
+    response::{
+        sse::{Event, KeepAlive, Sse},
+        IntoResponse, Response,
+    },
     routing::{get, post},
     Json, Router,
 };
-use std::sync::Arc as StdArc;
-use ontology_graph::{Concept, ConceptId, ConceptPatch, OntologyGraph, Path as GraphPath, Relation, RelationId};
+use futures::stream::StreamExt;
+use ontology_graph::{
+    Concept, ConceptId, ConceptPatch, OntologyGraph, Path as GraphPath, Relation, RelationId,
+};
 use ontology_index::{HybridIndex, RetrievalRequest, ScoredConcept};
-use ontology_rag::{RagAnswer, RagPipeline};
+use ontology_rag::{RagAnswer, RagPipeline, RagStreamEvent};
 use ontology_storage::{LogRecord, Store};
+use parking_lot::Mutex as PlMutex;
 use serde::{Deserialize, Serialize};
+use std::convert::Infallible;
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+use std::sync::Arc as StdArc;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use thiserror::Error;
 use tracing::warn;
 
@@ -42,16 +52,60 @@ pub struct AppState {
     pub pipeline: Arc<RagPipeline>,
 }
 
-pub fn build_router(state: AppState) -> Router {
-    build_router_with_auth(state, None)
+/// Tunables for the optional rate limiter / request-id middleware.
+#[derive(Debug, Clone)]
+pub struct RouterConfig {
+    /// Bearer token gate. Routes other than `/healthz` require
+    /// `Authorization: Bearer <token>` when set.
+    pub bearer_token: Option<String>,
+    /// Per-IP request limit. `None` disables rate limiting.
+    pub rate_limit: Option<RateLimit>,
 }
 
-/// Same as [`build_router`], plus a bearer-token gate. When `bearer_token`
-/// is `Some(t)`, every route except `/healthz` requires
-/// `Authorization: Bearer <t>`. Compares with constant-time equality.
-pub fn build_router_with_auth(
+#[derive(Debug, Clone, Copy)]
+pub struct RateLimit {
+    /// Max requests allowed in `window`.
+    pub max_requests: u32,
+    /// Sliding window. Tokens refill linearly across this window.
+    pub window: Duration,
+}
+
+impl RouterConfig {
+    pub fn unprotected() -> Self {
+        Self {
+            bearer_token: None,
+            rate_limit: None,
+        }
+    }
+}
+
+pub fn build_router(state: AppState) -> Router {
+    build_router_with_config(state, RouterConfig::unprotected())
+}
+
+/// Convenience for the common case: bearer token only, no rate limit.
+pub fn build_router_with_auth(state: AppState, bearer_token: Option<String>) -> Router {
+    build_router_with_config(
+        state,
+        RouterConfig {
+            bearer_token,
+            rate_limit: None,
+        },
+    )
+}
+
+/// Full-featured constructor. Adds (in this order, outer-to-inner):
+/// 1. request-id injection (always on),
+/// 2. optional rate-limit by client IP,
+/// 3. optional bearer-token check.
+pub fn build_router_with_config(state: AppState, cfg: RouterConfig) -> Router {
+    build_router_inner(state, cfg.bearer_token, cfg.rate_limit)
+}
+
+fn build_router_inner(
     state: AppState,
     bearer_token: Option<String>,
+    rate_limit: Option<RateLimit>,
 ) -> Router {
     let healthz_router = Router::new().route("/healthz", get(healthz));
 
@@ -59,10 +113,16 @@ pub fn build_router_with_auth(
         .route("/stats", get(stats))
         .route("/metrics", get(metrics))
         .route("/concepts", post(create_concept))
-        .route("/concepts/:id", get(get_concept).patch(update_concept).delete(delete_concept))
+        .route(
+            "/concepts/:id",
+            get(get_concept)
+                .patch(update_concept)
+                .delete(delete_concept),
+        )
         .route("/relations", post(create_relation))
         .route("/retrieve", post(retrieve))
         .route("/ask", post(ask))
+        .route("/ask/stream", post(ask_stream))
         .route("/path", post(path))
         .route("/compact", post(compact))
         .with_state(state);
@@ -78,8 +138,116 @@ pub fn build_router_with_auth(
         None => protected,
     };
 
-    healthz_router.merge(protected)
+    let mut app = healthz_router.merge(protected);
+
+    if let Some(rl) = rate_limit {
+        let limiter = StdArc::new(RateLimiter::new(rl));
+        app = app.layer(middleware::from_fn(move |req, next| {
+            let limiter = limiter.clone();
+            async move { rate_limit_layer(req, next, limiter).await }
+        }));
+    }
+
+    // Outermost — every response gets an X-Request-Id and every span gets one.
+    app = app.layer(middleware::from_fn(request_id_layer));
+
+    app
 }
+
+/// Token-bucket-ish rate limiter keyed by remote IP. Uses `parking_lot::Mutex`
+/// because the critical section is microseconds; contention is rare.
+#[derive(Debug)]
+struct RateLimiter {
+    cfg: RateLimit,
+    state: PlMutex<ahash::AHashMap<std::net::IpAddr, BucketState>>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct BucketState {
+    /// Number of tokens currently in the bucket.
+    tokens: f64,
+    /// Last time we refilled.
+    last: Instant,
+}
+
+impl RateLimiter {
+    fn new(cfg: RateLimit) -> Self {
+        Self {
+            cfg,
+            state: PlMutex::new(ahash::AHashMap::new()),
+        }
+    }
+
+    fn allow(&self, ip: std::net::IpAddr) -> bool {
+        let max = self.cfg.max_requests as f64;
+        let refill_per_sec = max / self.cfg.window.as_secs_f64().max(0.001);
+        let now = Instant::now();
+        let mut buckets = self.state.lock();
+        let bucket = buckets.entry(ip).or_insert(BucketState {
+            tokens: max,
+            last: now,
+        });
+        let elapsed = now.duration_since(bucket.last).as_secs_f64();
+        bucket.tokens = (bucket.tokens + elapsed * refill_per_sec).min(max);
+        bucket.last = now;
+        if bucket.tokens >= 1.0 {
+            bucket.tokens -= 1.0;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+async fn rate_limit_layer(
+    req: Request<axum::body::Body>,
+    next: Next,
+    limiter: StdArc<RateLimiter>,
+) -> Result<Response, StatusCode> {
+    // Extract client IP from the `connect_info` extension (set by axum's
+    // `IntoMakeServiceWithConnectInfo`) or fall back to a sentinel that
+    // groups all anonymous callers into one bucket — fail-closed on the
+    // shared bucket, not fail-open per request.
+    let ip = req
+        .extensions()
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+        .map(|ci| ci.0.ip())
+        .unwrap_or_else(|| std::net::IpAddr::V4(std::net::Ipv4Addr::new(0, 0, 0, 0)));
+    if !limiter.allow(ip) {
+        return Err(StatusCode::TOO_MANY_REQUESTS);
+    }
+    Ok(next.run(req).await)
+}
+
+static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+async fn request_id_layer(mut req: Request<axum::body::Body>, next: Next) -> Response {
+    // Honor an inbound X-Request-Id, otherwise mint one.
+    let inbound = req
+        .headers()
+        .get("x-request-id")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+    let id = inbound.unwrap_or_else(|| {
+        let n = REQUEST_COUNTER.fetch_add(1, AtomicOrdering::Relaxed);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(n);
+        format!("req-{nanos:x}-{n:x}")
+    });
+    req.extensions_mut().insert(RequestId(id.clone()));
+    let mut resp = next.run(req).await;
+    if let Ok(value) = HeaderValue::from_str(&id) {
+        resp.headers_mut().insert("x-request-id", value);
+    }
+    resp
+}
+
+/// Extension type holding the request id — extract via `Extension<RequestId>`
+/// from a handler if you want to log or surface it.
+#[derive(Debug, Clone)]
+pub struct RequestId(pub String);
 
 async fn require_bearer(
     req: Request<axum::body::Body>,
@@ -99,8 +267,15 @@ async fn require_bearer(
             let a = provided.as_bytes();
             let b = expected.as_bytes();
             let eq = a.len() == b.len()
-                && a.iter().zip(b.iter()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0;
-            if eq { Ok(next.run(req).await) } else { Err(StatusCode::UNAUTHORIZED) }
+                && a.iter()
+                    .zip(b.iter())
+                    .fold(0u8, |acc, (x, y)| acc | (x ^ y))
+                    == 0;
+            if eq {
+                Ok(next.run(req).await)
+            } else {
+                Err(StatusCode::UNAUTHORIZED)
+            }
         }
         None => Err(StatusCode::UNAUTHORIZED),
     }
@@ -116,7 +291,9 @@ struct PathRequest {
     max_depth: u32,
 }
 
-fn default_path_depth() -> u32 { 6 }
+fn default_path_depth() -> u32 {
+    6
+}
 
 #[derive(Serialize)]
 struct PathResponse {
@@ -129,20 +306,29 @@ async fn path(
     State(s): State<AppState>,
     Json(req): Json<PathRequest>,
 ) -> Result<Json<PathResponse>, ApiError> {
-    let src = s.graph.find_by_name(&req.from_type, &req.from_name)
-        .ok_or_else(|| ApiError::BadRequest(format!(
-            "no concept ({}) {}", req.from_type, req.from_name,
-        )))?;
-    let tgt = s.graph.find_by_name(&req.to_type, &req.to_name)
-        .ok_or_else(|| ApiError::BadRequest(format!(
-            "no concept ({}) {}", req.to_type, req.to_name,
-        )))?;
+    let src = s
+        .graph
+        .find_by_name(&req.from_type, &req.from_name)
+        .ok_or_else(|| {
+            ApiError::BadRequest(format!("no concept ({}) {}", req.from_type, req.from_name,))
+        })?;
+    let tgt = s
+        .graph
+        .find_by_name(&req.to_type, &req.to_name)
+        .ok_or_else(|| {
+            ApiError::BadRequest(format!("no concept ({}) {}", req.to_type, req.to_name,))
+        })?;
     let p = s.graph.shortest_path(src, tgt, req.max_depth)?;
-    Ok(Json(PathResponse { found: p.is_some(), path: p }))
+    Ok(Json(PathResponse {
+        found: p.is_some(),
+        path: p,
+    }))
 }
 
 async fn compact(State(s): State<AppState>) -> Result<StatusCode, ApiError> {
-    s.store.compact(&s.graph).await
+    s.store
+        .compact(&s.graph)
+        .await
         .map_err(|e| ApiError::Store(e.to_string()))?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -151,7 +337,9 @@ async fn compact(State(s): State<AppState>) -> Result<StatusCode, ApiError> {
 // Handlers
 // ---------------------------------------------------------------------------
 
-async fn healthz() -> &'static str { "ok" }
+async fn healthz() -> &'static str {
+    "ok"
+}
 
 #[derive(Serialize)]
 struct Stats {
@@ -204,7 +392,9 @@ async fn stats(State(s): State<AppState>) -> Json<Stats> {
 }
 
 #[derive(Serialize)]
-struct CreatedConcept { id: ConceptId }
+struct CreatedConcept {
+    id: ConceptId,
+}
 
 async fn create_concept(
     State(s): State<AppState>,
@@ -234,7 +424,9 @@ async fn update_concept(
     Json(patch): Json<ConceptPatch>,
 ) -> Result<Json<Concept>, ApiError> {
     let updated = s.graph.update_concept(ConceptId(id), patch)?;
-    s.store.append(&LogRecord::update_concept(updated.clone())).await
+    s.store
+        .append(&LogRecord::update_concept(updated.clone()))
+        .await
         .map_err(|e| ApiError::Store(e.to_string()))?;
     s.index.index_concept(ConceptId(id))?;
     Ok(Json(updated))
@@ -247,17 +439,23 @@ async fn delete_concept(
     let cid = ConceptId(id);
     let removed = s.graph.remove_concept(cid)?;
     s.index.forget(cid);
-    s.store.append(&LogRecord::delete_concept(cid)).await
+    s.store
+        .append(&LogRecord::delete_concept(cid))
+        .await
         .map_err(|e| ApiError::Store(e.to_string()))?;
     for rid in removed {
-        s.store.append(&LogRecord::delete_relation(rid)).await
+        s.store
+            .append(&LogRecord::delete_relation(rid))
+            .await
             .map_err(|e| ApiError::Store(e.to_string()))?;
     }
     Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Serialize)]
-struct CreatedRelation { id: RelationId }
+struct CreatedRelation {
+    id: RelationId,
+}
 
 async fn create_relation(
     State(s): State<AppState>,
@@ -265,7 +463,9 @@ async fn create_relation(
 ) -> Result<Json<CreatedRelation>, ApiError> {
     let id = s.graph.add_relation(rel.clone())?;
     rel.id = id;
-    s.store.append(&LogRecord::relation(rel)).await
+    s.store
+        .append(&LogRecord::relation(rel))
+        .await
         .map_err(|e| ApiError::Store(e.to_string()))?;
     Ok(Json(CreatedRelation { id }))
 }
@@ -288,9 +488,47 @@ async fn ask(
     State(s): State<AppState>,
     Json(req): Json<RetrievalRequest>,
 ) -> Result<Json<RagAnswer>, ApiError> {
-    let ans = s.pipeline.answer_with(req).await
+    let ans = s
+        .pipeline
+        .answer_with(req)
+        .await
         .map_err(|e| ApiError::Llm(e.to_string()))?;
     Ok(Json(ans))
+}
+
+/// Server-Sent Events flavor of `/ask`. Each event is one
+/// [`RagStreamEvent`] serialized as JSON. Order:
+///
+/// 1. `event: retrieved` — grounding subgraph.
+/// 2. `event: token`     — zero or more text deltas.
+/// 3. `event: end`       — final usage/stop reason. Stream closes after.
+/// 4. `event: error`     — any LLM error; stream closes after.
+async fn ask_stream(
+    State(s): State<AppState>,
+    Json(req): Json<RetrievalRequest>,
+) -> Result<Sse<futures::stream::BoxStream<'static, Result<Event, Infallible>>>, ApiError> {
+    let inner = s
+        .pipeline
+        .answer_stream(req)
+        .await
+        .map_err(|e| ApiError::Llm(e.to_string()))?;
+
+    let events = inner.map(|item| {
+        let event = match &item {
+            Ok(RagStreamEvent::Retrieved { .. }) => Event::default().event("retrieved"),
+            Ok(RagStreamEvent::Token(_)) => Event::default().event("token"),
+            Ok(RagStreamEvent::End { .. }) => Event::default().event("end"),
+            Err(_) => Event::default().event("error"),
+        };
+        let payload = match item {
+            Ok(ev) => serde_json::to_string(&ev).unwrap_or_else(|_| "{}".into()),
+            Err(e) => serde_json::to_string(&serde_json::json!({"message": e.to_string()}))
+                .unwrap_or_else(|_| "{}".into()),
+        };
+        Ok::<_, Infallible>(event.data(payload))
+    });
+
+    Ok(Sse::new(events.boxed()).keep_alive(KeepAlive::new().interval(Duration::from_secs(15))))
 }
 
 // ---------------------------------------------------------------------------
@@ -310,14 +548,16 @@ pub enum ApiError {
 }
 
 #[derive(Serialize, Deserialize)]
-struct ErrorBody { error: String }
+struct ErrorBody {
+    error: String,
+}
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, msg) = match &self {
             ApiError::Graph(_) => (StatusCode::BAD_REQUEST, self.to_string()),
             ApiError::Store(_) => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
-            ApiError::Llm(_)   => (StatusCode::BAD_GATEWAY, self.to_string()),
+            ApiError::Llm(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
             ApiError::BadRequest(_) => (StatusCode::BAD_REQUEST, self.to_string()),
         };
         (status, Json(ErrorBody { error: msg })).into_response()

@@ -21,7 +21,9 @@ struct Inner {
 }
 
 impl LexicalIndex {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     pub fn insert(&self, id: ConceptId, text: &str) {
         let mut tf: AHashMap<String, u32> = AHashMap::new();
@@ -57,11 +59,16 @@ impl LexicalIndex {
     /// Returns concept ids ranked by tf-idf score.
     pub fn search(&self, query: &str, limit: usize) -> Vec<(ConceptId, f32)> {
         let g = self.inner.read();
-        if g.n_docs == 0 { return Vec::new(); }
+        if g.n_docs == 0 {
+            return Vec::new();
+        }
         let mut scores: AHashMap<ConceptId, f32> = AHashMap::new();
         let n = g.n_docs as f32;
         for term in tokens(query) {
-            let postings = match g.postings.get(&term) { Some(p) => p, None => continue };
+            let postings = match g.postings.get(&term) {
+                Some(p) => p,
+                None => continue,
+            };
             let df = postings.len() as f32;
             let idf = ((n - df + 0.5) / (df + 0.5) + 1.0).ln();
             for (id, tf) in postings {

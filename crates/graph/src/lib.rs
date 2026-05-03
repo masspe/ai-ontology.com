@@ -6,16 +6,16 @@
 //! them. All mutating operations validate against the schema so the graph
 //! cannot drift away from its ontology.
 
-pub mod id;
-pub mod schema;
-pub mod model;
-pub mod graph;
-pub mod traversal;
 pub mod error;
+pub mod graph;
+pub mod id;
+pub mod model;
+pub mod schema;
+pub mod traversal;
 
 pub use error::{GraphError, GraphResult};
-pub use id::{ConceptId, RelationId};
-pub use schema::{Ontology, ConceptType, RelationType, Cardinality};
-pub use model::{Concept, ConceptPatch, Property, PropertyValue, Relation};
 pub use graph::OntologyGraph;
-pub use traversal::{Subgraph, TraversalSpec, Direction, Path, PathStep};
+pub use id::{ConceptId, RelationId};
+pub use model::{Concept, ConceptPatch, Property, PropertyValue, Relation};
+pub use schema::{Cardinality, ConceptType, Ontology, RelationType};
+pub use traversal::{Direction, Path, PathStep, Subgraph, TraversalSpec};

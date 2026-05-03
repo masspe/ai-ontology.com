@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use futures::stream::{BoxStream, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use thiserror::Error;
@@ -18,9 +19,24 @@ pub struct Message {
 }
 
 impl Message {
-    pub fn system(s: impl Into<String>) -> Self { Self { role: Role::System, content: s.into() } }
-    pub fn user(s: impl Into<String>) -> Self { Self { role: Role::User, content: s.into() } }
-    pub fn assistant(s: impl Into<String>) -> Self { Self { role: Role::Assistant, content: s.into() } }
+    pub fn system(s: impl Into<String>) -> Self {
+        Self {
+            role: Role::System,
+            content: s.into(),
+        }
+    }
+    pub fn user(s: impl Into<String>) -> Self {
+        Self {
+            role: Role::User,
+            content: s.into(),
+        }
+    }
+    pub fn assistant(s: impl Into<String>) -> Self {
+        Self {
+            role: Role::Assistant,
+            content: s.into(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -82,6 +98,32 @@ pub struct LlmResponse {
     pub usage: TokenUsage,
 }
 
+/// One frame of a streaming generation. Emit text deltas as `Text(_)`,
+/// then a single trailing `End { usage, stop_reason }` to close the
+/// stream cleanly. Implementations are free to also emit periodic
+/// `KeepAlive` frames if there's a long gap with no token output.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum StreamChunk {
+    /// Incremental text from the model.
+    Text(String),
+    /// Heartbeat with no payload — clients can use this to keep
+    /// connections alive across loadbalancer idle timeouts.
+    KeepAlive,
+    /// Final frame with totals; the stream ends after this.
+    End {
+        #[serde(default)]
+        usage: TokenUsage,
+        #[serde(default)]
+        stop_reason: Option<String>,
+        #[serde(default)]
+        model: String,
+    },
+}
+
+/// Boxed async stream of model output. Produced by [`LanguageModel::generate_stream`].
+pub type LlmStream = BoxStream<'static, Result<StreamChunk, LlmError>>;
+
 #[derive(Debug, Error)]
 pub enum LlmError {
     #[error("http: {0}")]
@@ -94,9 +136,28 @@ pub enum LlmError {
 
 /// Abstract chat-completion endpoint. All RAG pipeline tests can use
 /// [`EchoModel`]; production callers wire up [`AnthropicModel`] or their own.
+///
+/// Implementations should override `generate_stream` for true incremental
+/// output. The default forwards to `generate` and emits a single text
+/// chunk + `End`, which preserves correctness but loses the latency win.
 #[async_trait]
 pub trait LanguageModel: Send + Sync + 'static {
     async fn generate(&self, req: &LlmRequest) -> Result<LlmResponse, LlmError>;
+
+    /// Stream text deltas as they're produced. The default fakes a stream
+    /// from `generate` so every implementor works out of the box.
+    async fn generate_stream(&self, req: &LlmRequest) -> Result<LlmStream, LlmError> {
+        let resp = self.generate(req).await?;
+        let chunks = vec![
+            Ok::<_, LlmError>(StreamChunk::Text(resp.content)),
+            Ok(StreamChunk::End {
+                usage: resp.usage,
+                stop_reason: resp.stop_reason,
+                model: resp.model,
+            }),
+        ];
+        Ok(futures::stream::iter(chunks).boxed())
+    }
 }
 
 /// Deterministic fake: echoes the last user message, prefixed with a marker
@@ -156,24 +217,31 @@ impl AnthropicModel {
     }
 
     pub fn with_model(mut self, model: impl Into<String>) -> Self {
-        self.model = model.into(); self
+        self.model = model.into();
+        self
     }
 
     pub fn with_base_url(mut self, url: impl Into<String>) -> Self {
-        self.base_url = url.into(); self
+        self.base_url = url.into();
+        self
     }
 
     pub fn with_max_retries(mut self, n: u32) -> Self {
-        self.max_retries = n; self
+        self.max_retries = n;
+        self
     }
 
     pub fn with_initial_backoff(mut self, d: Duration) -> Self {
-        self.initial_backoff = d; self
+        self.initial_backoff = d;
+        self
     }
 }
 
 #[derive(Serialize)]
-struct AnthropicMessage<'a> { role: &'a str, content: &'a str }
+struct AnthropicMessage<'a> {
+    role: &'a str,
+    content: &'a str,
+}
 
 #[derive(Serialize)]
 struct CacheControl {
@@ -206,6 +274,8 @@ struct AnthropicRequest<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     system: Option<SystemField<'a>>,
     messages: Vec<AnthropicMessage<'a>>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    stream: bool,
 }
 
 #[derive(Deserialize)]
@@ -290,7 +360,11 @@ fn build_system_field<'a>(
             let mut blocks = Vec::with_capacity(2);
             if let Some(s) = instruction {
                 if !s.is_empty() {
-                    blocks.push(SystemBlock { ty: "text", text: s, cache_control: None });
+                    blocks.push(SystemBlock {
+                        ty: "text",
+                        text: s,
+                        cache_control: None,
+                    });
                 }
             }
             // cache_control on the LAST block also caches everything before it.
@@ -301,6 +375,122 @@ fn build_system_field<'a>(
             });
             Some(SystemField::Blocks(blocks))
         }
+    }
+}
+
+/// Take one complete SSE event (terminated by `\n\n`) off the front of
+/// `buf`. Returns `(event_name, data_payload)` if one is available.
+fn take_one_sse_event(buf: &mut Vec<u8>) -> Option<(String, String)> {
+    let pos = buf.windows(2).position(|w| w == b"\n\n")?;
+    let raw = std::str::from_utf8(&buf[..pos]).ok()?.to_string();
+    buf.drain(..pos + 2);
+    let mut event = String::new();
+    let mut data = String::new();
+    for line in raw.split('\n') {
+        if let Some(rest) = line.strip_prefix("event: ") {
+            event = rest.trim().to_string();
+        } else if let Some(rest) = line.strip_prefix("data: ") {
+            if !data.is_empty() {
+                data.push('\n');
+            }
+            data.push_str(rest);
+        }
+    }
+    Some((event, data))
+}
+
+#[derive(Deserialize)]
+struct DeltaEvent {
+    delta: DeltaPayload,
+}
+
+#[derive(Deserialize)]
+struct DeltaPayload {
+    #[serde(rename = "type", default)]
+    ty: String,
+    #[serde(default)]
+    text: String,
+}
+
+#[derive(Deserialize)]
+struct MessageStartEvent {
+    message: MessageStartPayload,
+}
+
+#[derive(Deserialize)]
+struct MessageStartPayload {
+    #[serde(default)]
+    model: String,
+    #[serde(default)]
+    usage: AnthropicUsage,
+}
+
+#[derive(Deserialize)]
+struct MessageDeltaEvent {
+    #[serde(default)]
+    delta: MessageStopDelta,
+    #[serde(default)]
+    usage: AnthropicUsage,
+}
+
+#[derive(Deserialize, Default)]
+struct MessageStopDelta {
+    #[serde(default)]
+    stop_reason: Option<String>,
+}
+
+struct StreamState {
+    body: Option<reqwest::Response>,
+    buf: Vec<u8>,
+    model: String,
+    usage: TokenUsage,
+    stop_reason: Option<String>,
+    end_emitted: bool,
+}
+
+fn parse_anthropic_event(
+    event: &str,
+    data: &str,
+    state: &mut StreamState,
+) -> Option<Result<StreamChunk, LlmError>> {
+    match event {
+        "content_block_delta" => {
+            let parsed: DeltaEvent = serde_json::from_str(data).ok()?;
+            if parsed.delta.ty == "text_delta" && !parsed.delta.text.is_empty() {
+                return Some(Ok(StreamChunk::Text(parsed.delta.text)));
+            }
+            None
+        }
+        "message_start" => {
+            if let Ok(parsed) = serde_json::from_str::<MessageStartEvent>(data) {
+                if !parsed.message.model.is_empty() {
+                    state.model = parsed.message.model;
+                }
+                state.usage.input_tokens = parsed.message.usage.input_tokens;
+                state.usage.cache_creation_input_tokens =
+                    parsed.message.usage.cache_creation_input_tokens;
+                state.usage.cache_read_input_tokens = parsed.message.usage.cache_read_input_tokens;
+            }
+            None
+        }
+        "message_delta" => {
+            if let Ok(parsed) = serde_json::from_str::<MessageDeltaEvent>(data) {
+                if let Some(sr) = parsed.delta.stop_reason {
+                    state.stop_reason = Some(sr);
+                }
+                if parsed.usage.output_tokens > 0 {
+                    state.usage.output_tokens = parsed.usage.output_tokens;
+                }
+            }
+            None
+        }
+        "message_stop" => Some(Ok(StreamChunk::End {
+            usage: state.usage.clone(),
+            stop_reason: state.stop_reason.take(),
+            model: std::mem::take(&mut state.model),
+        })),
+        "error" => Some(Err(LlmError::Api(data.to_string()))),
+        _ => None,
     }
 }
 
@@ -331,6 +521,7 @@ impl LanguageModel for AnthropicModel {
             },
             system: build_system_field(req.system.as_deref(), req.cached_context.as_deref()),
             messages,
+            stream: false,
         };
 
         let url = format!("{}/v1/messages", self.base_url);
@@ -407,6 +598,104 @@ impl LanguageModel for AnthropicModel {
             },
         })
     }
+
+    async fn generate_stream(&self, req: &LlmRequest) -> Result<LlmStream, LlmError> {
+        let messages: Vec<AnthropicMessage> = req
+            .messages
+            .iter()
+            .filter(|m| m.role != Role::System)
+            .map(|m| AnthropicMessage {
+                role: match m.role {
+                    Role::User => "user",
+                    Role::Assistant => "assistant",
+                    Role::System => "user",
+                },
+                content: &m.content,
+            })
+            .collect();
+
+        let body = AnthropicRequest {
+            model: &self.model,
+            max_tokens: req.max_tokens,
+            temperature: if supports_sampling_params(&self.model) {
+                Some(req.temperature)
+            } else {
+                None
+            },
+            system: build_system_field(req.system.as_deref(), req.cached_context.as_deref()),
+            messages,
+            stream: true,
+        };
+
+        let url = format!("{}/v1/messages", self.base_url);
+        let resp = self
+            .http
+            .post(&url)
+            .header("x-api-key", &self.api_key)
+            .header("anthropic-version", "2023-06-01")
+            .header("content-type", "application/json")
+            .header("accept", "text/event-stream")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| LlmError::Http(e.to_string()))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(LlmError::Api(format!("{status}: {text}")));
+        }
+
+        let state = StreamState {
+            body: Some(resp),
+            buf: Vec::with_capacity(4096),
+            model: String::new(),
+            usage: TokenUsage::default(),
+            stop_reason: None,
+            end_emitted: false,
+        };
+
+        let stream = futures::stream::unfold(state, |mut state| async move {
+            if state.end_emitted {
+                return None;
+            }
+            loop {
+                // Drain any complete SSE events already buffered.
+                while let Some((event, data)) = take_one_sse_event(&mut state.buf) {
+                    if let Some(chunk) = parse_anthropic_event(&event, &data, &mut state) {
+                        if matches!(chunk, Ok(StreamChunk::End { .. })) {
+                            state.end_emitted = true;
+                        }
+                        return Some((chunk, state));
+                    }
+                }
+                // Read more bytes from the response body.
+                let body = match state.body.as_mut() {
+                    Some(b) => b,
+                    None => return None,
+                };
+                match body.chunk().await {
+                    Ok(Some(bytes)) => state.buf.extend_from_slice(&bytes),
+                    Ok(None) => {
+                        // Connection closed without an explicit message_stop —
+                        // synthesize an End so the consumer can flush.
+                        state.end_emitted = true;
+                        let chunk = StreamChunk::End {
+                            usage: state.usage.clone(),
+                            stop_reason: state.stop_reason.take(),
+                            model: std::mem::take(&mut state.model),
+                        };
+                        return Some((Ok(chunk), state));
+                    }
+                    Err(e) => {
+                        return Some((Err(LlmError::Http(e.to_string())), state));
+                    }
+                }
+            }
+        })
+        .boxed();
+        Ok(stream)
+    }
 }
 
 #[cfg(test)]
@@ -448,10 +737,13 @@ mod tests {
 
     #[tokio::test]
     async fn echo_model_returns_default_usage() {
-        let r = EchoModel.generate(&LlmRequest {
-            messages: vec![Message::user("hi")],
-            ..Default::default()
-        }).await.unwrap();
+        let r = EchoModel
+            .generate(&LlmRequest {
+                messages: vec![Message::user("hi")],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
         assert_eq!(r.content, "[echo] hi");
         assert_eq!(r.usage.input_tokens, 0);
     }

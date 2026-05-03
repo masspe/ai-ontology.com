@@ -30,8 +30,11 @@ impl Snapshot {
         // for one logical link. On restore we re-run `add_relation`, which
         // would materialize *another* inverse — keep only the canonical
         // direction so the round-trip preserves relation_count().
-        let mut seen_symmetric: ahash::AHashSet<(String, ontology_graph::ConceptId, ontology_graph::ConceptId)>
-            = ahash::AHashSet::new();
+        let mut seen_symmetric: ahash::AHashSet<(
+            String,
+            ontology_graph::ConceptId,
+            ontology_graph::ConceptId,
+        )> = ahash::AHashSet::new();
         for c in &concepts {
             for r in graph.outgoing(c.id) {
                 let symmetric = ontology
@@ -61,9 +64,16 @@ impl Snapshot {
     }
 
     pub fn restore(self, graph: &Arc<OntologyGraph>) -> StoreResult<()> {
-        graph.extend_ontology(|target| { *target = self.ontology; Ok(()) })?;
-        for c in self.concepts { graph.upsert_concept(c)?; }
-        for r in self.relations { graph.add_relation(r)?; }
+        graph.extend_ontology(|target| {
+            *target = self.ontology;
+            Ok(())
+        })?;
+        for c in self.concepts {
+            graph.upsert_concept(c)?;
+        }
+        for r in self.relations {
+            graph.add_relation(r)?;
+        }
         Ok(())
     }
 }

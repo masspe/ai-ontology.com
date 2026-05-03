@@ -4,16 +4,13 @@ use serde::{Deserialize, Serialize};
 use crate::error::{GraphError, GraphResult};
 
 /// Cardinality constraint for a relation type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Cardinality {
     OneToOne,
     OneToMany,
     ManyToOne,
+    #[default]
     ManyToMany,
-}
-
-impl Default for Cardinality {
-    fn default() -> Self { Cardinality::ManyToMany }
 }
 
 /// A node type in the ontology, e.g. `Person`, `Paper`, `Drug`.
@@ -55,7 +52,9 @@ pub struct Ontology {
 }
 
 impl Ontology {
-    pub fn new() -> Self { Self::default() }
+    pub fn new() -> Self {
+        Self::default()
+    }
 
     pub fn add_concept_type(&mut self, ct: ConceptType) {
         self.concept_types.insert(ct.name.clone(), ct);
@@ -86,7 +85,9 @@ impl Ontology {
 
     /// Returns true if `child` is `ancestor`, or transitively inherits from it.
     pub fn is_subtype(&self, child: &str, ancestor: &str) -> bool {
-        if child == ancestor { return true; }
+        if child == ancestor {
+            return true;
+        }
         let mut cursor = self.concept_types.get(child);
         while let Some(ct) = cursor {
             match &ct.parent {
@@ -106,9 +107,7 @@ impl Ontology {
         target_type: &str,
     ) -> GraphResult<()> {
         let rt = self.relation_type(relation)?;
-        if !self.is_subtype(source_type, &rt.domain)
-            || !self.is_subtype(target_type, &rt.range)
-        {
+        if !self.is_subtype(source_type, &rt.domain) || !self.is_subtype(target_type, &rt.range) {
             return Err(GraphError::SchemaViolation {
                 relation: relation.to_string(),
                 source_type: source_type.to_string(),

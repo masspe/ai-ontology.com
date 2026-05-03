@@ -20,7 +20,9 @@ pub enum Record {
     },
 }
 
-fn default_weight() -> f32 { 1.0 }
+fn default_weight() -> f32 {
+    1.0
+}
 
 /// Convenience alias used by some adapters to avoid quoting `Record`.
 pub type RecordPayload = Record;

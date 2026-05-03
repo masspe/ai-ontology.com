@@ -10,16 +10,16 @@
 //! The on-disk format is a sequence of length-prefixed [`LogRecord`]s,
 //! decoupled from the in-memory graph types so the schema can evolve.
 
+pub mod file;
 pub mod log;
 pub mod memory;
-pub mod file;
-pub mod store;
-pub mod snapshot;
 pub mod periodic;
+pub mod snapshot;
+pub mod store;
 
+pub use file::FileStore;
 pub use log::{LogRecord, RecordKind};
 pub use memory::MemoryStore;
-pub use file::FileStore;
-pub use store::{Store, StoreError, StoreResult};
-pub use snapshot::Snapshot;
 pub use periodic::{spawn_snapshotter, SnapshotHandle};
+pub use snapshot::Snapshot;
+pub use store::{Store, StoreError, StoreResult};

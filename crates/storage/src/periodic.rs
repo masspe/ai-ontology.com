@@ -16,7 +16,9 @@ pub struct SnapshotHandle {
 
 impl SnapshotHandle {
     /// Trigger an immediate snapshot in addition to the periodic one.
-    pub fn trigger(&self) { self.notify.notify_one(); }
+    pub fn trigger(&self) {
+        self.notify.notify_one();
+    }
 
     /// Stop the background task. Awaits its termination.
     pub async fn stop(self) {

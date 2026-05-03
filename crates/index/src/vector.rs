@@ -16,7 +16,10 @@ pub struct VectorIndex {
 
 impl VectorIndex {
     pub fn new(embedder: Arc<dyn Embedder>) -> Self {
-        Self { embedder, rows: RwLock::new(Vec::new()) }
+        Self {
+            embedder,
+            rows: RwLock::new(Vec::new()),
+        }
     }
 
     pub fn insert(&self, id: ConceptId, text: &str) {
@@ -36,15 +39,17 @@ impl VectorIndex {
     pub fn search(&self, query: &str, limit: usize) -> Vec<(ConceptId, f32)> {
         let q = self.embedder.embed(query);
         let rows = self.rows.read();
-        let mut scored: Vec<(ConceptId, f32)> = rows
-            .iter()
-            .map(|(id, v)| (*id, cosine(&q, v)))
-            .collect();
+        let mut scored: Vec<(ConceptId, f32)> =
+            rows.iter().map(|(id, v)| (*id, cosine(&q, v))).collect();
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
         scored.truncate(limit);
         scored
     }
 
-    pub fn len(&self) -> usize { self.rows.read().len() }
-    pub fn is_empty(&self) -> bool { self.len() == 0 }
+    pub fn len(&self) -> usize {
+        self.rows.read().len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }

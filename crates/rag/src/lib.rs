@@ -11,13 +11,13 @@
 //! Two LLM clients are bundled: an in-memory [`EchoModel`] for tests, and an
 //! HTTP [`AnthropicModel`] for production use against the Claude Messages API.
 
-pub mod prompt;
 pub mod model;
 pub mod pipeline;
+pub mod prompt;
 
 pub use model::{
-    AnthropicModel, EchoModel, LanguageModel, LlmError, LlmRequest, LlmResponse, Message,
-    Role, TokenUsage,
+    AnthropicModel, EchoModel, LanguageModel, LlmError, LlmRequest, LlmResponse, LlmStream,
+    Message, Role, StreamChunk, TokenUsage,
 };
-pub use pipeline::{RagPipeline, RagAnswer};
+pub use pipeline::{RagAnswer, RagPipeline, RagStream, RagStreamEvent};
 pub use prompt::PromptBuilder;

@@ -38,8 +38,12 @@ pub struct RetrievalRequest {
     pub expansion: TraversalSpec,
 }
 
-fn default_top_k() -> usize { 8 }
-fn default_lex_w() -> f32 { 0.5 }
+fn default_top_k() -> usize {
+    8
+}
+fn default_lex_w() -> f32 {
+    0.5
+}
 
 impl Default for RetrievalRequest {
     fn default() -> Self {
@@ -76,7 +80,9 @@ impl HybridIndex {
         Self::new(graph, Arc::new(HashEmbedder::default()))
     }
 
-    pub fn graph(&self) -> &Arc<OntologyGraph> { &self.graph }
+    pub fn graph(&self) -> &Arc<OntologyGraph> {
+        &self.graph
+    }
 
     pub fn index_concept(&self, id: ConceptId) -> ontology_graph::GraphResult<()> {
         let c = self.graph.get_concept(id)?;
@@ -118,7 +124,9 @@ impl HybridIndex {
         // Build the type whitelist closure once, honoring subtype inheritance.
         let onto = self.graph.ontology();
         let allow_id = |id: ConceptId| -> bool {
-            if req.concept_types.is_empty() { return true; }
+            if req.concept_types.is_empty() {
+                return true;
+            }
             match self.graph.get_concept(id) {
                 Ok(c) => req
                     .concept_types
@@ -130,18 +138,34 @@ impl HybridIndex {
 
         let mut combined: AHashMap<ConceptId, ScoredConcept> = AHashMap::new();
         for (id, s) in &lex {
-            if !allow_id(*id) { continue; }
+            if !allow_id(*id) {
+                continue;
+            }
             let n = s / lex_max;
-            combined.entry(*id).or_insert(ScoredConcept {
-                id: *id, score: 0.0, lexical: 0.0, vector: 0.0,
-            }).lexical = n;
+            combined
+                .entry(*id)
+                .or_insert(ScoredConcept {
+                    id: *id,
+                    score: 0.0,
+                    lexical: 0.0,
+                    vector: 0.0,
+                })
+                .lexical = n;
         }
         for (id, s) in &vec {
-            if !allow_id(*id) { continue; }
+            if !allow_id(*id) {
+                continue;
+            }
             let n = s / vec_max;
-            combined.entry(*id).or_insert(ScoredConcept {
-                id: *id, score: 0.0, lexical: 0.0, vector: 0.0,
-            }).vector = n;
+            combined
+                .entry(*id)
+                .or_insert(ScoredConcept {
+                    id: *id,
+                    score: 0.0,
+                    lexical: 0.0,
+                    vector: 0.0,
+                })
+                .vector = n;
         }
         let mut out: Vec<ScoredConcept> = combined
             .into_values()
@@ -150,7 +174,11 @@ impl HybridIndex {
                 sc
             })
             .collect();
-        out.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        out.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         out.truncate(req.top_k);
         out
     }
@@ -167,33 +195,44 @@ impl HybridIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ontology_graph::{Concept, ConceptType, Ontology, Relation, RelationType};
+    use ontology_graph::{Concept, ConceptType, Ontology, RelationType};
 
     fn ontology() -> Ontology {
         let mut o = Ontology::new();
         o.add_concept_type(ConceptType {
-            name: "Topic".into(), parent: None, properties: None,
+            name: "Topic".into(),
+            parent: None,
+            properties: None,
             description: "topic".into(),
         });
         o.add_relation_type(RelationType {
             name: "related_to".into(),
-            domain: "Topic".into(), range: "Topic".into(),
+            domain: "Topic".into(),
+            range: "Topic".into(),
             cardinality: Default::default(),
-            symmetric: true, description: "".into(),
-        }).unwrap();
+            symmetric: true,
+            description: "".into(),
+        })
+        .unwrap();
         o
     }
 
     #[test]
     fn hybrid_ranking_finds_relevant_concept() {
         let g = OntologyGraph::with_arc(ontology());
-        let rag = g.upsert_concept(
-            Concept::new(Default::default(), "Topic", "Retrieval Augmented Generation")
+        let rag = g
+            .upsert_concept(
+                Concept::new(
+                    Default::default(),
+                    "Topic",
+                    "Retrieval Augmented Generation",
+                )
                 .with_description("LLMs grounded with retrieved documents"),
-        ).unwrap();
-        let _other = g.upsert_concept(
-            Concept::new(Default::default(), "Topic", "Knitting"),
-        ).unwrap();
+            )
+            .unwrap();
+        let _other = g
+            .upsert_concept(Concept::new(Default::default(), "Topic", "Knitting"))
+            .unwrap();
 
         let idx = HybridIndex::with_default_embedder(g.clone());
         idx.reindex_all();
@@ -211,16 +250,22 @@ mod tests {
         // only the requested type in the ranking output.
         let mut o = ontology();
         o.add_concept_type(ontology_graph::ConceptType {
-            name: "Person".into(), parent: None, properties: None,
+            name: "Person".into(),
+            parent: None,
+            properties: None,
             description: "human".into(),
         });
         let g = OntologyGraph::with_arc(o);
-        let topic = g.upsert_concept(
-            Concept::new(Default::default(), "Topic", "Vector Search"),
-        ).unwrap();
-        let person = g.upsert_concept(
-            Concept::new(Default::default(), "Person", "Vector Search Researcher"),
-        ).unwrap();
+        let topic = g
+            .upsert_concept(Concept::new(Default::default(), "Topic", "Vector Search"))
+            .unwrap();
+        let person = g
+            .upsert_concept(Concept::new(
+                Default::default(),
+                "Person",
+                "Vector Search Researcher",
+            ))
+            .unwrap();
 
         let idx = HybridIndex::with_default_embedder(g.clone());
         idx.reindex_all();

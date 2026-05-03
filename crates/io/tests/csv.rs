@@ -8,7 +8,9 @@ async fn csv_ingests_concepts_with_properties() {
         "ontology-csv-{}-{}",
         std::process::id(),
         std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos(),
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos(),
     ));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("people.csv");
@@ -18,11 +20,15 @@ async fn csv_ingests_concepts_with_properties() {
         "name,affiliation,description\n\
          Alice,Acme Labs,\"Quoted, with comma\"\n\
          Bob,Globex Corp,\n",
-    ).await.unwrap();
+    )
+    .await
+    .unwrap();
 
     let mut ont = Ontology::new();
     ont.add_concept_type(ConceptType {
-        name: "Person".into(), parent: None, properties: None,
+        name: "Person".into(),
+        parent: None,
+        properties: None,
         description: "human".into(),
     });
     let graph = OntologyGraph::with_arc(ont);

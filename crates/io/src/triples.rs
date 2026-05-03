@@ -53,12 +53,17 @@ impl TripleSource {
 impl Source for TripleSource {
     async fn next(&mut self) -> Result<Option<Record>, IngestError> {
         loop {
-            if let Some(r) = self.pending.pop() { return Ok(Some(r)); }
+            if let Some(r) = self.pending.pop() {
+                return Ok(Some(r));
+            }
             let line = match self.lines.next_line().await? {
-                Some(l) => l, None => return Ok(None),
+                Some(l) => l,
+                None => return Ok(None),
             };
             let line = line.split('#').next().unwrap_or("").trim().to_string();
-            if line.is_empty() { continue; }
+            if line.is_empty() {
+                continue;
+            }
             let toks: Vec<&str> = line.split_whitespace().collect();
             if toks.len() != 3 {
                 return Err(IngestError::Source(format!(
@@ -73,8 +78,10 @@ impl Source for TripleSource {
             // and the relation is the value we return now.
             let rel = Record::NamedRelation {
                 relation_type: predicate,
-                source_type: st.clone(), source_name: sn.clone(),
-                target_type: tt.clone(), target_name: tn.clone(),
+                source_type: st.clone(),
+                source_name: sn.clone(),
+                target_type: tt.clone(),
+                target_name: tn.clone(),
                 weight: 1.0,
             };
             // Only emit the relation immediately if both endpoints already

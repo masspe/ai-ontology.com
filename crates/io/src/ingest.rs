@@ -23,16 +23,20 @@ pub async fn export_graph<S: Sink + ?Sized>(
     // Symmetric edges materialize an inverse on insert, so the graph holds
     // both directions. Re-ingest would materialize another inverse — emit
     // only the canonical direction.
-    let mut seen_symmetric: std::collections::HashSet<
-        (String, ontology_graph::ConceptId, ontology_graph::ConceptId),
-    > = std::collections::HashSet::new();
+    let mut seen_symmetric: std::collections::HashSet<(
+        String,
+        ontology_graph::ConceptId,
+        ontology_graph::ConceptId,
+    )> = std::collections::HashSet::new();
     for c in &concepts {
         sink.write(&Record::Concept(c.clone())).await?;
         stats.concepts += 1;
     }
     for c in &concepts {
         for r in graph.outgoing(c.id) {
-            if !relation_ids.insert(r.id) { continue; }
+            if !relation_ids.insert(r.id) {
+                continue;
+            }
             let symmetric = ontology
                 .relation_types
                 .get(&r.relation_type)
@@ -86,7 +90,9 @@ pub trait Source: Send + Sync {
 #[async_trait]
 pub trait Sink: Send + Sync {
     async fn write(&mut self, record: &Record) -> Result<(), IngestError>;
-    async fn finish(&mut self) -> Result<(), IngestError> { Ok(()) }
+    async fn finish(&mut self) -> Result<(), IngestError> {
+        Ok(())
+    }
 }
 
 /// Drains `source` into the graph, optionally journaling every applied
@@ -112,7 +118,12 @@ pub async fn ingest_records<S: Source + ?Sized>(
     // Retry deferred records once both endpoints should now exist.
     for rec in deferred {
         if !apply_record(&rec, graph, store, &mut stats).await? {
-            if let Record::NamedRelation { source_type, source_name, .. } = &rec {
+            if let Record::NamedRelation {
+                source_type,
+                source_name,
+                ..
+            } = &rec
+            {
                 return Err(IngestError::UnknownNamed {
                     concept_type: source_type.clone(),
                     name: source_name.clone(),
@@ -139,8 +150,13 @@ async fn apply_record(
 ) -> Result<bool, IngestError> {
     match rec {
         Record::Ontology(o) => {
-            graph.extend_ontology(|target| { *target = o.clone(); Ok(()) })?;
-            if let Some(s) = store { s.append(&LogRecord::ontology(o.clone())).await?; }
+            graph.extend_ontology(|target| {
+                *target = o.clone();
+                Ok(())
+            })?;
+            if let Some(s) = store {
+                s.append(&LogRecord::ontology(o.clone())).await?;
+            }
             stats.ontology_updates += 1;
             Ok(true)
         }
@@ -148,7 +164,9 @@ async fn apply_record(
             let mut c = c.clone();
             let id = graph.upsert_concept(c.clone())?;
             c.id = id;
-            if let Some(s) = store { s.append(&LogRecord::concept(c)).await?; }
+            if let Some(s) = store {
+                s.append(&LogRecord::concept(c)).await?;
+            }
             stats.concepts += 1;
             Ok(true)
         }
@@ -156,12 +174,19 @@ async fn apply_record(
             let id = graph.add_relation(r.clone())?;
             let mut r = r.clone();
             r.id = id;
-            if let Some(s) = store { s.append(&LogRecord::relation(r)).await?; }
+            if let Some(s) = store {
+                s.append(&LogRecord::relation(r)).await?;
+            }
             stats.relations += 1;
             Ok(true)
         }
         Record::NamedRelation {
-            relation_type, source_type, source_name, target_type, target_name, weight,
+            relation_type,
+            source_type,
+            source_name,
+            target_type,
+            target_name,
+            weight,
         } => {
             let src = graph.find_by_name(source_type, source_name);
             let tgt = graph.find_by_name(target_type, target_name);
