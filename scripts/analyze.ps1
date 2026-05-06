@@ -25,10 +25,14 @@ param(
     [string]$Ontology = ".\examples\finance\ontology.json",
 
     # Fichiers/dossiers a ingerer apres l'ontologie. Accepte plusieurs valeurs.
+    # ATTENTION : `relations.jsonl` doit venir en dernier, tous les
+    # endpoints (concepts) doivent deja exister au moment de son chargement.
     [string[]]$Inputs = @(
         ".\examples\finance\seed.jsonl",
-        ".\examples\finance\relations.jsonl",
-        ".\examples\finance\contracts"
+        ".\examples\finance\contracts",
+        ".\examples\finance\invoices.xlsx",
+        ".\examples\finance\line_items.xlsx",
+        ".\examples\finance\relations.jsonl"
     ),
 
     # Type de concept a appliquer aux fichiers texte (--text-type).
@@ -36,6 +40,19 @@ param(
 
     # Extensions des fichiers texte a ramasser dans un dossier (--text-ext).
     [string]$TextExt = "txt,md",
+
+    # Type par defaut pour les CSV / XLSX (--csv-type / --xlsx-type).
+    # Les xlsx du jeu finance contiennent une colonne `type` par ligne, donc
+    # ce parametre sert seulement de fallback.
+    [string]$RowType = "Invoice",
+
+    # Surcharge du type par nom de fichier (basename sans extension, en
+    # minuscules). Un match de sous-chaine suffit. Ex :
+    #   -RowTypeMap @{ 'line_item' = 'LineItem'; 'memo' = 'Memo' }
+    [hashtable]$RowTypeMap = @{
+        'line_item' = 'LineItem'
+        'invoice'   = 'Invoice'
+    },
 
     # Liste de requetes lancees a la fois en `retrieve` et en `ask`.
     [string[]]$Queries = @(
@@ -131,30 +148,57 @@ if ($Model) { $ProviderArgs += "--model"; $ProviderArgs += $Model }
 
 Write-Section "Ingest ontologie + donnees -> $DataDir"
 
-# 1) ontologie seule (sans donnees) : on passe un fichier JSONL vide via stdin.
-if ($Ontology) {
-    if (-not (Test-Path $Ontology)) { throw "Ontologie introuvable : $Ontology" }
-    "" | Invoke-Ontology --data $DataDir ingest --ontology $Ontology -
+if ($Ontology -and -not (Test-Path $Ontology)) {
+    throw "Ontologie introuvable : $Ontology"
 }
 
-# 2) chaque entree (fichier ou dossier) est ingeree separement, avec les
-#    arguments adaptes a son extension/type.
+# L'ontologie est chargee avec la PREMIERE ingestion (la CLI exige un fichier
+# de donnees ; --ontology est juste un flag optionnel sur `ingest`).
+$ontologyPending = [bool]$Ontology
+
 foreach ($in in $Inputs) {
     if (-not (Test-Path $in)) {
         Write-Warning "Entree absente, ignoree : $in"
         continue
     }
     $item = Get-Item $in
+
+    $extraArgs = @()
+    if ($ontologyPending) {
+        $extraArgs += @("--ontology", $Ontology)
+        $ontologyPending = $false
+    }
+
     if ($item.PSIsContainer) {
-        Invoke-Ontology --data $DataDir ingest --text-type $TextType --text-ext $TextExt $item.FullName
+        Invoke-Ontology --data $DataDir ingest @extraArgs --text-type $TextType --text-ext $TextExt $item.FullName
     } else {
-        switch -regex ($item.Extension.ToLowerInvariant()) {
-            '\.(csv)$'              { Invoke-Ontology --data $DataDir ingest --csv-type $TextType $item.FullName }
-            '\.(xlsx|xls|ods)$'     { Invoke-Ontology --data $DataDir ingest --xlsx-type $TextType $item.FullName }
-            '\.(jsonl|ndjson)$'     { Invoke-Ontology --data $DataDir ingest $item.FullName }
-            '\.(triples|txt|md)$'   { Invoke-Ontology --data $DataDir ingest $item.FullName }
-            default                 { Invoke-Ontology --data $DataDir ingest $item.FullName }
+        # Resout le type pour CSV/XLSX : surcharge -RowTypeMap, sinon $RowType.
+        $resolvedType = $RowType
+        $stem = [System.IO.Path]::GetFileNameWithoutExtension($item.Name).ToLowerInvariant()
+        foreach ($key in $RowTypeMap.Keys) {
+            if ($stem -like "*$key*") { $resolvedType = $RowTypeMap[$key]; break }
         }
+
+        switch -regex ($item.Extension.ToLowerInvariant()) {
+            '\.(csv)$'              { Invoke-Ontology --data $DataDir ingest @extraArgs --csv-type $resolvedType $item.FullName }
+            '\.(xlsx|xls|ods)$'     { Invoke-Ontology --data $DataDir ingest @extraArgs --xlsx-type $resolvedType $item.FullName }
+            '\.(jsonl|ndjson)$'     { Invoke-Ontology --data $DataDir ingest @extraArgs $item.FullName }
+            '\.(triples|txt|md)$'   { Invoke-Ontology --data $DataDir ingest @extraArgs $item.FullName }
+            default                 { Invoke-Ontology --data $DataDir ingest @extraArgs $item.FullName }
+        }
+    }
+}
+
+# Si toutes les entrees etaient absentes mais qu'on a une ontologie, on
+# l'ingere quand meme avec un fichier JSONL vide en entree.
+if ($ontologyPending) {
+    $tmp = New-TemporaryFile
+    Rename-Item $tmp.FullName ($tmp.FullName + ".jsonl")
+    $tmp = Get-Item ($tmp.FullName + ".jsonl")
+    try {
+        Invoke-Ontology --data $DataDir ingest --ontology $Ontology $tmp.FullName
+    } finally {
+        Remove-Item $tmp.FullName -Force -ErrorAction SilentlyContinue
     }
 }
 
