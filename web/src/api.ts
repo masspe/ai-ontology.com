@@ -26,6 +26,63 @@ export async function getStats(): Promise<Stats> {
   return r.json();
 }
 
+export interface Concept {
+  id: number;
+  concept_type: string;
+  name: string;
+  description?: string;
+  properties?: Record<string, unknown>;
+}
+
+export interface ListConceptsResponse {
+  total: number;
+  concepts: Concept[];
+}
+
+export async function listConcepts(opts: {
+  type?: string;
+  q?: string;
+  limit?: number;
+  offset?: number;
+} = {}): Promise<ListConceptsResponse> {
+  const p = new URLSearchParams();
+  if (opts.type) p.set("type", opts.type);
+  if (opts.q) p.set("q", opts.q);
+  if (opts.limit != null) p.set("limit", String(opts.limit));
+  if (opts.offset != null) p.set("offset", String(opts.offset));
+  const qs = p.toString();
+  const r = await fetch(`${BASE}/concepts${qs ? `?${qs}` : ""}`);
+  if (!r.ok) throw new Error(`concepts: ${r.status}`);
+  return r.json();
+}
+
+export interface ConceptType {
+  name: string;
+  parent?: string | null;
+  description?: string;
+  properties?: string[] | null;
+}
+
+export interface RelationType {
+  name: string;
+  domain: string;
+  range: string;
+  cardinality?: string;
+  symmetric?: boolean;
+  description?: string;
+}
+
+export interface OntologySchema {
+  concept_types: Record<string, ConceptType>;
+  relation_types: Record<string, RelationType>;
+}
+
+export async function getOntology(): Promise<OntologySchema> {
+  const r = await fetch(`${BASE}/ontology`);
+  if (!r.ok) throw new Error(`ontology: ${r.status}`);
+  return r.json();
+}
+
 export interface UploadResponse {
   ingested: { concepts: number; relations: number; ontology_updates: number };
 }

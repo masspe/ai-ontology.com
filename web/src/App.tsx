@@ -10,8 +10,9 @@ import { useEffect, useState } from "react";
 import { getStats, type Stats } from "./api";
 import { UploadPanel } from "./UploadPanel";
 import { AskPanel } from "./AskPanel";
+import { BrowsePanel } from "./BrowsePanel";
 
-type Tab = "ask" | "upload";
+type Tab = "ask" | "browse" | "upload";
 
 export default function App() {
   const [tab, setTab] = useState<Tab>("ask");
@@ -58,6 +59,16 @@ export default function App() {
           </a>
           <a
             href="#"
+            className={tab === "browse" ? "active" : ""}
+            onClick={(e) => {
+              e.preventDefault();
+              setTab("browse");
+            }}
+          >
+            Browse
+          </a>
+          <a
+            href="#"
             className={tab === "upload" ? "active" : ""}
             onClick={(e) => {
               e.preventDefault();
@@ -69,7 +80,13 @@ export default function App() {
         </nav>
       </header>
 
-      {tab === "ask" ? <AskPanel /> : <UploadPanel onUploaded={refresh} />}
+      {tab === "ask" ? (
+        <AskPanel />
+      ) : tab === "browse" ? (
+        <BrowsePanel />
+      ) : (
+        <UploadPanel onUploaded={refresh} />
+      )}
     </main>
   );
 }
