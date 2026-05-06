@@ -24,7 +24,7 @@
 //! into a larger axum app or test it with `tower::ServiceExt`.
 
 use axum::{
-    extract::{Multipart, Path, State},
+    extract::{Multipart, Path, Query, State},
     http::{HeaderValue, Request, StatusCode},
     middleware::{self, Next},
     response::{
@@ -126,7 +126,8 @@ fn build_router_inner(
     let protected = Router::new()
         .route("/stats", get(stats))
         .route("/metrics", get(metrics))
-        .route("/concepts", post(create_concept))
+        .route("/ontology", get(get_ontology))
+        .route("/concepts", get(list_concepts).post(create_concept))
         .route(
             "/concepts/:id",
             get(get_concept)
@@ -440,6 +441,70 @@ async fn get_concept(
 ) -> Result<Json<Concept>, ApiError> {
     let c = s.graph.get_concept(ConceptId(id))?;
     Ok(Json(c))
+}
+
+#[derive(Deserialize, Default)]
+struct ListConceptsQuery {
+    /// Filter by concept type (exact match).
+    #[serde(rename = "type")]
+    concept_type: Option<String>,
+    /// Case-insensitive substring match on the concept name.
+    q: Option<String>,
+    /// Maximum number of concepts to return. Defaults to 200, capped at 5_000
+    /// to keep the JSON payload bounded.
+    limit: Option<usize>,
+    /// Number of matching concepts to skip before returning results.
+    #[serde(default)]
+    offset: usize,
+}
+
+#[derive(Serialize)]
+struct ListConceptsResponse {
+    /// Total number of concepts matching the filter (before `limit`/`offset`).
+    total: usize,
+    concepts: Vec<Concept>,
+}
+
+/// `GET /concepts?type=&q=&limit=&offset=` — paginated browse of every node
+/// in the graph. Sorted by `(concept_type, name)` so the response is stable
+/// across calls.
+async fn list_concepts(
+    State(s): State<AppState>,
+    Query(q): Query<ListConceptsQuery>,
+) -> Json<ListConceptsResponse> {
+    let needle = q.q.as_ref().map(|s| s.to_lowercase());
+    let mut all: Vec<Concept> = s
+        .graph
+        .all_concepts()
+        .into_iter()
+        .filter(|c| {
+            q.concept_type
+                .as_ref()
+                .map(|t| c.concept_type == *t)
+                .unwrap_or(true)
+        })
+        .filter(|c| {
+            needle
+                .as_ref()
+                .map(|n| c.name.to_lowercase().contains(n))
+                .unwrap_or(true)
+        })
+        .collect();
+    all.sort_by(|a, b| {
+        a.concept_type
+            .cmp(&b.concept_type)
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    let total = all.len();
+    let limit = q.limit.unwrap_or(200).min(5_000);
+    let concepts = all.into_iter().skip(q.offset).take(limit).collect();
+    Json(ListConceptsResponse { total, concepts })
+}
+
+/// `GET /ontology` — the concept-type and relation-type schema, served
+/// verbatim. Useful for clients that want to render type-aware UIs.
+async fn get_ontology(State(s): State<AppState>) -> Json<Ontology> {
+    Json(s.graph.ontology())
 }
 
 async fn update_concept(

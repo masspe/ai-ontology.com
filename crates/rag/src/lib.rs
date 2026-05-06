@@ -25,7 +25,7 @@ pub mod prompt;
 
 pub use model::{
     AnthropicModel, EchoModel, LanguageModel, LlmError, LlmRequest, LlmResponse, LlmStream,
-    Message, Role, StreamChunk, TokenUsage,
+    Message, OpenAiModel, Role, StreamChunk, TokenUsage,
 };
 pub use pipeline::{RagAnswer, RagPipeline, RagStream, RagStreamEvent};
 pub use prompt::PromptBuilder;

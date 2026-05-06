@@ -65,6 +65,10 @@ DATA=./data
 ./target/release/ontology --data $DATA ask "Who wrote about RAG?"            # echo
 ANTHROPIC_API_KEY=... ./target/release/ontology --data $DATA \
     ask --anthropic "Who wrote about RAG?"
+OPENAI_API_KEY=... ./target/release/ontology --data $DATA \
+    ask --openai --model gpt-4o-mini "Who wrote about RAG?"
+DEEPSEEK_API_KEY=... ./target/release/ontology --data $DATA \
+    ask --deepseek "Who wrote about RAG?"
 ./target/release/ontology --data $DATA snapshot
 ./target/release/ontology --data $DATA compact          # snapshot + truncate WAL
 ./target/release/ontology --data $DATA path \
@@ -91,6 +95,10 @@ $env:DATA = ".\data"
 .\target\release\ontology.exe --data $env:DATA ask "Who wrote about RAG?"            # echo
 $env:ANTHROPIC_API_KEY = "..."
 .\target\release\ontology.exe --data $env:DATA ask --anthropic "Who wrote about RAG?"
+$env:OPENAI_API_KEY = "..."
+.\target\release\ontology.exe --data $env:DATA ask --openai --model gpt-4o-mini "Who wrote about RAG?"
+$env:DEEPSEEK_API_KEY = "..."
+.\target\release\ontology.exe --data $env:DATA ask --deepseek "Who wrote about RAG?"
 .\target\release\ontology.exe --data $env:DATA snapshot
 .\target\release\ontology.exe --data $env:DATA compact          # snapshot + truncate WAL
 .\target\release\ontology.exe --data $env:DATA path `

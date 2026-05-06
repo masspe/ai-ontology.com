@@ -14,7 +14,7 @@ use ontology_io::{
     export_graph, ingest_records, CsvSource, JsonlSink, JsonlSource, TextDocumentSource,
     TripleSource, XlsxSource,
 };
-use ontology_rag::{AnthropicModel, EchoModel, RagPipeline};
+use ontology_rag::{AnthropicModel, EchoModel, OpenAiModel, RagPipeline};
 use ontology_server::AppState;
 use ontology_storage::{FileStore, MemoryStore, Store};
 use std::path::PathBuf;
@@ -75,17 +75,28 @@ enum Cmd {
         depth: u32,
     },
     /// Run the full RAG pipeline. Uses the EchoModel by default; pass
-    /// --anthropic to call the live Messages API (requires ANTHROPIC_API_KEY).
+    /// --anthropic, --openai, or --deepseek to call a live provider
+    /// (each requires its own API-key env var).
     Ask {
         query: String,
         #[arg(long, default_value_t = 8)]
         top_k: usize,
         #[arg(long, default_value_t = 2)]
         depth: u32,
-        #[arg(long)]
+        /// Use the Anthropic Messages API. Requires `ANTHROPIC_API_KEY`.
+        #[arg(long, conflicts_with_all = ["openai", "deepseek"])]
         anthropic: bool,
-        #[arg(long, default_value = "claude-opus-4-7")]
-        model: String,
+        /// Use the OpenAI chat completions API. Requires `OPENAI_API_KEY`.
+        #[arg(long, conflicts_with_all = ["anthropic", "deepseek"])]
+        openai: bool,
+        /// Use the DeepSeek chat completions API (OpenAI-compatible).
+        /// Requires `DEEPSEEK_API_KEY`.
+        #[arg(long, conflicts_with_all = ["anthropic", "openai"])]
+        deepseek: bool,
+        /// Override the model name. Defaults: claude-opus-4-7 (anthropic),
+        /// gpt-4o-mini (openai), deepseek-chat (deepseek).
+        #[arg(long)]
+        model: Option<String>,
     },
     /// Take a durable snapshot of the current graph (only with --data).
     Snapshot,
@@ -110,10 +121,19 @@ enum Cmd {
     Serve {
         #[arg(long, default_value = "127.0.0.1:8080")]
         bind: String,
-        #[arg(long)]
+        /// Use the Anthropic Messages API. Requires `ANTHROPIC_API_KEY`.
+        #[arg(long, conflicts_with_all = ["openai", "deepseek"])]
         anthropic: bool,
-        #[arg(long, default_value = "claude-opus-4-7")]
-        model: String,
+        /// Use the OpenAI chat completions API. Requires `OPENAI_API_KEY`.
+        #[arg(long, conflicts_with_all = ["anthropic", "deepseek"])]
+        openai: bool,
+        /// Use the DeepSeek chat completions API. Requires `DEEPSEEK_API_KEY`.
+        #[arg(long, conflicts_with_all = ["anthropic", "openai"])]
+        deepseek: bool,
+        /// Override the model name. Defaults: claude-opus-4-7 (anthropic),
+        /// gpt-4o-mini (openai), deepseek-chat (deepseek).
+        #[arg(long)]
+        model: Option<String>,
         /// Optional bearer token. When set, every route except /healthz
         /// requires `Authorization: Bearer <token>`. Reads from the env
         /// var named here, NOT the literal value, so the secret never
@@ -265,15 +285,11 @@ async fn main() -> Result<()> {
             top_k,
             depth,
             anthropic,
+            openai,
+            deepseek,
             model,
         } => {
-            let llm: Arc<dyn ontology_rag::LanguageModel> = if anthropic {
-                let key = std::env::var("ANTHROPIC_API_KEY")
-                    .context("ANTHROPIC_API_KEY required for --anthropic")?;
-                Arc::new(AnthropicModel::new(key).with_model(model))
-            } else {
-                Arc::new(EchoModel)
-            };
+            let llm = build_llm(anthropic, openai, deepseek, model.as_deref())?;
             let pipe = RagPipeline::new(index.clone(), llm);
             let mut req = RetrievalRequest {
                 query,
@@ -348,16 +364,12 @@ async fn main() -> Result<()> {
         Cmd::Serve {
             bind,
             anthropic,
+            openai,
+            deepseek,
             model,
             auth_env,
         } => {
-            let llm: Arc<dyn ontology_rag::LanguageModel> = if anthropic {
-                let key = std::env::var("ANTHROPIC_API_KEY")
-                    .context("ANTHROPIC_API_KEY required for --anthropic")?;
-                Arc::new(AnthropicModel::new(key).with_model(model))
-            } else {
-                Arc::new(EchoModel)
-            };
+            let llm = build_llm(anthropic, openai, deepseek, model.as_deref())?;
             let pipeline = Arc::new(RagPipeline::new(index.clone(), llm));
             let state = AppState {
                 graph: graph.clone(),
@@ -380,4 +392,42 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Resolve the `--anthropic` / `--openai` / `--deepseek` triple plus an
+/// optional model override to a concrete `LanguageModel`. clap already
+/// guarantees at most one of the three flags is set.
+fn build_llm(
+    anthropic: bool,
+    openai: bool,
+    deepseek: bool,
+    model: Option<&str>,
+) -> Result<Arc<dyn ontology_rag::LanguageModel>> {
+    if anthropic {
+        let key = std::env::var("ANTHROPIC_API_KEY")
+            .context("ANTHROPIC_API_KEY required for --anthropic")?;
+        let mut m = AnthropicModel::new(key);
+        if let Some(name) = model {
+            m = m.with_model(name);
+        }
+        Ok(Arc::new(m))
+    } else if openai {
+        let key = std::env::var("OPENAI_API_KEY")
+            .context("OPENAI_API_KEY required for --openai")?;
+        let mut m = OpenAiModel::new(key);
+        if let Some(name) = model {
+            m = m.with_model(name);
+        }
+        Ok(Arc::new(m))
+    } else if deepseek {
+        let key = std::env::var("DEEPSEEK_API_KEY")
+            .context("DEEPSEEK_API_KEY required for --deepseek")?;
+        let mut m = OpenAiModel::deepseek(key);
+        if let Some(name) = model {
+            m = m.with_model(name);
+        }
+        Ok(Arc::new(m))
+    } else {
+        Ok(Arc::new(EchoModel))
+    }
 }

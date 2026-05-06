@@ -706,6 +706,467 @@ impl LanguageModel for AnthropicModel {
     }
 }
 
+// ---------------------------------------------------------------------------
+// OpenAI / DeepSeek client (OpenAI-compatible chat completions).
+// ---------------------------------------------------------------------------
+
+/// HTTP client for any OpenAI-compatible `chat/completions` endpoint.
+///
+/// Drives both **OpenAI** (`https://api.openai.com`) and **DeepSeek**
+/// (`https://api.deepseek.com`) — DeepSeek's API mirrors OpenAI's wire
+/// format byte-for-byte, including the streaming SSE shape and the
+/// `usage` block (DeepSeek additionally exposes `prompt_cache_hit_tokens`,
+/// which we map into `cache_read_input_tokens`).
+///
+/// Auth is `Authorization: Bearer <api_key>`.
+///
+/// `cached_context` is concatenated into the leading `system` message —
+/// OpenAI / DeepSeek both perform automatic prefix caching server-side
+/// on identical leading content, so byte-stable prefixes pay the cached
+/// rate without any client-side opt-in.
+///
+/// Retries 408 / 409 / 429 and any 5xx response with full-jitter
+/// exponential backoff (default 3 retries). Honors `retry-after`.
+pub struct OpenAiModel {
+    http: reqwest::Client,
+    api_key: String,
+    model: String,
+    base_url: String,
+    max_retries: u32,
+    initial_backoff: Duration,
+}
+
+impl OpenAiModel {
+    /// Default OpenAI endpoint with model `gpt-4o-mini`.
+    pub fn new(api_key: impl Into<String>) -> Self {
+        Self {
+            http: reqwest::Client::new(),
+            api_key: api_key.into(),
+            model: "gpt-4o-mini".into(),
+            base_url: "https://api.openai.com".into(),
+            max_retries: 3,
+            initial_backoff: Duration::from_millis(500),
+        }
+    }
+
+    /// Pre-configured for the DeepSeek endpoint with model `deepseek-chat`.
+    pub fn deepseek(api_key: impl Into<String>) -> Self {
+        Self {
+            http: reqwest::Client::new(),
+            api_key: api_key.into(),
+            model: "deepseek-chat".into(),
+            base_url: "https://api.deepseek.com".into(),
+            max_retries: 3,
+            initial_backoff: Duration::from_millis(500),
+        }
+    }
+
+    pub fn with_model(mut self, model: impl Into<String>) -> Self {
+        self.model = model.into();
+        self
+    }
+
+    pub fn with_base_url(mut self, url: impl Into<String>) -> Self {
+        self.base_url = url.into();
+        self
+    }
+
+    pub fn with_max_retries(mut self, n: u32) -> Self {
+        self.max_retries = n;
+        self
+    }
+
+    pub fn with_initial_backoff(mut self, d: Duration) -> Self {
+        self.initial_backoff = d;
+        self
+    }
+}
+
+#[derive(Serialize)]
+struct OpenAiMessage<'a> {
+    role: &'a str,
+    content: &'a str,
+}
+
+#[derive(Serialize)]
+struct OpenAiStreamOptions {
+    include_usage: bool,
+}
+
+#[derive(Serialize)]
+struct OpenAiRequest<'a> {
+    model: &'a str,
+    messages: Vec<OpenAiMessage<'a>>,
+    max_tokens: u32,
+    temperature: f32,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stream_options: Option<OpenAiStreamOptions>,
+}
+
+#[derive(Deserialize, Default)]
+struct OpenAiUsage {
+    #[serde(default)]
+    prompt_tokens: u32,
+    #[serde(default)]
+    completion_tokens: u32,
+    /// OpenAI exposes cached tokens under `prompt_tokens_details.cached_tokens`.
+    #[serde(default)]
+    prompt_tokens_details: Option<OpenAiPromptTokensDetails>,
+    /// DeepSeek exposes the same number directly on `usage`.
+    #[serde(default)]
+    prompt_cache_hit_tokens: Option<u32>,
+}
+
+#[derive(Deserialize, Default)]
+struct OpenAiPromptTokensDetails {
+    #[serde(default)]
+    cached_tokens: u32,
+}
+
+impl OpenAiUsage {
+    fn into_token_usage(self) -> TokenUsage {
+        let cached = self
+            .prompt_cache_hit_tokens
+            .or_else(|| self.prompt_tokens_details.as_ref().map(|d| d.cached_tokens))
+            .unwrap_or(0);
+        TokenUsage {
+            input_tokens: self.prompt_tokens,
+            output_tokens: self.completion_tokens,
+            cache_creation_input_tokens: 0,
+            cache_read_input_tokens: cached,
+        }
+    }
+}
+
+#[derive(Deserialize, Default)]
+struct OpenAiResponseMessage {
+    #[serde(default)]
+    content: String,
+}
+
+#[derive(Deserialize, Default)]
+struct OpenAiChoice {
+    #[serde(default)]
+    message: OpenAiResponseMessage,
+    #[serde(default)]
+    finish_reason: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct OpenAiResponse {
+    #[serde(default)]
+    choices: Vec<OpenAiChoice>,
+    #[serde(default)]
+    model: String,
+    #[serde(default)]
+    usage: OpenAiUsage,
+}
+
+/// Build the message array. `cached_context` is folded into the leading
+/// system message so it benefits from automatic prefix caching.
+fn build_openai_messages<'a>(
+    system: Option<&'a str>,
+    cached: Option<&'a str>,
+    messages: &'a [Message],
+    merged_system: &'a mut String,
+) -> Vec<OpenAiMessage<'a>> {
+    let has_system = system.is_some() || cached.is_some();
+    if has_system {
+        if let Some(c) = cached {
+            merged_system.push_str(c);
+        }
+        if let Some(s) = system {
+            if !merged_system.is_empty() && !s.is_empty() {
+                merged_system.push_str("\n\n");
+            }
+            merged_system.push_str(s);
+        }
+    }
+    let mut out = Vec::with_capacity(messages.len() + 1);
+    if has_system {
+        out.push(OpenAiMessage {
+            role: "system",
+            content: merged_system.as_str(),
+        });
+    }
+    for m in messages {
+        out.push(OpenAiMessage {
+            role: match m.role {
+                Role::System => "system",
+                Role::User => "user",
+                Role::Assistant => "assistant",
+            },
+            content: &m.content,
+        });
+    }
+    out
+}
+
+#[derive(Deserialize, Default)]
+struct OpenAiStreamChoice {
+    #[serde(default)]
+    delta: OpenAiStreamDelta,
+    #[serde(default)]
+    finish_reason: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+struct OpenAiStreamDelta {
+    #[serde(default)]
+    content: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct OpenAiStreamFrame {
+    #[serde(default)]
+    choices: Vec<OpenAiStreamChoice>,
+    #[serde(default)]
+    model: String,
+    #[serde(default)]
+    usage: Option<OpenAiUsage>,
+}
+
+/// Take one OpenAI-style SSE frame off the front of `buf`. Frames are
+/// `data: {json}\n\n` and the stream terminator is `data: [DONE]`.
+/// Returns `Some(None)` for `[DONE]`, `Some(Some(payload))` for a real
+/// frame, or `None` if no complete frame is buffered yet.
+fn take_one_openai_sse_frame(buf: &mut Vec<u8>) -> Option<Option<String>> {
+    let pos = buf.windows(2).position(|w| w == b"\n\n")?;
+    let raw = std::str::from_utf8(&buf[..pos]).ok()?.to_string();
+    buf.drain(..pos + 2);
+    let mut data = String::new();
+    for line in raw.split('\n') {
+        if let Some(rest) = line.strip_prefix("data: ").or_else(|| line.strip_prefix("data:")) {
+            if !data.is_empty() {
+                data.push('\n');
+            }
+            data.push_str(rest.trim_start());
+        }
+    }
+    if data.is_empty() {
+        // Comment / keep-alive frame; signal "skip" by returning Some(None)
+        // would be wrong — the caller would treat it as DONE. Return an
+        // empty payload instead so the caller advances and tries again.
+        return Some(Some(String::new()));
+    }
+    if data == "[DONE]" {
+        return Some(None);
+    }
+    Some(Some(data))
+}
+
+struct OpenAiStreamState {
+    body: Option<reqwest::Response>,
+    buf: Vec<u8>,
+    model: String,
+    usage: TokenUsage,
+    stop_reason: Option<String>,
+    end_emitted: bool,
+}
+
+#[async_trait]
+impl LanguageModel for OpenAiModel {
+    async fn generate(&self, req: &LlmRequest) -> Result<LlmResponse, LlmError> {
+        let mut merged_system = String::new();
+        let messages = build_openai_messages(
+            req.system.as_deref(),
+            req.cached_context.as_deref(),
+            &req.messages,
+            &mut merged_system,
+        );
+
+        let body = OpenAiRequest {
+            model: &self.model,
+            messages,
+            max_tokens: req.max_tokens,
+            temperature: req.temperature,
+            stream: false,
+            stream_options: None,
+        };
+
+        let url = format!("{}/v1/chat/completions", self.base_url);
+
+        let mut attempt: u32 = 0;
+        let parsed: OpenAiResponse = loop {
+            let send_result = self
+                .http
+                .post(&url)
+                .bearer_auth(&self.api_key)
+                .header("content-type", "application/json")
+                .json(&body)
+                .send()
+                .await;
+
+            match send_result {
+                Err(e) if e.is_connect() || e.is_timeout() => {
+                    if attempt >= self.max_retries {
+                        return Err(LlmError::Http(e.to_string()));
+                    }
+                    let delay = jittered_backoff(self.initial_backoff, attempt);
+                    tracing::warn!(error=%e, attempt, ?delay, "transport error; retrying");
+                    tokio::time::sleep(delay).await;
+                    attempt += 1;
+                    continue;
+                }
+                Err(e) => return Err(LlmError::Http(e.to_string())),
+                Ok(resp) => {
+                    let status = resp.status();
+                    if status.is_success() {
+                        break resp
+                            .json::<OpenAiResponse>()
+                            .await
+                            .map_err(|e| LlmError::Decode(e.to_string()))?;
+                    }
+                    if is_retryable_status(status) && attempt < self.max_retries {
+                        let server_hint = resp
+                            .headers()
+                            .get(reqwest::header::RETRY_AFTER)
+                            .and_then(|v| v.to_str().ok())
+                            .and_then(|s| s.parse::<u64>().ok())
+                            .map(Duration::from_secs);
+                        let delay = server_hint
+                            .unwrap_or_else(|| jittered_backoff(self.initial_backoff, attempt));
+                        tracing::warn!(%status, attempt, ?delay, "retryable api error");
+                        let _ = resp.text().await;
+                        tokio::time::sleep(delay).await;
+                        attempt += 1;
+                        continue;
+                    }
+                    let text = resp.text().await.unwrap_or_default();
+                    return Err(LlmError::Api(format!("{status}: {text}")));
+                }
+            }
+        };
+
+        let (content, stop_reason) = match parsed.choices.into_iter().next() {
+            Some(c) => (c.message.content, c.finish_reason),
+            None => (String::new(), None),
+        };
+        Ok(LlmResponse {
+            content,
+            model: parsed.model,
+            stop_reason,
+            usage: parsed.usage.into_token_usage(),
+        })
+    }
+
+    async fn generate_stream(&self, req: &LlmRequest) -> Result<LlmStream, LlmError> {
+        let mut merged_system = String::new();
+        let messages = build_openai_messages(
+            req.system.as_deref(),
+            req.cached_context.as_deref(),
+            &req.messages,
+            &mut merged_system,
+        );
+
+        let body = OpenAiRequest {
+            model: &self.model,
+            messages,
+            max_tokens: req.max_tokens,
+            temperature: req.temperature,
+            stream: true,
+            stream_options: Some(OpenAiStreamOptions { include_usage: true }),
+        };
+
+        let url = format!("{}/v1/chat/completions", self.base_url);
+        let resp = self
+            .http
+            .post(&url)
+            .bearer_auth(&self.api_key)
+            .header("content-type", "application/json")
+            .header("accept", "text/event-stream")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| LlmError::Http(e.to_string()))?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(LlmError::Api(format!("{status}: {text}")));
+        }
+
+        let state = OpenAiStreamState {
+            body: Some(resp),
+            buf: Vec::with_capacity(4096),
+            model: String::new(),
+            usage: TokenUsage::default(),
+            stop_reason: None,
+            end_emitted: false,
+        };
+
+        let stream = futures::stream::unfold(state, |mut state| async move {
+            if state.end_emitted {
+                return None;
+            }
+            loop {
+                // Drain any complete SSE frames already buffered.
+                while let Some(frame) = take_one_openai_sse_frame(&mut state.buf) {
+                    let payload = match frame {
+                        // `[DONE]` — emit final End and stop.
+                        None => {
+                            state.end_emitted = true;
+                            let chunk = StreamChunk::End {
+                                usage: state.usage.clone(),
+                                stop_reason: state.stop_reason.take(),
+                                model: std::mem::take(&mut state.model),
+                            };
+                            return Some((Ok(chunk), state));
+                        }
+                        Some(p) if p.is_empty() => continue,
+                        Some(p) => p,
+                    };
+                    let parsed: OpenAiStreamFrame = match serde_json::from_str(&payload) {
+                        Ok(p) => p,
+                        Err(_) => continue,
+                    };
+                    if !parsed.model.is_empty() && state.model.is_empty() {
+                        state.model = parsed.model;
+                    }
+                    if let Some(u) = parsed.usage {
+                        state.usage = u.into_token_usage();
+                    }
+                    for choice in parsed.choices {
+                        if let Some(fr) = choice.finish_reason {
+                            state.stop_reason = Some(fr);
+                        }
+                        if let Some(text) = choice.delta.content {
+                            if !text.is_empty() {
+                                return Some((Ok(StreamChunk::Text(text)), state));
+                            }
+                        }
+                    }
+                }
+                // Read more bytes from the response body.
+                let body = match state.body.as_mut() {
+                    Some(b) => b,
+                    None => return None,
+                };
+                match body.chunk().await {
+                    Ok(Some(bytes)) => state.buf.extend_from_slice(&bytes),
+                    Ok(None) => {
+                        // Server closed without an explicit [DONE] — flush.
+                        state.end_emitted = true;
+                        let chunk = StreamChunk::End {
+                            usage: state.usage.clone(),
+                            stop_reason: state.stop_reason.take(),
+                            model: std::mem::take(&mut state.model),
+                        };
+                        return Some((Ok(chunk), state));
+                    }
+                    Err(e) => {
+                        return Some((Err(LlmError::Http(e.to_string())), state));
+                    }
+                }
+            }
+        })
+        .boxed();
+        Ok(stream)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -754,5 +1215,66 @@ mod tests {
             .unwrap();
         assert_eq!(r.content, "[echo] hi");
         assert_eq!(r.usage.input_tokens, 0);
+    }
+
+    #[test]
+    fn openai_messages_fold_cached_then_system_into_one_block() {
+        let msgs = vec![Message::user("q?")];
+        let mut merged = String::new();
+        let out = build_openai_messages(Some("be terse"), Some("ONTOLOGY"), &msgs, &mut merged);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].role, "system");
+        assert_eq!(out[0].content, "ONTOLOGY\n\nbe terse");
+        assert_eq!(out[1].role, "user");
+        assert_eq!(out[1].content, "q?");
+    }
+
+    #[test]
+    fn openai_messages_no_system_when_neither_set() {
+        let msgs = vec![Message::user("q?")];
+        let mut merged = String::new();
+        let out = build_openai_messages(None, None, &msgs, &mut merged);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].role, "user");
+    }
+
+    #[test]
+    fn openai_usage_picks_deepseek_cache_field_first() {
+        let u = OpenAiUsage {
+            prompt_tokens: 10,
+            completion_tokens: 3,
+            prompt_tokens_details: Some(OpenAiPromptTokensDetails { cached_tokens: 4 }),
+            prompt_cache_hit_tokens: Some(7),
+        };
+        let t = u.into_token_usage();
+        assert_eq!(t.input_tokens, 10);
+        assert_eq!(t.output_tokens, 3);
+        assert_eq!(t.cache_read_input_tokens, 7);
+    }
+
+    #[test]
+    fn openai_usage_falls_back_to_openai_details() {
+        let u = OpenAiUsage {
+            prompt_tokens: 10,
+            completion_tokens: 3,
+            prompt_tokens_details: Some(OpenAiPromptTokensDetails { cached_tokens: 4 }),
+            prompt_cache_hit_tokens: None,
+        };
+        assert_eq!(u.into_token_usage().cache_read_input_tokens, 4);
+    }
+
+    #[test]
+    fn openai_sse_frame_parses_done_terminator() {
+        let mut buf = b"data: [DONE]\n\n".to_vec();
+        let frame = take_one_openai_sse_frame(&mut buf);
+        assert!(matches!(frame, Some(None)));
+        assert!(buf.is_empty());
+    }
+
+    #[test]
+    fn openai_sse_frame_parses_data_payload() {
+        let mut buf = b"data: {\"a\":1}\n\n".to_vec();
+        let frame = take_one_openai_sse_frame(&mut buf).unwrap();
+        assert_eq!(frame.as_deref(), Some("{\"a\":1}"));
     }
 }
