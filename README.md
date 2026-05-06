@@ -12,9 +12,10 @@ answers in retrieved subgraphs.
 | `ontology-storage` | Append-only WAL + bincode snapshots; pluggable `Store` trait. |
 | `ontology-index`   | Lexical (TF-IDF) + vector (cosine) + graph-expansion retrieval. |
 | `ontology-io`      | `Source` / `Sink` traits with JSONL and triples adapters. |
-| `ontology-rag`     | Prompt builder + `LanguageModel` trait (echo + Anthropic clients with prompt caching). |
-| `ontology-server`  | axum HTTP server exposing `/concepts`, `/relations`, `/retrieve`, `/ask`. |
+| `ontology-rag`     | Prompt builder + `LanguageModel` trait (echo, Anthropic, OpenAI, DeepSeek; with prompt caching). |
+| `ontology-server`  | axum HTTP server exposing `/concepts`, `/relations`, `/retrieve`, `/ask`, `/ontology`. |
 | `ontology-cli`     | `ontology` binary tying it all together. |
+| `web/`             | Vite + React UI (Ask · Browse · Upload tabs).                          |
 
 ## Architecture
 
@@ -38,7 +39,8 @@ answers in retrieved subgraphs.
                                               ▼
                               ┌────────────────────────────────┐
                               │  PromptBuilder → LanguageModel │
-                              │      (Anthropic / Echo)        │
+                              │  (Anthropic / OpenAI /         │
+                              │   DeepSeek / Echo)             │
                               └────────────────────────────────┘
 ```
 
@@ -113,6 +115,44 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8080/retrieve -ContentType 
 Stop-Process -Id $server.Id
 ```
 
+## HTTP API
+
+| Method | Path                | Body / Returns                                          |
+|--------|---------------------|----------------------------------------------------------|
+| GET    | `/healthz`          | `"ok"`                                                   |
+| GET    | `/stats`            | counts of concepts, relations, types                     |
+| GET    | `/metrics`          | Prometheus-format gauges                                 |
+| GET    | `/ontology`         | full schema (concept types + relation types)             |
+| GET    | `/concepts`         | paginated list; query: `type`, `q`, `limit`, `offset`    |
+| POST   | `/concepts`         | create a `Concept`, returns `{id}`                       |
+| GET    | `/concepts/:id`     | fetch one concept                                        |
+| PATCH  | `/concepts/:id`     | partial update (`ConceptPatch`)                          |
+| DELETE | `/concepts/:id`     | remove concept and cascade incident edges                |
+| POST   | `/relations`        | create a `Relation`, returns `{id}`                      |
+| POST   | `/retrieve`         | `RetrievalRequest` → ranked seeds + subgraph             |
+| POST   | `/ask`              | `RetrievalRequest` → full `RagAnswer`                    |
+| POST   | `/ask/stream`       | same, streamed as Server-Sent Events                     |
+| POST   | `/path`             | shortest path between two named concepts                 |
+| POST   | `/upload`           | multipart ingest (`kind`, `file`, optional `concept_type`) |
+| POST   | `/compact`          | snapshot + truncate WAL                                  |
+
+## Web UI
+
+A small Vite + React app under [`web/`](./web) consumes the HTTP API:
+
+* **Ask** — streaming `/ask/stream` with citations and token usage.
+* **Browse** — paginated listing of every node (`/concepts`) grouped by
+  type, with a type filter, name search, and a schema overview backed by
+  `/ontology`.
+* **Upload** — multipart ingest (`/upload`) for ontology JSON, JSONL,
+  triples, CSV, XLSX, or text documents.
+
+```bash
+cd web
+npm install
+VITE_API_BASE=http://127.0.0.1:8080 npm run dev
+```
+
 ## Observability
 
 `GET /metrics` returns Prometheus-format gauges (`ontology_concepts`,
@@ -125,6 +165,32 @@ Wire it into your Prometheus scrape config alongside the bearer token.
 * `*.triples` / `*.txt`  — `Type:Name predicate Type:Name`, `#` comments.
 * `*.csv` — header row with a `name` column; `--csv-type <Type>` required.
 * `-` (literal hyphen) — read JSONL from stdin: `cat data.jsonl | ontology ingest -`.
+
+## LLM providers
+
+Four `LanguageModel` implementations ship in `ontology-rag`:
+
+| Backend            | Constructor                                | Env var              | Default model    |
+| ------------------ | ------------------------------------------ | -------------------- | ---------------- |
+| Echo (offline fake)| `EchoModel`                                | —                    | `echo`           |
+| Anthropic Messages | `AnthropicModel::new(key)`                 | `ANTHROPIC_API_KEY`  | `claude-opus-4-7`|
+| OpenAI Chat        | `OpenAiModel::new(key)`                    | `OPENAI_API_KEY`     | `gpt-4o-mini`    |
+| DeepSeek Chat      | `OpenAiModel::deepseek(key)`               | `DEEPSEEK_API_KEY`   | `deepseek-chat`  |
+
+DeepSeek's API is OpenAI-compatible byte-for-byte (including streaming
+SSE and the `usage` block) so it shares `OpenAiModel` with a different
+base URL. All three HTTP clients support streaming, retry 408 / 409 /
+429 / 5xx with full-jitter exponential backoff (default 3 retries),
+and honor server-sent `retry-after`.
+
+Select a backend on the CLI with mutually-exclusive flags on `ask` and
+`serve`:
+
+```bash
+ontology --data $DATA ask --anthropic               "Who wrote about RAG?"
+ontology --data $DATA ask --openai --model gpt-4o   "Who wrote about RAG?"
+ontology --data $DATA ask --deepseek                "Who wrote about RAG?"
+```
 
 ## Prompt caching
 
@@ -139,9 +205,17 @@ breakpoint is silently ignored — no error.
 `temperature` is automatically omitted on Claude Opus 4.7 (the API rejects
 it with a 400). Older models still receive it.
 
-The Anthropic client retries 408 / 409 / 429 / 5xx with full-jitter
+OpenAI and DeepSeek both perform **automatic** server-side prefix caching
+on identical leading content — the `OpenAiModel` folds `cached_context`
+into the leading `system` message so byte-stable prefixes pay the cached
+rate without any client opt-in. Cache hits are exposed via
+`usage.cache_read_input_tokens` (mapped from OpenAI's
+`prompt_tokens_details.cached_tokens` and DeepSeek's
+`prompt_cache_hit_tokens`).
+
+All HTTP clients retry 408 / 409 / 429 / 5xx with full-jitter
 exponential backoff (default 3 retries; configurable via
-`AnthropicModel::with_max_retries`). When the server sends a `retry-after`
+`with_max_retries`). When the server sends a `retry-after`
 header it's honored verbatim.
 
 ## Authentication
