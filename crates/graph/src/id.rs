@@ -18,6 +18,14 @@ pub struct ConceptId(pub u64);
 #[serde(transparent)]
 pub struct RelationId(pub u64);
 
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, Default)]
+#[serde(transparent)]
+pub struct RuleId(pub u64);
+
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize, Default)]
+#[serde(transparent)]
+pub struct ActionId(pub u64);
+
 impl fmt::Debug for ConceptId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "C#{}", self.0)
@@ -38,6 +46,26 @@ impl fmt::Display for RelationId {
         write!(f, "R#{}", self.0)
     }
 }
+impl fmt::Debug for RuleId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Ru#{}", self.0)
+    }
+}
+impl fmt::Display for RuleId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Ru#{}", self.0)
+    }
+}
+impl fmt::Debug for ActionId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "A#{}", self.0)
+    }
+}
+impl fmt::Display for ActionId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "A#{}", self.0)
+    }
+}
 
 /// Monotonically-increasing id allocator. Thread-safe and lock-free.
 #[derive(Debug, Default)]
@@ -56,6 +84,12 @@ impl IdAllocator {
     }
     pub fn next_relation(&self) -> RelationId {
         RelationId(self.next.fetch_add(1, Ordering::Relaxed))
+    }
+    pub fn next_rule(&self) -> RuleId {
+        RuleId(self.next.fetch_add(1, Ordering::Relaxed))
+    }
+    pub fn next_action(&self) -> ActionId {
+        ActionId(self.next.fetch_add(1, Ordering::Relaxed))
     }
     pub fn high_water(&self) -> u64 {
         self.next.load(Ordering::Relaxed)

@@ -138,20 +138,118 @@ Stop-Process -Id $server.Id
 
 ## Web UI
 
-A small Vite + React app under [`web/`](./web) consumes the HTTP API:
+A Vite + React SPA under [`web/`](./web) consumes the HTTP API and adds
+a guided **Ontology Builder** that drafts a schema from a natural-language
+description (plus optional seed files) via the RAG backend.
 
-* **Ask** — streaming `/ask/stream` with citations and token usage.
-* **Browse** — paginated listing of every node (`/concepts`) grouped by
-  type, with a type filter, name search, and a schema overview backed by
-  `/ontology`.
-* **Upload** — multipart ingest (`/upload`) for ontology JSON, JSONL,
-  triples, CSV, XLSX, or text documents.
+Pages:
+
+* **Builder** (`/builder`) — describe your domain in plain English, optionally
+  attach seed files (PDF, text, CSV, JSONL, triples), click **Generate
+  Ontology** to call `POST /ontology/generate`, review the proposed concept
+  types / relation types in the live graph view, then **Save Ontology** to
+  persist via `PUT /ontology`.
+* **Graph** (`/graph`) — interactive subgraph viewer (ReactFlow + dagre).
+* **Concepts** (`/concepts`) — paginated listing of every node grouped by
+  type, with a type filter and name search.
+* **Files** (`/files`) — multipart ingest (`/upload`) for ontology JSON,
+  JSONL, triples, CSV, XLSX, or text documents.
+* **Rules** / **Queries** / **Actions** / **Settings** / **Dashboard**.
+
+### Running the full stack locally
+
+Three services cooperate. Start them in three terminals (or use the
+combined script in step 3 to run the ontology API + web together).
+
+#### 1. Auth server (`http://localhost:4000`)
+
+Issues JWTs consumed by the SPA. Required for login / signup / OAuth.
+
+```powershell
+cd auth-server
+npm install
+Copy-Item .env.example .env       # then edit: JWT_SECRET, OAUTH_STATE_SECRET, provider keys
+npm run dev
+```
+
+See [auth-server/README.md](./auth-server/README.md) for OAuth provider
+setup (Google, Microsoft).
+
+#### 2. Ontology API (`http://127.0.0.1:5000`)
+
+The Rust HTTP server. To enable **Generate Ontology** from the UI, export
+an LLM key before starting it (Anthropic, OpenAI or DeepSeek):
+
+```powershell
+cargo build --release
+$env:ANTHROPIC_API_KEY = "sk-ant-..."     # or OPENAI_API_KEY / DEEPSEEK_API_KEY
+.\target\release\ontology.exe --data .\data serve --bind 127.0.0.1:5000 --anthropic
+```
+
+POSIX equivalent:
 
 ```bash
+cargo build --release
+ANTHROPIC_API_KEY=sk-ant-... \
+  ./target/release/ontology --data ./data serve --bind 127.0.0.1:5000 --anthropic
+```
+
+#### 3. Frontend (`http://localhost:5173`)
+
+```powershell
 cd web
 npm install
-VITE_API_BASE=http://127.0.0.1:5000 npm run dev
+$env:VITE_API_BASE = "http://127.0.0.1:5000"
+$env:VITE_AUTH_BASE = "http://localhost:4000"
+npm run dev:web
 ```
+
+Shortcut: `npm run dev` inside `web/` launches the ontology API
+(`cargo run -p ontology-cli -- ... serve`) **and** the Vite dev server in
+parallel via `concurrently`. Use this when you do not need a release build
+of the backend. The auth server still needs to be started separately.
+
+The `dev:server` script also passes `--seed ../examples/finance`, so on a
+fresh `data/` directory the API starts with the bundled finance demo
+already loaded (Companies, People, Contracts, Invoices, LineItems and
+their relations — visible at `GET /stats`). Seeding is skipped when the
+persistent store already contains concepts, so restarts are idempotent;
+delete the `data/` folder to force a re-seed.
+
+To seed from another example, pass `--seed` to `ontology serve` directly:
+
+```powershell
+.\target\release\ontology.exe --data .\data serve `
+    --bind 127.0.0.1:5000 --seed .\examples\finance
+```
+
+The seeder walks the directory in dependency order: `ontology.json`
+first, then `seed.jsonl`, other `*.jsonl` files, `*.triples`,
+subdirectories (each file becomes a concept whose type is inferred from
+the directory name — `contracts/` → `Contract`), `*.xlsx` spreadsheets
+(concept type inferred from the file stem — `invoices.xlsx` → `Invoice`)
+and finally `relations.jsonl`.
+
+### Generating an ontology from the UI
+
+1. Open `http://localhost:5173`, sign up or log in.
+2. Navigate to **Builder** in the sidebar (`/builder`).
+3. Type a description of your domain — e.g. *“Contract management for a
+   law firm: parties, clauses, obligations, effective dates, jurisdictions.”*
+4. (Optional) Attach one or more seed files. Their text is included as
+   context for the LLM.
+5. Click **Generate Ontology**. The SPA calls `POST /ontology/generate`;
+   the backend asks the configured `LanguageModel` to draft concept types,
+   relation types, and example seed concepts, then returns a preview.
+6. Inspect the proposed schema in the live graph. Edit names / properties
+   inline if needed.
+7. Click **Save Ontology** to `PUT /ontology` and persist it (WAL +
+   snapshot). The schema is then visible across **Graph**, **Concepts**,
+   **Rules**, etc., and ready to receive ingested data via **Files**.
+
+> If **Generate Ontology** returns `503 no language model configured`,
+> restart the ontology API with one of `--anthropic` / `--openai` /
+> `--deepseek` and the matching `*_API_KEY` env var.
 
 ## Observability
 

@@ -7,7 +7,10 @@ import Dashboard from "./pages/Dashboard";
 import OntologyBuilder from "./pages/OntologyBuilder";
 import Files from "./pages/Files";
 import GraphView from "./pages/GraphView";
+import Concepts from "./pages/Concepts";
+import Rules from "./pages/Rules";
 import Queries from "./pages/Queries";
+import Actions from "./pages/Actions";
 import Settings from "./pages/Settings";
 // @ts-expect-error JSX module
 import Login from "./pages/Login.jsx";
@@ -33,7 +36,10 @@ export default function App() {
             <Route path="builder" element={<OntologyBuilder />} />
             <Route path="files" element={<Files />} />
             <Route path="graph" element={<GraphView />} />
+            <Route path="concepts" element={<Concepts />} />
+            <Route path="rules" element={<Rules />} />
             <Route path="queries" element={<Queries />} />
+            <Route path="actions" element={<Actions />} />
             <Route path="settings" element={<Settings />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>

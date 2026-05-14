@@ -23,6 +23,8 @@
 //! The router is constructed via [`build_router`] so callers can mount it
 //! into a larger axum app or test it with `tower::ServiceExt`.
 
+mod openapi;
+
 use axum::{
     extract::{Multipart, Path, Query, State},
     http::{HeaderValue, Request, StatusCode},
@@ -36,8 +38,9 @@ use axum::{
 };
 use futures::stream::StreamExt;
 use ontology_graph::{
-    Concept, ConceptId, ConceptPatch, Ontology, OntologyGraph, Path as GraphPath, Relation,
-    RelationId, Subgraph, TraversalSpec,
+    Action, ActionId, ActionPatch, Concept, ConceptId, ConceptPatch, Ontology, OntologyGraph,
+    Path as GraphPath, Relation, RelationId, RelationPatch, Rule, RuleId, RulePatch, Subgraph,
+    TraversalSpec,
 };
 use ontology_index::{HybridIndex, RetrievalRequest, ScoredConcept};
 use ontology_io::{
@@ -383,11 +386,69 @@ fn now_ts() -> u64 {
 /// Tunables for the optional rate limiter / request-id middleware.
 #[derive(Debug, Clone)]
 pub struct RouterConfig {
-    /// Bearer token gate. Routes other than `/healthz` require
-    /// `Authorization: Bearer <token>` when set.
+    /// Static bearer token gate. Routes other than `/healthz` require
+    /// `Authorization: Bearer <token>` when set. Kept for back-compat with
+    /// machine-to-machine callers; for end users prefer [`Self::jwt`].
     pub bearer_token: Option<String>,
+    /// JWT verification config. When set, requests must carry a valid
+    /// `Authorization: Bearer <jwt>` signed with the same secret + issuer +
+    /// audience as the companion `auth-server`. Validation is HS256 with
+    /// `exp` enforced and ±60 s clock skew. If both `bearer_token` and `jwt`
+    /// are set, either credential is accepted.
+    pub jwt: Option<JwtAuth>,
     /// Per-IP request limit. `None` disables rate limiting.
     pub rate_limit: Option<RateLimit>,
+}
+
+/// JWT verification parameters. Mirrors the Node `auth-server` defaults
+/// (`iss=ai-ontology`, `aud=web`, HS256, `exp` required) so the same token
+/// issued by the auth-server unlocks this Rust API.
+#[derive(Debug, Clone)]
+pub struct JwtAuth {
+    /// HS256 shared secret. Must match `JWT_SECRET` of the auth-server.
+    pub secret: Vec<u8>,
+    /// Required `iss` claim, e.g. `"ai-ontology"`.
+    pub issuer: Option<String>,
+    /// Required `aud` claim, e.g. `"web"`.
+    pub audience: Option<String>,
+    /// Allowed clock skew when checking `exp` / `nbf` (default 60 s).
+    pub leeway_secs: u64,
+}
+
+impl JwtAuth {
+    /// Convenience constructor matching the auth-server defaults.
+    pub fn from_secret(secret: impl Into<Vec<u8>>) -> Self {
+        Self {
+            secret: secret.into(),
+            issuer: Some("ai-ontology".into()),
+            audience: Some("web".into()),
+            leeway_secs: 60,
+        }
+    }
+}
+
+/// Claims issued by the auth-server. We don't need every field — just the
+/// ones we want to validate or surface to handlers via `AuthContext`.
+#[derive(Debug, Clone, Deserialize)]
+struct JwtClaims {
+    sub: String,
+    #[serde(default)]
+    email: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+}
+
+/// Authenticated principal attached to the request extensions when a JWT
+/// (or static token) was accepted. Handlers can extract this with
+/// `Extension<AuthContext>` to enforce per-user authorization.
+#[derive(Debug, Clone)]
+pub struct AuthContext {
+    pub subject: String,
+    pub email: Option<String>,
+    pub name: Option<String>,
+    /// `true` when the caller authenticated with the static service token
+    /// rather than a user JWT.
+    pub service: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -402,6 +463,7 @@ impl RouterConfig {
     pub fn unprotected() -> Self {
         Self {
             bearer_token: None,
+            jwt: None,
             rate_limit: None,
         }
     }
@@ -417,6 +479,20 @@ pub fn build_router_with_auth(state: AppState, bearer_token: Option<String>) -> 
         state,
         RouterConfig {
             bearer_token,
+            jwt: None,
+            rate_limit: None,
+        },
+    )
+}
+
+/// Convenience for the typical SPA setup: validate JWTs issued by the
+/// companion auth-server with the shared secret.
+pub fn build_router_with_jwt(state: AppState, jwt: JwtAuth) -> Router {
+    build_router_with_config(
+        state,
+        RouterConfig {
+            bearer_token: None,
+            jwt: Some(jwt),
             rate_limit: None,
         },
     )
@@ -425,17 +501,21 @@ pub fn build_router_with_auth(state: AppState, bearer_token: Option<String>) -> 
 /// Full-featured constructor. Adds (in this order, outer-to-inner):
 /// 1. request-id injection (always on),
 /// 2. optional rate-limit by client IP,
-/// 3. optional bearer-token check.
+/// 3. optional bearer-token / JWT check.
 pub fn build_router_with_config(state: AppState, cfg: RouterConfig) -> Router {
-    build_router_inner(state, cfg.bearer_token, cfg.rate_limit)
+    build_router_inner(state, cfg.bearer_token, cfg.jwt, cfg.rate_limit)
 }
 
 fn build_router_inner(
     state: AppState,
     bearer_token: Option<String>,
+    jwt: Option<JwtAuth>,
     rate_limit: Option<RateLimit>,
 ) -> Router {
-    let healthz_router = Router::new().route("/healthz", get(healthz));
+    let healthz_router = Router::new()
+        .route("/healthz", get(healthz))
+        .route("/openapi.json", get(openapi::openapi_spec))
+        .route("/docs", get(openapi::swagger_ui));
 
     let protected = Router::new()
         .route("/stats", get(stats))
@@ -450,7 +530,27 @@ fn build_router_inner(
                 .patch(update_concept)
                 .delete(delete_concept),
         )
-        .route("/relations", post(create_relation))
+        .route("/relations", get(list_relations).post(create_relation))
+        .route(
+            "/relations/:id",
+            get(get_relation_handler)
+                .patch(update_relation_handler)
+                .delete(delete_relation_handler),
+        )
+        .route("/rules", get(list_rules).post(create_rule))
+        .route(
+            "/rules/:id",
+            get(get_rule_handler)
+                .patch(update_rule_handler)
+                .delete(delete_rule_handler),
+        )
+        .route("/actions", get(list_actions).post(create_action))
+        .route(
+            "/actions/:id",
+            get(get_action_handler)
+                .patch(update_action_handler)
+                .delete(delete_action_handler),
+        )
         .route("/retrieve", post(retrieve))
         .route("/subgraph", post(subgraph_handler))
         .route("/ask", post(ask))
@@ -470,15 +570,16 @@ fn build_router_inner(
         .route("/settings", get(get_settings).patch(patch_settings))
         .with_state(state);
 
-    let protected = match bearer_token {
-        Some(token) => {
-            let token = StdArc::new(token);
-            protected.layer(middleware::from_fn(move |req, next| {
-                let token = token.clone();
-                async move { require_bearer(req, next, token).await }
-            }))
-        }
-        None => protected,
+    let protected = if bearer_token.is_some() || jwt.is_some() {
+        let static_token = bearer_token.map(StdArc::new);
+        let jwt_cfg = jwt.map(|j| StdArc::new(BuiltJwt::new(j)));
+        protected.layer(middleware::from_fn(move |req, next| {
+            let static_token = static_token.clone();
+            let jwt_cfg = jwt_cfg.clone();
+            async move { require_auth(req, next, static_token, jwt_cfg).await }
+        }))
+    } else {
+        protected
     };
 
     let mut app = healthz_router.merge(protected);
@@ -601,36 +702,102 @@ async fn request_id_layer(mut req: Request<axum::body::Body>, next: Next) -> Res
 #[derive(Debug, Clone)]
 pub struct RequestId(pub String);
 
-async fn require_bearer(
-    req: Request<axum::body::Body>,
-    next: Next,
-    expected: StdArc<String>,
-) -> Result<Response, StatusCode> {
-    let header = req
-        .headers()
+/// Pre-built decoding key + validation so we don't reallocate per request.
+struct BuiltJwt {
+    decoding: jsonwebtoken::DecodingKey,
+    validation: jsonwebtoken::Validation,
+}
+
+impl std::fmt::Debug for BuiltJwt {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BuiltJwt").finish_non_exhaustive()
+    }
+}
+
+impl BuiltJwt {
+    fn new(cfg: JwtAuth) -> Self {
+        let mut validation = jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::HS256);
+        validation.leeway = cfg.leeway_secs;
+        validation.validate_exp = true;
+        if let Some(iss) = cfg.issuer.as_ref() {
+            validation.set_issuer(&[iss.as_str()]);
+        }
+        if let Some(aud) = cfg.audience.as_ref() {
+            validation.set_audience(&[aud.as_str()]);
+        } else {
+            // jsonwebtoken validates `aud` by default; disable when not pinned.
+            validation.validate_aud = false;
+        }
+        Self {
+            decoding: jsonwebtoken::DecodingKey::from_secret(&cfg.secret),
+            validation,
+        }
+    }
+
+    fn verify(&self, token: &str) -> Result<JwtClaims, jsonwebtoken::errors::Error> {
+        jsonwebtoken::decode::<JwtClaims>(token, &self.decoding, &self.validation)
+            .map(|data| data.claims)
+    }
+}
+
+fn extract_bearer(req: &Request<axum::body::Body>) -> Option<String> {
+    req.headers()
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|v: &HeaderValue| v.to_str().ok())
-        .and_then(|s| s.strip_prefix("Bearer "))
-        .map(|s| s.to_string());
+        .and_then(|s| s.strip_prefix("Bearer ").or_else(|| s.strip_prefix("bearer ")))
+        .map(|s| s.trim().to_string())
+}
 
-    match header {
-        Some(provided) => {
-            // Constant-time compare to avoid leaking the token via timing.
-            let a = provided.as_bytes();
-            let b = expected.as_bytes();
-            let eq = a.len() == b.len()
-                && a.iter()
-                    .zip(b.iter())
-                    .fold(0u8, |acc, (x, y)| acc | (x ^ y))
-                    == 0;
-            if eq {
-                Ok(next.run(req).await)
-            } else {
-                Err(StatusCode::UNAUTHORIZED)
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len()
+        && a.iter()
+            .zip(b.iter())
+            .fold(0u8, |acc, (x, y)| acc | (x ^ y))
+            == 0
+}
+
+async fn require_auth(
+    mut req: Request<axum::body::Body>,
+    next: Next,
+    static_token: Option<StdArc<String>>,
+    jwt: Option<StdArc<BuiltJwt>>,
+) -> Result<Response, StatusCode> {
+    let provided = extract_bearer(&req).ok_or(StatusCode::UNAUTHORIZED)?;
+
+    // Try JWT first (user credentials), then fall back to the static
+    // service token. Both paths attach an `AuthContext` extension so
+    // downstream handlers can identify the caller.
+    if let Some(jwt) = jwt.as_ref() {
+        match jwt.verify(&provided) {
+            Ok(claims) => {
+                req.extensions_mut().insert(AuthContext {
+                    subject: claims.sub,
+                    email: claims.email,
+                    name: claims.name,
+                    service: false,
+                });
+                return Ok(next.run(req).await);
+            }
+            Err(err) => {
+                tracing::debug!(?err, "jwt verification failed");
+                // fall through to static-token check
             }
         }
-        None => Err(StatusCode::UNAUTHORIZED),
     }
+
+    if let Some(expected) = static_token.as_ref() {
+        if constant_time_eq(provided.as_bytes(), expected.as_bytes()) {
+            req.extensions_mut().insert(AuthContext {
+                subject: "service".into(),
+                email: None,
+                name: None,
+                service: true,
+            });
+            return Ok(next.run(req).await);
+        }
+    }
+
+    Err(StatusCode::UNAUTHORIZED)
 }
 
 #[derive(Deserialize)]
@@ -697,6 +864,8 @@ async fn healthz() -> &'static str {
 struct Stats {
     concepts: usize,
     relations: usize,
+    rules: usize,
+    actions: usize,
     concept_types: usize,
     relation_types: usize,
     rule_types: usize,
@@ -726,13 +895,21 @@ async fn metrics(State(s): State<AppState>) -> ([(String, String); 1], String) {
          ontology_rule_types {}\n\
          # HELP ontology_action_types Number of action types declared in the ontology.\n\
          # TYPE ontology_action_types gauge\n\
-         ontology_action_types {}\n",
+         ontology_action_types {}\n\
+         # HELP ontology_rules Number of rule instances in the graph.\n\
+         # TYPE ontology_rules gauge\n\
+         ontology_rules {}\n\
+         # HELP ontology_actions Number of action instances in the graph.\n\
+         # TYPE ontology_actions gauge\n\
+         ontology_actions {}\n",
         s.graph.concept_count(),
         s.graph.relation_count(),
         onto.concept_types.len(),
         onto.relation_types.len(),
         onto.rule_types.len(),
         onto.action_types.len(),
+        s.graph.rule_count(),
+        s.graph.action_count(),
     );
     (
         [(
@@ -748,6 +925,8 @@ async fn stats(State(s): State<AppState>) -> Json<StatsResponse> {
     let core = Stats {
         concepts: s.graph.concept_count(),
         relations: s.graph.relation_count(),
+        rules: s.graph.rule_count(),
+        actions: s.graph.action_count(),
         concept_types: onto.concept_types.len(),
         relation_types: onto.relation_types.len(),
         rule_types: onto.rule_types.len(),
@@ -917,6 +1096,201 @@ async fn create_relation(
         .await
         .map_err(|e| ApiError::Store(e.to_string()))?;
     Ok(Json(CreatedRelation { id }))
+}
+
+#[derive(Deserialize, Default)]
+struct ListRelationsQuery {
+    #[serde(default)]
+    source: Option<u64>,
+    #[serde(default)]
+    target: Option<u64>,
+    #[serde(default, rename = "type")]
+    relation_type: Option<String>,
+    #[serde(default)]
+    limit: Option<usize>,
+    #[serde(default)]
+    offset: Option<usize>,
+}
+
+#[derive(Serialize)]
+struct ListRelationsResponse {
+    total: usize,
+    relations: Vec<Relation>,
+}
+
+async fn list_relations(
+    State(s): State<AppState>,
+    Query(q): Query<ListRelationsQuery>,
+) -> Json<ListRelationsResponse> {
+    let mut all = s.graph.all_relations();
+    if let Some(src) = q.source {
+        all.retain(|r| r.source.0 == src);
+    }
+    if let Some(tgt) = q.target {
+        all.retain(|r| r.target.0 == tgt);
+    }
+    if let Some(t) = q.relation_type.as_deref() {
+        all.retain(|r| r.relation_type == t);
+    }
+    all.sort_by(|a, b| a.id.0.cmp(&b.id.0));
+    let total = all.len();
+    let offset = q.offset.unwrap_or(0);
+    let limit = q.limit.unwrap_or(100).min(1000);
+    let relations = all.into_iter().skip(offset).take(limit).collect();
+    Json(ListRelationsResponse { total, relations })
+}
+
+async fn get_relation_handler(
+    State(s): State<AppState>,
+    Path(id): Path<u64>,
+) -> Result<Json<Relation>, ApiError> {
+    Ok(Json(s.graph.get_relation(RelationId(id))?))
+}
+
+async fn update_relation_handler(
+    State(s): State<AppState>,
+    Path(id): Path<u64>,
+    Json(patch): Json<RelationPatch>,
+) -> Result<Json<Relation>, ApiError> {
+    let updated = s.graph.update_relation(RelationId(id), patch)?;
+    s.store
+        .append(&LogRecord::update_relation(updated.clone()))
+        .await
+        .map_err(|e| ApiError::Store(e.to_string()))?;
+    Ok(Json(updated))
+}
+
+async fn delete_relation_handler(
+    State(s): State<AppState>,
+    Path(id): Path<u64>,
+) -> Result<StatusCode, ApiError> {
+    let rid = RelationId(id);
+    s.graph.remove_relation(rid)?;
+    s.store
+        .append(&LogRecord::delete_relation(rid))
+        .await
+        .map_err(|e| ApiError::Store(e.to_string()))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Serialize)]
+struct CreatedRule {
+    id: RuleId,
+}
+
+async fn list_rules(State(s): State<AppState>) -> Json<Vec<Rule>> {
+    let mut all = s.graph.all_rules();
+    all.sort_by(|a, b| a.rule_type.cmp(&b.rule_type).then_with(|| a.name.cmp(&b.name)));
+    Json(all)
+}
+
+async fn create_rule(
+    State(s): State<AppState>,
+    Json(mut rule): Json<Rule>,
+) -> Result<Json<CreatedRule>, ApiError> {
+    let id = s.graph.upsert_rule(rule.clone())?;
+    rule.id = id;
+    s.store
+        .append(&LogRecord::rule(rule))
+        .await
+        .map_err(|e| ApiError::Store(e.to_string()))?;
+    Ok(Json(CreatedRule { id }))
+}
+
+async fn get_rule_handler(
+    State(s): State<AppState>,
+    Path(id): Path<u64>,
+) -> Result<Json<Rule>, ApiError> {
+    let r = s.graph.get_rule(RuleId(id))?;
+    Ok(Json(r))
+}
+
+async fn delete_rule_handler(
+    State(s): State<AppState>,
+    Path(id): Path<u64>,
+) -> Result<StatusCode, ApiError> {
+    let rid = RuleId(id);
+    s.graph.remove_rule(rid)?;
+    s.store
+        .append(&LogRecord::delete_rule(rid))
+        .await
+        .map_err(|e| ApiError::Store(e.to_string()))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn update_rule_handler(
+    State(s): State<AppState>,
+    Path(id): Path<u64>,
+    Json(patch): Json<RulePatch>,
+) -> Result<Json<Rule>, ApiError> {
+    let updated = s.graph.update_rule(RuleId(id), patch)?;
+    s.store
+        .append(&LogRecord::rule(updated.clone()))
+        .await
+        .map_err(|e| ApiError::Store(e.to_string()))?;
+    Ok(Json(updated))
+}
+
+#[derive(Serialize)]
+struct CreatedAction {
+    id: ActionId,
+}
+
+async fn list_actions(State(s): State<AppState>) -> Json<Vec<Action>> {
+    let mut all = s.graph.all_actions();
+    all.sort_by(|a, b| {
+        a.action_type
+            .cmp(&b.action_type)
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    Json(all)
+}
+
+async fn create_action(
+    State(s): State<AppState>,
+    Json(mut action): Json<Action>,
+) -> Result<Json<CreatedAction>, ApiError> {
+    let id = s.graph.upsert_action(action.clone())?;
+    action.id = id;
+    s.store
+        .append(&LogRecord::action(action))
+        .await
+        .map_err(|e| ApiError::Store(e.to_string()))?;
+    Ok(Json(CreatedAction { id }))
+}
+
+async fn get_action_handler(
+    State(s): State<AppState>,
+    Path(id): Path<u64>,
+) -> Result<Json<Action>, ApiError> {
+    let a = s.graph.get_action(ActionId(id))?;
+    Ok(Json(a))
+}
+
+async fn delete_action_handler(
+    State(s): State<AppState>,
+    Path(id): Path<u64>,
+) -> Result<StatusCode, ApiError> {
+    let aid = ActionId(id);
+    s.graph.remove_action(aid)?;
+    s.store
+        .append(&LogRecord::delete_action(aid))
+        .await
+        .map_err(|e| ApiError::Store(e.to_string()))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn update_action_handler(
+    State(s): State<AppState>,
+    Path(id): Path<u64>,
+    Json(patch): Json<ActionPatch>,
+) -> Result<Json<Action>, ApiError> {
+    let updated = s.graph.update_action(ActionId(id), patch)?;
+    s.store
+        .append(&LogRecord::action(updated.clone()))
+        .await
+        .map_err(|e| ApiError::Store(e.to_string()))?;
+    Ok(Json(updated))
 }
 
 #[derive(Serialize)]

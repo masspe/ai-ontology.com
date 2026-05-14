@@ -13,6 +13,25 @@ from Winven AI Sarl. See LICENSE and LICENSE-COMMERCIAL.md.
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="referrer" content="strict-origin-when-cross-origin" />
+    <meta http-equiv="X-Content-Type-Options" content="nosniff" />
+    <!--
+      Baseline CSP. Tighten further at the edge / reverse proxy (HSTS,
+      frame-ancestors, COOP, COEP). `connect-src` must list every API origin
+      the SPA talks to (Rust ontology-server + Node auth-server).
+    -->
+    <meta http-equiv="Content-Security-Policy" content="
+      default-src 'self';
+      script-src 'self';
+      style-src 'self' 'unsafe-inline';
+      img-src 'self' data: https:;
+      font-src 'self' data:;
+      connect-src 'self' http://localhost:4000 http://localhost:5000 http://127.0.0.1:4000 http://127.0.0.1:5000;
+      frame-ancestors 'none';
+      base-uri 'self';
+      form-action 'self';
+      object-src 'none';
+    " />
     <title>Ontology RAG</title>
   </head>
   <body>
