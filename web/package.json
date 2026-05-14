@@ -8,15 +8,20 @@
   "scripts": {
     "dev": "concurrently -k -n server,web -c blue,green \"npm:dev:server\" \"npm:dev:web\"",
     "dev:web": "vite",
-    "dev:server": "cargo run --manifest-path ../Cargo.toml -p ontology-cli -- --data ../data serve --bind 127.0.0.1:8080",
+    "dev:server": "cargo run --manifest-path ../Cargo.toml -p ontology-cli -- --data ../data serve --bind 127.0.0.1:5000",
     "build": "tsc -b && vite build",
     "preview": "vite preview"
   },
   "dependencies": {
+    "clsx": "^2.1.1",
+    "dagre": "^0.8.5",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.27.0",
+    "reactflow": "^11.11.4"
   },
   "devDependencies": {
+    "@types/dagre": "^0.7.52",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.3",

@@ -119,7 +119,7 @@ enum Cmd {
     },
     /// Run the HTTP server.
     Serve {
-        #[arg(long, default_value = "127.0.0.1:8080")]
+        #[arg(long, default_value = "127.0.0.1:5000")]
         bind: String,
         /// Use the Anthropic Messages API. Requires `ANTHROPIC_API_KEY`.
         #[arg(long, conflicts_with_all = ["openai", "deepseek"])]
@@ -239,11 +239,13 @@ async fn main() -> Result<()> {
         Cmd::Stats => {
             let onto = graph.ontology();
             println!(
-                "concepts: {}\nrelations: {}\nconcept_types: {}\nrelation_types: {}",
+                "concepts: {}\nrelations: {}\nconcept_types: {}\nrelation_types: {}\nrule_types: {}\naction_types: {}",
                 graph.concept_count(),
                 graph.relation_count(),
                 onto.concept_types.len(),
                 onto.relation_types.len(),
+                onto.rule_types.len(),
+                onto.action_types.len(),
             );
         }
         Cmd::Retrieve {
@@ -371,12 +373,7 @@ async fn main() -> Result<()> {
         } => {
             let llm = build_llm(anthropic, openai, deepseek, model.as_deref())?;
             let pipeline = Arc::new(RagPipeline::new(index.clone(), llm));
-            let state = AppState {
-                graph: graph.clone(),
-                index: index.clone(),
-                store: store.clone(),
-                pipeline,
-            };
+            let state = AppState::new(graph.clone(), index.clone(), store.clone(), pipeline);
             let bearer = match auth_env {
                 Some(env_name) => Some(
                     std::env::var(&env_name)

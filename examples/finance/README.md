@@ -32,7 +32,7 @@ cargo build --release --bin ontology
 
 # 2. start the server (echo LLM by default — no API key needed)
 DATA=$(mktemp -d)
-./target/release/ontology --data "$DATA" serve --bind 127.0.0.1:8080 &
+./target/release/ontology --data "$DATA" serve --bind 127.0.0.1:5000 &
 
 # 3. start the React UI
 cd web
@@ -42,7 +42,7 @@ npm run dev   # served at http://localhost:5173
 # 4. switch to the live LLM (optional)
 #    Stop the server above, then:
 #    ANTHROPIC_API_KEY=sk-... ./target/release/ontology --data "$DATA" \
-#        serve --bind 127.0.0.1:8080 --anthropic
+#        serve --bind 127.0.0.1:5000 --anthropic
 ```
 
 Open http://localhost:5173, switch to the **Upload** tab and drop the
@@ -105,7 +105,7 @@ rm -rf "$DATA"
 mkdir "$DATA"
 
 # Or from the API: POST /compact takes a snapshot then truncates the WAL.
-curl -XPOST localhost:8080/compact
+curl -XPOST localhost:5000/compact
 ```
 
 For batch/CI ingest without the UI, the same data loads via the CLI:

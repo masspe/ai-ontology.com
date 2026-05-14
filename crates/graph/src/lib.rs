@@ -25,5 +25,5 @@ pub use error::{GraphError, GraphResult};
 pub use graph::OntologyGraph;
 pub use id::{ConceptId, RelationId};
 pub use model::{Concept, ConceptPatch, Property, PropertyValue, Relation};
-pub use schema::{Cardinality, ConceptType, Ontology, RelationType};
+pub use schema::{ActionType, Cardinality, ConceptType, Ontology, RelationType, RuleType};
 pub use traversal::{Direction, Path, PathStep, Subgraph, TraversalSpec};

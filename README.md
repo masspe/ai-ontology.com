@@ -79,9 +79,9 @@ DEEPSEEK_API_KEY=... ./target/release/ontology --data $DATA \
 ./target/release/ontology --data $DATA export out.jsonl  # round-trips through `ingest`
 
 # HTTP API
-./target/release/ontology --data $DATA serve --bind 127.0.0.1:8080 &
-curl -s localhost:8080/stats | jq
-curl -s -XPOST localhost:8080/retrieve -H 'content-type: application/json' \
+./target/release/ontology --data $DATA serve --bind 127.0.0.1:5000 &
+curl -s localhost:5000/stats | jq
+curl -s -XPOST localhost:5000/retrieve -H 'content-type: application/json' \
   -d '{"query":"retrieval augmented generation","top_k":4,"lexical_weight":0.5,"expansion":{"max_depth":2}}'
 ```
 
@@ -109,9 +109,9 @@ $env:DEEPSEEK_API_KEY = "..."
 .\target\release\ontology.exe --data $env:DATA export out.jsonl  # round-trips through `ingest`
 
 # HTTP API
-$server = Start-Process -FilePath .\target\release\ontology.exe -ArgumentList @('--data', $env:DATA, 'serve', '--bind', '127.0.0.1:8080') -PassThru
-Invoke-RestMethod http://127.0.0.1:8080/stats
-Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8080/retrieve -ContentType 'application/json' -Body '{"query":"retrieval augmented generation","top_k":4,"lexical_weight":0.5,"expansion":{"max_depth":2}}'
+$server = Start-Process -FilePath .\target\release\ontology.exe -ArgumentList @('--data', $env:DATA, 'serve', '--bind', '127.0.0.1:5000') -PassThru
+Invoke-RestMethod http://127.0.0.1:5000/stats
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:5000/retrieve -ContentType 'application/json' -Body '{"query":"retrieval augmented generation","top_k":4,"lexical_weight":0.5,"expansion":{"max_depth":2}}'
 Stop-Process -Id $server.Id
 ```
 
@@ -150,7 +150,7 @@ A small Vite + React app under [`web/`](./web) consumes the HTTP API:
 ```bash
 cd web
 npm install
-VITE_API_BASE=http://127.0.0.1:8080 npm run dev
+VITE_API_BASE=http://127.0.0.1:5000 npm run dev
 ```
 
 ## Observability

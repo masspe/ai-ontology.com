@@ -6,7 +6,7 @@
 // Dual-licensed: AGPL-3.0-or-later OR a commercial license
 // from Winven AI Sarl. See LICENSE and LICENSE-COMMERCIAL.md.
 
-use ontology_graph::{Concept, Ontology, Relation};
+use ontology_graph::{ActionType, Concept, ConceptType, Ontology, Relation, RelationType, RuleType};
 use serde::{Deserialize, Serialize};
 
 /// Tagged input record. Sources emit one of these per item.
@@ -26,6 +26,16 @@ pub enum Record {
         #[serde(default = "default_weight")]
         weight: f32,
     },
+    /// Ontology extension produced by the document extractor — register
+    /// (or refresh) a single concept type without rewriting the whole
+    /// schema. Idempotent.
+    ConceptTypeDecl(ConceptType),
+    /// Ontology extension — register (or refresh) a single relation type.
+    RelationTypeDecl(RelationType),
+    /// Ontology extension — register (or refresh) a single rule.
+    RuleTypeDecl(RuleType),
+    /// Ontology extension — register (or refresh) a single action.
+    ActionTypeDecl(ActionType),
 }
 
 fn default_weight() -> f32 {
