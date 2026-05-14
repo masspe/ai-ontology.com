@@ -25,6 +25,6 @@ LABEL org.opencontainers.image.source="https://github.com/masspe/ai-ontology.com
 COPY --from=builder /workspace/target/release/ontology /usr/local/bin/ontology
 USER nonroot
 WORKDIR /data
-EXPOSE 8080
+EXPOSE 5000
 ENTRYPOINT ["/usr/local/bin/ontology", "--data", "/data"]
-CMD ["serve", "--bind", "0.0.0.0:8080"]
+CMD ["serve", "--bind", "0.0.0.0:5000"]

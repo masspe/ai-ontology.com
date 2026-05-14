@@ -7,33 +7,32 @@
 // from Winven AI Sarl. See LICENSE and LICENSE-COMMERCIAL.md.
 
 use async_trait::async_trait;
-use ontology_graph::{Concept, ConceptId};
 use std::path::{Path, PathBuf};
 use tokio::fs;
 
+use crate::extract::extract_from_text;
 use crate::ingest::{IngestError, Source};
 use crate::record::Record;
 
 /// Ingester for free-text "documents" (think: contracts, policies, memos).
 ///
-/// Each input becomes one [`Concept`] of the configured type:
-/// * `name` is the file stem (e.g. `c-2025-001` for `c-2025-001.txt`),
-/// * `description` is the full text of the file,
-/// * no extra properties are emitted.
-///
-/// The [`HybridIndex`] then tokenizes that description for both lexical
-/// (TF-IDF) and vector (cosine) retrieval, so questions about the document
-/// content land on the right concept without any further wiring.
+/// Each input becomes one [`Concept`] of the configured type (`name` =
+/// file stem, `description` = full body). The body is additionally fed to
+/// [`extract_from_text`] so any inline `@concept`, `@relation`, `@rule`
+/// and `@action` directives lift their declarations into the ontology and
+/// the graph automatically.
 ///
 /// Two constructors:
 /// * [`TextDocumentSource::from_files`] — explicit list of paths.
 /// * [`TextDocumentSource::from_dir`] — every regular file under a directory
 ///   matching one of the given extensions.
 ///
+/// [`Concept`]: ontology_graph::Concept
 /// [`HybridIndex`]: ontology_index::HybridIndex
 pub struct TextDocumentSource {
     concept_type: String,
     queue: Vec<PathBuf>,
+    pending: Vec<Record>,
 }
 
 impl TextDocumentSource {
@@ -48,6 +47,7 @@ impl TextDocumentSource {
                 .into_iter()
                 .map(|p| p.as_ref().to_path_buf())
                 .collect(),
+            pending: Vec::new(),
         }
     }
 
@@ -77,6 +77,7 @@ impl TextDocumentSource {
         Ok(Self {
             concept_type: concept_type.into(),
             queue,
+            pending: Vec::new(),
         })
     }
 }
@@ -84,20 +85,27 @@ impl TextDocumentSource {
 #[async_trait]
 impl Source for TextDocumentSource {
     async fn next(&mut self) -> Result<Option<Record>, IngestError> {
-        let path = match self.queue.pop() {
-            Some(p) => p,
-            None => return Ok(None),
-        };
-        let name = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| path.display().to_string());
-        let body = fs::read_to_string(&path)
-            .await
-            .map_err(|e| IngestError::Source(format!("{}: {e}", path.display())))?;
-        let mut concept = Concept::new(ConceptId(0), self.concept_type.clone(), name);
-        concept.description = body;
-        Ok(Some(Record::Concept(concept)))
+        loop {
+            if let Some(r) = self.pending.pop() {
+                return Ok(Some(r));
+            }
+            let path = match self.queue.pop() {
+                Some(p) => p,
+                None => return Ok(None),
+            };
+            let name = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| path.display().to_string());
+            let body = fs::read_to_string(&path)
+                .await
+                .map_err(|e| IngestError::Source(format!("{}: {e}", path.display())))?;
+            // Extract emits records in dependency-friendly order; we drain
+            // via `pop`, so reverse to preserve that order to the consumer.
+            let mut recs = extract_from_text(&self.concept_type, &name, &body);
+            recs.reverse();
+            self.pending = recs;
+        }
     }
 }

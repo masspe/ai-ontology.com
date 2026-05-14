@@ -37,22 +37,22 @@ use axum::{
 use futures::stream::StreamExt;
 use ontology_graph::{
     Concept, ConceptId, ConceptPatch, Ontology, OntologyGraph, Path as GraphPath, Relation,
-    RelationId,
+    RelationId, Subgraph, TraversalSpec,
 };
 use ontology_index::{HybridIndex, RetrievalRequest, ScoredConcept};
 use ontology_io::{
-    ingest_records, CsvSource, IngestStats, JsonlSource, TextDocumentSource, TripleSource,
-    XlsxSource,
+    export_graph, ingest_records, CsvSource, IngestStats, JsonlSink, JsonlSource,
+    TextDocumentSource, TripleSource, XlsxSource,
 };
-use ontology_rag::{RagAnswer, RagPipeline, RagStreamEvent};
+use ontology_rag::{OntologyGenError, RagAnswer, RagPipeline, RagStreamEvent};
 use ontology_storage::{LogRecord, Store};
-use parking_lot::Mutex as PlMutex;
+use parking_lot::{Mutex as PlMutex, RwLock as PlRwLock};
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::Arc as StdArc;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::warn;
@@ -64,6 +64,320 @@ pub struct AppState {
     pub index: Arc<HybridIndex>,
     pub store: Arc<dyn Store>,
     pub pipeline: Arc<RagPipeline>,
+    /// In-memory registry of files uploaded through `/upload`. Tracks
+    /// metadata only — the raw bytes are streamed into the ingester and
+    /// discarded. Resets on server restart.
+    pub files: Arc<PlRwLock<FileRegistry>>,
+    /// User-saved retrieval queries. In-memory; resets on restart.
+    pub queries: Arc<PlRwLock<SavedQueryStore>>,
+    /// Mutable user-facing settings (retrieval defaults, UI prefs).
+    pub settings: Arc<PlRwLock<Settings>>,
+    /// Ring buffer of recent `Stats` samples for sparklines & deltas.
+    pub history: Arc<PlRwLock<StatsHistory>>,
+    /// Server bind time — used by `/settings` for "uptime" display.
+    pub started_at: SystemTime,
+}
+
+impl AppState {
+    /// Construct a new application state with default-initialised in-memory
+    /// stores for files, saved queries, settings and stats history.
+    pub fn new(
+        graph: Arc<OntologyGraph>,
+        index: Arc<HybridIndex>,
+        store: Arc<dyn Store>,
+        pipeline: Arc<RagPipeline>,
+    ) -> Self {
+        Self {
+            graph,
+            index,
+            store,
+            pipeline,
+            files: Arc::new(PlRwLock::new(FileRegistry::default())),
+            queries: Arc::new(PlRwLock::new(SavedQueryStore::default())),
+            settings: Arc::new(PlRwLock::new(Settings::default())),
+            history: Arc::new(PlRwLock::new(StatsHistory::default())),
+            started_at: SystemTime::now(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// New in-memory state types (files / queries / settings / history)
+// ---------------------------------------------------------------------------
+
+/// A record of an uploaded file. Persisted in memory only.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileRecord {
+    pub id: u64,
+    pub name: String,
+    pub size: u64,
+    pub kind: String,
+    pub status: String,
+    pub uploaded_at: u64,
+    pub concepts: u64,
+    pub relations: u64,
+    pub ontology_updates: u64,
+    #[serde(default)]
+    pub concept_type: Option<String>,
+}
+
+#[derive(Debug, Default)]
+pub struct FileRegistry {
+    next_id: u64,
+    records: Vec<FileRecord>,
+}
+
+impl FileRegistry {
+    fn insert(&mut self, mut rec: FileRecord) -> FileRecord {
+        self.next_id += 1;
+        rec.id = self.next_id;
+        self.records.push(rec.clone());
+        rec
+    }
+    fn list(&self) -> Vec<FileRecord> {
+        let mut v = self.records.clone();
+        v.sort_by(|a, b| b.uploaded_at.cmp(&a.uploaded_at));
+        v
+    }
+    fn get(&self, id: u64) -> Option<FileRecord> {
+        self.records.iter().find(|r| r.id == id).cloned()
+    }
+    fn remove(&mut self, id: u64) -> bool {
+        let len = self.records.len();
+        self.records.retain(|r| r.id != id);
+        self.records.len() != len
+    }
+}
+
+/// A saved retrieval query (prompt + retrieval parameters).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SavedQuery {
+    pub id: u64,
+    pub name: String,
+    pub query: String,
+    #[serde(default = "default_query_top_k")]
+    pub top_k: usize,
+    #[serde(default = "default_query_lex_w")]
+    pub lexical_weight: f32,
+    #[serde(default)]
+    pub concept_types: Vec<String>,
+    #[serde(default = "default_query_depth")]
+    pub expansion_depth: u32,
+    pub created_at: u64,
+    #[serde(default)]
+    pub last_run_at: Option<u64>,
+}
+
+fn default_query_top_k() -> usize {
+    8
+}
+fn default_query_lex_w() -> f32 {
+    0.5
+}
+fn default_query_depth() -> u32 {
+    2
+}
+
+/// Mutable fields a client may patch onto a saved query. All optional —
+/// missing fields are left untouched.
+#[derive(Debug, Default, Deserialize)]
+pub struct SavedQueryPatch {
+    pub name: Option<String>,
+    pub query: Option<String>,
+    pub top_k: Option<usize>,
+    pub lexical_weight: Option<f32>,
+    pub concept_types: Option<Vec<String>>,
+    pub expansion_depth: Option<u32>,
+}
+
+#[derive(Debug, Default)]
+pub struct SavedQueryStore {
+    next_id: u64,
+    records: Vec<SavedQuery>,
+}
+
+impl SavedQueryStore {
+    fn insert(&mut self, mut q: SavedQuery) -> SavedQuery {
+        self.next_id += 1;
+        q.id = self.next_id;
+        self.records.push(q.clone());
+        q
+    }
+    fn list(&self) -> Vec<SavedQuery> {
+        let mut v = self.records.clone();
+        v.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        v
+    }
+    fn get(&self, id: u64) -> Option<SavedQuery> {
+        self.records.iter().find(|q| q.id == id).cloned()
+    }
+    fn update(&mut self, id: u64, patch: SavedQueryPatch) -> Option<SavedQuery> {
+        let rec = self.records.iter_mut().find(|q| q.id == id)?;
+        if let Some(v) = patch.name {
+            rec.name = v;
+        }
+        if let Some(v) = patch.query {
+            rec.query = v;
+        }
+        if let Some(v) = patch.top_k {
+            rec.top_k = v;
+        }
+        if let Some(v) = patch.lexical_weight {
+            rec.lexical_weight = v;
+        }
+        if let Some(v) = patch.concept_types {
+            rec.concept_types = v;
+        }
+        if let Some(v) = patch.expansion_depth {
+            rec.expansion_depth = v;
+        }
+        Some(rec.clone())
+    }
+    fn touch_run(&mut self, id: u64) {
+        if let Some(rec) = self.records.iter_mut().find(|q| q.id == id) {
+            rec.last_run_at = Some(now_ts());
+        }
+    }
+    fn remove(&mut self, id: u64) -> bool {
+        let len = self.records.len();
+        self.records.retain(|q| q.id != id);
+        self.records.len() != len
+    }
+}
+
+/// User-facing settings. LLM `provider` / `model` are sourced from the
+/// running pipeline and are read-only (bound at `ontology serve` start);
+/// the rest may be patched at runtime.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Settings {
+    pub retrieval: RetrievalDefaults,
+    pub ui: UiPrefs,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RetrievalDefaults {
+    pub top_k: usize,
+    pub lexical_weight: f32,
+    pub expansion_depth: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UiPrefs {
+    pub theme: String,
+    pub graph_layout: String,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            retrieval: RetrievalDefaults {
+                top_k: 8,
+                lexical_weight: 0.5,
+                expansion_depth: 2,
+            },
+            ui: UiPrefs {
+                theme: "light".into(),
+                graph_layout: "dagre".into(),
+            },
+        }
+    }
+}
+
+/// PATCH-style settings update. Every field is optional; missing fields are
+/// preserved.
+#[derive(Debug, Default, Deserialize)]
+pub struct SettingsPatch {
+    pub retrieval: Option<RetrievalDefaultsPatch>,
+    pub ui: Option<UiPrefsPatch>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct RetrievalDefaultsPatch {
+    pub top_k: Option<usize>,
+    pub lexical_weight: Option<f32>,
+    pub expansion_depth: Option<u32>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct UiPrefsPatch {
+    pub theme: Option<String>,
+    pub graph_layout: Option<String>,
+}
+
+/// Bounded ring buffer of `Stats` samples — capacity ~7 days at 1h.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StatsSample {
+    pub ts: u64,
+    pub concepts: usize,
+    pub relations: usize,
+    pub concept_types: usize,
+    pub relation_types: usize,
+}
+
+#[derive(Debug, Default)]
+pub struct StatsHistory {
+    samples: Vec<StatsSample>,
+}
+
+impl StatsHistory {
+    const CAPACITY: usize = 200;
+    /// Append a sample if the last one is older than 60s (or none yet).
+    /// Keeps the buffer bounded and avoids spamming on every `/stats` call.
+    fn record(&mut self, s: StatsSample) {
+        if let Some(last) = self.samples.last() {
+            if s.ts.saturating_sub(last.ts) < 60 {
+                return;
+            }
+        }
+        self.samples.push(s);
+        let len = self.samples.len();
+        if len > Self::CAPACITY {
+            self.samples.drain(0..len - Self::CAPACITY);
+        }
+    }
+    fn snapshot(&self) -> Vec<StatsSample> {
+        self.samples.clone()
+    }
+    /// Percentage delta vs the oldest sample in the buffer. Used to power
+    /// the "↑12% vs last run" pills on the dashboard.
+    fn deltas_pct(&self, current: &StatsSample) -> StatsDeltas {
+        let baseline = self.samples.first();
+        let pct = |old: usize, new: usize| -> f32 {
+            if old == 0 {
+                if new == 0 {
+                    0.0
+                } else {
+                    100.0
+                }
+            } else {
+                ((new as f32 - old as f32) / old as f32) * 100.0
+            }
+        };
+        match baseline {
+            Some(b) => StatsDeltas {
+                concepts_pct: pct(b.concepts, current.concepts),
+                relations_pct: pct(b.relations, current.relations),
+                concept_types_pct: pct(b.concept_types, current.concept_types),
+                relation_types_pct: pct(b.relation_types, current.relation_types),
+            },
+            None => StatsDeltas::default(),
+        }
+    }
+}
+
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct StatsDeltas {
+    pub concepts_pct: f32,
+    pub relations_pct: f32,
+    pub concept_types_pct: f32,
+    pub relation_types_pct: f32,
+}
+
+fn now_ts() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 /// Tunables for the optional rate limiter / request-id middleware.
@@ -125,8 +439,10 @@ fn build_router_inner(
 
     let protected = Router::new()
         .route("/stats", get(stats))
+        .route("/stats/history", get(stats_history))
         .route("/metrics", get(metrics))
-        .route("/ontology", get(get_ontology))
+        .route("/ontology", get(get_ontology).put(put_ontology))
+        .route("/ontology/generate", post(generate_ontology_handler))
         .route("/concepts", get(list_concepts).post(create_concept))
         .route(
             "/concepts/:id",
@@ -136,11 +452,22 @@ fn build_router_inner(
         )
         .route("/relations", post(create_relation))
         .route("/retrieve", post(retrieve))
+        .route("/subgraph", post(subgraph_handler))
         .route("/ask", post(ask))
         .route("/ask/stream", post(ask_stream))
         .route("/path", post(path))
         .route("/compact", post(compact))
         .route("/upload", post(upload))
+        .route("/export", get(export_handler))
+        .route("/files", get(list_files))
+        .route("/files/:id", get(get_file).delete(delete_file))
+        .route("/queries", get(list_queries).post(create_query))
+        .route(
+            "/queries/:id",
+            get(get_query).patch(update_query).delete(delete_query),
+        )
+        .route("/queries/:id/run", post(run_query))
+        .route("/settings", get(get_settings).patch(patch_settings))
         .with_state(state);
 
     let protected = match bearer_token {
@@ -372,6 +699,8 @@ struct Stats {
     relations: usize,
     concept_types: usize,
     relation_types: usize,
+    rule_types: usize,
+    action_types: usize,
 }
 
 /// Prometheus-compatible plain-text metrics. Plays nicely with any
@@ -391,11 +720,19 @@ async fn metrics(State(s): State<AppState>) -> ([(String, String); 1], String) {
          ontology_concept_types {}\n\
          # HELP ontology_relation_types Number of relation types in the ontology.\n\
          # TYPE ontology_relation_types gauge\n\
-         ontology_relation_types {}\n",
+         ontology_relation_types {}\n\
+         # HELP ontology_rule_types Number of rule types declared in the ontology.\n\
+         # TYPE ontology_rule_types gauge\n\
+         ontology_rule_types {}\n\
+         # HELP ontology_action_types Number of action types declared in the ontology.\n\
+         # TYPE ontology_action_types gauge\n\
+         ontology_action_types {}\n",
         s.graph.concept_count(),
         s.graph.relation_count(),
         onto.concept_types.len(),
         onto.relation_types.len(),
+        onto.rule_types.len(),
+        onto.action_types.len(),
     );
     (
         [(
@@ -406,14 +743,37 @@ async fn metrics(State(s): State<AppState>) -> ([(String, String); 1], String) {
     )
 }
 
-async fn stats(State(s): State<AppState>) -> Json<Stats> {
+async fn stats(State(s): State<AppState>) -> Json<StatsResponse> {
     let onto = s.graph.ontology();
-    Json(Stats {
+    let core = Stats {
         concepts: s.graph.concept_count(),
         relations: s.graph.relation_count(),
         concept_types: onto.concept_types.len(),
         relation_types: onto.relation_types.len(),
-    })
+        rule_types: onto.rule_types.len(),
+        action_types: onto.action_types.len(),
+    };
+    let sample = StatsSample {
+        ts: now_ts(),
+        concepts: core.concepts,
+        relations: core.relations,
+        concept_types: core.concept_types,
+        relation_types: core.relation_types,
+    };
+    let deltas = {
+        let mut h = s.history.write();
+        let d = h.deltas_pct(&sample);
+        h.record(sample);
+        d
+    };
+    Json(StatsResponse { core, deltas })
+}
+
+#[derive(Serialize)]
+struct StatsResponse {
+    #[serde(flatten)]
+    core: Stats,
+    deltas: StatsDeltas,
 }
 
 #[derive(Serialize)]
@@ -693,6 +1053,8 @@ async fn upload(
 
     let kind = kind.ok_or_else(|| ApiError::BadRequest("missing `kind`".into()))?;
     let bytes = bytes.ok_or_else(|| ApiError::BadRequest("missing `file`".into()))?;
+    // Snapshot for the file registry — the match below consumes `concept_type`.
+    let concept_type_for_record = concept_type.clone();
 
     let stats = match kind.as_str() {
         "ontology" => {
@@ -778,7 +1140,24 @@ async fn upload(
 
     s.index.reindex_all();
 
+    let display_name = filename.clone().unwrap_or_else(|| format!("upload.{kind}"));
+    let size = bytes.len() as u64;
+    let rec = FileRecord {
+        id: 0,
+        name: display_name,
+        size,
+        kind: kind.clone(),
+        status: "processed".into(),
+        uploaded_at: now_ts(),
+        concepts: stats.concepts,
+        relations: stats.relations,
+        ontology_updates: stats.ontology_updates,
+        concept_type: concept_type_for_record,
+    };
+    let file = s.files.write().insert(rec);
+
     Ok(Json(UploadResponse {
+        file_id: file.id,
         ingested: IngestSummary {
             concepts: stats.concepts,
             relations: stats.relations,
@@ -800,6 +1179,7 @@ async fn persist_temp(bytes: &[u8], ext: &str) -> Result<tempfile::NamedTempFile
 
 #[derive(Serialize)]
 struct UploadResponse {
+    file_id: u64,
     ingested: IngestSummary,
 }
 
@@ -808,6 +1188,421 @@ struct IngestSummary {
     concepts: u64,
     relations: u64,
     ontology_updates: u64,
+}
+
+// ---------------------------------------------------------------------------
+// New handlers: history / ontology gen / subgraph / export / files / queries
+// / settings
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize)]
+struct StatsHistoryResponse {
+    samples: Vec<StatsSample>,
+}
+
+async fn stats_history(State(s): State<AppState>) -> Json<StatsHistoryResponse> {
+    Json(StatsHistoryResponse {
+        samples: s.history.read().snapshot(),
+    })
+}
+
+#[derive(Deserialize)]
+struct GenerateOntologyRequest {
+    description: String,
+}
+
+#[derive(Serialize)]
+struct GenerateOntologyResponse {
+    ontology: Ontology,
+    model: String,
+}
+
+/// `POST /ontology/generate` — natural-language → ontology schema. The body
+/// is `{description: "…"}`. The configured LLM (set at server start via
+/// `--anthropic` / `--openai` / `--deepseek`) renders a strict JSON
+/// document; this handler parses it. Malformed JSON surfaces a 422 with
+/// the raw response so the UI can show it to the user.
+async fn generate_ontology_handler(
+    State(s): State<AppState>,
+    Json(req): Json<GenerateOntologyRequest>,
+) -> Result<Json<GenerateOntologyResponse>, ApiError> {
+    if req.description.trim().is_empty() {
+        return Err(ApiError::BadRequest("description must not be empty".into()));
+    }
+    let onto = s
+        .pipeline
+        .generate_ontology(&req.description)
+        .await
+        .map_err(|e| match e {
+            OntologyGenError::Llm(e) => ApiError::Llm(e.to_string()),
+            OntologyGenError::Parse { raw, error } => {
+                ApiError::Unprocessable(format!("ontology JSON parse failed: {error}\nraw:\n{raw}"))
+            }
+        })?;
+    Ok(Json(GenerateOntologyResponse {
+        ontology: onto,
+        model: "configured-llm".into(),
+    }))
+}
+
+/// `PUT /ontology` — replace the ontology schema in place. The request body
+/// is the full [`Ontology`] JSON. Useful after `/ontology/generate` accepts
+/// the LLM output. Concepts and relations already in the graph are *not*
+/// modified — validation will trip on any future edges incompatible with
+/// the new schema.
+async fn put_ontology(
+    State(s): State<AppState>,
+    Json(onto): Json<Ontology>,
+) -> Result<Json<Ontology>, ApiError> {
+    s.graph.extend_ontology(|target| {
+        *target = onto.clone();
+        Ok(())
+    })?;
+    s.store
+        .append(&LogRecord::ontology(onto.clone()))
+        .await
+        .map_err(|e| ApiError::Store(e.to_string()))?;
+    Ok(Json(onto))
+}
+
+#[derive(Deserialize, Default)]
+struct SubgraphRequest {
+    #[serde(default)]
+    seed_concept_ids: Vec<u64>,
+    #[serde(default)]
+    seed_query: Option<String>,
+    #[serde(default)]
+    seed_concept_types: Vec<String>,
+    #[serde(default = "default_subgraph_limit")]
+    limit: usize,
+    #[serde(default = "default_query_depth")]
+    expansion_depth: u32,
+}
+
+fn default_subgraph_limit() -> usize {
+    200
+}
+
+#[derive(Serialize)]
+struct SubgraphResponse {
+    subgraph: Subgraph,
+}
+
+/// `POST /subgraph` — fetch a bounded subgraph for the Graph View page.
+///
+/// Seeds can be supplied three ways (any combination):
+/// * `seed_concept_ids` — explicit ConceptId list,
+/// * `seed_query` — runs hybrid retrieval to find seeds (top-k = 8),
+/// * `seed_concept_types` — pulls every concept of the given types
+///   (capped at `limit`).
+///
+/// If no seeds are supplied, returns the first `limit` concepts in the
+/// graph so the Graph View has something to render on first load.
+async fn subgraph_handler(
+    State(s): State<AppState>,
+    Json(req): Json<SubgraphRequest>,
+) -> Json<SubgraphResponse> {
+    let limit = req.limit.clamp(1, 2_000);
+
+    // 1. Collect seed concept ids.
+    let mut seeds: Vec<ConceptId> = req
+        .seed_concept_ids
+        .into_iter()
+        .map(ConceptId)
+        .collect();
+
+    if let Some(q) = req.seed_query.as_ref().filter(|q| !q.trim().is_empty()) {
+        let req = RetrievalRequest {
+            query: q.clone(),
+            top_k: 8,
+            lexical_weight: 0.5,
+            concept_types: req.seed_concept_types.clone(),
+            expansion: TraversalSpec {
+                max_depth: 0,
+                max_nodes: 8,
+                ..Default::default()
+            },
+        };
+        let (scored, _) = s.index.retrieve(&req);
+        for sc in scored {
+            if !seeds.contains(&sc.id) {
+                seeds.push(sc.id);
+            }
+        }
+    }
+
+    if seeds.is_empty() {
+        for c in s.graph.all_concepts() {
+            if !req.seed_concept_types.is_empty()
+                && !req.seed_concept_types.iter().any(|t| t == &c.concept_type)
+            {
+                continue;
+            }
+            seeds.push(c.id);
+            if seeds.len() >= limit {
+                break;
+            }
+        }
+    }
+
+    let spec = TraversalSpec {
+        max_depth: req.expansion_depth,
+        concept_types: req.seed_concept_types,
+        max_nodes: limit,
+        ..Default::default()
+    };
+    let subgraph = s.graph.expand(&seeds, &spec);
+    Json(SubgraphResponse { subgraph })
+}
+
+/// `GET /export?format=jsonl` — stream the entire graph as newline-
+/// delimited JSON records (`Ontology`, then every `Concept`, then every
+/// `Relation`). Round-trips through `/upload kind=jsonl`. The response is
+/// returned as `application/x-ndjson` so curl / fetch can dump it
+/// straight to a file.
+#[derive(Deserialize)]
+struct ExportQuery {
+    #[serde(default = "default_export_format")]
+    format: String,
+}
+
+fn default_export_format() -> String {
+    "jsonl".into()
+}
+
+async fn export_handler(
+    State(s): State<AppState>,
+    Query(q): Query<ExportQuery>,
+) -> Result<Response, ApiError> {
+    match q.format.as_str() {
+        "jsonl" | "ndjson" => {
+            // Write through a tempfile so we reuse the existing `JsonlSink`
+            // adapter without duplicating its formatting logic.
+            let tmp = tempfile::Builder::new()
+                .suffix(".jsonl")
+                .tempfile()
+                .map_err(|e| ApiError::Store(e.to_string()))?;
+            let mut sink = JsonlSink::create(tmp.path())
+                .await
+                .map_err(|e| ApiError::Store(e.to_string()))?;
+            export_graph(&s.graph, &mut sink)
+                .await
+                .map_err(|e| ApiError::Store(e.to_string()))?;
+            let bytes = tokio::fs::read(tmp.path())
+                .await
+                .map_err(|e| ApiError::Store(e.to_string()))?;
+            let mut resp = (
+                StatusCode::OK,
+                [(
+                    axum::http::header::CONTENT_TYPE.to_string(),
+                    "application/x-ndjson".to_string(),
+                )],
+                bytes,
+            )
+                .into_response();
+            resp.headers_mut().insert(
+                axum::http::header::CONTENT_DISPOSITION,
+                HeaderValue::from_static("attachment; filename=\"ontology.jsonl\""),
+            );
+            Ok(resp)
+        }
+        "json" => {
+            // Compact JSON snapshot: ontology + concepts + relations.
+            let body = serde_json::json!({
+                "ontology": s.graph.ontology(),
+                "concepts": s.graph.all_concepts(),
+                "relations": s
+                    .graph
+                    .all_concepts()
+                    .iter()
+                    .flat_map(|c| s.graph.outgoing(c.id))
+                    .collect::<Vec<_>>(),
+            });
+            Ok(Json(body).into_response())
+        }
+        other => Err(ApiError::BadRequest(format!("unknown format: {other}"))),
+    }
+}
+
+// ---- Files registry --------------------------------------------------------
+
+#[derive(Serialize)]
+struct ListFilesResponse {
+    files: Vec<FileRecord>,
+}
+
+async fn list_files(State(s): State<AppState>) -> Json<ListFilesResponse> {
+    Json(ListFilesResponse {
+        files: s.files.read().list(),
+    })
+}
+
+async fn get_file(
+    State(s): State<AppState>,
+    Path(id): Path<u64>,
+) -> Result<Json<FileRecord>, ApiError> {
+    s.files
+        .read()
+        .get(id)
+        .map(Json)
+        .ok_or_else(|| ApiError::NotFound(format!("file {id}")))
+}
+
+async fn delete_file(
+    State(s): State<AppState>,
+    Path(id): Path<u64>,
+) -> Result<StatusCode, ApiError> {
+    if s.files.write().remove(id) {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(ApiError::NotFound(format!("file {id}")))
+    }
+}
+
+// ---- Saved queries ---------------------------------------------------------
+
+#[derive(Deserialize)]
+struct CreateQueryRequest {
+    name: String,
+    query: String,
+    #[serde(default = "default_query_top_k")]
+    top_k: usize,
+    #[serde(default = "default_query_lex_w")]
+    lexical_weight: f32,
+    #[serde(default)]
+    concept_types: Vec<String>,
+    #[serde(default = "default_query_depth")]
+    expansion_depth: u32,
+}
+
+#[derive(Serialize)]
+struct ListQueriesResponse {
+    queries: Vec<SavedQuery>,
+}
+
+async fn list_queries(State(s): State<AppState>) -> Json<ListQueriesResponse> {
+    Json(ListQueriesResponse {
+        queries: s.queries.read().list(),
+    })
+}
+
+async fn create_query(
+    State(s): State<AppState>,
+    Json(req): Json<CreateQueryRequest>,
+) -> Result<Json<SavedQuery>, ApiError> {
+    if req.name.trim().is_empty() {
+        return Err(ApiError::BadRequest("query name is required".into()));
+    }
+    let q = SavedQuery {
+        id: 0,
+        name: req.name,
+        query: req.query,
+        top_k: req.top_k,
+        lexical_weight: req.lexical_weight,
+        concept_types: req.concept_types,
+        expansion_depth: req.expansion_depth,
+        created_at: now_ts(),
+        last_run_at: None,
+    };
+    Ok(Json(s.queries.write().insert(q)))
+}
+
+async fn get_query(
+    State(s): State<AppState>,
+    Path(id): Path<u64>,
+) -> Result<Json<SavedQuery>, ApiError> {
+    s.queries
+        .read()
+        .get(id)
+        .map(Json)
+        .ok_or_else(|| ApiError::NotFound(format!("query {id}")))
+}
+
+async fn update_query(
+    State(s): State<AppState>,
+    Path(id): Path<u64>,
+    Json(patch): Json<SavedQueryPatch>,
+) -> Result<Json<SavedQuery>, ApiError> {
+    s.queries
+        .write()
+        .update(id, patch)
+        .map(Json)
+        .ok_or_else(|| ApiError::NotFound(format!("query {id}")))
+}
+
+async fn delete_query(
+    State(s): State<AppState>,
+    Path(id): Path<u64>,
+) -> Result<StatusCode, ApiError> {
+    if s.queries.write().remove(id) {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(ApiError::NotFound(format!("query {id}")))
+    }
+}
+
+/// `POST /queries/:id/run` — execute the saved query through the same
+/// RAG pipeline `/ask` uses and return the full answer. Updates the
+/// `last_run_at` timestamp as a side effect.
+async fn run_query(
+    State(s): State<AppState>,
+    Path(id): Path<u64>,
+) -> Result<Json<RagAnswer>, ApiError> {
+    let q = s
+        .queries
+        .read()
+        .get(id)
+        .ok_or_else(|| ApiError::NotFound(format!("query {id}")))?;
+    let req = RetrievalRequest {
+        query: q.query.clone(),
+        top_k: q.top_k,
+        lexical_weight: q.lexical_weight,
+        concept_types: q.concept_types.clone(),
+        expansion: TraversalSpec {
+            max_depth: q.expansion_depth,
+            ..Default::default()
+        },
+    };
+    let ans = s
+        .pipeline
+        .answer_with(req)
+        .await
+        .map_err(|e| ApiError::Llm(e.to_string()))?;
+    s.queries.write().touch_run(id);
+    Ok(Json(ans))
+}
+
+// ---- Settings --------------------------------------------------------------
+
+async fn get_settings(State(s): State<AppState>) -> Json<Settings> {
+    Json(s.settings.read().clone())
+}
+
+async fn patch_settings(
+    State(s): State<AppState>,
+    Json(patch): Json<SettingsPatch>,
+) -> Json<Settings> {
+    let mut current = s.settings.write();
+    if let Some(r) = patch.retrieval {
+        if let Some(v) = r.top_k {
+            current.retrieval.top_k = v;
+        }
+        if let Some(v) = r.lexical_weight {
+            current.retrieval.lexical_weight = v;
+        }
+        if let Some(v) = r.expansion_depth {
+            current.retrieval.expansion_depth = v;
+        }
+    }
+    if let Some(u) = patch.ui {
+        if let Some(v) = u.theme {
+            current.ui.theme = v;
+        }
+        if let Some(v) = u.graph_layout {
+            current.ui.graph_layout = v;
+        }
+    }
+    Json(current.clone())
 }
 
 // ---------------------------------------------------------------------------
@@ -824,6 +1619,10 @@ pub enum ApiError {
     Llm(String),
     #[error("bad request: {0}")]
     BadRequest(String),
+    #[error("not found: {0}")]
+    NotFound(String),
+    #[error("unprocessable: {0}")]
+    Unprocessable(String),
 }
 
 #[derive(Serialize, Deserialize)]
@@ -838,6 +1637,8 @@ impl IntoResponse for ApiError {
             ApiError::Store(_) => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
             ApiError::Llm(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
             ApiError::BadRequest(_) => (StatusCode::BAD_REQUEST, self.to_string()),
+            ApiError::NotFound(_) => (StatusCode::NOT_FOUND, self.to_string()),
+            ApiError::Unprocessable(_) => (StatusCode::UNPROCESSABLE_ENTITY, self.to_string()),
         };
         (status, Json(ErrorBody { error: msg })).into_response()
     }

@@ -26,12 +26,7 @@ fn make_state() -> AppState {
     let index = Arc::new(HybridIndex::with_default_embedder(graph.clone()));
     let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
     let pipeline = Arc::new(RagPipeline::new(index.clone(), Arc::new(EchoModel)));
-    AppState {
-        graph,
-        index,
-        store,
-        pipeline,
-    }
+    AppState::new(graph, index, store, pipeline)
 }
 
 fn ontology() -> Ontology {
@@ -66,12 +61,7 @@ async fn create_retrieve_delete_round_trip() {
     let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
     let pipeline = Arc::new(RagPipeline::new(index.clone(), Arc::new(EchoModel)));
 
-    let app = build_router(AppState {
-        graph: graph.clone(),
-        index,
-        store,
-        pipeline,
-    });
+    let app = build_router(AppState::new(graph.clone(), index, store, pipeline));
 
     // Create concept.
     let body = json!({ "id": 0, "concept_type": "Topic", "name": "RAG",
@@ -356,4 +346,204 @@ async fn request_id_is_minted_and_round_trips() {
         .await
         .unwrap();
     assert_eq!(resp.headers().get("x-request-id").unwrap(), "trace-42");
+}
+
+
+// ---------------------------------------------------------------------------
+// Smoke tests for the new endpoints
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn settings_round_trip() {
+    let app = build_router(make_state());
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/settings")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v = read_body(resp.into_body()).await;
+    assert_eq!(v["retrieval"]["top_k"].as_u64(), Some(8));
+
+    let patch = json!({ "retrieval": { "top_k": 12 }, "ui": { "theme": "dark" } });
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/settings")
+                .header("content-type", "application/json")
+                .body(Body::from(patch.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v = read_body(resp.into_body()).await;
+    assert_eq!(v["retrieval"]["top_k"].as_u64(), Some(12));
+    assert_eq!(v["ui"]["theme"], "dark");
+}
+
+#[tokio::test]
+async fn saved_queries_crud_and_run() {
+    let app = build_router(make_state());
+
+    let create = json!({ "name": "RAG basics", "query": "what is RAG", "top_k": 4 });
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/queries")
+                .header("content-type", "application/json")
+                .body(Body::from(create.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v = read_body(resp.into_body()).await;
+    let id = v["id"].as_u64().unwrap();
+    assert_eq!(v["name"], "RAG basics");
+
+    // List.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/queries")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let v = read_body(resp.into_body()).await;
+    assert_eq!(v["queries"].as_array().unwrap().len(), 1);
+
+    // Run (EchoModel returns deterministic answer).
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/queries/{id}/run"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v = read_body(resp.into_body()).await;
+    assert!(v["answer"].as_str().unwrap().starts_with("[echo]"));
+
+    // Delete.
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/queries/{id}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+}
+
+#[tokio::test]
+async fn subgraph_returns_concepts() {
+    let state = make_state();
+    // Seed two concepts so the subgraph isn't empty.
+    state
+        .graph
+        .upsert_concept(ontology_graph::Concept::new(Default::default(), "Topic", "A"))
+        .unwrap();
+    state
+        .graph
+        .upsert_concept(ontology_graph::Concept::new(Default::default(), "Topic", "B"))
+        .unwrap();
+    let app = build_router(state);
+
+    let body = json!({ "limit": 50, "expansion_depth": 1 });
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/subgraph")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v = read_body(resp.into_body()).await;
+    assert_eq!(v["subgraph"]["concepts"].as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn export_jsonl_streams() {
+    let state = make_state();
+    state
+        .graph
+        .upsert_concept(ontology_graph::Concept::new(Default::default(), "Topic", "A"))
+        .unwrap();
+    let app = build_router(state);
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/export?format=jsonl")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let bytes = to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+    let text = std::str::from_utf8(&bytes).unwrap();
+    assert!(text.contains("\"ontology\""), "export body:\n{text}");
+    assert!(text.contains("\"concept\""));
+}
+
+#[tokio::test]
+async fn stats_history_grows_after_calls() {
+    let app = build_router(make_state());
+
+    // /stats records a sample.
+    for _ in 0..2 {
+        let _ = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/stats")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+    }
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/stats/history")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let v = read_body(resp.into_body()).await;
+    // The 60s dedupe means we'll have exactly one sample for two quick calls.
+    assert!(v["samples"].as_array().unwrap().len() >= 1);
 }

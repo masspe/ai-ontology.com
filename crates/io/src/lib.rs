@@ -18,6 +18,7 @@
 //! sources (e.g. Kafka, S3) by implementing the trait.
 
 pub mod csv;
+pub mod extract;
 pub mod ingest;
 pub mod jsonl;
 pub mod record;
@@ -26,6 +27,7 @@ pub mod triples;
 pub mod xlsx;
 
 pub use csv::CsvSource;
+pub use extract::extract_from_text;
 pub use ingest::{export_graph, ingest_records, ExportStats, IngestStats, Sink, Source};
 pub use jsonl::{JsonlSink, JsonlSource};
 pub use record::{Record, RecordPayload};

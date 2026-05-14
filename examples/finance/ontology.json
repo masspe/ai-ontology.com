@@ -14,5 +14,57 @@
     "issued_to":        { "name": "issued_to",        "domain": "Invoice",  "range": "Company",  "cardinality": "ManyToOne",  "symmetric": false, "description": "an invoice is issued to a company" },
     "covers_contract":  { "name": "covers_contract",  "domain": "Invoice",  "range": "Contract", "cardinality": "ManyToOne",  "symmetric": false, "description": "an invoice bills a particular contract" },
     "has_line_item":    { "name": "has_line_item",    "domain": "Invoice",  "range": "LineItem", "cardinality": "OneToMany",  "symmetric": false, "description": "an invoice contains line items" }
+  },
+  "rule_types": {
+    "invoice_must_reference_contract": {
+      "name": "invoice_must_reference_contract",
+      "when": "an Invoice exists",
+      "then": "it is linked to exactly one Contract via `covers_contract`",
+      "applies_to": ["Invoice"],
+      "strict": true,
+      "description": "every invoice must bill a known contract"
+    },
+    "contract_signed_by_employee": {
+      "name": "contract_signed_by_employee",
+      "when": "a Contract is `signed_by` a Person",
+      "then": "that Person is `employed_by` one of the Companies the Contract is `between`",
+      "applies_to": ["Contract"],
+      "strict": false,
+      "description": "signatories are normally employees of a contracting party"
+    },
+    "invoice_parties_match_contract": {
+      "name": "invoice_parties_match_contract",
+      "when": "an Invoice `covers_contract` C",
+      "then": "its `issued_by` and `issued_to` Companies are both `between` parties of C",
+      "applies_to": ["Invoice"],
+      "strict": true,
+      "description": "invoice parties must be among the contract's parties"
+    }
+  },
+  "action_types": {
+    "sign_contract": {
+      "name": "sign_contract",
+      "subject": "Person",
+      "object": "Contract",
+      "parameters": ["date"],
+      "effect": "creates a `signed_by` relation from the Contract to the Person",
+      "description": "a person signs a contract on behalf of their employer"
+    },
+    "issue_invoice": {
+      "name": "issue_invoice",
+      "subject": "Company",
+      "object": "Invoice",
+      "parameters": ["recipient", "contract", "amount", "currency"],
+      "effect": "creates the Invoice with `issued_by`, `issued_to`, and `covers_contract` edges",
+      "description": "a company issues an invoice against a contract"
+    },
+    "add_line_item": {
+      "name": "add_line_item",
+      "subject": "Invoice",
+      "object": "LineItem",
+      "parameters": ["description", "quantity", "unit_price"],
+      "effect": "attaches a LineItem to the Invoice via `has_line_item`",
+      "description": "append a billable line to an invoice"
+    }
   }
 }

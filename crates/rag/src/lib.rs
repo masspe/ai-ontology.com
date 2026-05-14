@@ -27,5 +27,5 @@ pub use model::{
     AnthropicModel, EchoModel, LanguageModel, LlmError, LlmRequest, LlmResponse, LlmStream,
     Message, OpenAiModel, Role, StreamChunk, TokenUsage,
 };
-pub use pipeline::{RagAnswer, RagPipeline, RagStream, RagStreamEvent};
+pub use pipeline::{OntologyGenError, RagAnswer, RagPipeline, RagStream, RagStreamEvent};
 pub use prompt::PromptBuilder;

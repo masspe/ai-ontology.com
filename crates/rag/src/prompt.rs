@@ -76,6 +76,41 @@ impl<'a> PromptBuilder<'a> {
                 if rt.symmetric { " [symmetric]" } else { "" },
             );
         }
+        if !self.ontology.rule_types.is_empty() {
+            out.push_str("# Rules\n");
+            let mut rules: Vec<_> = self.ontology.rule_types.values().collect();
+            rules.sort_by(|a, b| a.name.cmp(&b.name));
+            for r in rules {
+                let scope = if r.applies_to.is_empty() {
+                    "*".to_string()
+                } else {
+                    r.applies_to.join(",")
+                };
+                let kind = if r.strict { "MUST" } else { "SHOULD" };
+                let when = if r.when.is_empty() { "-" } else { r.when.as_str() };
+                let then = if r.then.is_empty() { "-" } else { r.then.as_str() };
+                let _ = writeln!(out, "- [{}] {} ({}): when {} then {}", kind, r.name, scope, when, then);
+            }
+        }
+        if !self.ontology.action_types.is_empty() {
+            out.push_str("# Actions\n");
+            let mut actions: Vec<_> = self.ontology.action_types.values().collect();
+            actions.sort_by(|a, b| a.name.cmp(&b.name));
+            for a in actions {
+                let obj = a.object.as_deref().unwrap_or("-");
+                let params = if a.parameters.is_empty() {
+                    String::new()
+                } else {
+                    format!(" [{}]", a.parameters.join(", "))
+                };
+                let effect = if a.effect.is_empty() {
+                    String::new()
+                } else {
+                    format!(" => {}", a.effect)
+                };
+                let _ = writeln!(out, "- {}: ({}) -> ({}){}{}", a.name, a.subject, obj, params, effect);
+            }
+        }
         out
     }
 
@@ -152,5 +187,43 @@ impl<'a> PromptBuilder<'a> {
          ontology, concept list and edge list to answer. If the answer is not \
          supported by the supplied context, say you don't know. Cite concept \
          names verbatim."
+    }
+
+    /// System prompt that instructs the LLM to emit a strict JSON
+    /// [`ontology_graph::Ontology`] document from a natural-language brief.
+    ///
+    /// The exact schema mirrors `crates/graph/src/schema.rs` so the response
+    /// can be deserialized with `serde_json::from_str::<Ontology>(...)`.
+    pub fn ontology_generation_system_message() -> &'static str {
+        "You are an ontology engineer. Given a natural-language brief, you \
+         must emit a single JSON object describing the ontology. \
+         Output rules:\n\
+         1. Output ONLY the JSON object — no prose, no markdown fences, no \
+            commentary before or after.\n\
+         2. The JSON must match this schema exactly:\n\
+         {\n  \
+           \"concept_types\":   { \"<Name>\": { \"name\": \"<Name>\", \"parent\": <string|null>, \"description\": \"…\", \"properties\": <string[]|null> } },\n  \
+           \"relation_types\":  { \"<Name>\": { \"name\": \"<Name>\", \"domain\": \"<ConceptType>\", \"range\": \"<ConceptType>\", \"cardinality\": \"OneToOne|OneToMany|ManyToOne|ManyToMany\", \"symmetric\": <bool>, \"description\": \"…\" } },\n  \
+           \"rule_types\":      { \"<Name>\": { \"name\": \"<Name>\", \"when\": \"…\", \"then\": \"…\", \"applies_to\": [\"ConceptType\", …], \"strict\": <bool>, \"description\": \"…\" } },\n  \
+           \"action_types\":    { \"<Name>\": { \"name\": \"<Name>\", \"subject\": \"<ConceptType>\", \"object\": <string|null>, \"parameters\": [\"…\"], \"effect\": \"…\", \"description\": \"…\" } }\n\
+         }\n\
+         3. Every `domain` and `range` referenced in `relation_types` MUST \
+            appear as a key in `concept_types`.\n\
+         4. `concept_types`, `relation_types`, `rule_types`, `action_types` \
+            keys must be PascalCase identifiers (no spaces, no punctuation).\n\
+         5. Keep concept names singular (Person, not Persons).\n\
+         6. If the brief is vague, still produce a coherent ontology with \
+            at least 3 concept types and 2 relation types.\n\
+         7. Empty maps are fine for `rule_types` / `action_types` if not \
+            implied by the brief — use `{}`, not `null`.\n"
+    }
+
+    /// Render the user message for an ontology-generation call. Keeps the
+    /// prompt deterministic so callers can cache or replay it.
+    pub fn ontology_generation_user_message(description: &str) -> String {
+        format!(
+            "Brief:\n{}\n\nReturn the JSON ontology document now.",
+            description.trim()
+        )
     }
 }

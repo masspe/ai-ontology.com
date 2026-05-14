@@ -8,5 +8,42 @@
     "authored":   { "name": "authored",   "domain": "Person", "range": "Paper", "cardinality": "OneToMany", "symmetric": false, "description": "writes" },
     "covers":     { "name": "covers",     "domain": "Paper",  "range": "Topic", "cardinality": "ManyToMany", "symmetric": false, "description": "subject of" },
     "related_to": { "name": "related_to", "domain": "Topic",  "range": "Topic", "cardinality": "ManyToMany", "symmetric": true,  "description": "neighborhood" }
+  },
+  "rule_types": {
+    "paper_has_author": {
+      "name": "paper_has_author",
+      "when": "a Paper exists",
+      "then": "at least one Person is linked via `authored`",
+      "applies_to": ["Paper"],
+      "strict": true,
+      "description": "every paper must have at least one author"
+    },
+    "paper_has_topic": {
+      "name": "paper_has_topic",
+      "when": "a Paper exists",
+      "then": "it is linked to one or more Topic via `covers`",
+      "applies_to": ["Paper"],
+      "strict": false,
+      "description": "papers should be tagged with at least one topic"
+    }
+  },
+  "action_types": {
+    "publish": {
+      "name": "publish",
+      "subject": "Person",
+      "object": "Paper",
+      "parameters": ["venue", "year"],
+      "effect": "the paper becomes citable and gains an `authored` edge from the publisher",
+      "description": "a person publishes a paper"
+    },
+    "cite": {
+      "name": "cite",
+      "subject": "Paper",
+      "object": "Paper",
+      "parameters": [],
+      "effect": "a directed citation edge is established between the two papers",
+      "description": "a paper cites another paper"
+    }
   }
 }
+

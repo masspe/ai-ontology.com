@@ -213,5 +213,69 @@ async fn apply_record(
                 _ => Ok(false),
             }
         }
+        Record::ConceptTypeDecl(ct) => {
+            graph.extend_ontology(|o| {
+                o.add_concept_type(ct.clone());
+                Ok(())
+            })?;
+            if let Some(s) = store {
+                s.append(&LogRecord::ontology(graph.ontology())).await?;
+            }
+            stats.ontology_updates += 1;
+            Ok(true)
+        }
+        Record::RelationTypeDecl(rt) => {
+            // Deferred if domain/range aren't known yet — let the retry pass
+            // see the concept types first.
+            let known = {
+                let o = graph.ontology();
+                o.concept_types.contains_key(&rt.domain)
+                    && o.concept_types.contains_key(&rt.range)
+            };
+            if !known {
+                return Ok(false);
+            }
+            graph.extend_ontology(|o| o.add_relation_type(rt.clone()))?;
+            if let Some(s) = store {
+                s.append(&LogRecord::ontology(graph.ontology())).await?;
+            }
+            stats.ontology_updates += 1;
+            Ok(true)
+        }
+        Record::RuleTypeDecl(rule) => {
+            let known = {
+                let o = graph.ontology();
+                rule.applies_to.iter().all(|t| o.concept_types.contains_key(t))
+            };
+            if !known {
+                return Ok(false);
+            }
+            graph.extend_ontology(|o| o.add_rule_type(rule.clone()))?;
+            if let Some(s) = store {
+                s.append(&LogRecord::ontology(graph.ontology())).await?;
+            }
+            stats.ontology_updates += 1;
+            Ok(true)
+        }
+        Record::ActionTypeDecl(action) => {
+            let known = {
+                let o = graph.ontology();
+                o.concept_types.contains_key(&action.subject)
+                    && action
+                        .object
+                        .as_ref()
+                        .map(|t| o.concept_types.contains_key(t))
+                        .unwrap_or(true)
+            };
+            if !known {
+                return Ok(false);
+            }
+            graph.extend_ontology(|o| o.add_action_type(action.clone()))?;
+            if let Some(s) = store {
+                s.append(&LogRecord::ontology(graph.ontology())).await?;
+            }
+            stats.ontology_updates += 1;
+            Ok(true)
+        }
     }
 }

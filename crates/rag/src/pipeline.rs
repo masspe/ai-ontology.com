@@ -223,6 +223,94 @@ impl RagPipeline {
 
         Ok(retrieved.chain(mapped).boxed())
     }
+
+    /// One-shot natural-language → [`ontology_graph::Ontology`] generator.
+    ///
+    /// Routes a brief through the configured LLM with a strict-JSON
+    /// instruction prompt, then deserializes the response. The function is
+    /// tolerant of common LLM tics: a leading "```json" fence, trailing
+    /// commentary after the closing brace, or a stray BOM. Anything that
+    /// still fails to parse surfaces as [`OntologyGenError::Parse`] with the
+    /// raw text so the caller can show it to the user.
+    pub async fn generate_ontology(
+        &self,
+        description: &str,
+    ) -> Result<ontology_graph::Ontology, OntologyGenError> {
+        let llm_req = LlmRequest {
+            system: Some(PromptBuilder::ontology_generation_system_message().to_string()),
+            cached_context: None,
+            messages: vec![Message::user(PromptBuilder::ontology_generation_user_message(
+                description,
+            ))],
+            max_tokens: self.max_tokens.max(2048),
+            temperature: 0.0,
+        };
+        let resp = self.llm.generate(&llm_req).await.map_err(OntologyGenError::Llm)?;
+        let json = extract_json_block(&resp.content)
+            .ok_or_else(|| OntologyGenError::Parse {
+                raw: resp.content.clone(),
+                error: "no JSON object found in response".into(),
+            })?;
+        serde_json::from_str::<ontology_graph::Ontology>(&json).map_err(|e| {
+            OntologyGenError::Parse {
+                raw: resp.content,
+                error: e.to_string(),
+            }
+        })
+    }
+}
+
+/// Strip BOM / leading markdown fence and trim to the outermost balanced
+/// `{ … }` block. Returns `None` if no `{` is present.
+fn extract_json_block(text: &str) -> Option<String> {
+    let s = text.trim_start_matches('\u{feff}').trim();
+    // Strip ``` or ```json fences if present.
+    let s = if let Some(rest) = s.strip_prefix("```") {
+        let rest = rest.trim_start_matches("json").trim_start_matches('\n');
+        rest.trim_end_matches("```").trim()
+    } else {
+        s
+    };
+    let start = s.find('{')?;
+    // Find matching closing brace, accounting for string literals.
+    let bytes = s.as_bytes();
+    let mut depth = 0i32;
+    let mut in_str = false;
+    let mut escape = false;
+    let mut end = None;
+    for (i, &b) in bytes.iter().enumerate().skip(start) {
+        if in_str {
+            if escape {
+                escape = false;
+            } else if b == b'\\' {
+                escape = true;
+            } else if b == b'"' {
+                in_str = false;
+            }
+            continue;
+        }
+        match b {
+            b'"' => in_str = true,
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = Some(i + 1);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    end.map(|e| s[start..e].to_string())
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum OntologyGenError {
+    #[error("llm: {0}")]
+    Llm(crate::model::LlmError),
+    #[error("parse: {error}")]
+    Parse { raw: String, error: String },
 }
 
 #[cfg(test)]

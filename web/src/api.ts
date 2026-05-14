@@ -1,29 +1,109 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Winven-Commercial
 // Copyright (C) 2026 Winven AI Sarl
-// Route de Crassier 7, 1262 Eysins, VD, CH
-// 
-// This file is part of ai-ontology.com.
-// Dual-licensed: AGPL-3.0-or-later OR a commercial license
-// from Winven AI Sarl. See LICENSE and LICENSE-COMMERCIAL.md.
+//
+// Typed REST client for the ontology-server HTTP API.
 
-// Tiny API client. The base URL comes from VITE_API_BASE if set at build
-// time, otherwise it falls back to http://localhost:8080 — the default
-// `ontology serve --bind 127.0.0.1:8080`.
+/* eslint-disable @typescript-eslint/no-explicit-any */
 
-const BASE: string =
-  (import.meta.env.VITE_API_BASE as string | undefined) ?? "http://localhost:8080";
+const ENV_BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "";
+
+/** Resolve the API base URL: localStorage override → vite env → same-origin. */
+export function apiBase(): string {
+  if (typeof window !== "undefined") {
+    const override = window.localStorage.getItem("ontology.apiBase");
+    if (override && override.trim()) return override.replace(/\/$/, "");
+  }
+  return ENV_BASE.replace(/\/$/, "");
+}
+
+/** Resolve the bearer token from localStorage, if any. */
+export function apiToken(): string | null {
+  if (typeof window === "undefined") return null;
+  const t = window.localStorage.getItem("ontology.apiToken");
+  return t && t.trim() ? t : null;
+}
+
+function headers(json = false): HeadersInit {
+  const h: Record<string, string> = {};
+  if (json) h["content-type"] = "application/json";
+  const t = apiToken();
+  if (t) h["authorization"] = `Bearer ${t}`;
+  return h;
+}
+
+async function http<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const url = `${apiBase()}${path}`;
+  const res = await fetch(url, init);
+  if (!res.ok) {
+    let msg = `${res.status} ${res.statusText}`;
+    try {
+      const body = await res.json();
+      if (body && typeof body === "object" && "error" in body) msg = body.error as string;
+    } catch {
+      try {
+        msg = await res.text();
+      } catch {
+        /* ignore */
+      }
+    }
+    throw new Error(msg);
+  }
+  if (res.status === 204) return undefined as unknown as T;
+  return (await res.json()) as T;
+}
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 
 export interface Stats {
   concepts: number;
   relations: number;
   concept_types: number;
   relation_types: number;
+  rule_types: number;
+  action_types: number;
+  deltas: {
+    concepts_pct: number;
+    relations_pct: number;
+    concept_types_pct: number;
+    relation_types_pct: number;
+  };
 }
 
-export async function getStats(): Promise<Stats> {
-  const r = await fetch(`${BASE}/stats`);
-  if (!r.ok) throw new Error(`stats: ${r.status}`);
-  return r.json();
+export interface StatsSample {
+  ts: number;
+  concepts: number;
+  relations: number;
+  concept_types: number;
+  relation_types: number;
+}
+
+export interface StatsHistory {
+  samples: StatsSample[];
+}
+
+export interface ConceptTypeDef {
+  name: string;
+  description?: string | null;
+  parent?: string | null;
+  properties?: Record<string, any> | null;
+}
+
+export interface RelationTypeDef {
+  name: string;
+  domain: string;
+  range: string;
+  cardinality: string;
+  symmetric: boolean;
+  description?: string;
+}
+
+export interface Ontology {
+  concept_types: Record<string, ConceptTypeDef>;
+  relation_types: Record<string, RelationTypeDef>;
+  rule_types?: Record<string, any>;
+  action_types?: Record<string, any>;
 }
 
 export interface Concept {
@@ -31,7 +111,20 @@ export interface Concept {
   concept_type: string;
   name: string;
   description?: string;
-  properties?: Record<string, unknown>;
+  properties?: Record<string, any>;
+}
+
+export interface Relation {
+  id: number;
+  relation_type: string;
+  source: number;
+  target: number;
+  properties?: Record<string, any>;
+}
+
+export interface Subgraph {
+  concepts: Concept[];
+  relations: Relation[];
 }
 
 export interface ListConceptsResponse {
@@ -39,177 +132,247 @@ export interface ListConceptsResponse {
   concepts: Concept[];
 }
 
-export async function listConcepts(opts: {
+export interface FileRecord {
+  id: number;
+  name: string;
+  size: number;
+  kind: string;
+  status: string;
+  uploaded_at: number;
+  concepts: number;
+  relations: number;
+  ontology_updates: number;
+  concept_type?: string | null;
+}
+
+export interface SavedQuery {
+  id: number;
+  name: string;
+  query: string;
+  top_k: number;
+  lexical_weight: number;
+  concept_types: string[];
+  expansion_depth: number;
+  created_at: number;
+  last_run_at?: number | null;
+}
+
+export interface Settings {
+  retrieval: {
+    top_k: number;
+    lexical_weight: number;
+    expansion_depth: number;
+  };
+  ui: {
+    theme: string;
+    graph_layout: string;
+  };
+}
+
+export interface SettingsPatch {
+  retrieval?: Partial<Settings["retrieval"]>;
+  ui?: Partial<Settings["ui"]>;
+}
+
+export interface RagAnswer {
+  answer: string;
+  citations?: Array<{ id: number; name: string; concept_type: string }>;
+  usage?: Record<string, any>;
+  subgraph?: Subgraph;
+}
+
+export interface UploadResponse {
+  file_id: number;
+  ingested: {
+    concepts: number;
+    relations: number;
+    ontology_updates: number;
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Endpoints
+// ---------------------------------------------------------------------------
+
+export const getStats = () => http<Stats>("/stats");
+export const getStatsHistory = () => http<StatsHistory>("/stats/history");
+export const getOntology = () => http<Ontology>("/ontology");
+export const replaceOntology = (o: Ontology) =>
+  http<Ontology>("/ontology", {
+    method: "PUT",
+    headers: headers(true),
+    body: JSON.stringify(o),
+  });
+export const generateOntology = (description: string) =>
+  http<{ ontology: Ontology; model: string }>("/ontology/generate", {
+    method: "POST",
+    headers: headers(true),
+    body: JSON.stringify({ description }),
+  });
+
+export const listConcepts = (params: {
   type?: string;
   q?: string;
   limit?: number;
   offset?: number;
-} = {}): Promise<ListConceptsResponse> {
-  const p = new URLSearchParams();
-  if (opts.type) p.set("type", opts.type);
-  if (opts.q) p.set("q", opts.q);
-  if (opts.limit != null) p.set("limit", String(opts.limit));
-  if (opts.offset != null) p.set("offset", String(opts.offset));
-  const qs = p.toString();
-  const r = await fetch(`${BASE}/concepts${qs ? `?${qs}` : ""}`);
-  if (!r.ok) throw new Error(`concepts: ${r.status}`);
-  return r.json();
-}
+} = {}) => {
+  const qs = new URLSearchParams();
+  if (params.type) qs.set("type", params.type);
+  if (params.q) qs.set("q", params.q);
+  if (params.limit != null) qs.set("limit", String(params.limit));
+  if (params.offset != null) qs.set("offset", String(params.offset));
+  const s = qs.toString();
+  return http<ListConceptsResponse>(`/concepts${s ? `?${s}` : ""}`);
+};
 
-export interface ConceptType {
-  name: string;
-  parent?: string | null;
-  description?: string;
-  properties?: string[] | null;
-}
+export const deleteConcept = (id: number) =>
+  http<void>(`/concepts/${id}`, { method: "DELETE", headers: headers() });
 
-export interface RelationType {
-  name: string;
-  domain: string;
-  range: string;
-  cardinality?: string;
-  symmetric?: boolean;
-  description?: string;
-}
-
-export interface OntologySchema {
-  concept_types: Record<string, ConceptType>;
-  relation_types: Record<string, RelationType>;
-}
-
-export async function getOntology(): Promise<OntologySchema> {
-  const r = await fetch(`${BASE}/ontology`);
-  if (!r.ok) throw new Error(`ontology: ${r.status}`);
-  return r.json();
-}
-
-export interface UploadResponse {
-  ingested: { concepts: number; relations: number; ontology_updates: number };
-}
-
-/**
- * Upload a single file via multipart/form-data. The server inspects the
- * `kind` field and dispatches to the matching ingester.
- */
-export async function upload(
-  kind: "ontology" | "jsonl" | "triples" | "csv" | "xlsx" | "text",
-  file: File,
-  opts?: { concept_type?: string; name?: string },
-): Promise<UploadResponse> {
-  const fd = new FormData();
-  fd.append("kind", kind);
-  if (opts?.concept_type) fd.append("concept_type", opts.concept_type);
-  if (opts?.name) fd.append("name", opts.name);
-  fd.append("file", file);
-  const r = await fetch(`${BASE}/upload`, { method: "POST", body: fd });
-  if (!r.ok) throw new Error(`upload: ${r.status} ${await r.text()}`);
-  return r.json();
-}
-
-export interface ScoredConcept {
-  id: number;
-  score: number;
-  lexical: number;
-  vector: number;
-}
-
-export interface RagStreamHandlers {
-  onRetrieved?: (
-    payload: { query: string; scored: ScoredConcept[]; subgraph: unknown },
-  ) => void;
-  onToken?: (text: string) => void;
-  onEnd?: (payload: {
-    usage: {
-      input_tokens?: number;
-      output_tokens?: number;
-      cache_creation_input_tokens?: number;
-      cache_read_input_tokens?: number;
-    };
-    model?: string;
-    stop_reason?: string | null;
-  }) => void;
-  onError?: (msg: string) => void;
-}
-
-/**
- * Drive POST /ask/stream and parse the SSE frames into typed callbacks.
- *
- * Why fetch + manual parsing instead of EventSource? EventSource only
- * supports GET; the server's /ask/stream is POST so it can carry the
- * RetrievalRequest body. Manual ReadableStream parsing is cheap.
- */
-export async function askStream(
-  query: string,
-  handlers: RagStreamHandlers,
-  opts: {
-    top_k?: number;
-    depth?: number;
-    concept_types?: string[];
-    signal?: AbortSignal;
-  } = {},
-): Promise<void> {
-  const body = JSON.stringify({
-    query,
-    top_k: opts.top_k ?? 8,
-    lexical_weight: 0.5,
-    concept_types: opts.concept_types ?? [],
-    expansion: { max_depth: opts.depth ?? 2 },
-  });
-  const r = await fetch(`${BASE}/ask/stream`, {
+export const ask = (req: {
+  query: string;
+  top_k?: number;
+  lexical_weight?: number;
+  concept_types?: string[];
+  expansion?: { max_depth?: number; max_nodes?: number };
+}) =>
+  http<RagAnswer>("/ask", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body,
-    signal: opts.signal,
+    headers: headers(true),
+    body: JSON.stringify({
+      query: req.query,
+      top_k: req.top_k ?? 8,
+      lexical_weight: req.lexical_weight ?? 0.5,
+      concept_types: req.concept_types ?? [],
+      expansion: { max_depth: req.expansion?.max_depth ?? 2, max_nodes: req.expansion?.max_nodes ?? 64 },
+    }),
   });
-  if (!r.ok || !r.body) {
-    throw new Error(`ask/stream: ${r.status} ${await r.text()}`);
-  }
 
-  const reader = r.body.getReader();
-  const dec = new TextDecoder();
-  let buf = "";
-  while (true) {
+export interface AskStreamHandlers {
+  onRetrieved?: (subgraph: Subgraph) => void;
+  onToken?: (text: string) => void;
+  onEnd?: (info: Record<string, any>) => void;
+  onError?: (err: string) => void;
+}
+
+export async function askStream(
+  req: { query: string; top_k?: number; lexical_weight?: number; concept_types?: string[] },
+  handlers: AskStreamHandlers,
+  signal?: AbortSignal,
+): Promise<void> {
+  const url = `${apiBase()}/ask/stream`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { ...headers(true), accept: "text/event-stream" },
+    body: JSON.stringify({
+      query: req.query,
+      top_k: req.top_k ?? 8,
+      lexical_weight: req.lexical_weight ?? 0.5,
+      concept_types: req.concept_types ?? [],
+      expansion: { max_depth: 2, max_nodes: 64 },
+    }),
+    signal,
+  });
+  if (!res.ok || !res.body) {
+    throw new Error(`stream failed: ${res.status} ${res.statusText}`);
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
     const { value, done } = await reader.read();
     if (done) break;
-    buf += dec.decode(value, { stream: true });
-
-    // SSE event boundary is a blank line.
-    let idx;
-    while ((idx = buf.indexOf("\n\n")) !== -1) {
-      const raw = buf.slice(0, idx);
-      buf = buf.slice(idx + 2);
+    buffer += decoder.decode(value, { stream: true });
+    const events = buffer.split("\n\n");
+    buffer = events.pop() ?? "";
+    for (const raw of events) {
+      const lines = raw.split("\n");
       let event = "message";
-      const dataLines: string[] = [];
-      for (const line of raw.split("\n")) {
-        if (line.startsWith("event:")) {
-          event = line.slice(6).trim();
-        } else if (line.startsWith("data:")) {
-          dataLines.push(line.slice(5).trimStart());
-        }
+      let data = "";
+      for (const line of lines) {
+        if (line.startsWith("event:")) event = line.slice(6).trim();
+        else if (line.startsWith("data:")) data += line.slice(5).trim();
       }
-      const data = dataLines.join("\n");
       if (!data) continue;
       try {
-        const payload = JSON.parse(data);
-        switch (event) {
-          case "retrieved":
-            handlers.onRetrieved?.(payload);
-            break;
-          case "token":
-            // Wire shape: { "type": "token", "text": "<delta>" }
-            if (typeof payload.text === "string") handlers.onToken?.(payload.text);
-            break;
-          case "end":
-            handlers.onEnd?.(payload);
-            return;
-          case "error":
-            handlers.onError?.(payload.message ?? data);
-            return;
-        }
-      } catch (e) {
-        // Malformed frame — skip rather than crash the whole stream.
-        console.warn("bad SSE frame", data, e);
+        const parsed = JSON.parse(data);
+        if (event === "retrieved" && parsed.subgraph) handlers.onRetrieved?.(parsed.subgraph);
+        else if (event === "token") handlers.onToken?.(parsed.text ?? parsed.delta ?? "");
+        else if (event === "end") handlers.onEnd?.(parsed);
+        else if (event === "error") handlers.onError?.(parsed.message ?? "stream error");
+      } catch {
+        /* ignore */
       }
     }
   }
 }
+
+export async function upload(
+  file: File,
+  opts: { kind: string; conceptType?: string; name?: string },
+): Promise<UploadResponse> {
+  const form = new FormData();
+  form.append("file", file, file.name);
+  form.append("kind", opts.kind);
+  if (opts.conceptType) form.append("concept_type", opts.conceptType);
+  if (opts.name) form.append("name", opts.name);
+  const url = `${apiBase()}/upload`;
+  const h: Record<string, string> = {};
+  const t = apiToken();
+  if (t) h["authorization"] = `Bearer ${t}`;
+  const res = await fetch(url, { method: "POST", body: form, headers: h });
+  if (!res.ok) throw new Error(`upload failed: ${res.status} ${res.statusText}`);
+  return (await res.json()) as UploadResponse;
+}
+
+export const getSubgraph = (req: {
+  seed_concept_ids?: number[];
+  seed_query?: string;
+  seed_concept_types?: string[];
+  limit?: number;
+  expansion_depth?: number;
+}) =>
+  http<{ subgraph: Subgraph }>("/subgraph", {
+    method: "POST",
+    headers: headers(true),
+    body: JSON.stringify(req),
+  });
+
+export const exportGraphUrl = (format: "jsonl" | "json" = "jsonl") =>
+  `${apiBase()}/export?format=${format}`;
+
+export const getFiles = () => http<{ files: FileRecord[] }>("/files");
+export const deleteFile = (id: number) =>
+  http<void>(`/files/${id}`, { method: "DELETE", headers: headers() });
+
+export const getQueries = () => http<{ queries: SavedQuery[] }>("/queries");
+export const createQuery = (q: {
+  name: string;
+  query: string;
+  top_k?: number;
+  lexical_weight?: number;
+  concept_types?: string[];
+  expansion_depth?: number;
+}) =>
+  http<SavedQuery>("/queries", {
+    method: "POST",
+    headers: headers(true),
+    body: JSON.stringify(q),
+  });
+export const updateQuery = (id: number, patch: Partial<SavedQuery>) =>
+  http<SavedQuery>(`/queries/${id}`, {
+    method: "PATCH",
+    headers: headers(true),
+    body: JSON.stringify(patch),
+  });
+export const deleteQuery = (id: number) =>
+  http<void>(`/queries/${id}`, { method: "DELETE", headers: headers() });
+export const runQuery = (id: number) =>
+  http<RagAnswer>(`/queries/${id}/run`, { method: "POST", headers: headers() });
+
+export const getSettings = () => http<Settings>("/settings");
+export const patchSettings = (patch: SettingsPatch) =>
+  http<Settings>("/settings", {
+    method: "PATCH",
+    headers: headers(true),
+    body: JSON.stringify(patch),
+  });
