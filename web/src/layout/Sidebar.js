@@ -7,7 +7,10 @@ const NAV = [
     { to: "/builder", label: "Ontology Builder", icon: "✦" },
     { to: "/files", label: "Files", icon: "▤" },
     { to: "/graph", label: "Graph View", icon: "◈" },
+    { to: "/concepts", label: "Concepts", icon: "◉" },
+    { to: "/rules", label: "Rules", icon: "§" },
     { to: "/queries", label: "Queries", icon: "✎" },
+    { to: "/actions", label: "Actions", icon: "⚡" },
     { to: "/settings", label: "Settings", icon: "⚙" },
 ];
 export default function Sidebar({ collapsed, onToggle }) {

@@ -6,7 +6,7 @@
 // Dual-licensed: AGPL-3.0-or-later OR a commercial license
 // from Winven AI Sarl. See LICENSE and LICENSE-COMMERCIAL.md.
 
-use ontology_graph::{Concept, Ontology, OntologyGraph, Relation};
+use ontology_graph::{Action, Concept, Ontology, OntologyGraph, Relation, Rule};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -17,6 +17,10 @@ pub struct Snapshot {
     pub ontology: Ontology,
     pub concepts: Vec<Concept>,
     pub relations: Vec<Relation>,
+    #[serde(default)]
+    pub rules: Vec<Rule>,
+    #[serde(default)]
+    pub actions: Vec<Action>,
     /// WAL sequence number at the time the snapshot was taken. WAL records
     /// with `seq <= high_water_seq` are skipped on replay so a compacted
     /// store doesn't double-apply.
@@ -67,6 +71,8 @@ impl Snapshot {
             ontology,
             concepts,
             relations,
+            rules: graph.all_rules(),
+            actions: graph.all_actions(),
             high_water_seq,
         }
     }
@@ -81,6 +87,12 @@ impl Snapshot {
         }
         for r in self.relations {
             graph.add_relation(r)?;
+        }
+        for r in self.rules {
+            graph.upsert_rule(r)?;
+        }
+        for a in self.actions {
+            graph.upsert_action(a)?;
         }
         Ok(())
     }

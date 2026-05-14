@@ -65,6 +65,19 @@ pub(crate) fn apply(graph: &Arc<OntologyGraph>, r: LogRecord) -> StoreResult<()>
         RecordKind::Relation(rel) => {
             graph.add_relation(rel)?;
         }
+        RecordKind::UpdateRelation(rel) => {
+            if graph.get_relation(rel.id).is_ok() {
+                graph.update_relation(
+                    rel.id,
+                    ontology_graph::RelationPatch {
+                        weight: Some(rel.weight),
+                        properties: Some(rel.properties.clone()),
+                    },
+                )?;
+            } else {
+                graph.add_relation(rel)?;
+            }
+        }
         RecordKind::UpdateConcept(c) => {
             // If the concept already exists, drive update_concept so the
             // rename path cleans the name-index. Otherwise treat the update
@@ -88,6 +101,18 @@ pub(crate) fn apply(graph: &Arc<OntologyGraph>, r: LogRecord) -> StoreResult<()>
         }
         RecordKind::DeleteRelation(id) => {
             let _ = graph.remove_relation(id);
+        }
+        RecordKind::Rule(r) => {
+            graph.upsert_rule(r)?;
+        }
+        RecordKind::Action(a) => {
+            graph.upsert_action(a)?;
+        }
+        RecordKind::DeleteRule(id) => {
+            let _ = graph.remove_rule(id);
+        }
+        RecordKind::DeleteAction(id) => {
+            let _ = graph.remove_action(id);
         }
     }
     Ok(())

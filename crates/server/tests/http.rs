@@ -12,8 +12,8 @@ use ontology_graph::{ConceptType, Ontology, OntologyGraph, RelationType};
 use ontology_index::HybridIndex;
 use ontology_rag::{EchoModel, RagPipeline};
 use ontology_server::{
-    build_router, build_router_with_auth, build_router_with_config, AppState, RateLimit,
-    RouterConfig,
+    build_router, build_router_with_auth, build_router_with_config, build_router_with_jwt,
+    AppState, JwtAuth, RateLimit, RouterConfig,
 };
 use ontology_storage::{MemoryStore, Store};
 use serde_json::{json, Value};
@@ -284,6 +284,7 @@ async fn rate_limiter_rejects_after_burst() {
         make_state(),
         RouterConfig {
             bearer_token: None,
+            jwt: None,
             rate_limit: Some(RateLimit {
                 max_requests: 2,
                 window: Duration::from_secs(60),
@@ -309,6 +310,173 @@ async fn rate_limiter_rejects_after_burst() {
             .unwrap();
         assert_eq!(resp.status(), expected);
     }
+}
+
+fn mint_jwt(secret: &[u8], sub: &str, iss: &str, aud: &str, expires_in: i64) -> String {
+    use jsonwebtoken::{encode, EncodingKey, Header};
+    #[derive(serde::Serialize)]
+    struct Claims<'a> {
+        sub: &'a str,
+        iss: &'a str,
+        aud: &'a str,
+        exp: usize,
+        email: &'a str,
+        name: &'a str,
+    }
+    let exp = (std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64
+        + expires_in) as usize;
+    encode(
+        &Header::default(),
+        &Claims { sub, iss, aud, exp, email: "alice@example.com", name: "Alice" },
+        &EncodingKey::from_secret(secret),
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn jwt_auth_accepts_valid_token() {
+    let secret = b"super-shared-secret-must-be-long-enough";
+    let app = build_router_with_jwt(make_state(), JwtAuth::from_secret(secret.to_vec()));
+
+    // Healthz is open.
+    let resp = app
+        .clone()
+        .oneshot(Request::builder().uri("/healthz").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // No token → 401.
+    let resp = app
+        .clone()
+        .oneshot(Request::builder().uri("/stats").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    // Valid token → 200.
+    let token = mint_jwt(secret, "user-1", "ai-ontology", "web", 3600);
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/stats")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn jwt_auth_rejects_bad_signature_wrong_claims_and_expired() {
+    let secret = b"the-real-secret-the-real-secret-the-real";
+    let app = build_router_with_jwt(make_state(), JwtAuth::from_secret(secret.to_vec()));
+
+    // Wrong signing key → 401.
+    let token = mint_jwt(b"wrong-key-wrong-key-wrong-key-wrong", "u", "ai-ontology", "web", 60);
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/stats")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    // Wrong audience → 401.
+    let token = mint_jwt(secret, "u", "ai-ontology", "other", 60);
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/stats")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    // Expired → 401 (well past the 60s leeway).
+    let token = mint_jwt(secret, "u", "ai-ontology", "web", -3600);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/stats")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn jwt_and_static_token_coexist() {
+    // Both creds accepted: a JWT for users, a service token for backend jobs.
+    let secret = b"coexist-secret-coexist-secret-coexist";
+    let app = build_router_with_config(
+        make_state(),
+        RouterConfig {
+            bearer_token: Some("service-token".into()),
+            jwt: Some(JwtAuth::from_secret(secret.to_vec())),
+            rate_limit: None,
+        },
+    );
+
+    // Service static token works.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/stats")
+                .header("authorization", "Bearer service-token")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // User JWT works.
+    let token = mint_jwt(secret, "user-1", "ai-ontology", "web", 3600);
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/stats")
+                .header("authorization", format!("Bearer {token}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    // Garbage rejected.
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/stats")
+                .header("authorization", "Bearer nope")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
 }
 
 #[tokio::test]
@@ -546,4 +714,76 @@ async fn stats_history_grows_after_calls() {
     let v = read_body(resp.into_body()).await;
     // The 60s dedupe means we'll have exactly one sample for two quick calls.
     assert!(v["samples"].as_array().unwrap().len() >= 1);
+}
+
+
+#[tokio::test]
+async fn openapi_spec_endpoint_returns_valid_document() {
+    let app = build_router(make_state());
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/openapi.json")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v = read_body(resp.into_body()).await;
+    assert_eq!(v["openapi"], "3.0.3");
+    assert!(v["info"]["title"].as_str().unwrap().contains("ai-ontology"));
+    // A handful of routes we expect to be documented.
+    let paths = v["paths"].as_object().unwrap();
+    for p in [
+        "/healthz",
+        "/stats",
+        "/concepts",
+        "/relations",
+        "/relations/{id}",
+        "/rules",
+        "/rules/{id}",
+        "/actions",
+        "/actions/{id}",
+        "/ask",
+    ] {
+        assert!(paths.contains_key(p), "missing path in spec: {p}");
+    }
+}
+
+#[tokio::test]
+async fn swagger_ui_page_is_served() {
+    let app = build_router(make_state());
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/docs")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let ct = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(ct.starts_with("text/html"), "got content-type: {ct}");
+    let bytes = to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+    let body = std::str::from_utf8(&bytes).unwrap();
+    assert!(body.contains("SwaggerUIBundle"));
+}
+
+#[tokio::test]
+async fn openapi_and_docs_are_unauthenticated() {
+    let app = build_router_with_auth(make_state(), Some("s3cret".into()));
+    for path in ["/openapi.json", "/docs"] {
+        let resp = app
+            .clone()
+            .oneshot(Request::builder().uri(path).body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK, "auth-gated: {path}");
+    }
 }

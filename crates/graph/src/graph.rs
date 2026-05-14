@@ -13,8 +13,8 @@ use smallvec::SmallVec;
 use std::sync::Arc;
 
 use crate::error::{GraphError, GraphResult};
-use crate::id::{ConceptId, IdAllocator, RelationId};
-use crate::model::{Concept, ConceptPatch, Relation};
+use crate::id::{ActionId, ConceptId, IdAllocator, RelationId, RuleId};
+use crate::model::{Action, ActionPatch, Concept, ConceptPatch, Relation, RelationPatch, Rule, RulePatch};
 use crate::schema::Ontology;
 
 type AdjList = SmallVec<[RelationId; 4]>;
@@ -26,6 +26,8 @@ type AdjList = SmallVec<[RelationId; 4]>;
 pub struct OntologyGraph {
     ontology: RwLock<Ontology>,
     concepts: DashMap<ConceptId, Concept>,
+    rules: DashMap<RuleId, Rule>,
+    actions: DashMap<ActionId, Action>,
     relations: DashMap<RelationId, Relation>,
     /// (concept_type, lowercased name) -> id, for natural-language lookup.
     name_index: DashMap<(String, String), ConceptId>,
@@ -39,6 +41,8 @@ impl OntologyGraph {
         Self {
             ontology: RwLock::new(ontology),
             concepts: DashMap::new(),
+            rules: DashMap::new(),           
+            actions: DashMap::new(),
             relations: DashMap::new(),
             name_index: DashMap::new(),
             out_edges: DashMap::new(),
@@ -192,6 +196,30 @@ impl OntologyGraph {
             .ok_or(GraphError::UnknownRelation(id))
     }
 
+    pub fn all_relations(&self) -> Vec<Relation> {
+        self.relations.iter().map(|e| e.value().clone()).collect()
+    }
+
+    /// Apply a partial update to an existing relation. Only `weight` and
+    /// `properties` are mutable; the adjacency index is unaffected.
+    pub fn update_relation(
+        &self,
+        id: RelationId,
+        patch: RelationPatch,
+    ) -> GraphResult<Relation> {
+        let mut entry = self
+            .relations
+            .get_mut(&id)
+            .ok_or(GraphError::UnknownRelation(id))?;
+        if let Some(w) = patch.weight {
+            entry.weight = w;
+        }
+        if let Some(p) = patch.properties {
+            entry.properties = p;
+        }
+        Ok(entry.clone())
+    }
+
     /// Apply a partial update to an existing concept. Renaming updates the
     /// name index; clearing description / replacing properties is in-place.
     /// Returns the new concept. The concept's `concept_type` is immutable —
@@ -323,6 +351,190 @@ impl OntologyGraph {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    // ---------- rules ----------
+
+    /// Insert (or replace) a rule. Allocates an id when `rule.id == RuleId(0)`.
+    /// The named `rule_type` and every concept id referenced in `applies_to`
+    /// must already exist; otherwise the call fails.
+    pub fn upsert_rule(&self, mut rule: Rule) -> GraphResult<RuleId> {
+        {
+            let onto = self.ontology.read();
+            if onto.rule_type(&rule.rule_type).is_none() {
+                return Err(GraphError::UnknownRelationType(rule.rule_type.clone()));
+            }
+        }
+        for cid in &rule.applies_to {
+            if !self.concepts.contains_key(cid) {
+                return Err(GraphError::UnknownConcept(*cid));
+            }
+        }
+        if rule.id.0 == 0 {
+            rule.id = self.ids.next_rule();
+        } else {
+            self.ids.observe(rule.id.0);
+        }
+        let id = rule.id;
+        self.rules.insert(id, rule);
+        Ok(id)
+    }
+
+    pub fn get_rule(&self, id: RuleId) -> GraphResult<Rule> {
+        self.rules
+            .get(&id)
+            .map(|r| r.clone())
+            .ok_or(GraphError::UnknownRelationType(format!("rule {id}")))
+    }
+
+    pub fn all_rules(&self) -> Vec<Rule> {
+        self.rules.iter().map(|e| e.value().clone()).collect()
+    }
+
+    pub fn rule_count(&self) -> usize {
+        self.rules.len()
+    }
+
+    pub fn remove_rule(&self, id: RuleId) -> GraphResult<()> {
+        self.rules
+            .remove(&id)
+            .map(|_| ())
+            .ok_or(GraphError::UnknownRelationType(format!("rule {id}")))
+    }
+
+    /// Apply a partial update to an existing rule. `rule_type` cannot be
+    /// changed; every concept id referenced in a replacement `applies_to`
+    /// must already exist.
+    pub fn update_rule(&self, id: RuleId, patch: RulePatch) -> GraphResult<Rule> {
+        if let Some(applies) = &patch.applies_to {
+            for cid in applies {
+                if !self.concepts.contains_key(cid) {
+                    return Err(GraphError::UnknownConcept(*cid));
+                }
+            }
+        }
+        let mut entry = self
+            .rules
+            .get_mut(&id)
+            .ok_or(GraphError::UnknownRelationType(format!("rule {id}")))?;
+        if let Some(n) = patch.name {
+            entry.name = n;
+        }
+        if let Some(w) = patch.when {
+            entry.when = w;
+        }
+        if let Some(t) = patch.then {
+            entry.then = t;
+        }
+        if let Some(a) = patch.applies_to {
+            entry.applies_to = a;
+        }
+        if let Some(s) = patch.strict {
+            entry.strict = s;
+        }
+        if let Some(d) = patch.description {
+            entry.description = d;
+        }
+        if let Some(p) = patch.properties {
+            entry.properties = p;
+        }
+        Ok(entry.clone())
+    }
+
+    // ---------- actions ----------
+
+    /// Insert (or replace) an action. The `action_type` must be declared
+    /// in the ontology and both endpoints (`subject`, optional `object`)
+    /// must exist as concepts.
+    pub fn upsert_action(&self, mut action: Action) -> GraphResult<ActionId> {
+        {
+            let onto = self.ontology.read();
+            if onto.action_type(&action.action_type).is_none() {
+                return Err(GraphError::UnknownRelationType(action.action_type.clone()));
+            }
+        }
+        if !self.concepts.contains_key(&action.subject) {
+            return Err(GraphError::UnknownConcept(action.subject));
+        }
+        if let Some(obj) = action.object {
+            if !self.concepts.contains_key(&obj) {
+                return Err(GraphError::UnknownConcept(obj));
+            }
+        }
+        if action.id.0 == 0 {
+            action.id = self.ids.next_action();
+        } else {
+            self.ids.observe(action.id.0);
+        }
+        let id = action.id;
+        self.actions.insert(id, action);
+        Ok(id)
+    }
+
+    pub fn get_action(&self, id: ActionId) -> GraphResult<Action> {
+        self.actions
+            .get(&id)
+            .map(|a| a.clone())
+            .ok_or(GraphError::UnknownRelationType(format!("action {id}")))
+    }
+
+    pub fn all_actions(&self) -> Vec<Action> {
+        self.actions.iter().map(|e| e.value().clone()).collect()
+    }
+
+    pub fn action_count(&self) -> usize {
+        self.actions.len()
+    }
+
+    pub fn remove_action(&self, id: ActionId) -> GraphResult<()> {
+        self.actions
+            .remove(&id)
+            .map(|_| ())
+            .ok_or(GraphError::UnknownRelationType(format!("action {id}")))
+    }
+
+    /// Apply a partial update to an existing action. `action_type` cannot
+    /// be changed; replacement `subject` / `object` concept ids must exist.
+    pub fn update_action(
+        &self,
+        id: ActionId,
+        patch: ActionPatch,
+    ) -> GraphResult<Action> {
+        if let Some(subj) = patch.subject {
+            if !self.concepts.contains_key(&subj) {
+                return Err(GraphError::UnknownConcept(subj));
+            }
+        }
+        if let Some(obj_opt) = &patch.object {
+            if let Some(obj) = obj_opt {
+                if !self.concepts.contains_key(obj) {
+                    return Err(GraphError::UnknownConcept(*obj));
+                }
+            }
+        }
+        let mut entry = self
+            .actions
+            .get_mut(&id)
+            .ok_or(GraphError::UnknownRelationType(format!("action {id}")))?;
+        if let Some(n) = patch.name {
+            entry.name = n;
+        }
+        if let Some(s) = patch.subject {
+            entry.subject = s;
+        }
+        if let Some(o) = patch.object {
+            entry.object = o;
+        }
+        if let Some(p) = patch.parameters {
+            entry.parameters = p;
+        }
+        if let Some(e) = patch.effect {
+            entry.effect = e;
+        }
+        if let Some(d) = patch.description {
+            entry.description = d;
+        }
+        Ok(entry.clone())
     }
 }
 

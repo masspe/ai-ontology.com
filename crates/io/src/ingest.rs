@@ -64,6 +64,14 @@ pub async fn export_graph<S: Sink + ?Sized>(
             stats.relations += 1;
         }
     }
+    for rule in graph.all_rules() {
+        sink.write(&Record::Rule(rule)).await?;
+        stats.rules += 1;
+    }
+    for action in graph.all_actions() {
+        sink.write(&Record::Action(action)).await?;
+        stats.actions += 1;
+    }
     sink.finish().await?;
     Ok(stats)
 }
@@ -72,6 +80,8 @@ pub async fn export_graph<S: Sink + ?Sized>(
 pub struct ExportStats {
     pub concepts: u64,
     pub relations: u64,
+    pub rules: u64,
+    pub actions: u64,
 }
 
 #[derive(Debug, Error)]
@@ -148,6 +158,8 @@ pub struct IngestStats {
     pub concepts: u64,
     pub relations: u64,
     pub ontology_updates: u64,
+    pub rules: u64,
+    pub actions: u64,
 }
 
 async fn apply_record(
@@ -275,6 +287,48 @@ async fn apply_record(
                 s.append(&LogRecord::ontology(graph.ontology())).await?;
             }
             stats.ontology_updates += 1;
+            Ok(true)
+        }
+        Record::Rule(rule) => {
+            // Need the rule_type and all referenced concepts to exist.
+            let ready = {
+                let o = graph.ontology();
+                o.rule_type(&rule.rule_type).is_some()
+            } && rule
+                .applies_to
+                .iter()
+                .all(|cid| graph.get_concept(*cid).is_ok());
+            if !ready {
+                return Ok(false);
+            }
+            let mut r = rule.clone();
+            let id = graph.upsert_rule(r.clone())?;
+            r.id = id;
+            if let Some(s) = store {
+                s.append(&LogRecord::rule(r)).await?;
+            }
+            stats.rules += 1;
+            Ok(true)
+        }
+        Record::Action(action) => {
+            let ready = {
+                let o = graph.ontology();
+                o.action_type(&action.action_type).is_some()
+            } && graph.get_concept(action.subject).is_ok()
+                && action
+                    .object
+                    .map(|cid| graph.get_concept(cid).is_ok())
+                    .unwrap_or(true);
+            if !ready {
+                return Ok(false);
+            }
+            let mut a = action.clone();
+            let id = graph.upsert_action(a.clone())?;
+            a.id = id;
+            if let Some(s) = store {
+                s.append(&LogRecord::action(a)).await?;
+            }
+            stats.actions += 1;
             Ok(true)
         }
     }

@@ -9,7 +9,7 @@
 use ahash::AHashMap;
 use serde::{Deserialize, Serialize};
 
-use crate::id::{ConceptId, RelationId};
+use crate::id::{ActionId, ConceptId, RelationId, RuleId};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -121,7 +121,7 @@ impl Relation {
         target: ConceptId,
     ) -> Self {
         Self {
-            id,
+            id: id,
             relation_type: relation_type.into(),
             source,
             target,
@@ -129,4 +129,144 @@ impl Relation {
             properties: AHashMap::new(),
         }
     }
+}
+
+/// A runtime instance of a [`crate::schema::RuleType`]. Carries the live
+/// `when` / `then` expressions plus a free-form property bag for any
+/// metadata (severity, owner, ticket id, …) the host application wants
+/// to attach.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Rule {
+    pub id: RuleId,
+    /// Name of the [`crate::schema::RuleType`] this rule conforms to.
+    pub rule_type: String,
+    /// Human-readable name, unique per `rule_type`.
+    pub name: String,
+    #[serde(default)]
+    pub when: String,
+    #[serde(default)]
+    pub then: String,
+    /// Concrete concept ids this rule scopes to. Empty means global.
+    #[serde(default)]
+    pub applies_to: Vec<ConceptId>,
+    #[serde(default)]
+    pub strict: bool,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub properties: AHashMap<String, PropertyValue>,
+}
+
+impl Rule {
+    pub fn new(
+        id: RuleId,
+        rule_type: impl Into<String>,
+        name: impl Into<String>,
+    ) -> Self {
+        Self {
+            id,
+            rule_type: rule_type.into(),
+            name: name.into(),
+            when: String::new(),
+            then: String::new(),
+            applies_to: Vec::new(),
+            strict: false,
+            description: String::new(),
+            properties: AHashMap::new(),
+        }
+    }
+}
+
+/// Partial update to an existing rule. Each `Some` field replaces the
+/// corresponding field; `None` leaves it untouched. `rule_type` is
+/// intentionally absent — changing it would invalidate type validation
+/// already applied at insert time.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RulePatch {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub when: Option<String>,
+    #[serde(default)]
+    pub then: Option<String>,
+    #[serde(default)]
+    pub applies_to: Option<Vec<ConceptId>>,
+    #[serde(default)]
+    pub strict: Option<bool>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub properties: Option<AHashMap<String, PropertyValue>>,
+}
+
+/// A runtime instance of a [`crate::schema::ActionType`]. Records a
+/// concrete invocation (or invocation template) including the subject /
+/// object concept ids and any captured parameters.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Action {
+    pub id: ActionId,
+    /// Name of the [`crate::schema::ActionType`] this action conforms to.
+    pub action_type: String,
+    /// Human-readable name, unique per `action_type`.
+    pub name: String,
+    pub subject: ConceptId,
+    #[serde(default)]
+    pub object: Option<ConceptId>,
+    #[serde(default)]
+    pub parameters: AHashMap<String, PropertyValue>,
+    #[serde(default)]
+    pub effect: String,
+    #[serde(default)]
+    pub description: String,
+}
+
+impl Action {
+    pub fn new(
+        id: ActionId,
+        action_type: impl Into<String>,
+        name: impl Into<String>,
+        subject: ConceptId,
+    ) -> Self {
+        Self {
+            id,
+            action_type: action_type.into(),
+            name: name.into(),
+            subject,
+            object: None,
+            parameters: AHashMap::new(),
+            effect: String::new(),
+            description: String::new(),
+        }
+    }
+}
+
+/// Partial update to an existing action. Each `Some` field replaces the
+/// corresponding field; `None` leaves it untouched. `action_type` is
+/// intentionally absent.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ActionPatch {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub subject: Option<ConceptId>,
+    /// Replaces `object`. Use `Some(None)` to clear, `Some(Some(id))` to set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub object: Option<Option<ConceptId>>,
+    #[serde(default)]
+    pub parameters: Option<AHashMap<String, PropertyValue>>,
+    #[serde(default)]
+    pub effect: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+/// Partial update to an existing relation. Only edge metadata is mutable;
+/// `source`, `target`, and `relation_type` are immutable because they
+/// underpin the materialized adjacency index.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RelationPatch {
+    #[serde(default)]
+    pub weight: Option<f32>,
+    #[serde(default)]
+    pub properties: Option<AHashMap<String, PropertyValue>>,
 }

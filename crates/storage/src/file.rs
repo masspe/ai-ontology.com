@@ -12,7 +12,7 @@ use parking_lot::Mutex;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs::{File, OpenOptions};
-use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tracing::{debug, warn};
 
 use crate::log::LogRecord;
@@ -164,11 +164,27 @@ impl Store for FileStore {
         tokio::fs::write(&tmp, &bytes).await?;
         tokio::fs::rename(&tmp, &self.snapshot_path).await?;
 
-        // 2. Truncate the WAL. After this point, replay only sees records
-        //    with seq > high_water_seq (i.e. none, until the next append).
-        writer.set_len(0).await?;
-        writer.seek(std::io::SeekFrom::Start(0)).await?;
-        writer.flush().await?;
+        // 2. Truncate the WAL by reopening the file with `truncate(true)`.
+        //    We can't call `set_len(0)` on the existing handle because it
+        //    was opened with `append(true)`; on Windows that yields only
+        //    `FILE_APPEND_DATA` rights, which forbid SetEndOfFile and
+        //    return `ERROR_ACCESS_DENIED`. Reopening sidesteps that.
+        let truncated = OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(&self.log_path)
+            .await?;
+        drop(truncated);
+        // Reopen the append handle so subsequent writes target the now
+        // empty file (the previous handle still points at the old
+        // position past the prior end-of-file on some platforms).
+        let fresh = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.log_path)
+            .await?;
+        *writer = fresh;
 
         Ok(())
     }

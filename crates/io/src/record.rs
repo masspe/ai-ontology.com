@@ -6,7 +6,9 @@
 // Dual-licensed: AGPL-3.0-or-later OR a commercial license
 // from Winven AI Sarl. See LICENSE and LICENSE-COMMERCIAL.md.
 
-use ontology_graph::{ActionType, Concept, ConceptType, Ontology, Relation, RelationType, RuleType};
+use ontology_graph::{
+    Action, ActionType, Concept, ConceptType, Ontology, Relation, RelationType, Rule, RuleType,
+};
 use serde::{Deserialize, Serialize};
 
 /// Tagged input record. Sources emit one of these per item.
@@ -36,6 +38,10 @@ pub enum Record {
     RuleTypeDecl(RuleType),
     /// Ontology extension — register (or refresh) a single action.
     ActionTypeDecl(ActionType),
+    /// Concrete rule instance.
+    Rule(Rule),
+    /// Concrete action instance.
+    Action(Action),
 }
 
 fn default_weight() -> f32 {
