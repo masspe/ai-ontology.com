@@ -76,6 +76,8 @@ const providers = {
     tokenUrl: "https://oauth2.googleapis.com/token",
     userInfoUrl: "https://openidconnect.googleapis.com/v1/userinfo",
     scope: "openid email profile",
+    // Google-specific: request a refresh token on first consent.
+    extraAuthParams: { access_type: "offline", prompt: "select_account" },
     clientId: () => config.google.clientId,
     clientSecret: () => config.google.clientSecret,
     redirectUri: () => config.google.redirectUri,
@@ -93,7 +95,10 @@ const providers = {
     authUrl: () => `https://login.microsoftonline.com/${config.microsoft.tenant}/oauth2/v2.0/authorize`,
     tokenUrl: () => `https://login.microsoftonline.com/${config.microsoft.tenant}/oauth2/v2.0/token`,
     userInfoUrl: "https://graph.microsoft.com/oidc/userinfo",
+    // Refresh tokens come from the `offline_access` scope on the v2.0 endpoint;
+    // `access_type=offline` is Google-only and must NOT be sent here.
     scope: "openid email profile offline_access",
+    extraAuthParams: { prompt: "select_account", response_mode: "query" },
     clientId: () => config.microsoft.clientId,
     clientSecret: () => config.microsoft.clientSecret,
     redirectUri: () => config.microsoft.redirectUri,
@@ -113,7 +118,12 @@ const providers = {
 function startHandler(providerKey) {
   return (req, res) => {
     const p = providers[providerKey];
-    if (!p.enabled()) return res.status(503).json({ error: `${providerKey} OAuth not configured` });
+    if (!p.enabled()) {
+      // Bounce back to the SPA with a structured error so the UI can show a
+      // friendly message instead of leaving the user staring at raw JSON.
+      console.warn(`[oauth/${providerKey}] start blocked: provider not configured`);
+      return redirectToFrontend(res, { error: `${providerKey}_not_configured` });
+    }
 
     const next = safeNext(req.query.next);
     const nonce = crypto.randomBytes(16).toString("hex");
@@ -127,8 +137,9 @@ function startHandler(providerKey) {
     url.searchParams.set("response_type", "code");
     url.searchParams.set("scope", p.scope);
     url.searchParams.set("state", nonce);
-    url.searchParams.set("access_type", "offline");
-    url.searchParams.set("prompt", "select_account");
+    for (const [k, v] of Object.entries(p.extraAuthParams || {})) {
+      url.searchParams.set(k, v);
+    }
     res.redirect(url.toString());
   };
 }
