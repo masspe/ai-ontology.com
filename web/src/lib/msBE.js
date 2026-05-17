@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Winven-Commercial
 // Centralized API client. Exposes msBE.auth.* and handles 401 -> logout/redirect.
 
-const API_BASE = (import.meta.env.VITE_AUTH_API_BASE || "http://localhost:4000").replace(/\/$/, "");
+// Default to same-origin so the Vite dev server (and any reverse proxy in
+// production) can forward /auth/* to the auth backend. Override with
+// VITE_AUTH_API_BASE only when calling the auth server directly.
+const API_BASE = (import.meta.env.VITE_AUTH_API_BASE || "").replace(/\/$/, "");
 const TOKEN_KEY = "msBE.token";
 const USER_KEY = "msBE.user";
 

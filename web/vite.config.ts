@@ -16,6 +16,7 @@ import react from "@vitejs/plugin-react";
 // React app can use same-origin URLs ("/stats", "/ask", …) without CORS
 // or VITE_API_BASE config. Override the target with ONTOLOGY_API_URL.
 const API_TARGET = process.env.ONTOLOGY_API_URL || "http://127.0.0.1:5000";
+const AUTH_TARGET = process.env.AUTH_API_URL || "http://127.0.0.1:4000";
 
 const API_PATHS = [
   "/healthz",
@@ -40,8 +41,11 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
-    proxy: Object.fromEntries(
-      API_PATHS.map((p) => [p, { target: API_TARGET, changeOrigin: true, ws: true }]),
-    ),
+    proxy: {
+      ...Object.fromEntries(
+        API_PATHS.map((p) => [p, { target: API_TARGET, changeOrigin: true, ws: true }]),
+      ),
+      "/auth": { target: AUTH_TARGET, changeOrigin: true, ws: true },
+    },
   },
 });
