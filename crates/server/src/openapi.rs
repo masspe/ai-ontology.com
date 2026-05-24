@@ -421,6 +421,33 @@ const SPEC_JSON: &str = r##"{
                     "responses": { "200": { "description": "Created" } }
                 }
             },
+            "/rules/generate": {
+                "post": {
+                    "summary": "LLM-generate a rule from a prompt",
+                    "tags": ["rules"],
+                    "requestBody": {
+                        "required": true,
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "description": { "type": "string" },
+                                        "rule_type": { "type": "string" },
+                                        "applies_to": {
+                                            "type": "array",
+                                            "items": { "type": "integer", "format": "int64" },
+                                            "minItems": 1
+                                        }
+                                    },
+                                    "required": ["description", "rule_type", "applies_to"]
+                                }
+                            }
+                        }
+                    },
+                    "responses": { "200": { "description": "Generated rule fields" } }
+                }
+            },
             "/rules/{id}": {
                 "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
                 "get":    { "summary": "Get a rule",    "tags": ["rules"], "responses": { "200": { "description": "Rule" } } },

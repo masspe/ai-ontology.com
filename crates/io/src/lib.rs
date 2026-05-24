@@ -17,19 +17,31 @@
 //! "subject / predicate / object" triple format. Users can plug in custom
 //! sources (e.g. Kafka, S3) by implementing the trait.
 
+pub mod charset;
 pub mod csv;
+pub mod docx;
 pub mod extract;
 pub mod ingest;
 pub mod jsonl;
+pub mod lang;
+pub mod proposal;
 pub mod record;
 pub mod text;
 pub mod triples;
 pub mod xlsx;
 
+pub use charset::{decode_to_utf8, DecodedText};
 pub use csv::CsvSource;
+pub use docx::{extract_docx_text, is_zip};
 pub use extract::extract_from_text;
 pub use ingest::{export_graph, ingest_records, ExportStats, IngestStats, Sink, Source};
 pub use jsonl::{JsonlSink, JsonlSource};
+pub use lang::{detect_language, LangTag};
+pub use proposal::{
+    ApplyDecision, ApplyOutcome, ApplyReport, ConflictInfo, ConflictKind, DecisionAction,
+    OntologyProposal, ProposalAction, ProposalConcept, ProposalConceptType, ProposalRelation,
+    ProposalRelationType, ProposalRule, ProposalSource,
+};
 pub use record::{Record, RecordPayload};
 pub use text::TextDocumentSource;
 pub use triples::TripleSource;

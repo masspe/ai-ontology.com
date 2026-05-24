@@ -4,7 +4,7 @@ import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-run
 import { useEffect, useMemo, useState } from "react";
 import Card from "../components/Card";
 import Sparkline from "../components/Sparkline";
-import { createRule, deleteRule, getOntology, getStats, listConcepts, listRules, updateRule, } from "../api";
+import { createRule, deleteRule, generateRule, getOntology, getStats, listConcepts, listRules, updateRule, } from "../api";
 function ruleStatus(r) {
     const raw = r.properties?.status?.toLowerCase();
     if (raw === "reviewed")
@@ -279,16 +279,45 @@ function RuleModal({ initial, ontology, concepts, onCancel, onSave }) {
     const [strict, setStrict] = useState(initial?.strict ?? false);
     const [description, setDescription] = useState(initial?.description ?? "");
     const [appliesTo, setAppliesTo] = useState(initial?.applies_to ?? []);
+    const [prompt, setPrompt] = useState("");
+    const [generating, setGenerating] = useState(false);
+    const [genError, setGenError] = useState(null);
+    const [showAppliesError, setShowAppliesError] = useState(false);
     const isEdit = initial != null;
     // Default rule_type once ontology loads.
     useEffect(() => {
         if (!ruleType && ruleTypes.length > 0)
             setRuleType(ruleTypes[0]);
     }, [ruleTypes, ruleType]);
+    const canGenerate = appliesTo.length > 0 && ruleType.trim() !== "" && prompt.trim() !== "" && !generating;
+    async function onGenerate() {
+        if (!canGenerate)
+            return;
+        setGenError(null);
+        setGenerating(true);
+        try {
+            const out = await generateRule(prompt.trim(), ruleType, appliesTo);
+            setName(out.name);
+            setWhen(out.when);
+            setThen(out.then);
+            setDescription(out.description);
+            setStrict(out.strict);
+        }
+        catch (e) {
+            setGenError(e.message);
+        }
+        finally {
+            setGenerating(false);
+        }
+    }
     function submit(e) {
         e.preventDefault();
         if (!name.trim() || !ruleType)
             return;
+        if (appliesTo.length === 0) {
+            setShowAppliesError(true);
+            return;
+        }
         onSave({
             rule_type: ruleType,
             name: name.trim(),
@@ -300,7 +329,18 @@ function RuleModal({ initial, ontology, concepts, onCancel, onSave }) {
             properties: initial?.properties ?? {},
         });
     }
-    return (_jsx("div", { className: "modal-backdrop", onClick: onCancel, children: _jsxs("form", { className: "modal-card", onClick: (e) => e.stopPropagation(), onSubmit: submit, children: [_jsx("h3", { className: "modal-title", children: isEdit ? "Edit Rule" : "Create Rule" }), _jsxs("label", { className: "modal-field", children: [_jsx("span", { children: "Rule Type" }), ruleTypes.length > 0 ? (_jsx("select", { value: ruleType, onChange: (e) => setRuleType(e.target.value), disabled: isEdit, required: true, children: ruleTypes.map((t) => (_jsx("option", { value: t, children: t }, t))) })) : (_jsx("input", { value: ruleType, onChange: (e) => setRuleType(e.target.value), disabled: isEdit, required: true })), isEdit && _jsx("small", { className: "muted", children: "Type is immutable." })] }), _jsxs("label", { className: "modal-field", children: [_jsx("span", { children: "Name" }), _jsx("input", { value: name, onChange: (e) => setName(e.target.value), required: true })] }), _jsxs("label", { className: "modal-field", children: [_jsx("span", { children: "Description" }), _jsx("input", { value: description, onChange: (e) => setDescription(e.target.value) })] }), _jsxs("label", { className: "modal-field", children: [_jsx("span", { children: "When" }), _jsx("textarea", { value: when, onChange: (e) => setWhen(e.target.value), rows: 2 })] }), _jsxs("label", { className: "modal-field", children: [_jsx("span", { children: "Then" }), _jsx("textarea", { value: then, onChange: (e) => setThen(e.target.value), rows: 2 })] }), _jsxs("label", { className: "modal-field", children: [_jsx("span", { children: "Applies To (concepts)" }), _jsx("select", { multiple: true, value: appliesTo.map(String), onChange: (e) => setAppliesTo(Array.from(e.target.selectedOptions).map((o) => Number(o.value))), size: Math.min(6, Math.max(3, concepts.length)), children: concepts.map((c) => (_jsxs("option", { value: c.id, children: [c.concept_type, ": ", c.name] }, c.id))) }), _jsx("small", { className: "muted", children: "Hold Ctrl/Cmd to multi-select. Empty = global." })] }), _jsxs("label", { className: "modal-check", children: [_jsx("input", { type: "checkbox", checked: strict, onChange: (e) => setStrict(e.target.checked) }), _jsx("span", { children: "Strict (treated as active)" })] }), _jsxs("div", { className: "modal-actions", children: [_jsx("button", { type: "button", className: "btn-ghost", onClick: onCancel, children: "Cancel" }), _jsx("button", { type: "submit", className: "btn-primary", children: isEdit ? "Save" : "Create" })] }), _jsx("style", { children: `
+    return (_jsx("div", { className: "modal-backdrop", onClick: onCancel, children: _jsxs("form", { className: "modal-card", onClick: (e) => e.stopPropagation(), onSubmit: submit, children: [_jsx("h3", { className: "modal-title", children: isEdit ? "Edit Rule" : "Create Rule" }), _jsxs("div", { className: "modal-ai", children: [_jsx("div", { className: "modal-ai-title", children: "Generate with AI" }), _jsx("textarea", { value: prompt, onChange: (e) => setPrompt(e.target.value), rows: 2, placeholder: "Describe the rule you want to create\u2026" }), _jsxs("div", { className: "modal-ai-row", children: [_jsx("button", { type: "button", className: "btn-primary", onClick: onGenerate, disabled: !canGenerate, children: generating ? "Generating…" : "Generate" }), _jsx("small", { className: "muted", children: appliesTo.length === 0
+                                        ? "Select at least one concept under Applies To before generating."
+                                        : !ruleType
+                                            ? "Pick a rule type first."
+                                            : !prompt.trim()
+                                                ? "Describe the rule to enable generation."
+                                                : "Fills in Name, When, Then, Description, Strict." })] }), genError && _jsx("div", { className: "modal-ai-error", children: genError })] }), _jsxs("label", { className: "modal-field", children: [_jsx("span", { children: "Rule Type" }), ruleTypes.length > 0 ? (_jsx("select", { value: ruleType, onChange: (e) => setRuleType(e.target.value), disabled: isEdit, required: true, children: ruleTypes.map((t) => (_jsx("option", { value: t, children: t }, t))) })) : (_jsx("input", { value: ruleType, onChange: (e) => setRuleType(e.target.value), disabled: isEdit, required: true })), isEdit && _jsx("small", { className: "muted", children: "Type is immutable." })] }), _jsxs("label", { className: "modal-field", children: [_jsx("span", { children: "Name" }), _jsx("input", { value: name, onChange: (e) => setName(e.target.value), required: true })] }), _jsxs("label", { className: "modal-field", children: [_jsx("span", { children: "Description" }), _jsx("input", { value: description, onChange: (e) => setDescription(e.target.value) })] }), _jsxs("label", { className: "modal-field", children: [_jsx("span", { children: "When" }), _jsx("textarea", { value: when, onChange: (e) => setWhen(e.target.value), rows: 2 })] }), _jsxs("label", { className: "modal-field", children: [_jsx("span", { children: "Then" }), _jsx("textarea", { value: then, onChange: (e) => setThen(e.target.value), rows: 2 })] }), _jsxs("label", { className: "modal-field", children: [_jsxs("span", { children: ["Applies To (concepts) ", _jsx("span", { className: "modal-req", children: "*" })] }), _jsx("select", { multiple: true, value: appliesTo.map(String), onChange: (e) => {
+                                const next = Array.from(e.target.selectedOptions).map((o) => Number(o.value));
+                                setAppliesTo(next);
+                                if (next.length > 0)
+                                    setShowAppliesError(false);
+                            }, size: Math.min(6, Math.max(3, concepts.length)), required: true, "aria-invalid": showAppliesError && appliesTo.length === 0, children: concepts.map((c) => (_jsxs("option", { value: c.id, children: [c.concept_type, ": ", c.name] }, c.id))) }), _jsx("small", { className: "muted", children: "Hold Ctrl/Cmd to multi-select. At least one concept is required." }), showAppliesError && appliesTo.length === 0 && (_jsx("small", { className: "modal-field-error", children: "Select at least one concept." }))] }), _jsxs("label", { className: "modal-check", children: [_jsx("input", { type: "checkbox", checked: strict, onChange: (e) => setStrict(e.target.checked) }), _jsx("span", { children: "Strict (treated as active)" })] }), _jsxs("div", { className: "modal-actions", children: [_jsx("button", { type: "button", className: "btn-ghost", onClick: onCancel, children: "Cancel" }), _jsx("button", { type: "submit", className: "btn-primary", children: isEdit ? "Save" : "Create" })] }), _jsx("style", { children: `
           .modal-backdrop { position: fixed; inset: 0; background: rgba(15,23,42,.45);
             display: flex; align-items: center; justify-content: center; z-index: 1000; }
           .modal-card { background: #fff; border-radius: 12px; padding: 24px;
@@ -316,5 +356,16 @@ function RuleModal({ initial, ontology, concepts, onCancel, onSave }) {
           .modal-field select[multiple] { padding: 4px; }
           .modal-check { display: flex; align-items: center; gap: 8px; font-size: 13px; }
           .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+          .modal-ai { display: flex; flex-direction: column; gap: 6px;
+            padding: 10px; border: 1px dashed #c4b5fd; background: #faf5ff;
+            border-radius: 8px; }
+          .modal-ai-title { font-weight: 600; font-size: 13px; color: #6d28d9; }
+          .modal-ai textarea { padding: 8px 10px; border: 1px solid #cbd5e1;
+            border-radius: 8px; font: inherit; background: #fff; }
+          .modal-ai-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+          .modal-ai-error { color: #b91c1c; font-size: 12px; background: #fef2f2;
+            border: 1px solid #fecaca; padding: 6px 8px; border-radius: 6px; }
+          .modal-req { color: #dc2626; }
+          .modal-field-error { color: #b91c1c; }
         ` })] }) }));
 }

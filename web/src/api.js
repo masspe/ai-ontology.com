@@ -132,6 +132,11 @@ export const generateOntology = (description) => http("/ontology/generate", {
     headers: headers(true),
     body: JSON.stringify({ description }),
 });
+export const generateRule = (description, rule_type, applies_to) => http("/rules/generate", {
+    method: "POST",
+    headers: headers(true),
+    body: JSON.stringify({ description, rule_type, applies_to }),
+});
 export const listConcepts = (params = {}) => {
     const qs = new URLSearchParams();
     if (params.type)

@@ -258,6 +258,57 @@ impl RagPipeline {
             }
         })
     }
+
+    /// One-shot natural-language → [`GeneratedRule`] generator.
+    ///
+    /// The caller supplies the rule type and the concept names this rule
+    /// scopes to; the LLM fills in `name`, `when`, `then`, `description`
+    /// and `strict`. Tolerant of the same LLM tics handled by
+    /// [`Pipeline::generate_ontology`].
+    pub async fn generate_rule(
+        &self,
+        description: &str,
+        rule_type: &str,
+        concept_names: &[String],
+    ) -> Result<GeneratedRule, OntologyGenError> {
+        let llm_req = LlmRequest {
+            system: Some(PromptBuilder::rule_generation_system_message().to_string()),
+            cached_context: None,
+            messages: vec![Message::user(PromptBuilder::rule_generation_user_message(
+                description,
+                rule_type,
+                concept_names,
+            ))],
+            max_tokens: self.max_tokens.max(1024),
+            temperature: 0.0,
+        };
+        let resp = self.llm.generate(&llm_req).await.map_err(OntologyGenError::Llm)?;
+        let json = extract_json_block(&resp.content)
+            .ok_or_else(|| OntologyGenError::Parse {
+                raw: resp.content.clone(),
+                error: "no JSON object found in response".into(),
+            })?;
+        serde_json::from_str::<GeneratedRule>(&json).map_err(|e| OntologyGenError::Parse {
+            raw: resp.content,
+            error: e.to_string(),
+        })
+    }
+}
+
+/// Subset of [`ontology_graph::Rule`] fields produced by
+/// [`Pipeline::generate_rule`]. The caller fills in `id`, `rule_type`,
+/// `applies_to` and `properties`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GeneratedRule {
+    pub name: String,
+    #[serde(default)]
+    pub when: String,
+    #[serde(default)]
+    pub then: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub strict: bool,
 }
 
 /// Strip BOM / leading markdown fence and trim to the outermost balanced

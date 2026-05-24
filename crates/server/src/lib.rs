@@ -23,6 +23,7 @@
 //! The router is constructed via [`build_router`] so callers can mount it
 //! into a larger axum app or test it with `tower::ServiceExt`.
 
+mod ingest_review;
 mod openapi;
 
 use axum::{
@@ -47,7 +48,7 @@ use ontology_io::{
     export_graph, ingest_records, CsvSource, IngestStats, JsonlSink, JsonlSource,
     TextDocumentSource, TripleSource, XlsxSource,
 };
-use ontology_rag::{OntologyGenError, RagAnswer, RagPipeline, RagStreamEvent};
+use ontology_rag::{GeneratedRule, OntologyGenError, RagAnswer, RagPipeline, RagStreamEvent};
 use ontology_storage::{LogRecord, Store};
 use parking_lot::{Mutex as PlMutex, RwLock as PlRwLock};
 use serde::{Deserialize, Serialize};
@@ -538,6 +539,7 @@ fn build_router_inner(
                 .delete(delete_relation_handler),
         )
         .route("/rules", get(list_rules).post(create_rule))
+        .route("/rules/generate", post(generate_rule_handler))
         .route(
             "/rules/:id",
             get(get_rule_handler)
@@ -558,6 +560,8 @@ fn build_router_inner(
         .route("/path", post(path))
         .route("/compact", post(compact))
         .route("/upload", post(upload))
+        .route("/ingest/analyze", post(ingest_review::analyze))
+        .route("/ingest/apply", post(ingest_review::apply))
         .route("/export", get(export_handler))
         .route("/files", get(list_files))
         .route("/files/:id", get(get_file).delete(delete_file))
@@ -1500,7 +1504,16 @@ async fn upload(
             // Buffer to a tempfile + reuse TextDocumentSource so we go through
             // exactly the same code path as the CLI.
             let dir = tempfile::tempdir().map_err(|e| ApiError::Store(e.to_string()))?;
-            let path = dir.path().join(format!("{stem}.txt"));
+            // Preserve the original extension so binary formats like .docx
+            // are routed through their dedicated extractor in
+            // TextDocumentSource instead of being decoded as raw bytes.
+            let ext = filename
+                .as_deref()
+                .map(std::path::Path::new)
+                .and_then(|p| p.extension().and_then(|e| e.to_str()))
+                .map(|s| s.to_ascii_lowercase())
+                .unwrap_or_else(|| "txt".into());
+            let path = dir.path().join(format!("{stem}.{ext}"));
             tokio::fs::write(&path, &bytes)
                 .await
                 .map_err(|e| ApiError::Store(e.to_string()))?;
@@ -1616,6 +1629,68 @@ async fn generate_ontology_handler(
     Ok(Json(GenerateOntologyResponse {
         ontology: onto,
         model: "configured-llm".into(),
+    }))
+}
+
+#[derive(Deserialize)]
+struct GenerateRuleRequest {
+    description: String,
+    rule_type: String,
+    #[serde(default)]
+    applies_to: Vec<u64>,
+}
+
+#[derive(Serialize)]
+struct GenerateRuleResponse {
+    name: String,
+    when: String,
+    then: String,
+    description: String,
+    strict: bool,
+}
+
+/// `POST /rules/generate` — natural-language → rule fields. The caller
+/// supplies the prompt, the rule type and the concept ids the rule will
+/// scope to. The handler resolves those ids to concept names, invokes the
+/// configured LLM, and returns the generated `name`/`when`/`then`/
+/// `description`/`strict` fields. Malformed JSON surfaces a 422 with the
+/// raw response so the UI can show it to the user.
+async fn generate_rule_handler(
+    State(s): State<AppState>,
+    Json(req): Json<GenerateRuleRequest>,
+) -> Result<Json<GenerateRuleResponse>, ApiError> {
+    if req.description.trim().is_empty() {
+        return Err(ApiError::BadRequest("description must not be empty".into()));
+    }
+    if req.rule_type.trim().is_empty() {
+        return Err(ApiError::BadRequest("rule_type must not be empty".into()));
+    }
+    if req.applies_to.is_empty() {
+        return Err(ApiError::BadRequest(
+            "applies_to must contain at least one concept id".into(),
+        ));
+    }
+    let mut concept_names = Vec::with_capacity(req.applies_to.len());
+    for cid in &req.applies_to {
+        let c = s.graph.get_concept(ConceptId(*cid))?;
+        concept_names.push(c.name);
+    }
+    let generated: GeneratedRule = s
+        .pipeline
+        .generate_rule(&req.description, &req.rule_type, &concept_names)
+        .await
+        .map_err(|e| match e {
+            OntologyGenError::Llm(e) => ApiError::Llm(e.to_string()),
+            OntologyGenError::Parse { raw, error } => {
+                ApiError::Unprocessable(format!("rule JSON parse failed: {error}\nraw:\n{raw}"))
+            }
+        })?;
+    Ok(Json(GenerateRuleResponse {
+        name: generated.name,
+        when: generated.when,
+        then: generated.then,
+        description: generated.description,
+        strict: generated.strict,
     }))
 }
 

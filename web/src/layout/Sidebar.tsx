@@ -14,6 +14,7 @@ const NAV: NavItem[] = [
   { to: "/", label: "Dashboard", icon: "▦", end: true },
   { to: "/builder", label: "Ontology Builder", icon: "✦" },
   { to: "/files", label: "Files", icon: "▤" },
+  { to: "/ingest", label: "Ingest (LLM)", icon: "✨" },
   { to: "/graph", label: "Graph View", icon: "◈" },
   { to: "/concepts", label: "Concepts", icon: "◉" },
   { to: "/rules", label: "Rules", icon: "§" },

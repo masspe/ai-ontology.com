@@ -82,6 +82,16 @@ impl TextDocumentSource {
     }
 }
 
+/// Decode arbitrary file bytes into a `String` for text ingestion.
+///
+/// Delegates to [`crate::charset::decode_to_utf8`] which auto-detects
+/// UTF-8 (with or without BOM), UTF-16 LE/BE, and legacy single-byte
+/// encodings (Windows-1252, ISO-8859-*) via `chardetng`. Result is NFC
+/// normalized; decoding never fails (malformed bytes become U+FFFD).
+fn decode_text(raw: &[u8]) -> String {
+    crate::charset::decode_to_utf8(raw).text
+}
+
 #[async_trait]
 impl Source for TextDocumentSource {
     async fn next(&mut self) -> Result<Option<Record>, IngestError> {
@@ -98,9 +108,25 @@ impl Source for TextDocumentSource {
                 .and_then(|s| s.to_str())
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| path.display().to_string());
-            let body = fs::read_to_string(&path)
+            let raw = fs::read(&path)
                 .await
                 .map_err(|e| IngestError::Source(format!("{}: {e}", path.display())))?;
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|s| s.to_ascii_lowercase());
+            let is_docx = ext.as_deref() == Some("docx")
+                || (crate::docx::is_zip(&raw)
+                    && ext.as_deref().map_or(false, |e| {
+                        matches!(e, "docx" | "docm" | "dotx" | "dotm")
+                    }));
+            let body = if is_docx {
+                crate::docx::extract_docx_text(&raw).map_err(|e| {
+                    IngestError::Source(format!("{}: docx extract: {e}", path.display()))
+                })?
+            } else {
+                decode_text(&raw)
+            };
             // Extract emits records in dependency-friendly order; we drain
             // via `pop`, so reverse to preserve that order to the consumer.
             let mut recs = extract_from_text(&self.concept_type, &name, &body);

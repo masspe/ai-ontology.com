@@ -8,6 +8,7 @@
 
 import { useMemo } from "react";
 import type { Subgraph } from "../api";
+import type { OntologyProposal } from "../lib/proposalTypes";
 
 // --- palette (kept in sync with Dashboard.NetworkPreview) -------------------
 const PALETTE: { fill: string; stroke: string; text: string }[] = [
@@ -23,6 +24,10 @@ const PALETTE: { fill: string; stroke: string; text: string }[] = [
 
 interface Props {
   subgraph?: Subgraph | null;
+  /** Optional proposed-concept overlay (from `/ingest/analyze`). Proposed
+   * nodes render with a dashed outline and reduced opacity. Relations
+   * connecting two resolvable refs are also overlaid. */
+  proposed?: OntologyProposal | null;
   height?: number;
   /** Maximum number of concepts to render. */
   limit?: number;
@@ -140,6 +145,7 @@ function layout(subgraph: Subgraph, w: number, h: number, limit: number): Layout
 
 export default function OntologyGraph({
   subgraph,
+  proposed,
   height = 460,
   limit = 24,
   showLegend = true,
@@ -149,12 +155,85 @@ export default function OntologyGraph({
   const VBW = 960;
   const VBH = Math.max(280, Math.round((height / 460) * 520));
 
+  // Merge `subgraph` with the optional `proposed` overlay. Proposed concepts
+  // get negative synthetic ids so they never collide with real ones.
+  const { merged, proposedNodeIds, proposedEdgeKeys } = useMemo(() => {
+    const concepts = subgraph ? [...subgraph.concepts] : [];
+    const relations = subgraph ? [...subgraph.relations] : [];
+    const propNodes = new Set<number>();
+    const propEdges = new Set<string>();
+    if (!proposed) {
+      return {
+        merged: { concepts, relations } as Subgraph,
+        proposedNodeIds: propNodes,
+        proposedEdgeKeys: propEdges,
+      };
+    }
+    // Map existing concepts by `Type::Name` (lowercase) for graph-ref lookups.
+    const byKey = new Map<string, number>();
+    for (const c of concepts) {
+      byKey.set(`${c.concept_type}::${c.name.trim().toLowerCase()}`, c.id);
+    }
+    // Map proposed client_refs → assigned (possibly synthetic) ids.
+    const refToId = new Map<string, number>();
+    let nextId = -1;
+    for (const pc of proposed.concepts) {
+      const key = `${pc.concept_type}::${pc.name.trim().toLowerCase()}`;
+      const existing = byKey.get(key);
+      if (existing !== undefined) {
+        refToId.set(pc.client_ref, existing);
+        continue;
+      }
+      const id = nextId--;
+      refToId.set(pc.client_ref, id);
+      byKey.set(key, id);
+      propNodes.add(id);
+      concepts.push({
+        id,
+        concept_type: pc.concept_type,
+        name: pc.name,
+        description: pc.description,
+      });
+    }
+    // Resolve a relation ref (client_ref or `Type:Name`) to a concept id.
+    const resolve = (ref: string): number | undefined => {
+      if (refToId.has(ref)) return refToId.get(ref);
+      // graph-ref form `Type:Name`
+      const colon = ref.indexOf(":");
+      if (colon > 0) {
+        const type = ref.slice(0, colon);
+        const name = ref.slice(colon + 1);
+        return byKey.get(`${type}::${name.trim().toLowerCase()}`);
+      }
+      return undefined;
+    };
+    let nextRelId = -1;
+    for (const pr of proposed.relations) {
+      const src = resolve(pr.source_ref);
+      const tgt = resolve(pr.target_ref);
+      if (src === undefined || tgt === undefined) continue;
+      const id = nextRelId--;
+      relations.push({
+        id,
+        relation_type: pr.relation_type,
+        source: src,
+        target: tgt,
+      });
+      propEdges.add(`${src}->${tgt}::${pr.relation_type}`);
+    }
+    return {
+      merged: { concepts, relations } as Subgraph,
+      proposedNodeIds: propNodes,
+      proposedEdgeKeys: propEdges,
+    };
+  }, [subgraph, proposed]);
+
   const lay = useMemo<Layout>(() => {
-    if (!subgraph || subgraph.concepts.length === 0) {
+    if (merged.concepts.length === 0) {
       return { nodes: [], edges: [], width: VBW, height: VBH, types: [] };
     }
-    return layout(subgraph, VBW, VBH, limit);
-  }, [subgraph, VBW, VBH, limit]);
+    return layout(merged, VBW, VBH, limit);
+  }, [merged, VBW, VBH, limit]);
 
   const byId = useMemo(() => {
     const m = new Map<number, Layout["nodes"][number]>();
@@ -176,6 +255,7 @@ export default function OntologyGraph({
               if (!a || !b) return null;
               const mx = (a.x + b.x) / 2;
               const my = (a.y + b.y) / 2;
+              const isProposed = proposedEdgeKeys.has(`${e.from}->${e.to}::${e.label ?? ""}`);
               return (
                 <g key={`e-${i}`}>
                   <line
@@ -183,11 +263,13 @@ export default function OntologyGraph({
                     y1={a.y}
                     x2={b.x}
                     y2={b.y}
-                    stroke="#cbd5e1"
+                    stroke={isProposed ? "#7c3aed" : "#cbd5e1"}
                     strokeWidth={1.2}
+                    strokeDasharray={isProposed ? "4 3" : undefined}
+                    opacity={isProposed ? 0.85 : 1}
                   />
                   {e.label && (
-                    <g transform={`translate(${mx}, ${my})`}>
+                    <g transform={`translate(${mx}, ${my})`} opacity={isProposed ? 0.9 : 1}>
                       <rect
                         x={-e.label.length * 3 - 6}
                         y={-9}
@@ -195,7 +277,8 @@ export default function OntologyGraph({
                         height={18}
                         rx={9}
                         fill="#ede9fe"
-                        stroke="#c4b5fd"
+                        stroke={isProposed ? "#7c3aed" : "#c4b5fd"}
+                        strokeDasharray={isProposed ? "3 2" : undefined}
                       />
                       <text
                         x={0}
@@ -217,8 +300,9 @@ export default function OntologyGraph({
           <g>
             {lay.nodes.map((n) => {
               const p = PALETTE[n.color % PALETTE.length];
+              const isProposed = proposedNodeIds.has(n.id);
               return (
-                <g key={`n-${n.id}`}>
+                <g key={`n-${n.id}`} opacity={isProposed ? 0.85 : 1}>
                   <rect
                     x={n.x - n.w / 2}
                     y={n.y - n.h / 2}
@@ -227,7 +311,8 @@ export default function OntologyGraph({
                     rx={n.h / 2}
                     fill={p.fill}
                     stroke={p.stroke}
-                    strokeWidth={1.4}
+                    strokeWidth={isProposed ? 1.8 : 1.4}
+                    strokeDasharray={isProposed ? "5 3" : undefined}
                   />
                   <text
                     x={n.x}
@@ -237,7 +322,7 @@ export default function OntologyGraph({
                     fill={p.text}
                     textAnchor="middle"
                   >
-                    {n.label}
+                    {isProposed ? "+ " : ""}{n.label}
                   </text>
                 </g>
               );

@@ -2,9 +2,29 @@
 // Copyright (C) 2026 Winven AI Sarl
 
 import { useEffect, useState } from "react";
+import JSZip from "jszip";
 import Card from "../components/Card";
 import Dropzone from "../components/Dropzone";
 import OntologyGraph from "../components/OntologyGraph";
+import {
+  ApplyReportView,
+  ReviewPanel,
+  defaultDecisionFor,
+} from "../components/IngestReview";
+import { analyzeIngest, applyIngest } from "../lib/ingestApi";
+import { mergeProposals, type ProposalPart } from "../lib/mergeProposals";
+import {
+  needsPreprocessing,
+  prepareForIngest,
+  terminateOcrWorker,
+} from "../lib/extractText";
+import type {
+  ApplyDecision,
+  ApplyReport,
+  DecisionAction,
+  OntologyProposal,
+} from "../lib/proposalTypes";
+import { iterRefs } from "../lib/proposalTypes";
 import {
   deleteFile,
   exportGraphUrl,
@@ -14,7 +34,6 @@ import {
   getStats,
   getSubgraph,
   replaceOntology,
-  upload,
   type FileRecord,
   type Ontology,
   type Stats,
@@ -40,6 +59,30 @@ const KIND_BY_EXT: Record<string, string> = {
   md: "text",
   pdf: "text",
   docx: "text",
+  doc: "text",
+  rtf: "text",
+  html: "text",
+  htm: "text",
+  xml: "text",
+  yaml: "text",
+  yml: "text",
+  // Images (OCR'd client-side before /ingest/analyze).
+  png: "image",
+  jpg: "image",
+  jpeg: "image",
+  webp: "image",
+  bmp: "image",
+  gif: "image",
+  tif: "image",
+  tiff: "image",
+};
+
+const SKIP_IN_ZIP = (name: string): boolean => {
+  const base = name.split("/").pop() ?? name;
+  if (!base || base.startsWith(".")) return true;
+  if (name.includes("__MACOSX/")) return true;
+  if (base === "Thumbs.db" || base === ".DS_Store") return true;
+  return false;
 };
 
 const ICON_BY_KIND: Record<string, { label: string; bg: string; fg: string }> = {
@@ -49,6 +92,7 @@ const ICON_BY_KIND: Record<string, { label: string; bg: string; fg: string }> = 
   csv: { label: "CSV", bg: "#dcfce7", fg: "#16a34a" },
   xlsx: { label: "XLS", bg: "#dcfce7", fg: "#16a34a" },
   text: { label: "TXT", bg: "#ede9fe", fg: "#7c3aed" },
+  image: { label: "IMG", bg: "#fce7f3", fg: "#be185d" },
 };
 
 function iconForFile(f: FileRecord): { label: string; bg: string; fg: string } {
@@ -102,6 +146,12 @@ export default function OntologyBuilder() {
   const [info, setInfo] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<number | null>(null);
 
+  // ---- ingest-based concept preview ----
+  const [ingestProposal, setIngestProposal] = useState<OntologyProposal | null>(null);
+  const [ingestDecisions, setIngestDecisions] = useState<Record<string, DecisionAction>>({});
+  const [applyBusy, setApplyBusy] = useState(false);
+  const [applyReport, setApplyReport] = useState<ApplyReport | null>(null);
+
   const refresh = async () => {
     try {
       const [o, s, f, sg] = await Promise.all([
@@ -122,6 +172,14 @@ export default function OntologyBuilder() {
 
   useEffect(() => {
     refresh();
+  }, []);
+
+  // Release the tesseract.js WASM worker (and its language data) when the
+  // builder page unmounts, so navigating away frees ~10 MB of memory.
+  useEffect(() => {
+    return () => {
+      void terminateOcrWorker();
+    };
   }, []);
 
   const handleGenerate = async () => {
@@ -162,28 +220,176 @@ export default function OntologyBuilder() {
     }
   };
 
+  const extractZip = async (file: File): Promise<File[]> => {
+    const zip = await JSZip.loadAsync(await file.arrayBuffer());
+    const out: File[] = [];
+    const entries = Object.values(zip.files);
+    for (const entry of entries) {
+      if (entry.dir) continue;
+      if (SKIP_IN_ZIP(entry.name)) continue;
+      const blob = await entry.async("blob");
+      const name = entry.name.split("/").pop() || entry.name;
+      out.push(new File([blob], name, { type: blob.type }));
+    }
+    return out;
+  };
+
+  const expandZips = async (input: File[]): Promise<File[]> => {
+    const queue = [...input];
+    const flat: File[] = [];
+    while (queue.length) {
+      const f = queue.shift()!;
+      const fext = (f.name.split(".").pop() ?? "").toLowerCase();
+      if (fext === "zip") {
+        queue.push(...(await extractZip(f)));
+      } else {
+        flat.push(f);
+      }
+    }
+    return flat;
+  };
+
+  /** Run `/ingest/analyze` on each file (sequentially), merge the proposals
+   * and seed default decisions. The resulting `ingestProposal` powers the
+   * inline `<ReviewPanel>` and a follow-up `/ingest/apply` call. */
+  const analyzeManyAndPreview = async (
+    files: File[],
+    sourceLabel: string,
+  ): Promise<void> => {
+    if (files.length === 0) {
+      setInfo(`${sourceLabel}: no ingestible files found.`);
+      return;
+    }
+    const parts: ProposalPart[] = [];
+    const failures: string[] = [];
+    const willOcr = files.some(needsPreprocessing);
+    if (willOcr) {
+      setInfo(
+        `${sourceLabel}: preparing ${files.length} file(s) — OCR may take a moment on first run while language data is downloaded…`,
+      );
+    }
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
+      try {
+        const prepared = await prepareForIngest(f, {
+          onProgress: (p) =>
+            setInfo(
+              `Analyzing ${i + 1}/${files.length} (${f.name}): ${p.status}`,
+            ),
+        });
+        setInfo(`Analyzing ${i + 1}/${files.length}: ${f.name}…`);
+        const proposal = await analyzeIngest({ file: prepared });
+        parts.push({ file: f.name, proposal });
+      } catch (e) {
+        failures.push(`${f.name}: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+    if (parts.length === 0) {
+      setError(
+        failures.length > 0
+          ? failures.slice(0, 3).join(" | ")
+          : `${sourceLabel}: nothing could be analyzed.`,
+      );
+      setInfo(null);
+      return;
+    }
+    const merged = mergeProposals(parts);
+    const decisions: Record<string, DecisionAction> = {};
+    const items: { client_ref: string; conflict?: typeof merged.concepts[number]["conflict"] }[] = [
+      ...merged.concept_types,
+      ...merged.relation_types,
+      ...merged.concepts,
+      ...merged.relations,
+      ...merged.rules,
+      ...merged.actions,
+    ];
+    for (const it of items) decisions[it.client_ref] = defaultDecisionFor(it.conflict);
+    setIngestProposal(merged);
+    setIngestDecisions(decisions);
+    setApplyReport(null);
+    const tail = failures.length ? ` · ${failures.length} failed` : "";
+    setInfo(
+      `${sourceLabel}: previewed ${merged.concepts.length} concept(s) and ${merged.relations.length} relation(s) from ${parts.length}/${files.length} file(s)${tail}. Review below, then click Apply.`,
+    );
+    if (failures.length) setError(failures.slice(0, 3).join(" | "));
+  };
+
   const handleUpload = async (file: File) => {
     setBusy("upload");
     setError(null);
     setInfo(null);
     try {
       const ext = (file.name.split(".").pop() ?? "").toLowerCase();
-      const kind = KIND_BY_EXT[ext] ?? "text";
-      const needsCt = ["csv", "xlsx", "text"].includes(kind);
-      const conceptType = needsCt
-        ? (window.prompt(`Concept type for ${file.name}?`, "Document") ?? "").trim()
-        : undefined;
-      if (needsCt && !conceptType) {
-        setBusy("idle");
-        return;
-      }
-      const res = await upload(file, { kind, conceptType: conceptType || undefined });
-      setInfo(`Processed ${file.name} — ${res.ingested.concepts} concepts, ${res.ingested.relations} relations.`);
-      await refresh();
+      const inputs = ext === "zip" ? await expandZips([file]) : [file];
+      await analyzeManyAndPreview(
+        inputs,
+        ext === "zip" ? `Archive ${file.name}` : file.name,
+      );
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy("idle");
+    }
+  };
+
+  const handleFolder = async (fileList: FileList | null) => {
+    if (!fileList || fileList.length === 0) return;
+    setBusy("upload");
+    setError(null);
+    setInfo(null);
+    try {
+      const all: File[] = [];
+      for (let i = 0; i < fileList.length; i++) {
+        const f = fileList[i];
+        const rel = (f as File & { webkitRelativePath?: string }).webkitRelativePath ?? f.name;
+        if (SKIP_IN_ZIP(rel)) continue;
+        const ext = (f.name.split(".").pop() ?? "").toLowerCase();
+        if (!(ext in KIND_BY_EXT) && ext !== "zip") continue;
+        all.push(f);
+      }
+      const rootName =
+        ((fileList[0] as File & { webkitRelativePath?: string }).webkitRelativePath ?? "")
+          .split("/")[0] || "folder";
+      setInfo(`Scanning ${rootName} (${all.length} candidate file(s))…`);
+      const flat = await expandZips(all);
+      await analyzeManyAndPreview(flat, `Folder ${rootName}`);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy("idle");
+    }
+  };
+
+  const cancelIngestProposal = () => {
+    setIngestProposal(null);
+    setIngestDecisions({});
+    setInfo(null);
+  };
+
+  const applyIngestProposal = async () => {
+    if (!ingestProposal) return;
+    setApplyBusy(true);
+    setError(null);
+    try {
+      const decisions: ApplyDecision[] = Object.entries(ingestDecisions).map(
+        ([client_ref, action]) => ({ client_ref, action }),
+      );
+      const report = await applyIngest({
+        proposal: ingestProposal,
+        decisions,
+        defaultAction: "skip",
+      });
+      setApplyReport(report);
+      setIngestProposal(null);
+      setIngestDecisions({});
+      setInfo(
+        `Applied: ${report.created} created, ${report.merged} merged, ${report.skipped} skipped, ${report.failed} failed.`,
+      );
+      await refresh();
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setApplyBusy(false);
     }
   };
 
@@ -224,6 +430,80 @@ export default function OntologyBuilder() {
 
       {error && <div className="error-banner">{error}</div>}
       {info && <div className="success-banner">{info}</div>}
+
+      {ingestProposal && (
+        <Card
+          title={
+            <span>
+              Extracted concepts preview{" "}
+              <span className="info-dot" title="Concepts extracted by the LLM from your documents — review and apply">
+                ⓘ
+              </span>
+            </span>
+          }
+          subtitle={
+            <span className="muted" style={{ fontSize: 12 }}>
+              {ingestProposal.concepts.length} concept(s) ·{" "}
+              {ingestProposal.relations.length} relation(s) ·{" "}
+              {ingestProposal.concept_types.length} new concept type(s)
+            </span>
+          }
+          style={{ marginBottom: 16 }}
+        >
+          <ReviewPanel
+            proposal={ingestProposal}
+            decisions={ingestDecisions}
+            onDecision={(ref, action) =>
+              setIngestDecisions((d) => ({ ...d, [ref]: action }))
+            }
+            onEditConcept={(ref, patch) =>
+              setIngestProposal((p) =>
+                p
+                  ? {
+                      ...p,
+                      concepts: p.concepts.map((c) =>
+                        c.client_ref === ref ? { ...c, ...patch } : c,
+                      ),
+                    }
+                  : p,
+              )
+            }
+            onEditRelation={(ref, patch) =>
+              setIngestProposal((p) =>
+                p
+                  ? {
+                      ...p,
+                      relations: p.relations.map((r) =>
+                        r.client_ref === ref ? { ...r, ...patch } : r,
+                      ),
+                    }
+                  : p,
+              )
+            }
+            onBulkDecision={(action) => {
+              if (!ingestProposal) return;
+              const next: Record<string, DecisionAction> = {};
+              for (const ref of iterRefs(ingestProposal)) next[ref] = action;
+              setIngestDecisions(next);
+            }}
+            onApply={applyIngestProposal}
+            onCancel={cancelIngestProposal}
+            applyDisabled={applyBusy}
+            applyLabel={applyBusy ? "Applying…" : "Apply to graph"}
+            cancelLabel="Discard"
+          />
+        </Card>
+      )}
+
+      {applyReport && !ingestProposal && (
+        <div style={{ marginBottom: 16 }}>
+          <ApplyReportView
+            report={applyReport}
+            onReset={() => setApplyReport(null)}
+            resetLabel="Dismiss"
+          />
+        </div>
+      )}
 
       <div className="builder-grid">
         {/* ---------- LEFT COLUMN ---------- */}
@@ -282,8 +562,30 @@ export default function OntologyBuilder() {
             <Dropzone
               onFile={handleUpload}
               disabled={busy !== "idle"}
-              hint="Supports PDF, DOCX, CSV, JSON (Max 50MB)"
+              hint="Supports ZIP (auto-extracted), PDF, DOC/DOCX, images (PNG/JPG/… auto-OCR), CSV, XLSX, JSON, TXT, MD (Max 50MB)"
             />
+
+            <div className="folder-row">
+              <label className={`folder-btn${busy !== "idle" ? " disabled" : ""}`}>
+                <span aria-hidden>📁</span> Connect Folder
+                <input
+                  type="file"
+                  /* @ts-expect-error non-standard but widely supported */
+                  webkitdirectory=""
+                  directory=""
+                  multiple
+                  style={{ display: "none" }}
+                  disabled={busy !== "idle"}
+                  onChange={(e) => {
+                    handleFolder(e.target.files);
+                    e.target.value = "";
+                  }}
+                />
+              </label>
+              <span className="folder-hint">
+                Pick a folder — every supported file (including nested ZIPs) is extracted and ingested.
+              </span>
+            </div>
 
             {files.length > 0 && (
               <>
@@ -343,7 +645,7 @@ export default function OntologyBuilder() {
             className="graph-card"
           >
             <div className="graph-area">
-              <OntologyGraph subgraph={subgraph} height={460} />
+              <OntologyGraph subgraph={subgraph} proposed={ingestProposal} height={460} />
               {proposed && (
                 <div className="graph-preview-overlay">
                   <div className="muted" style={{ marginBottom: 6, fontSize: 12 }}>
@@ -464,6 +766,20 @@ export default function OntologyBuilder() {
         .btn-generate-split { padding: 12px 0; font-size: 12px; }
 
         /* ---------- Upload Files ---------- */
+        .folder-row {
+          margin-top: 10px;
+          display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+        }
+        .folder-btn {
+          display: inline-flex; align-items: center; gap: 6px;
+          padding: 8px 14px; font-size: 12px; font-weight: 500;
+          background: var(--panel); border: 1px dashed var(--border);
+          border-radius: 8px; cursor: pointer; color: var(--text);
+        }
+        .folder-btn:hover { background: var(--panel-2); border-color: var(--accent); color: var(--accent); }
+        .folder-btn.disabled { opacity: 0.5; cursor: not-allowed; pointer-events: none; }
+        .folder-hint { font-size: 11px; color: var(--muted); }
+
         .upload-section-title { margin: 16px 0 8px; font-size: 12px; font-weight: 600; color: var(--text); }
         .upload-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
         .upload-item {
