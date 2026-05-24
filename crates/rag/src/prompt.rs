@@ -226,4 +226,51 @@ impl<'a> PromptBuilder<'a> {
             description.trim()
         )
     }
+
+    /// System prompt that instructs the LLM to emit a strict JSON object
+    /// describing a single [`ontology_graph::Rule`]. The caller is expected
+    /// to provide `id`, `rule_type`, `applies_to` and `properties` itself —
+    /// the model only fills in the human-authored fields.
+    pub fn rule_generation_system_message() -> &'static str {
+        "You are an ontology rule author. Given a natural-language prompt, \
+         the rule type and the list of concept names this rule will scope \
+         to, emit a single JSON object describing the rule. \
+         Output rules:\n\
+         1. Output ONLY the JSON object — no prose, no markdown fences, no \
+            commentary before or after.\n\
+         2. The JSON must match this schema exactly:\n\
+         {\n  \
+           \"name\": \"<short PascalCase or Title Case identifier, unique per rule_type>\",\n  \
+           \"when\": \"<antecedent / condition expression>\",\n  \
+           \"then\": \"<consequent / conclusion expression>\",\n  \
+           \"description\": \"<one-sentence human-readable summary>\",\n  \
+           \"strict\": <bool>\n\
+         }\n\
+         3. Do NOT include `id`, `rule_type`, `applies_to` or `properties` \
+            — the caller supplies those.\n\
+         4. `when` and `then` should reference the supplied concept names \
+            verbatim when relevant.\n\
+         5. `strict` is `true` for hard constraints / validations and \
+            `false` for soft inferences or suggestions.\n"
+    }
+
+    /// Render the user message for a rule-generation call. Keeps the
+    /// prompt deterministic so callers can cache or replay it.
+    pub fn rule_generation_user_message(
+        prompt: &str,
+        rule_type: &str,
+        applies_to_concept_names: &[String],
+    ) -> String {
+        let concepts = if applies_to_concept_names.is_empty() {
+            "(none)".to_string()
+        } else {
+            applies_to_concept_names.join(", ")
+        };
+        format!(
+            "Rule type: {}\nApplies to concepts: {}\n\nPrompt:\n{}\n\nReturn the JSON rule object now.",
+            rule_type.trim(),
+            concepts,
+            prompt.trim()
+        )
+    }
 }

@@ -67,6 +67,20 @@ impl OntologyGraph {
         f(&mut g)
     }
 
+    /// Remove every concept, relation, rule and action from the graph,
+    /// leaving the ontology schema untouched. The id allocator is reset so
+    /// subsequent inserts start from id 1 again.
+    pub fn clear_instances(&self) {
+        self.concepts.clear();
+        self.rules.clear();
+        self.actions.clear();
+        self.relations.clear();
+        self.name_index.clear();
+        self.out_edges.clear();
+        self.in_edges.clear();
+        self.ids.reset(1);
+    }
+
     // ---------- concepts ----------
 
     /// Insert a concept. Allocates an id if `concept.id == ConceptId(0)`.

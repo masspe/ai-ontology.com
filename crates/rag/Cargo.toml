@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 ontology-graph = { workspace = true }
 ontology-index = { workspace = true }
+ontology-io = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 async-trait = { workspace = true }

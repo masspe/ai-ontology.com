@@ -7,6 +7,7 @@ import Sparkline from "../components/Sparkline";
 import {
   createRule,
   deleteRule,
+  generateRule,
   getOntology,
   getStats,
   listConcepts,
@@ -742,6 +743,10 @@ function RuleModal({ initial, ontology, concepts, onCancel, onSave }: RuleModalP
   const [strict, setStrict] = useState(initial?.strict ?? false);
   const [description, setDescription] = useState(initial?.description ?? "");
   const [appliesTo, setAppliesTo] = useState<number[]>(initial?.applies_to ?? []);
+  const [prompt, setPrompt] = useState("");
+  const [generating, setGenerating] = useState(false);
+  const [genError, setGenError] = useState<string | null>(null);
+  const [showAppliesError, setShowAppliesError] = useState(false);
   const isEdit = initial != null;
 
   // Default rule_type once ontology loads.
@@ -749,9 +754,34 @@ function RuleModal({ initial, ontology, concepts, onCancel, onSave }: RuleModalP
     if (!ruleType && ruleTypes.length > 0) setRuleType(ruleTypes[0]!);
   }, [ruleTypes, ruleType]);
 
+  const canGenerate =
+    appliesTo.length > 0 && ruleType.trim() !== "" && prompt.trim() !== "" && !generating;
+
+  async function onGenerate() {
+    if (!canGenerate) return;
+    setGenError(null);
+    setGenerating(true);
+    try {
+      const out = await generateRule(prompt.trim(), ruleType, appliesTo);
+      setName(out.name);
+      setWhen(out.when);
+      setThen(out.then);
+      setDescription(out.description);
+      setStrict(out.strict);
+    } catch (e) {
+      setGenError((e as Error).message);
+    } finally {
+      setGenerating(false);
+    }
+  }
+
   function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!name.trim() || !ruleType) return;
+    if (appliesTo.length === 0) {
+      setShowAppliesError(true);
+      return;
+    }
     onSave({
       rule_type: ruleType,
       name: name.trim(),
@@ -772,6 +802,36 @@ function RuleModal({ initial, ontology, concepts, onCancel, onSave }: RuleModalP
         onSubmit={submit}
       >
         <h3 className="modal-title">{isEdit ? "Edit Rule" : "Create Rule"}</h3>
+
+        <div className="modal-ai">
+          <div className="modal-ai-title">Generate with AI</div>
+          <textarea
+            value={prompt}
+            onChange={(e) => setPrompt(e.target.value)}
+            rows={2}
+            placeholder="Describe the rule you want to create…"
+          />
+          <div className="modal-ai-row">
+            <button
+              type="button"
+              className="btn-primary"
+              onClick={onGenerate}
+              disabled={!canGenerate}
+            >
+              {generating ? "Generating…" : "Generate"}
+            </button>
+            <small className="muted">
+              {appliesTo.length === 0
+                ? "Select at least one concept under Applies To before generating."
+                : !ruleType
+                  ? "Pick a rule type first."
+                  : !prompt.trim()
+                    ? "Describe the rule to enable generation."
+                    : "Fills in Name, When, Then, Description, Strict."}
+            </small>
+          </div>
+          {genError && <div className="modal-ai-error">{genError}</div>}
+        </div>
 
         <label className="modal-field">
           <span>Rule Type</span>
@@ -818,16 +878,18 @@ function RuleModal({ initial, ontology, concepts, onCancel, onSave }: RuleModalP
         </label>
 
         <label className="modal-field">
-          <span>Applies To (concepts)</span>
+          <span>Applies To (concepts) <span className="modal-req">*</span></span>
           <select
             multiple
             value={appliesTo.map(String)}
-            onChange={(e) =>
-              setAppliesTo(
-                Array.from(e.target.selectedOptions).map((o) => Number(o.value)),
-              )
-            }
+            onChange={(e) => {
+              const next = Array.from(e.target.selectedOptions).map((o) => Number(o.value));
+              setAppliesTo(next);
+              if (next.length > 0) setShowAppliesError(false);
+            }}
             size={Math.min(6, Math.max(3, concepts.length))}
+            required
+            aria-invalid={showAppliesError && appliesTo.length === 0}
           >
             {concepts.map((c) => (
               <option key={c.id} value={c.id}>
@@ -835,7 +897,12 @@ function RuleModal({ initial, ontology, concepts, onCancel, onSave }: RuleModalP
               </option>
             ))}
           </select>
-          <small className="muted">Hold Ctrl/Cmd to multi-select. Empty = global.</small>
+          <small className="muted">
+            Hold Ctrl/Cmd to multi-select. At least one concept is required.
+          </small>
+          {showAppliesError && appliesTo.length === 0 && (
+            <small className="modal-field-error">Select at least one concept.</small>
+          )}
         </label>
 
         <label className="modal-check">
@@ -872,6 +939,17 @@ function RuleModal({ initial, ontology, concepts, onCancel, onSave }: RuleModalP
           .modal-field select[multiple] { padding: 4px; }
           .modal-check { display: flex; align-items: center; gap: 8px; font-size: 13px; }
           .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+          .modal-ai { display: flex; flex-direction: column; gap: 6px;
+            padding: 10px; border: 1px dashed #c4b5fd; background: #faf5ff;
+            border-radius: 8px; }
+          .modal-ai-title { font-weight: 600; font-size: 13px; color: #6d28d9; }
+          .modal-ai textarea { padding: 8px 10px; border: 1px solid #cbd5e1;
+            border-radius: 8px; font: inherit; background: #fff; }
+          .modal-ai-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+          .modal-ai-error { color: #b91c1c; font-size: 12px; background: #fef2f2;
+            border: 1px solid #fecaca; padding: 6px 8px; border-radius: 6px; }
+          .modal-req { color: #dc2626; }
+          .modal-field-error { color: #b91c1c; }
         `}</style>
       </form>
     </div>

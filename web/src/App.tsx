@@ -6,6 +6,7 @@ import Layout from "./layout/Layout";
 import Dashboard from "./pages/Dashboard";
 import OntologyBuilder from "./pages/OntologyBuilder";
 import Files from "./pages/Files";
+import IngestWizard from "./pages/IngestWizard";
 import GraphView from "./pages/GraphView";
 import Concepts from "./pages/Concepts";
 import Rules from "./pages/Rules";
@@ -35,6 +36,7 @@ export default function App() {
             <Route index element={<Dashboard />} />
             <Route path="builder" element={<OntologyBuilder />} />
             <Route path="files" element={<Files />} />
+            <Route path="ingest" element={<IngestWizard />} />
             <Route path="graph" element={<GraphView />} />
             <Route path="concepts" element={<Concepts />} />
             <Route path="rules" element={<Rules />} />

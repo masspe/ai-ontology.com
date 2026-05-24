@@ -209,6 +209,7 @@ label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px
   padding: 0;
 }
 .icon-btn:hover { background: var(--panel-2); color: var(--text); }
+.icon-btn-danger:hover { background: var(--danger-soft); color: var(--danger); }
 
 .avatar {
   width: 32px; height: 32px; border-radius: 50%;

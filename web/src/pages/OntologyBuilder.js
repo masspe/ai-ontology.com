@@ -2,10 +2,16 @@ import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-run
 // SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Winven-Commercial
 // Copyright (C) 2026 Winven AI Sarl
 import { useEffect, useState } from "react";
+import JSZip from "jszip";
 import Card from "../components/Card";
 import Dropzone from "../components/Dropzone";
 import OntologyGraph from "../components/OntologyGraph";
-import { deleteFile, exportGraphUrl, generateOntology, getFiles, getOntology, getStats, getSubgraph, replaceOntology, upload, } from "../api";
+import { ApplyReportView, ReviewPanel, defaultDecisionFor, } from "../components/IngestReview";
+import { analyzeIngest, applyIngest } from "../lib/ingestApi";
+import { mergeProposals } from "../lib/mergeProposals";
+import { needsPreprocessing, prepareForIngest, terminateOcrWorker, } from "../lib/extractText";
+import { iterRefs } from "../lib/proposalTypes";
+import { deleteFile, exportGraphUrl, generateOntology, getFiles, getOntology, getStats, getSubgraph, replaceOntology, } from "../api";
 const MAX_DESC = 4000;
 const EXAMPLES = [
     "A contract management system tracking parties, agreements, clauses, obligations and renewal dates.",
@@ -23,6 +29,32 @@ const KIND_BY_EXT = {
     md: "text",
     pdf: "text",
     docx: "text",
+    doc: "text",
+    rtf: "text",
+    html: "text",
+    htm: "text",
+    xml: "text",
+    yaml: "text",
+    yml: "text",
+    // Images (OCR'd client-side before /ingest/analyze).
+    png: "image",
+    jpg: "image",
+    jpeg: "image",
+    webp: "image",
+    bmp: "image",
+    gif: "image",
+    tif: "image",
+    tiff: "image",
+};
+const SKIP_IN_ZIP = (name) => {
+    const base = name.split("/").pop() ?? name;
+    if (!base || base.startsWith("."))
+        return true;
+    if (name.includes("__MACOSX/"))
+        return true;
+    if (base === "Thumbs.db" || base === ".DS_Store")
+        return true;
+    return false;
 };
 const ICON_BY_KIND = {
     ontology: { label: "{ }", bg: "#fef3c7", fg: "#d97706" },
@@ -31,6 +63,7 @@ const ICON_BY_KIND = {
     csv: { label: "CSV", bg: "#dcfce7", fg: "#16a34a" },
     xlsx: { label: "XLS", bg: "#dcfce7", fg: "#16a34a" },
     text: { label: "TXT", bg: "#ede9fe", fg: "#7c3aed" },
+    image: { label: "IMG", bg: "#fce7f3", fg: "#be185d" },
 };
 function iconForFile(f) {
     const ext = (f.name.split(".").pop() ?? "").toLowerCase();
@@ -84,6 +117,11 @@ export default function OntologyBuilder() {
     const [error, setError] = useState(null);
     const [info, setInfo] = useState(null);
     const [lastUpdated, setLastUpdated] = useState(null);
+    // ---- ingest-based concept preview ----
+    const [ingestProposal, setIngestProposal] = useState(null);
+    const [ingestDecisions, setIngestDecisions] = useState({});
+    const [applyBusy, setApplyBusy] = useState(false);
+    const [applyReport, setApplyReport] = useState(null);
     const refresh = async () => {
         try {
             const [o, s, f, sg] = await Promise.all([
@@ -104,6 +142,13 @@ export default function OntologyBuilder() {
     };
     useEffect(() => {
         refresh();
+    }, []);
+    // Release the tesseract.js WASM worker (and its language data) when the
+    // builder page unmounts, so navigating away frees ~10 MB of memory.
+    useEffect(() => {
+        return () => {
+            void terminateOcrWorker();
+        };
     }, []);
     const handleGenerate = async () => {
         if (!description.trim() && files.length === 0)
@@ -145,30 +190,166 @@ export default function OntologyBuilder() {
             setBusy("idle");
         }
     };
+    const extractZip = async (file) => {
+        const zip = await JSZip.loadAsync(await file.arrayBuffer());
+        const out = [];
+        const entries = Object.values(zip.files);
+        for (const entry of entries) {
+            if (entry.dir)
+                continue;
+            if (SKIP_IN_ZIP(entry.name))
+                continue;
+            const blob = await entry.async("blob");
+            const name = entry.name.split("/").pop() || entry.name;
+            out.push(new File([blob], name, { type: blob.type }));
+        }
+        return out;
+    };
+    const expandZips = async (input) => {
+        const queue = [...input];
+        const flat = [];
+        while (queue.length) {
+            const f = queue.shift();
+            const fext = (f.name.split(".").pop() ?? "").toLowerCase();
+            if (fext === "zip") {
+                queue.push(...(await extractZip(f)));
+            }
+            else {
+                flat.push(f);
+            }
+        }
+        return flat;
+    };
+    /** Run `/ingest/analyze` on each file (sequentially), merge the proposals
+     * and seed default decisions. The resulting `ingestProposal` powers the
+     * inline `<ReviewPanel>` and a follow-up `/ingest/apply` call. */
+    const analyzeManyAndPreview = async (files, sourceLabel) => {
+        if (files.length === 0) {
+            setInfo(`${sourceLabel}: no ingestible files found.`);
+            return;
+        }
+        const parts = [];
+        const failures = [];
+        const willOcr = files.some(needsPreprocessing);
+        if (willOcr) {
+            setInfo(`${sourceLabel}: preparing ${files.length} file(s) — OCR may take a moment on first run while language data is downloaded…`);
+        }
+        for (let i = 0; i < files.length; i++) {
+            const f = files[i];
+            try {
+                const prepared = await prepareForIngest(f, {
+                    onProgress: (p) => setInfo(`Analyzing ${i + 1}/${files.length} (${f.name}): ${p.status}`),
+                });
+                setInfo(`Analyzing ${i + 1}/${files.length}: ${f.name}…`);
+                const proposal = await analyzeIngest({ file: prepared });
+                parts.push({ file: f.name, proposal });
+            }
+            catch (e) {
+                failures.push(`${f.name}: ${e instanceof Error ? e.message : String(e)}`);
+            }
+        }
+        if (parts.length === 0) {
+            setError(failures.length > 0
+                ? failures.slice(0, 3).join(" | ")
+                : `${sourceLabel}: nothing could be analyzed.`);
+            setInfo(null);
+            return;
+        }
+        const merged = mergeProposals(parts);
+        const decisions = {};
+        const items = [
+            ...merged.concept_types,
+            ...merged.relation_types,
+            ...merged.concepts,
+            ...merged.relations,
+            ...merged.rules,
+            ...merged.actions,
+        ];
+        for (const it of items)
+            decisions[it.client_ref] = defaultDecisionFor(it.conflict);
+        setIngestProposal(merged);
+        setIngestDecisions(decisions);
+        setApplyReport(null);
+        const tail = failures.length ? ` · ${failures.length} failed` : "";
+        setInfo(`${sourceLabel}: previewed ${merged.concepts.length} concept(s) and ${merged.relations.length} relation(s) from ${parts.length}/${files.length} file(s)${tail}. Review below, then click Apply.`);
+        if (failures.length)
+            setError(failures.slice(0, 3).join(" | "));
+    };
     const handleUpload = async (file) => {
         setBusy("upload");
         setError(null);
         setInfo(null);
         try {
             const ext = (file.name.split(".").pop() ?? "").toLowerCase();
-            const kind = KIND_BY_EXT[ext] ?? "text";
-            const needsCt = ["csv", "xlsx", "text"].includes(kind);
-            const conceptType = needsCt
-                ? (window.prompt(`Concept type for ${file.name}?`, "Document") ?? "").trim()
-                : undefined;
-            if (needsCt && !conceptType) {
-                setBusy("idle");
-                return;
-            }
-            const res = await upload(file, { kind, conceptType: conceptType || undefined });
-            setInfo(`Processed ${file.name} — ${res.ingested.concepts} concepts, ${res.ingested.relations} relations.`);
-            await refresh();
+            const inputs = ext === "zip" ? await expandZips([file]) : [file];
+            await analyzeManyAndPreview(inputs, ext === "zip" ? `Archive ${file.name}` : file.name);
         }
         catch (e) {
             setError(e instanceof Error ? e.message : String(e));
         }
         finally {
             setBusy("idle");
+        }
+    };
+    const handleFolder = async (fileList) => {
+        if (!fileList || fileList.length === 0)
+            return;
+        setBusy("upload");
+        setError(null);
+        setInfo(null);
+        try {
+            const all = [];
+            for (let i = 0; i < fileList.length; i++) {
+                const f = fileList[i];
+                const rel = f.webkitRelativePath ?? f.name;
+                if (SKIP_IN_ZIP(rel))
+                    continue;
+                const ext = (f.name.split(".").pop() ?? "").toLowerCase();
+                if (!(ext in KIND_BY_EXT) && ext !== "zip")
+                    continue;
+                all.push(f);
+            }
+            const rootName = (fileList[0].webkitRelativePath ?? "")
+                .split("/")[0] || "folder";
+            setInfo(`Scanning ${rootName} (${all.length} candidate file(s))…`);
+            const flat = await expandZips(all);
+            await analyzeManyAndPreview(flat, `Folder ${rootName}`);
+        }
+        catch (e) {
+            setError(e instanceof Error ? e.message : String(e));
+        }
+        finally {
+            setBusy("idle");
+        }
+    };
+    const cancelIngestProposal = () => {
+        setIngestProposal(null);
+        setIngestDecisions({});
+        setInfo(null);
+    };
+    const applyIngestProposal = async () => {
+        if (!ingestProposal)
+            return;
+        setApplyBusy(true);
+        setError(null);
+        try {
+            const decisions = Object.entries(ingestDecisions).map(([client_ref, action]) => ({ client_ref, action }));
+            const report = await applyIngest({
+                proposal: ingestProposal,
+                decisions,
+                defaultAction: "skip",
+            });
+            setApplyReport(report);
+            setIngestProposal(null);
+            setIngestDecisions({});
+            setInfo(`Applied: ${report.created} created, ${report.merged} merged, ${report.skipped} skipped, ${report.failed} failed.`);
+            await refresh();
+        }
+        catch (e) {
+            setError(e instanceof Error ? e.message : String(e));
+        }
+        finally {
+            setApplyBusy(false);
         }
     };
     const handleDeleteFile = async (id) => {
@@ -198,14 +379,36 @@ export default function OntologyBuilder() {
     const conceptTypeCount = ontology ? Object.keys(ontology.concept_types).length : 0;
     const confidence = stats && stats.concepts > 0 ? Math.min(99, 70 + Math.round((stats.relations / Math.max(1, stats.concepts)) * 10)) : 92;
     const confidenceLabel = confidence >= 85 ? "High" : confidence >= 65 ? "Medium" : "Low";
-    return (_jsxs(_Fragment, { children: [_jsx("div", { className: "page-header", children: _jsxs("div", { children: [_jsx("h1", { className: "page-title", children: "Ontology Creation" }), _jsx("p", { className: "page-subtitle", children: "Create an ontology from natural language instructions or from your files." })] }) }), error && _jsx("div", { className: "error-banner", children: error }), info && _jsx("div", { className: "success-banner", children: info }), _jsxs("div", { className: "builder-grid", children: [_jsxs("div", { className: "builder-left", children: [_jsxs(Card, { title: _jsxs("span", { children: ["Describe Your Ontology ", _jsx("span", { className: "info-dot", title: "Plain-English description used by the LLM", children: "\u24D8" })] }), actions: _jsxs("button", { className: "chip-btn", onClick: () => setShowExamples((v) => !v), children: [_jsx("span", { "aria-hidden": true, children: "\u229E" }), " Examples"] }), children: [showExamples && (_jsx("div", { className: "examples-list", children: EXAMPLES.map((ex, i) => (_jsx("button", { className: "example-chip", onClick: () => {
+    return (_jsxs(_Fragment, { children: [_jsx("div", { className: "page-header", children: _jsxs("div", { children: [_jsx("h1", { className: "page-title", children: "Ontology Creation" }), _jsx("p", { className: "page-subtitle", children: "Create an ontology from natural language instructions or from your files." })] }) }), error && _jsx("div", { className: "error-banner", children: error }), info && _jsx("div", { className: "success-banner", children: info }), ingestProposal && (_jsx(Card, { title: _jsxs("span", { children: ["Extracted concepts preview", " ", _jsx("span", { className: "info-dot", title: "Concepts extracted by the LLM from your documents \u2014 review and apply", children: "\u24D8" })] }), subtitle: _jsxs("span", { className: "muted", style: { fontSize: 12 }, children: [ingestProposal.concepts.length, " concept(s) \u00B7", " ", ingestProposal.relations.length, " relation(s) \u00B7", " ", ingestProposal.concept_types.length, " new concept type(s)"] }), style: { marginBottom: 16 }, children: _jsx(ReviewPanel, { proposal: ingestProposal, decisions: ingestDecisions, onDecision: (ref, action) => setIngestDecisions((d) => ({ ...d, [ref]: action })), onEditConcept: (ref, patch) => setIngestProposal((p) => p
+                        ? {
+                            ...p,
+                            concepts: p.concepts.map((c) => c.client_ref === ref ? { ...c, ...patch } : c),
+                        }
+                        : p), onEditRelation: (ref, patch) => setIngestProposal((p) => p
+                        ? {
+                            ...p,
+                            relations: p.relations.map((r) => r.client_ref === ref ? { ...r, ...patch } : r),
+                        }
+                        : p), onBulkDecision: (action) => {
+                        if (!ingestProposal)
+                            return;
+                        const next = {};
+                        for (const ref of iterRefs(ingestProposal))
+                            next[ref] = action;
+                        setIngestDecisions(next);
+                    }, onApply: applyIngestProposal, onCancel: cancelIngestProposal, applyDisabled: applyBusy, applyLabel: applyBusy ? "Applying…" : "Apply to graph", cancelLabel: "Discard" }) })), applyReport && !ingestProposal && (_jsx("div", { style: { marginBottom: 16 }, children: _jsx(ApplyReportView, { report: applyReport, onReset: () => setApplyReport(null), resetLabel: "Dismiss" }) })), _jsxs("div", { className: "builder-grid", children: [_jsxs("div", { className: "builder-left", children: [_jsxs(Card, { title: _jsxs("span", { children: ["Describe Your Ontology ", _jsx("span", { className: "info-dot", title: "Plain-English description used by the LLM", children: "\u24D8" })] }), actions: _jsxs("button", { className: "chip-btn", onClick: () => setShowExamples((v) => !v), children: [_jsx("span", { "aria-hidden": true, children: "\u229E" }), " Examples"] }), children: [showExamples && (_jsx("div", { className: "examples-list", children: EXAMPLES.map((ex, i) => (_jsx("button", { className: "example-chip", onClick: () => {
                                                 setDescription(ex);
                                                 setShowExamples(false);
-                                            }, children: ex }, i))) })), _jsx("textarea", { className: "desc-textarea", rows: 6, maxLength: MAX_DESC, placeholder: "Describe the ontology structure, entities, relations, and constraints...", value: description, onChange: (e) => setDescription(e.target.value) }), _jsxs("div", { className: "char-counter", children: [description.length, " / ", MAX_DESC] }), _jsxs("div", { className: "generate-row", children: [_jsxs("button", { className: "btn-generate", onClick: handleGenerate, disabled: busy !== "idle" || (!description.trim() && files.length === 0), children: [_jsx("span", { "aria-hidden": true, children: "\u2726" }), " ", busy === "generate" ? "Generating…" : "Generate Ontology"] }), _jsx("button", { className: "btn-generate-split", "aria-label": "More options", title: "More options", children: "\u25BE" })] })] }), _jsxs(Card, { title: _jsxs("span", { children: ["Upload Files (Optional) ", _jsx("span", { className: "info-dot", title: "Files are ingested into the graph", children: "\u24D8" })] }), style: { marginTop: 16 }, children: [_jsx(Dropzone, { onFile: handleUpload, disabled: busy !== "idle", hint: "Supports PDF, DOCX, CSV, JSON (Max 50MB)" }), files.length > 0 && (_jsxs(_Fragment, { children: [_jsx("div", { className: "upload-section-title", children: "Uploaded Files" }), _jsx("ul", { className: "upload-list", children: files.slice(0, 8).map((f) => {
+                                            }, children: ex }, i))) })), _jsx("textarea", { className: "desc-textarea", rows: 6, maxLength: MAX_DESC, placeholder: "Describe the ontology structure, entities, relations, and constraints...", value: description, onChange: (e) => setDescription(e.target.value) }), _jsxs("div", { className: "char-counter", children: [description.length, " / ", MAX_DESC] }), _jsxs("div", { className: "generate-row", children: [_jsxs("button", { className: "btn-generate", onClick: handleGenerate, disabled: busy !== "idle" || (!description.trim() && files.length === 0), children: [_jsx("span", { "aria-hidden": true, children: "\u2726" }), " ", busy === "generate" ? "Generating…" : "Generate Ontology"] }), _jsx("button", { className: "btn-generate-split", "aria-label": "More options", title: "More options", children: "\u25BE" })] })] }), _jsxs(Card, { title: _jsxs("span", { children: ["Upload Files (Optional) ", _jsx("span", { className: "info-dot", title: "Files are ingested into the graph", children: "\u24D8" })] }), style: { marginTop: 16 }, children: [_jsx(Dropzone, { onFile: handleUpload, disabled: busy !== "idle", hint: "Supports ZIP (auto-extracted), PDF, DOC/DOCX, images (PNG/JPG/\u2026 auto-OCR), CSV, XLSX, JSON, TXT, MD (Max 50MB)" }), _jsxs("div", { className: "folder-row", children: [_jsxs("label", { className: `folder-btn${busy !== "idle" ? " disabled" : ""}`, children: [_jsx("span", { "aria-hidden": true, children: "\uD83D\uDCC1" }), " Connect Folder", _jsx("input", { type: "file", 
+                                                        /* @ts-expect-error non-standard but widely supported */
+                                                        webkitdirectory: "", directory: "", multiple: true, style: { display: "none" }, disabled: busy !== "idle", onChange: (e) => {
+                                                            handleFolder(e.target.files);
+                                                            e.target.value = "";
+                                                        } })] }), _jsx("span", { className: "folder-hint", children: "Pick a folder \u2014 every supported file (including nested ZIPs) is extracted and ingested." })] }), files.length > 0 && (_jsxs(_Fragment, { children: [_jsx("div", { className: "upload-section-title", children: "Uploaded Files" }), _jsx("ul", { className: "upload-list", children: files.slice(0, 8).map((f) => {
                                                     const ic = iconForFile(f);
                                                     const processed = f.concepts > 0 || f.relations > 0;
                                                     return (_jsxs("li", { className: "upload-item", children: [_jsx("span", { className: "file-icon", style: { background: ic.bg, color: ic.fg }, children: ic.label }), _jsxs("div", { className: "file-meta", children: [_jsx("div", { className: "file-name", title: f.name, children: f.name }), _jsxs("div", { className: "file-sub", children: [fmtBytes(f.size), " \u00B7 ", f.kind.toUpperCase()] })] }), _jsx("span", { className: `status-pill ${processed ? "ok" : "warn"}`, children: processed ? "Processed" : "Analyzed" }), _jsx("span", { className: `status-check ${processed ? "ok" : "warn"}`, "aria-hidden": true, children: processed ? "✓" : "ⓘ" }), _jsx("button", { className: "kebab-btn", title: "Remove", onClick: () => handleDeleteFile(f.id), children: "\u22EE" })] }, f.id));
-                                                }) })] })), _jsxs("div", { className: "upload-actions", children: [_jsxs("button", { className: "action-btn", onClick: refresh, disabled: busy !== "idle", children: [_jsx("span", { "aria-hidden": true, children: "\uD83D\uDD0D" }), " Analyze Files"] }), _jsxs("button", { className: "action-btn", onClick: refresh, disabled: busy !== "idle", children: [_jsx("span", { "aria-hidden": true, children: "\u21C4" }), " Merge Sources"] }), _jsxs("button", { className: "action-btn danger", onClick: clearAll, disabled: busy !== "idle" || files.length === 0, children: [_jsx("span", { "aria-hidden": true, children: "\uD83D\uDDD1" }), " Clear All"] })] })] })] }), _jsxs("div", { className: "builder-right", children: [_jsx(Card, { title: _jsxs("span", { children: ["Ontology Graph ", _jsx("span", { className: "info-dot", title: "Live view of the current ontology", children: "\u24D8" })] }), actions: _jsxs("div", { className: "graph-toolbar", children: [_jsxs("button", { className: "chip-btn", children: [_jsx("span", { "aria-hidden": true, children: "\u21F5" }), " Layout ", _jsx("span", { "aria-hidden": true, children: "\u25BE" })] }), _jsx("button", { className: "icon-square", title: "Zoom in", children: "\uFF0B" }), _jsx("button", { className: "icon-square", title: "Zoom out", children: "\uFF0D" }), _jsx("button", { className: "icon-square", title: "Fit", children: "\u26F6" }), _jsx("button", { className: "icon-square", title: "Fullscreen", children: "\u26F6" })] }), className: "graph-card", children: _jsxs("div", { className: "graph-area", children: [_jsx(OntologyGraph, { subgraph: subgraph, height: 460 }), proposed && (_jsxs("div", { className: "graph-preview-overlay", children: [_jsxs("div", { className: "muted", style: { marginBottom: 6, fontSize: 12 }, children: ["Proposed schema \u00B7 click ", _jsx("strong", { children: "Save Ontology" }), " to apply"] }), _jsx("pre", { className: "json-view", style: { maxHeight: 360 }, children: JSON.stringify(proposed, null, 2) })] }))] }) }), _jsx(Card, { title: _jsxs("span", { children: ["Ontology Insights ", _jsx("span", { className: "info-dot", title: "Counts derived from the live graph", children: "\u24D8" })] }), subtitle: _jsxs("span", { className: "insights-sub", children: ["Last updated: ", lastUpdated ? fmtAgo(lastUpdated) : "—", _jsx("button", { className: "link-btn-sm", onClick: refresh, title: "Refresh", children: "\u21BB" })] }), actions: _jsxs("button", { className: "link-btn", children: ["View Details ", _jsx("span", { "aria-hidden": true, children: "\u203A" })] }), style: { marginTop: 16 }, children: _jsxs("div", { className: "insights-grid", children: [_jsx(InsightTile, { icon: "\uD83D\uDC65", label: "Entities", value: stats?.concepts ?? 0, delta: stats?.deltas.concepts_pct, color: "#dbeafe", iconColor: "#2563eb" }), _jsx(InsightTile, { icon: "\u232C", label: "Relations", value: stats?.relations ?? 0, delta: stats?.deltas.relations_pct, color: "#ede9fe", iconColor: "#7c3aed" }), _jsx(InsightTile, { icon: "\u25A6", label: "Classes", value: conceptTypeCount, delta: stats?.deltas.concept_types_pct, color: "#dcfce7", iconColor: "#16a34a" }), _jsx(InsightTile, { icon: "\u2713", label: "Confidence", value: `${confidence}%`, hint: confidenceLabel, color: "#fef3c7", iconColor: "#d97706" })] }) })] })] }), _jsxs("div", { className: "builder-footer", children: [_jsxs("a", { className: "footer-btn", href: exportGraphUrl("jsonl"), children: [_jsx("span", { "aria-hidden": true, children: "\u2913" }), " Export ", _jsx("span", { "aria-hidden": true, children: "\u25BE" })] }), _jsxs("button", { className: "footer-btn primary", onClick: handleSave, disabled: !proposed || busy !== "idle", children: [_jsx("span", { "aria-hidden": true, children: "\uD83D\uDCBE" }), " Save Ontology"] })] }), _jsx("style", { children: `
+                                                }) })] })), _jsxs("div", { className: "upload-actions", children: [_jsxs("button", { className: "action-btn", onClick: refresh, disabled: busy !== "idle", children: [_jsx("span", { "aria-hidden": true, children: "\uD83D\uDD0D" }), " Analyze Files"] }), _jsxs("button", { className: "action-btn", onClick: refresh, disabled: busy !== "idle", children: [_jsx("span", { "aria-hidden": true, children: "\u21C4" }), " Merge Sources"] }), _jsxs("button", { className: "action-btn danger", onClick: clearAll, disabled: busy !== "idle" || files.length === 0, children: [_jsx("span", { "aria-hidden": true, children: "\uD83D\uDDD1" }), " Clear All"] })] })] })] }), _jsxs("div", { className: "builder-right", children: [_jsx(Card, { title: _jsxs("span", { children: ["Ontology Graph ", _jsx("span", { className: "info-dot", title: "Live view of the current ontology", children: "\u24D8" })] }), actions: _jsxs("div", { className: "graph-toolbar", children: [_jsxs("button", { className: "chip-btn", children: [_jsx("span", { "aria-hidden": true, children: "\u21F5" }), " Layout ", _jsx("span", { "aria-hidden": true, children: "\u25BE" })] }), _jsx("button", { className: "icon-square", title: "Zoom in", children: "\uFF0B" }), _jsx("button", { className: "icon-square", title: "Zoom out", children: "\uFF0D" }), _jsx("button", { className: "icon-square", title: "Fit", children: "\u26F6" }), _jsx("button", { className: "icon-square", title: "Fullscreen", children: "\u26F6" })] }), className: "graph-card", children: _jsxs("div", { className: "graph-area", children: [_jsx(OntologyGraph, { subgraph: subgraph, proposed: ingestProposal, height: 460 }), proposed && (_jsxs("div", { className: "graph-preview-overlay", children: [_jsxs("div", { className: "muted", style: { marginBottom: 6, fontSize: 12 }, children: ["Proposed schema \u00B7 click ", _jsx("strong", { children: "Save Ontology" }), " to apply"] }), _jsx("pre", { className: "json-view", style: { maxHeight: 360 }, children: JSON.stringify(proposed, null, 2) })] }))] }) }), _jsx(Card, { title: _jsxs("span", { children: ["Ontology Insights ", _jsx("span", { className: "info-dot", title: "Counts derived from the live graph", children: "\u24D8" })] }), subtitle: _jsxs("span", { className: "insights-sub", children: ["Last updated: ", lastUpdated ? fmtAgo(lastUpdated) : "—", _jsx("button", { className: "link-btn-sm", onClick: refresh, title: "Refresh", children: "\u21BB" })] }), actions: _jsxs("button", { className: "link-btn", children: ["View Details ", _jsx("span", { "aria-hidden": true, children: "\u203A" })] }), style: { marginTop: 16 }, children: _jsxs("div", { className: "insights-grid", children: [_jsx(InsightTile, { icon: "\uD83D\uDC65", label: "Entities", value: stats?.concepts ?? 0, delta: stats?.deltas.concepts_pct, color: "#dbeafe", iconColor: "#2563eb" }), _jsx(InsightTile, { icon: "\u232C", label: "Relations", value: stats?.relations ?? 0, delta: stats?.deltas.relations_pct, color: "#ede9fe", iconColor: "#7c3aed" }), _jsx(InsightTile, { icon: "\u25A6", label: "Classes", value: conceptTypeCount, delta: stats?.deltas.concept_types_pct, color: "#dcfce7", iconColor: "#16a34a" }), _jsx(InsightTile, { icon: "\u2713", label: "Confidence", value: `${confidence}%`, hint: confidenceLabel, color: "#fef3c7", iconColor: "#d97706" })] }) })] })] }), _jsxs("div", { className: "builder-footer", children: [_jsxs("a", { className: "footer-btn", href: exportGraphUrl("jsonl"), children: [_jsx("span", { "aria-hidden": true, children: "\u2913" }), " Export ", _jsx("span", { "aria-hidden": true, children: "\u25BE" })] }), _jsxs("button", { className: "footer-btn primary", onClick: handleSave, disabled: !proposed || busy !== "idle", children: [_jsx("span", { "aria-hidden": true, children: "\uD83D\uDCBE" }), " Save Ontology"] })] }), _jsx("style", { children: `
         .builder-grid {
           display: grid;
           grid-template-columns: minmax(0, 460px) minmax(0, 1fr);
@@ -281,6 +484,20 @@ export default function OntologyBuilder() {
         .btn-generate-split { padding: 12px 0; font-size: 12px; }
 
         /* ---------- Upload Files ---------- */
+        .folder-row {
+          margin-top: 10px;
+          display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+        }
+        .folder-btn {
+          display: inline-flex; align-items: center; gap: 6px;
+          padding: 8px 14px; font-size: 12px; font-weight: 500;
+          background: var(--panel); border: 1px dashed var(--border);
+          border-radius: 8px; cursor: pointer; color: var(--text);
+        }
+        .folder-btn:hover { background: var(--panel-2); border-color: var(--accent); color: var(--accent); }
+        .folder-btn.disabled { opacity: 0.5; cursor: not-allowed; pointer-events: none; }
+        .folder-hint { font-size: 11px; color: var(--muted); }
+
         .upload-section-title { margin: 16px 0 8px; font-size: 12px; font-weight: 600; color: var(--text); }
         .upload-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
         .upload-item {

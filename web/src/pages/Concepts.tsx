@@ -10,6 +10,7 @@ import {
   createRelation,
   deleteConcept,
   deleteRelation,
+  generateOntology,
   getOntology,
   getStats,
   getStatsHistory,
@@ -202,6 +203,15 @@ const Icon = {
       <path d="M12 15V3" />
     </svg>
   ),
+  trash: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 6h18" />
+      <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+      <path d="M10 11v6" />
+      <path d="M14 11v6" />
+    </svg>
+  ),
 };
 
 // ---------------------------------------------------------------------------
@@ -329,6 +339,7 @@ export default function Concepts() {
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
 
   // ---- Debounce search ----
   useEffect(() => {
@@ -464,26 +475,29 @@ export default function Concepts() {
   }, [debouncedSearch, typeFilter, statusFilter, sort, page]);
 
   // ---- Actions ----
-  const handleCreate = async () => {
+  const openCreate = () => {
     const types = ontology ? Object.keys(ontology.concept_types) : [];
     if (types.length === 0) {
       setError("No concept types are defined yet. Create one in Ontology Builder first.");
       return;
     }
-    const name = window.prompt("Concept name?")?.trim();
-    if (!name) return;
-    const conceptType = window.prompt(`Concept type? (${types.slice(0, 6).join(", ")}${types.length > 6 ? ", …" : ""})`, types[0])?.trim();
-    if (!conceptType) return;
-    const description = window.prompt("Definition (optional)?")?.trim() ?? "";
+    setError(null);
+    setCreateOpen(true);
+  };
+
+  const handleCreateSubmit = async (data: {
+    name: string;
+    concept_type: string;
+    description: string;
+  }) => {
     setBusy(true);
     setError(null);
     try {
-      await createConcept({ concept_type: conceptType, name, description });
-      setInfo(`Concept "${name}" created.`);
-      // Reload list and sidecar.
+      await createConcept(data);
+      setInfo(`Concept "${data.name}" created.`);
+      setCreateOpen(false);
       setPage(0);
       await Promise.all([refreshSidecar(), refreshRecent()]);
-      // Trigger list reload by toggling debouncedSearch (no-op set).
       setDebouncedSearch((s) => s);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
@@ -630,7 +644,7 @@ export default function Concepts() {
         <Card
           title="Concept Library"
           actions={
-            <button className="btn-primary" onClick={handleCreate} disabled={busy}>
+            <button className="btn-primary" onClick={openCreate} disabled={busy}>
               <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
                 <span style={{ width: 14, height: 14, display: "inline-flex" }}>{Icon.plus}</span>
                 Create Concept
@@ -719,11 +733,12 @@ export default function Concepts() {
                         <span style={{ width: 16, height: 16, display: "inline-flex" }}>{Icon.pencil}</span>
                       </button>
                       <button
-                        className="icon-btn"
-                        title="Delete"
+                        className="icon-btn icon-btn-danger"
+                        title="Delete concept"
+                        aria-label={`Delete concept ${c.name}`}
                         onClick={(e) => { e.stopPropagation(); handleDelete(c); }}
                       >
-                        <span style={{ width: 16, height: 16, display: "inline-flex" }}>{Icon.dots}</span>
+                        <span style={{ width: 16, height: 16, display: "inline-flex" }}>{Icon.trash}</span>
                       </button>
                     </td>
                   </tr>
@@ -776,6 +791,7 @@ export default function Concepts() {
                   concept={selected}
                   domain={conceptDomain(selected, types)}
                   onEdit={() => handleEdit(selected)}
+                  onDelete={() => handleDelete(selected)}
                 />
                 <RelationsPanel
                   concept={selected}
@@ -892,7 +908,189 @@ export default function Concepts() {
           </div>
         </Card>
       </div>
+
+      {createOpen && (
+        <CreateConceptModal
+          typeNames={typeNames}
+          busy={busy}
+          onClose={() => setCreateOpen(false)}
+          onSubmit={handleCreateSubmit}
+        />
+      )}
     </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Create-concept modal — manual form + optional AI generation from a prompt
+// ---------------------------------------------------------------------------
+
+interface CreateConceptModalProps {
+  typeNames: string[];
+  busy: boolean;
+  onClose: () => void;
+  onSubmit: (data: { name: string; concept_type: string; description: string }) => void;
+}
+
+function CreateConceptModal({ typeNames, busy, onClose, onSubmit }: CreateConceptModalProps) {
+  const [name, setName] = useState("");
+  const [conceptType, setConceptType] = useState(typeNames[0] ?? "");
+  const [description, setDescription] = useState("");
+  const [aiPrompt, setAiPrompt] = useState("");
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+
+  const canSubmit = name.trim() && conceptType.trim() && !busy;
+
+  const handleGenerate = async () => {
+    if (!aiPrompt.trim()) return;
+    setAiBusy(true);
+    setAiError(null);
+    try {
+      const { ontology } = await generateOntology(aiPrompt.trim());
+      const firstType = Object.keys(ontology.concept_types)[0];
+      const firstDef = firstType ? ontology.concept_types[firstType] : null;
+      if (firstType) {
+        if (typeNames.includes(firstType)) setConceptType(firstType);
+        if (!name) setName(firstType);
+        if (firstDef?.description && !description) setDescription(firstDef.description);
+      } else {
+        setAiError("AI did not return any concepts. Try a more specific prompt.");
+      }
+    } catch (e) {
+      setAiError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setAiBusy(false);
+    }
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!canSubmit) return;
+    onSubmit({
+      name: name.trim(),
+      concept_type: conceptType.trim(),
+      description: description.trim(),
+    });
+  };
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div
+        className="modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="create-concept-title"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="modal-head">
+          <h3 id="create-concept-title">Create Concept</h3>
+          <button className="modal-close" onClick={onClose} aria-label="Close">×</button>
+        </div>
+
+        <div className="modal-section">
+          <label className="modal-label">Generate with AI from a prompt</label>
+          <textarea
+            className="modal-input"
+            rows={2}
+            placeholder='e.g. "A French software vendor specializing in industrial automation"'
+            value={aiPrompt}
+            onChange={(e) => setAiPrompt(e.target.value)}
+          />
+          <div className="modal-ai-row">
+            <button
+              type="button"
+              className="btn-primary"
+              disabled={aiBusy || !aiPrompt.trim()}
+              onClick={handleGenerate}
+            >
+              {aiBusy ? "Generating…" : "Generate"}
+            </button>
+            {aiError && <span className="modal-ai-error">{aiError}</span>}
+            {!aiError && (
+              <span className="muted" style={{ fontSize: 12 }}>
+                Drafts will populate the fields below — you can edit before saving.
+              </span>
+            )}
+          </div>
+        </div>
+
+        <div className="modal-divider"><span>or fill manually</span></div>
+
+        <form onSubmit={handleSubmit} className="modal-form">
+          <label className="modal-label">
+            Concept name
+            <input
+              className="modal-input"
+              autoFocus
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              required
+            />
+          </label>
+          <label className="modal-label">
+            Concept type
+            <select
+              className="modal-input"
+              value={conceptType}
+              onChange={(e) => setConceptType(e.target.value)}
+              required
+            >
+              {typeNames.map((t) => (
+                <option key={t} value={t}>{t}</option>
+              ))}
+            </select>
+          </label>
+          <label className="modal-label">
+            Definition (optional)
+            <textarea
+              className="modal-input"
+              rows={3}
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+            />
+          </label>
+          <div className="modal-actions">
+            <button type="button" className="btn-ghost" onClick={onClose} disabled={busy}>
+              Cancel
+            </button>
+            <button type="submit" className="btn-primary" disabled={!canSubmit}>
+              {busy ? "Creating…" : "Create"}
+            </button>
+          </div>
+        </form>
+
+        <style>{`
+          .modal-backdrop { position: fixed; inset: 0; background: rgba(15,23,42,0.55);
+            display: flex; align-items: center; justify-content: center; z-index: 1000; }
+          .modal { background: #fff; border-radius: 12px; width: min(560px, 92vw);
+            max-height: 92vh; overflow: auto; padding: 20px 22px;
+            box-shadow: 0 24px 48px rgba(15,23,42,0.25); }
+          .modal-head { display: flex; align-items: center; justify-content: space-between;
+            margin-bottom: 14px; }
+          .modal-head h3 { margin: 0; font-size: 18px; }
+          .modal-close { background: transparent; border: none; font-size: 22px;
+            line-height: 1; cursor: pointer; color: #64748b; padding: 4px 8px; }
+          .modal-close:hover { color: #0f172a; }
+          .modal-section { background: #f8fafc; border: 1px solid #e2e8f0;
+            border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+          .modal-ai-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+          .modal-ai-error { color: #dc2626; font-size: 12px; }
+          .modal-divider { display: flex; align-items: center; gap: 8px;
+            margin: 14px 0 6px; color: #94a3b8; font-size: 12px; text-transform: uppercase;
+            letter-spacing: 0.06em; }
+          .modal-divider::before, .modal-divider::after { content: ""; flex: 1;
+            border-top: 1px solid #e2e8f0; }
+          .modal-form { display: flex; flex-direction: column; gap: 12px; }
+          .modal-label { display: flex; flex-direction: column; gap: 4px;
+            font-size: 13px; color: #334155; font-weight: 500; }
+          .modal-input { padding: 8px 10px; border: 1px solid #cbd5e1;
+            border-radius: 8px; font: inherit; background: #fff; }
+          .modal-input:focus { outline: 2px solid #2563eb33; border-color: #2563eb; }
+          .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+        `}</style>
+      </div>
+    </div>
   );
 }
 
@@ -904,9 +1102,10 @@ interface DetailsProps {
   concept: Concept;
   domain: string;
   onEdit: () => void;
+  onDelete: () => void;
 }
 
-function ConceptDetails({ concept, domain, onEdit }: DetailsProps) {
+function ConceptDetails({ concept, domain, onEdit, onDelete }: DetailsProps) {
   const synonyms = (() => {
     const v = concept.properties?.synonyms;
     if (Array.isArray(v)) return v.map(String);
@@ -977,6 +1176,12 @@ function ConceptDetails({ concept, domain, onEdit }: DetailsProps) {
           <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
             <span style={{ width: 14, height: 14, display: "inline-flex" }}>{Icon.download}</span>
             Export
+          </span>
+        </button>
+        <button className="btn-danger" onClick={onDelete}>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+            <span style={{ width: 14, height: 14, display: "inline-flex" }}>{Icon.trash}</span>
+            Delete
           </span>
         </button>
       </div>

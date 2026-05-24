@@ -317,6 +317,23 @@ export const generateOntology = (description: string) =>
     body: JSON.stringify({ description }),
   });
 
+export const generateRule = (
+  description: string,
+  rule_type: string,
+  applies_to: number[],
+) =>
+  http<{
+    name: string;
+    when: string;
+    then: string;
+    description: string;
+    strict: boolean;
+  }>("/rules/generate", {
+    method: "POST",
+    headers: headers(true),
+    body: JSON.stringify({ description, rule_type, applies_to }),
+  });
+
 export const listConcepts = (params: {
   type?: string;
   q?: string;

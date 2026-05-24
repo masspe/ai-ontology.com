@@ -30,6 +30,9 @@ pub enum RecordKind {
     Action(Action),
     DeleteRule(RuleId),
     DeleteAction(ActionId),
+    /// Wipes all concepts, relations, rules and actions from the graph,
+    /// preserving the ontology schema. Used by the `DELETE /graph` endpoint.
+    Clear,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,6 +108,12 @@ impl LogRecord {
         Self {
             seq: 0,
             kind: RecordKind::DeleteAction(id),
+        }
+    }
+    pub fn clear() -> Self {
+        Self {
+            seq: 0,
+            kind: RecordKind::Clear,
         }
     }
 }

@@ -396,17 +396,41 @@ async fn main() -> Result<()> {
             jwt_audience,
             seed,
         } => {
-            // Optional one-shot seeding. Only runs when the live graph is
-            // empty so persistent stores aren't repopulated on restart.
-            if let Some(seed_dir) = seed {
+            // Resolve a seed directory: explicit --seed wins, otherwise look
+            // for ONTOLOGY_SEED_DIR, then <data>/seed, then ./seed. Seeding
+            // only runs when the live graph is empty so persistent stores
+            // aren't repopulated on restart — replay WAL stays the source of
+            // truth for everything the user did after the first boot.
+            let seed_dir: Option<PathBuf> = seed.or_else(|| {
+                if let Ok(env) = std::env::var("ONTOLOGY_SEED_DIR") {
+                    let p = PathBuf::from(env);
+                    if p.is_dir() {
+                        return Some(p);
+                    }
+                }
+                if let Some(data) = cli.data.as_ref() {
+                    let p = data.join("seed");
+                    if p.is_dir() {
+                        return Some(p);
+                    }
+                }
+                let p = PathBuf::from("seed");
+                if p.is_dir() {
+                    return Some(p);
+                }
+                None
+            });
+
+            if let Some(seed_dir) = seed_dir {
                 if graph.concept_count() == 0 {
+                    tracing::info!(seed = %seed_dir.display(), "auto-seeding empty graph");
                     seed_from_dir(&seed_dir, &graph, store.as_ref()).await?;
                     index.reindex_all();
                 } else {
                     tracing::info!(
                         seed = %seed_dir.display(),
                         concepts = graph.concept_count(),
-                        "skipping --seed: graph already has data"
+                        "skipping seed: graph already has data"
                     );
                 }
             }

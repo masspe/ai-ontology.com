@@ -9,9 +9,9 @@
 use async_trait::async_trait;
 use ontology_graph::{Concept, ConceptId, PropertyValue};
 use std::path::Path;
-use tokio::fs::File;
-use tokio::io::{AsyncBufReadExt, BufReader, Lines};
+use tokio::fs;
 
+use crate::charset::decode_to_utf8;
 use crate::ingest::{IngestError, Source};
 use crate::record::Record;
 
@@ -24,8 +24,12 @@ use crate::record::Record;
 /// quotes use the doubled-quote convention (`""`). Anything beyond that
 /// (record-level escaping, alternate delimiters) is out of scope — wire
 /// up a real CSV crate if you need it.
+///
+/// Encoding is auto-detected (UTF-8 with/without BOM, UTF-16 LE/BE,
+/// Windows-1252, ISO-8859-*) so a CSV exported by Excel-on-Windows
+/// imports cleanly without manual conversion.
 pub struct CsvSource {
-    lines: Lines<BufReader<File>>,
+    lines: std::vec::IntoIter<String>,
     concept_type: String,
     header: Option<Vec<String>>,
     name_col: Option<usize>,
@@ -36,9 +40,14 @@ impl CsvSource {
         path: impl AsRef<Path>,
         concept_type: impl Into<String>,
     ) -> Result<Self, IngestError> {
-        let f = File::open(path.as_ref()).await?;
+        let raw = fs::read(path.as_ref()).await?;
+        let decoded = decode_to_utf8(&raw);
+        // Pre-split into lines so the async `next` keeps the same shape.
+        // CSVs are typically small enough that loading them in memory is
+        // a fair trade for transparent encoding handling.
+        let lines: Vec<String> = decoded.text.lines().map(|s| s.to_string()).collect();
         Ok(Self {
-            lines: BufReader::new(f).lines(),
+            lines: lines.into_iter(),
             concept_type: concept_type.into(),
             header: None,
             name_col: None,
@@ -50,7 +59,7 @@ impl CsvSource {
 impl Source for CsvSource {
     async fn next(&mut self) -> Result<Option<Record>, IngestError> {
         loop {
-            let line = match self.lines.next_line().await? {
+            let line = match self.lines.next() {
                 Some(l) => l,
                 None => return Ok(None),
             };

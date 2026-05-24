@@ -94,6 +94,10 @@ impl IdAllocator {
     pub fn high_water(&self) -> u64 {
         self.next.load(Ordering::Relaxed)
     }
+    /// Reset the allocator so the next allocated id is `start`.
+    pub fn reset(&self, start: u64) {
+        self.next.store(start, Ordering::Release);
+    }
     pub fn observe(&self, value: u64) {
         // Bump the watermark so future allocations don't collide with
         // ids restored from disk.

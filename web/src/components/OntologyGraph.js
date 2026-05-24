@@ -106,16 +106,90 @@ function layout(subgraph, w, h, limit) {
     const types = [...typeIndex.entries()].map(([name, color]) => ({ name, color }));
     return { nodes, edges, width: w, height: h, types };
 }
-export default function OntologyGraph({ subgraph, height = 460, limit = 24, showLegend = true, className, }) {
+export default function OntologyGraph({ subgraph, proposed, height = 460, limit = 24, showLegend = true, className, }) {
     // viewBox is fixed; SVG scales to container width.
     const VBW = 960;
     const VBH = Math.max(280, Math.round((height / 460) * 520));
+    // Merge `subgraph` with the optional `proposed` overlay. Proposed concepts
+    // get negative synthetic ids so they never collide with real ones.
+    const { merged, proposedNodeIds, proposedEdgeKeys } = useMemo(() => {
+        const concepts = subgraph ? [...subgraph.concepts] : [];
+        const relations = subgraph ? [...subgraph.relations] : [];
+        const propNodes = new Set();
+        const propEdges = new Set();
+        if (!proposed) {
+            return {
+                merged: { concepts, relations },
+                proposedNodeIds: propNodes,
+                proposedEdgeKeys: propEdges,
+            };
+        }
+        // Map existing concepts by `Type::Name` (lowercase) for graph-ref lookups.
+        const byKey = new Map();
+        for (const c of concepts) {
+            byKey.set(`${c.concept_type}::${c.name.trim().toLowerCase()}`, c.id);
+        }
+        // Map proposed client_refs → assigned (possibly synthetic) ids.
+        const refToId = new Map();
+        let nextId = -1;
+        for (const pc of proposed.concepts) {
+            const key = `${pc.concept_type}::${pc.name.trim().toLowerCase()}`;
+            const existing = byKey.get(key);
+            if (existing !== undefined) {
+                refToId.set(pc.client_ref, existing);
+                continue;
+            }
+            const id = nextId--;
+            refToId.set(pc.client_ref, id);
+            byKey.set(key, id);
+            propNodes.add(id);
+            concepts.push({
+                id,
+                concept_type: pc.concept_type,
+                name: pc.name,
+                description: pc.description,
+            });
+        }
+        // Resolve a relation ref (client_ref or `Type:Name`) to a concept id.
+        const resolve = (ref) => {
+            if (refToId.has(ref))
+                return refToId.get(ref);
+            // graph-ref form `Type:Name`
+            const colon = ref.indexOf(":");
+            if (colon > 0) {
+                const type = ref.slice(0, colon);
+                const name = ref.slice(colon + 1);
+                return byKey.get(`${type}::${name.trim().toLowerCase()}`);
+            }
+            return undefined;
+        };
+        let nextRelId = -1;
+        for (const pr of proposed.relations) {
+            const src = resolve(pr.source_ref);
+            const tgt = resolve(pr.target_ref);
+            if (src === undefined || tgt === undefined)
+                continue;
+            const id = nextRelId--;
+            relations.push({
+                id,
+                relation_type: pr.relation_type,
+                source: src,
+                target: tgt,
+            });
+            propEdges.add(`${src}->${tgt}::${pr.relation_type}`);
+        }
+        return {
+            merged: { concepts, relations },
+            proposedNodeIds: propNodes,
+            proposedEdgeKeys: propEdges,
+        };
+    }, [subgraph, proposed]);
     const lay = useMemo(() => {
-        if (!subgraph || subgraph.concepts.length === 0) {
+        if (merged.concepts.length === 0) {
             return { nodes: [], edges: [], width: VBW, height: VBH, types: [] };
         }
-        return layout(subgraph, VBW, VBH, limit);
-    }, [subgraph, VBW, VBH, limit]);
+        return layout(merged, VBW, VBH, limit);
+    }, [merged, VBW, VBH, limit]);
     const byId = useMemo(() => {
         const m = new Map();
         for (const n of lay.nodes)
@@ -129,10 +203,12 @@ export default function OntologyGraph({ subgraph, height = 460, limit = 24, show
                                 return null;
                             const mx = (a.x + b.x) / 2;
                             const my = (a.y + b.y) / 2;
-                            return (_jsxs("g", { children: [_jsx("line", { x1: a.x, y1: a.y, x2: b.x, y2: b.y, stroke: "#cbd5e1", strokeWidth: 1.2 }), e.label && (_jsxs("g", { transform: `translate(${mx}, ${my})`, children: [_jsx("rect", { x: -e.label.length * 3 - 6, y: -9, width: e.label.length * 6 + 12, height: 18, rx: 9, fill: "#ede9fe", stroke: "#c4b5fd" }), _jsx("text", { x: 0, y: 4, fontSize: "10", fontWeight: "500", fill: "#6d28d9", textAnchor: "middle", children: ellipsize(e.label, 18) })] }))] }, `e-${i}`));
+                            const isProposed = proposedEdgeKeys.has(`${e.from}->${e.to}::${e.label ?? ""}`);
+                            return (_jsxs("g", { children: [_jsx("line", { x1: a.x, y1: a.y, x2: b.x, y2: b.y, stroke: isProposed ? "#7c3aed" : "#cbd5e1", strokeWidth: 1.2, strokeDasharray: isProposed ? "4 3" : undefined, opacity: isProposed ? 0.85 : 1 }), e.label && (_jsxs("g", { transform: `translate(${mx}, ${my})`, opacity: isProposed ? 0.9 : 1, children: [_jsx("rect", { x: -e.label.length * 3 - 6, y: -9, width: e.label.length * 6 + 12, height: 18, rx: 9, fill: "#ede9fe", stroke: isProposed ? "#7c3aed" : "#c4b5fd", strokeDasharray: isProposed ? "3 2" : undefined }), _jsx("text", { x: 0, y: 4, fontSize: "10", fontWeight: "500", fill: "#6d28d9", textAnchor: "middle", children: ellipsize(e.label, 18) })] }))] }, `e-${i}`));
                         }) }), _jsx("g", { children: lay.nodes.map((n) => {
                             const p = PALETTE[n.color % PALETTE.length];
-                            return (_jsxs("g", { children: [_jsx("rect", { x: n.x - n.w / 2, y: n.y - n.h / 2, width: n.w, height: n.h, rx: n.h / 2, fill: p.fill, stroke: p.stroke, strokeWidth: 1.4 }), _jsx("text", { x: n.x, y: n.y + 4, fontSize: "12", fontWeight: "600", fill: p.text, textAnchor: "middle", children: n.label })] }, `n-${n.id}`));
+                            const isProposed = proposedNodeIds.has(n.id);
+                            return (_jsxs("g", { opacity: isProposed ? 0.85 : 1, children: [_jsx("rect", { x: n.x - n.w / 2, y: n.y - n.h / 2, width: n.w, height: n.h, rx: n.h / 2, fill: p.fill, stroke: p.stroke, strokeWidth: isProposed ? 1.8 : 1.4, strokeDasharray: isProposed ? "5 3" : undefined }), _jsxs("text", { x: n.x, y: n.y + 4, fontSize: "12", fontWeight: "600", fill: p.text, textAnchor: "middle", children: [isProposed ? "+ " : "", n.label] })] }, `n-${n.id}`));
                         }) })] })), showLegend && lay.types.length > 0 && (_jsx("ul", { className: "og-legend", children: lay.types.slice(0, 8).map((t) => {
                     const p = PALETTE[t.color % PALETTE.length];
                     return (_jsxs("li", { children: [_jsx("span", { className: "og-dot", style: { background: p.stroke } }), " ", t.name] }, t.name));
