@@ -4,6 +4,8 @@ import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-run
 import { useEffect, useMemo, useRef, useState } from "react";
 import Card from "../components/Card";
 import Sparkline from "../components/Sparkline";
+// @ts-expect-error JSX module
+import { useConfirm } from "../components/ConfirmDialog.jsx";
 import { deleteFile, exportGraphUrl, getFiles, getOntology, upload, } from "../api";
 const KIND_BY_EXT = {
     json: "ontology",
@@ -119,6 +121,7 @@ function bucketBy(files, buckets = 12) {
 }
 const PAGE_SIZE = 6;
 export default function Files() {
+    const confirm = useConfirm();
     const [files, setFiles] = useState([]);
     const [ontology, setOntology] = useState(null);
     const [kind] = useState("jsonl");
@@ -179,7 +182,7 @@ export default function Files() {
         }
     };
     const onDelete = async (id) => {
-        if (!window.confirm("Remove this file record? (Already ingested data stays in the graph.)"))
+        if (!(await confirm({ title: "Remove file record", message: "Remove this file record? Already ingested data stays in the graph.", confirmLabel: "Remove", danger: true })))
             return;
         try {
             await deleteFile(id);

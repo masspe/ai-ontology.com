@@ -35,6 +35,9 @@ const API_PATHS = [
   "/files",
   "/queries",
   "/settings",
+  "/ingest",
+  "/rules",
+  "/actions",
 ];
 
 export default defineConfig({

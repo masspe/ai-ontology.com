@@ -4,6 +4,10 @@ import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-run
 import { useEffect, useMemo, useState } from "react";
 import Card from "../components/Card";
 import Sparkline from "../components/Sparkline";
+// @ts-expect-error JSX module
+import { useToast } from "../components/Toast.jsx";
+// @ts-expect-error JSX module
+import { useConfirm } from "../components/ConfirmDialog.jsx";
 import { createRule, deleteRule, generateRule, getOntology, getStats, listConcepts, listRules, updateRule, } from "../api";
 function ruleStatus(r) {
     const raw = r.properties?.status?.toLowerCase();
@@ -115,6 +119,8 @@ function Donut({ data }) {
 // Page
 // ---------------------------------------------------------------------------
 export default function Rules() {
+    const toast = useToast();
+    const confirm = useConfirm();
     const [rules, setRules] = useState([]);
     const [stats, setStats] = useState(null);
     const [loading, setLoading] = useState(true);
@@ -225,14 +231,15 @@ export default function Rules() {
     const selected = useMemo(() => rows.find((r) => r.id === selectedId) ?? rows[0] ?? null, [rows, selectedId]);
     const selectedRule = useMemo(() => rules.find((r) => r.id === selectedId) ?? rules[0] ?? null, [rules, selectedId]);
     async function onDelete(id) {
-        if (!confirm("Delete this rule?"))
+        if (!(await confirm({ title: "Delete rule", message: "Delete this rule?", confirmLabel: "Delete", danger: true })))
             return;
         try {
             await deleteRule(id);
             setRules((rs) => rs.filter((r) => r.id !== id));
+            toast.success("Rule deleted.");
         }
         catch (e) {
-            alert("Delete failed: " + e.message);
+            toast.error("Delete failed: " + e.message);
         }
     }
     async function onSaveRule(payload, editingId) {
@@ -257,7 +264,7 @@ export default function Rules() {
             setEditing(null);
         }
         catch (e) {
-            alert("Save failed: " + e.message);
+            toast.error("Save failed: " + e.message);
         }
     }
     const totalRules = stats?.rules ?? rules.length;

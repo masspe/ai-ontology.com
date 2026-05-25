@@ -10,11 +10,30 @@
 
 const ENV_BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "";
 
-/** Resolve the API base URL: localStorage override → vite env → same-origin. */
+const PROVIDER_CONFIG_KEY = "ontology.providerConfig";
+
+/** Best-effort read of the providerConfig store without importing the lib
+ *  (kept here to avoid a circular dependency). Returns `null` on any error. */
+function readProviderConfig(): { ontologyApiUrl?: string; ontologyBearerToken?: string } | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(PROVIDER_CONFIG_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+/** Resolve the API base URL: legacy localStorage override → providerConfig → vite env → same-origin. */
 export function apiBase(): string {
   if (typeof window !== "undefined") {
     const override = window.localStorage.getItem("ontology.apiBase");
     if (override && override.trim()) return override.replace(/\/$/, "");
+    const pc = readProviderConfig();
+    if (pc?.ontologyApiUrl && pc.ontologyApiUrl.trim()) {
+      return pc.ontologyApiUrl.trim().replace(/\/$/, "");
+    }
   }
   return ENV_BASE.replace(/\/$/, "");
 }
@@ -22,14 +41,20 @@ export function apiBase(): string {
 /**
  * Resolve the bearer token. Prefer the JWT minted by the auth-server
  * (`msBE.token`) so the Rust API enforces the same identity. Falls back to
- * the legacy `ontology.apiToken` service token for back-compat.
+ * the legacy `ontology.apiToken` service token, then to the providerConfig
+ * store, for back-compat.
  */
 export function apiToken(): string | null {
   if (typeof window === "undefined") return null;
   const jwt = window.localStorage.getItem("msBE.token");
   if (jwt && jwt.trim()) return jwt;
   const legacy = window.localStorage.getItem("ontology.apiToken");
-  return legacy && legacy.trim() ? legacy : null;
+  if (legacy && legacy.trim()) return legacy;
+  const pc = readProviderConfig();
+  if (pc?.ontologyBearerToken && pc.ontologyBearerToken.trim()) {
+    return pc.ontologyBearerToken.trim();
+  }
+  return null;
 }
 
 // ---- 401 handler -----------------------------------------------------------
@@ -264,6 +289,64 @@ export interface SavedQuery {
   last_run_at?: number | null;
 }
 
+export interface LlmSettings {
+  active_provider: "default" | "openai" | "anthropic" | "infomaniak" | string;
+  openai_api_key_hint: string;
+  openai_base_url: string;
+  openai_model: string;
+  anthropic_api_key_hint: string;
+  anthropic_base_url: string;
+  anthropic_model: string;
+  infomaniak_api_key_hint: string;
+  infomaniak_base_url: string;
+  infomaniak_model: string;
+  temperature: number;
+  max_tokens: number;
+}
+
+export interface LlmSettingsPatch {
+  active_provider?: string;
+  openai_api_key?: string;
+  openai_base_url?: string;
+  openai_model?: string;
+  anthropic_api_key?: string;
+  anthropic_base_url?: string;
+  anthropic_model?: string;
+  infomaniak_api_key?: string;
+  infomaniak_base_url?: string;
+  infomaniak_model?: string;
+  temperature?: number;
+  max_tokens?: number;
+}
+
+export interface OcrSettings {
+  provider: "tesseract" | "google_vision" | string;
+  auto_fallback: boolean;
+  min_text_threshold: number;
+  tesseract_languages: string;
+  google_api_key_hint: string;
+}
+
+export interface OcrSettingsPatch {
+  provider?: string;
+  auto_fallback?: boolean;
+  min_text_threshold?: number;
+  tesseract_languages?: string;
+  google_api_key?: string;
+}
+
+export interface OcrEngineProbe {
+  available: boolean;
+  ocrmypdf_version?: string | null;
+  tesseract_version?: string | null;
+  ghostscript_available: boolean;
+}
+
+export interface OcrStatus {
+  tesseract: OcrEngineProbe;
+  google_vision: { configured: boolean; auth: string };
+}
+
 export interface Settings {
   retrieval: {
     top_k: number;
@@ -274,11 +357,15 @@ export interface Settings {
     theme: string;
     graph_layout: string;
   };
+  llm: LlmSettings;
+  ocr: OcrSettings;
 }
 
 export interface SettingsPatch {
   retrieval?: Partial<Settings["retrieval"]>;
   ui?: Partial<Settings["ui"]>;
+  llm?: LlmSettingsPatch;
+  ocr?: OcrSettingsPatch;
 }
 
 export interface RagAnswer {
@@ -626,7 +713,50 @@ export const deleteQuery = (id: number) =>
 export const runQuery = (id: number) =>
   http<RagAnswer>(`/queries/${id}/run`, { method: "POST", headers: headers() });
 
+// ---- Feedback --------------------------------------------------------------
+
+export type FeedbackKind = "bug" | "error" | "evolution" | "improvement";
+
+export interface Feedback {
+  id: number;
+  created_at: number;
+  kind: FeedbackKind | string;
+  title: string;
+  description: string;
+  screenshot?: string | null;
+  frontend_logs: string;
+  backend_logs: string;
+  user_agent?: string | null;
+  url?: string | null;
+  reporter_email?: string | null;
+}
+
+export interface CreateFeedbackInput {
+  kind: FeedbackKind | string;
+  title: string;
+  description?: string;
+  screenshot?: string | null;
+  frontend_logs?: string;
+  user_agent?: string | null;
+  url?: string | null;
+  reporter_email?: string | null;
+}
+
+export const listFeedbacks = () => http<Feedback[]>("/feedbacks");
+export const createFeedback = (f: CreateFeedbackInput) =>
+  http<Feedback>("/feedbacks", {
+    method: "POST",
+    headers: headers(true),
+    body: JSON.stringify(f),
+  });
+export const deleteFeedback = (id: number) =>
+  http<void>(`/feedbacks/${id}`, { method: "DELETE", headers: headers() });
+
+export const tailServerLogs = (limit = 200) =>
+  http<{ lines: string[] }>(`/logs/tail?limit=${limit}`);
+
 export const getSettings = () => http<Settings>("/settings");
+export const getOcrStatus = () => http<OcrStatus>("/settings/ocr/status");
 export const patchSettings = (patch: SettingsPatch) =>
   http<Settings>("/settings", {
     method: "PATCH",

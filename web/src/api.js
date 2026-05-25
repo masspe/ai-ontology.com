@@ -7,19 +7,40 @@
 // handler so the user is logged out and bounced to /login.
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const ENV_BASE = import.meta.env.VITE_API_BASE ?? "";
-/** Resolve the API base URL: localStorage override → vite env → same-origin. */
+const PROVIDER_CONFIG_KEY = "ontology.providerConfig";
+/** Best-effort read of the providerConfig store without importing the lib
+ *  (kept here to avoid a circular dependency). Returns `null` on any error. */
+function readProviderConfig() {
+    if (typeof window === "undefined")
+        return null;
+    try {
+        const raw = window.localStorage.getItem(PROVIDER_CONFIG_KEY);
+        if (!raw)
+            return null;
+        return JSON.parse(raw);
+    }
+    catch {
+        return null;
+    }
+}
+/** Resolve the API base URL: legacy localStorage override → providerConfig → vite env → same-origin. */
 export function apiBase() {
     if (typeof window !== "undefined") {
         const override = window.localStorage.getItem("ontology.apiBase");
         if (override && override.trim())
             return override.replace(/\/$/, "");
+        const pc = readProviderConfig();
+        if (pc?.ontologyApiUrl && pc.ontologyApiUrl.trim()) {
+            return pc.ontologyApiUrl.trim().replace(/\/$/, "");
+        }
     }
     return ENV_BASE.replace(/\/$/, "");
 }
 /**
  * Resolve the bearer token. Prefer the JWT minted by the auth-server
  * (`msBE.token`) so the Rust API enforces the same identity. Falls back to
- * the legacy `ontology.apiToken` service token for back-compat.
+ * the legacy `ontology.apiToken` service token, then to the providerConfig
+ * store, for back-compat.
  */
 export function apiToken() {
     if (typeof window === "undefined")
@@ -28,7 +49,13 @@ export function apiToken() {
     if (jwt && jwt.trim())
         return jwt;
     const legacy = window.localStorage.getItem("ontology.apiToken");
-    return legacy && legacy.trim() ? legacy : null;
+    if (legacy && legacy.trim())
+        return legacy;
+    const pc = readProviderConfig();
+    if (pc?.ontologyBearerToken && pc.ontologyBearerToken.trim()) {
+        return pc.ontologyBearerToken.trim();
+    }
+    return null;
 }
 // ---- 401 handler -----------------------------------------------------------
 // Mirror the contract from msBE: on 401 we clear auth state and redirect to

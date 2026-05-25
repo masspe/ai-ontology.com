@@ -34,7 +34,7 @@ use axum::{
         sse::{Event, KeepAlive, Sse},
         IntoResponse, Response,
     },
-    routing::{get, post},
+    routing::{delete, get, post},
     Json, Router,
 };
 use futures::stream::StreamExt;
@@ -52,6 +52,7 @@ use ontology_rag::{GeneratedRule, OntologyGenError, RagAnswer, RagPipeline, RagS
 use ontology_storage::{LogRecord, Store};
 use parking_lot::{Mutex as PlMutex, RwLock as PlRwLock};
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 use std::convert::Infallible;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::Arc as StdArc;
@@ -78,6 +79,8 @@ pub struct AppState {
     pub settings: Arc<PlRwLock<Settings>>,
     /// Ring buffer of recent `Stats` samples for sparklines & deltas.
     pub history: Arc<PlRwLock<StatsHistory>>,
+    /// User-submitted feedback (bug reports, suggestions, …). In-memory only.
+    pub feedbacks: Arc<PlRwLock<FeedbackStore>>,
     /// Server bind time — used by `/settings` for "uptime" display.
     pub started_at: SystemTime,
 }
@@ -100,6 +103,7 @@ impl AppState {
             queries: Arc::new(PlRwLock::new(SavedQueryStore::default())),
             settings: Arc::new(PlRwLock::new(Settings::default())),
             history: Arc::new(PlRwLock::new(StatsHistory::default())),
+            feedbacks: Arc::new(PlRwLock::new(FeedbackStore::default())),
             started_at: SystemTime::now(),
         }
     }
@@ -256,6 +260,115 @@ impl SavedQueryStore {
 pub struct Settings {
     pub retrieval: RetrievalDefaults,
     pub ui: UiPrefs,
+    #[serde(default)]
+    pub llm: LlmSettings,
+    #[serde(default)]
+    pub ocr: OcrSettings,
+}
+
+/// OCR engine configuration. The Google Cloud Vision API key is write-only
+/// over the wire; `google_api_key_hint` exposes a masked preview.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OcrSettings {
+    /// `"tesseract" | "google_vision"`.
+    pub provider: String,
+    /// If true, fall back to the other engine when the primary returns
+    /// fewer than `min_text_threshold` characters or fails.
+    pub auto_fallback: bool,
+    /// Minimum number of OCR characters below which the fallback engine is
+    /// triggered.
+    pub min_text_threshold: u32,
+    /// Tesseract language pack expression, e.g. `"fra+deu+eng"`.
+    pub tesseract_languages: String,
+
+    #[serde(skip_serializing)]
+    pub google_api_key: String,
+    pub google_api_key_hint: String,
+}
+
+impl Default for OcrSettings {
+    fn default() -> Self {
+        Self {
+            provider: "tesseract".into(),
+            auto_fallback: true,
+            min_text_threshold: 50,
+            tesseract_languages: "fra+deu+eng".into(),
+            google_api_key: String::new(),
+            google_api_key_hint: String::new(),
+        }
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct OcrSettingsPatch {
+    pub provider: Option<String>,
+    pub auto_fallback: Option<bool>,
+    pub min_text_threshold: Option<u32>,
+    pub tesseract_languages: Option<String>,
+    pub google_api_key: Option<String>,
+}
+
+/// LLM provider configuration. Keys are returned masked over the wire — the
+/// raw `*_api_key` fields are write-only via `PATCH /settings`. The matching
+/// `*_api_key_hint` field exposes only the last 4 chars so the UI can show
+/// "sk-...1XAA" without round-tripping the secret.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmSettings {
+    /// `"default" | "openai" | "anthropic" | "infomaniak"`.
+    pub active_provider: String,
+
+    #[serde(skip_serializing)]
+    pub openai_api_key: String,
+    pub openai_api_key_hint: String,
+    pub openai_base_url: String,
+    pub openai_model: String,
+
+    #[serde(skip_serializing)]
+    pub anthropic_api_key: String,
+    pub anthropic_api_key_hint: String,
+    pub anthropic_base_url: String,
+    pub anthropic_model: String,
+
+    #[serde(skip_serializing)]
+    pub infomaniak_api_key: String,
+    pub infomaniak_api_key_hint: String,
+    pub infomaniak_base_url: String,
+    pub infomaniak_model: String,
+
+    pub temperature: f32,
+    pub max_tokens: u32,
+}
+
+impl Default for LlmSettings {
+    fn default() -> Self {
+        Self {
+            active_provider: "default".into(),
+            openai_api_key: String::new(),
+            openai_api_key_hint: String::new(),
+            openai_base_url: String::new(),
+            openai_model: "gpt-4o".into(),
+            anthropic_api_key: String::new(),
+            anthropic_api_key_hint: String::new(),
+            anthropic_base_url: String::new(),
+            anthropic_model: "claude-sonnet-4-6".into(),
+            infomaniak_api_key: String::new(),
+            infomaniak_api_key_hint: String::new(),
+            infomaniak_base_url: "https://api.infomaniak.com/1/ai".into(),
+            infomaniak_model: String::new(),
+            temperature: 0.3,
+            max_tokens: 1000,
+        }
+    }
+}
+
+fn key_hint(key: &str) -> String {
+    let k = key.trim();
+    if k.is_empty() {
+        return String::new();
+    }
+    let prefix = k.chars().take(3).collect::<String>();
+    let suffix: String = k.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
+    format!("{prefix}...{suffix}")
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -283,6 +396,8 @@ impl Default for Settings {
                 theme: "light".into(),
                 graph_layout: "dagre".into(),
             },
+            llm: LlmSettings::default(),
+            ocr: OcrSettings::default(),
         }
     }
 }
@@ -293,6 +408,24 @@ impl Default for Settings {
 pub struct SettingsPatch {
     pub retrieval: Option<RetrievalDefaultsPatch>,
     pub ui: Option<UiPrefsPatch>,
+    pub llm: Option<LlmSettingsPatch>,
+    pub ocr: Option<OcrSettingsPatch>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct LlmSettingsPatch {
+    pub active_provider: Option<String>,
+    pub openai_api_key: Option<String>,
+    pub openai_base_url: Option<String>,
+    pub openai_model: Option<String>,
+    pub anthropic_api_key: Option<String>,
+    pub anthropic_base_url: Option<String>,
+    pub anthropic_model: Option<String>,
+    pub infomaniak_api_key: Option<String>,
+    pub infomaniak_base_url: Option<String>,
+    pub infomaniak_model: Option<String>,
+    pub temperature: Option<f32>,
+    pub max_tokens: Option<u32>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -375,6 +508,86 @@ pub struct StatsDeltas {
     pub relations_pct: f32,
     pub concept_types_pct: f32,
     pub relation_types_pct: f32,
+}
+
+// ---------------------------------------------------------------------------
+// Feedback (in-memory store)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Feedback {
+    pub id: u64,
+    pub created_at: u64,
+    /// `"bug" | "error" | "evolution" | "improvement"`.
+    pub kind: String,
+    pub title: String,
+    #[serde(default)]
+    pub description: String,
+    /// Optional screenshot as a `data:image/png;base64,…` URL.
+    #[serde(default)]
+    pub screenshot: Option<String>,
+    /// Browser-side console log dump (newest first), already truncated client-side.
+    #[serde(default)]
+    pub frontend_logs: String,
+    /// Server-side log tail at submission time.
+    #[serde(default)]
+    pub backend_logs: String,
+    #[serde(default)]
+    pub user_agent: Option<String>,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub reporter_email: Option<String>,
+}
+
+#[derive(Debug, Default)]
+pub struct FeedbackStore {
+    next_id: u64,
+    records: Vec<Feedback>,
+}
+
+impl FeedbackStore {
+    fn insert(&mut self, mut f: Feedback) -> Feedback {
+        self.next_id += 1;
+        f.id = self.next_id;
+        f.created_at = now_ts();
+        self.records.push(f.clone());
+        f
+    }
+    fn list(&self) -> Vec<Feedback> {
+        let mut v = self.records.clone();
+        v.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        v
+    }
+    fn remove(&mut self, id: u64) -> bool {
+        let len = self.records.len();
+        self.records.retain(|f| f.id != id);
+        self.records.len() != len
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Recent-logs ring buffer (used by /logs/tail for feedback bundles)
+// ---------------------------------------------------------------------------
+
+const RECENT_LOGS_CAPACITY: usize = 500;
+static RECENT_LOGS: PlMutex<VecDeque<String>> = PlMutex::new(VecDeque::new());
+
+/// Append a one-line log entry to the recent-logs ring buffer. Called from
+/// the access-log middleware so `/logs/tail` always has request history; can
+/// also be called by external tracing layers.
+pub fn push_recent_log(line: impl Into<String>) {
+    let mut q = RECENT_LOGS.lock();
+    if q.len() >= RECENT_LOGS_CAPACITY {
+        q.pop_front();
+    }
+    q.push_back(line.into());
+}
+
+fn snapshot_recent_logs(limit: usize) -> Vec<String> {
+    let q = RECENT_LOGS.lock();
+    let n = q.len().min(limit);
+    q.iter().skip(q.len() - n).cloned().collect()
 }
 
 fn now_ts() -> u64 {
@@ -572,6 +785,12 @@ fn build_router_inner(
         )
         .route("/queries/:id/run", post(run_query))
         .route("/settings", get(get_settings).patch(patch_settings))
+        .route("/settings/llm/test", post(test_llm_connection))
+        .route("/settings/llm/models", get(list_llm_models))
+        .route("/settings/ocr/status", get(get_ocr_status))
+        .route("/feedbacks", get(list_feedbacks).post(create_feedback))
+        .route("/feedbacks/:id", delete(delete_feedback))
+        .route("/logs/tail", get(logs_tail))
         .with_state(state);
 
     let protected = if bearer_token.is_some() || jwt.is_some() {
@@ -694,10 +913,87 @@ async fn request_id_layer(mut req: Request<axum::body::Body>, next: Next) -> Res
         format!("req-{nanos:x}-{n:x}")
     });
     req.extensions_mut().insert(RequestId(id.clone()));
+
+    // Access log — captured before the body is consumed downstream.
+    let method = req.method().clone();
+    let uri = req.uri().clone();
+    let path = uri.path().to_string();
+    let query = uri.query().map(|q| q.to_string());
+    let started = std::time::Instant::now();
+    // Healthz and metrics scrapes are noisy — log them at trace level only.
+    let noisy = matches!(path.as_str(), "/healthz" | "/metrics");
+    if !noisy {
+        match &query {
+            Some(q) => tracing::info!(
+                target: "http",
+                req_id = %id,
+                method = %method,
+                path = %path,
+                query = %q,
+                "→ request"
+            ),
+            None => tracing::info!(
+                target: "http",
+                req_id = %id,
+                method = %method,
+                path = %path,
+                "→ request"
+            ),
+        }
+    }
+
     let mut resp = next.run(req).await;
     if let Ok(value) = HeaderValue::from_str(&id) {
         resp.headers_mut().insert("x-request-id", value);
     }
+
+    let status = resp.status();
+    let elapsed_ms = started.elapsed().as_millis() as u64;
+    let code = status.as_u16();
+    if !noisy {
+        let q = query.as_deref().map(|s| format!("?{s}")).unwrap_or_default();
+        push_recent_log(format!(
+            "{} {} {}{} {} {}ms",
+            now_ts(),
+            method,
+            path,
+            q,
+            code,
+            elapsed_ms
+        ));
+    }
+    if code >= 500 {
+        tracing::error!(
+            target: "http",
+            req_id = %id,
+            method = %method,
+            path = %path,
+            status = code,
+            elapsed_ms = elapsed_ms,
+            "← response (server error)"
+        );
+    } else if code >= 400 {
+        tracing::warn!(
+            target: "http",
+            req_id = %id,
+            method = %method,
+            path = %path,
+            status = code,
+            elapsed_ms = elapsed_ms,
+            "← response (client error)"
+        );
+    } else if !noisy {
+        tracing::info!(
+            target: "http",
+            req_id = %id,
+            method = %method,
+            path = %path,
+            status = code,
+            elapsed_ms = elapsed_ms,
+            "← response"
+        );
+    }
+
     resp
 }
 
@@ -2051,7 +2347,416 @@ async fn patch_settings(
             current.ui.graph_layout = v;
         }
     }
+    if let Some(l) = patch.llm {
+        let llm = &mut current.llm;
+        if let Some(v) = l.active_provider {
+            llm.active_provider = v;
+        }
+        if let Some(v) = l.openai_api_key {
+            llm.openai_api_key_hint = key_hint(&v);
+            llm.openai_api_key = v;
+        }
+        if let Some(v) = l.openai_base_url {
+            llm.openai_base_url = v;
+        }
+        if let Some(v) = l.openai_model {
+            llm.openai_model = v;
+        }
+        if let Some(v) = l.anthropic_api_key {
+            llm.anthropic_api_key_hint = key_hint(&v);
+            llm.anthropic_api_key = v;
+        }
+        if let Some(v) = l.anthropic_base_url {
+            llm.anthropic_base_url = v;
+        }
+        if let Some(v) = l.anthropic_model {
+            llm.anthropic_model = v;
+        }
+        if let Some(v) = l.infomaniak_api_key {
+            llm.infomaniak_api_key_hint = key_hint(&v);
+            llm.infomaniak_api_key = v;
+        }
+        if let Some(v) = l.infomaniak_base_url {
+            llm.infomaniak_base_url = v;
+        }
+        if let Some(v) = l.infomaniak_model {
+            llm.infomaniak_model = v;
+        }
+        if let Some(v) = l.temperature {
+            llm.temperature = v;
+        }
+        if let Some(v) = l.max_tokens {
+            llm.max_tokens = v;
+        }
+    }
+    if let Some(o) = patch.ocr {
+        let ocr = &mut current.ocr;
+        if let Some(v) = o.provider {
+            ocr.provider = v;
+        }
+        if let Some(v) = o.auto_fallback {
+            ocr.auto_fallback = v;
+        }
+        if let Some(v) = o.min_text_threshold {
+            ocr.min_text_threshold = v;
+        }
+        if let Some(v) = o.tesseract_languages {
+            ocr.tesseract_languages = v;
+        }
+        if let Some(v) = o.google_api_key {
+            ocr.google_api_key_hint = key_hint(&v);
+            ocr.google_api_key = v;
+        }
+    }
     Json(current.clone())
+}
+
+// ---- OCR engine status ----------------------------------------------------
+
+#[derive(Debug, Serialize)]
+struct OcrEngineProbe {
+    available: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ocrmypdf_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tesseract_version: Option<String>,
+    ghostscript_available: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct GoogleVisionProbe {
+    configured: bool,
+    auth: &'static str,
+}
+
+#[derive(Debug, Serialize)]
+struct OcrStatusResponse {
+    tesseract: OcrEngineProbe,
+    google_vision: GoogleVisionProbe,
+}
+
+fn probe_version(cmd: &str, arg: &str) -> Option<String> {
+    let out = std::process::Command::new(cmd).arg(arg).output().ok()?;
+    if !out.status.success() && out.stdout.is_empty() && out.stderr.is_empty() {
+        return None;
+    }
+    let combined = if !out.stdout.is_empty() {
+        String::from_utf8_lossy(&out.stdout).to_string()
+    } else {
+        String::from_utf8_lossy(&out.stderr).to_string()
+    };
+    let first = combined.lines().next().unwrap_or("").trim().to_string();
+    // Strip a leading binary name to keep just the version token.
+    let v = first
+        .split_whitespace()
+        .find(|t| t.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false))
+        .map(|s| s.to_string())
+        .unwrap_or(first);
+    if v.is_empty() {
+        None
+    } else {
+        Some(v)
+    }
+}
+
+fn probe_ghostscript() -> bool {
+    let candidates = if cfg!(windows) {
+        &["gswin64c", "gswin32c", "gs"][..]
+    } else {
+        &["gs"][..]
+    };
+    candidates
+        .iter()
+        .any(|c| probe_version(c, "--version").is_some())
+}
+
+async fn get_ocr_status(State(s): State<AppState>) -> Json<OcrStatusResponse> {
+    let ocrmypdf_version = probe_version("ocrmypdf", "--version");
+    let tesseract_version = probe_version("tesseract", "--version");
+    let ghostscript_available = probe_ghostscript();
+    let tesseract_available = tesseract_version.is_some();
+    let google_configured = !s.settings.read().ocr.google_api_key.is_empty();
+    Json(OcrStatusResponse {
+        tesseract: OcrEngineProbe {
+            available: tesseract_available,
+            ocrmypdf_version,
+            tesseract_version,
+            ghostscript_available,
+        },
+        google_vision: GoogleVisionProbe {
+            configured: google_configured,
+            auth: "API key",
+        },
+    })
+}
+
+// ---- LLM provider test & model discovery ---------------------------------
+
+#[derive(Debug, Deserialize)]
+struct LlmTestRequest {
+    #[serde(default)]
+    provider: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct LlmTestResponse {
+    ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+fn resolve_provider_creds(
+    llm: &LlmSettings,
+    provider: &str,
+) -> Result<(String, String, String, &'static str), String> {
+    // Returns (api_key, base_url, model, kind) where kind is "openai-compatible"
+    // or "anthropic".
+    match provider {
+        "openai" => {
+            if llm.openai_api_key.is_empty() {
+                return Err("Clé API OpenAI manquante".into());
+            }
+            let base = if llm.openai_base_url.is_empty() {
+                "https://api.openai.com/v1".to_string()
+            } else {
+                llm.openai_base_url.trim_end_matches('/').to_string()
+            };
+            Ok((llm.openai_api_key.clone(), base, llm.openai_model.clone(), "openai"))
+        }
+        "anthropic" => {
+            if llm.anthropic_api_key.is_empty() {
+                return Err("Clé API Anthropic manquante".into());
+            }
+            let base = if llm.anthropic_base_url.is_empty() {
+                "https://api.anthropic.com/v1".to_string()
+            } else {
+                llm.anthropic_base_url.trim_end_matches('/').to_string()
+            };
+            Ok((llm.anthropic_api_key.clone(), base, llm.anthropic_model.clone(), "anthropic"))
+        }
+        "infomaniak" => {
+            if llm.infomaniak_api_key.is_empty() {
+                return Err("Clé API Infomaniak manquante".into());
+            }
+            let base = if llm.infomaniak_base_url.is_empty() {
+                "https://api.infomaniak.com/1/ai".to_string()
+            } else {
+                llm.infomaniak_base_url.trim_end_matches('/').to_string()
+            };
+            Ok((llm.infomaniak_api_key.clone(), base, llm.infomaniak_model.clone(), "openai"))
+        }
+        other => Err(format!("Fournisseur inconnu : {other}")),
+    }
+}
+
+async fn test_llm_connection(
+    State(s): State<AppState>,
+    Json(req): Json<LlmTestRequest>,
+) -> Json<LlmTestResponse> {
+    let llm = s.settings.read().llm.clone();
+    let provider = req
+        .provider
+        .unwrap_or_else(|| llm.active_provider.clone());
+    let (key, base, model, kind) = match resolve_provider_creds(&llm, &provider) {
+        Ok(v) => v,
+        Err(e) => return Json(LlmTestResponse { ok: false, model: None, error: Some(e) }),
+    };
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
+
+    let res = if kind == "anthropic" {
+        client
+            .get(format!("{base}/models"))
+            .header("x-api-key", &key)
+            .header("anthropic-version", "2023-06-01")
+            .send()
+            .await
+    } else {
+        client
+            .get(format!("{base}/models"))
+            .bearer_auth(&key)
+            .send()
+            .await
+    };
+
+    match res {
+        Ok(r) if r.status().is_success() => Json(LlmTestResponse {
+            ok: true,
+            model: if model.is_empty() { None } else { Some(model) },
+            error: None,
+        }),
+        Ok(r) => {
+            let status = r.status();
+            let body = r.text().await.unwrap_or_default();
+            Json(LlmTestResponse {
+                ok: false,
+                model: None,
+                error: Some(format!("HTTP {status}: {}", body.chars().take(200).collect::<String>())),
+            })
+        }
+        Err(e) => Json(LlmTestResponse {
+            ok: false,
+            model: None,
+            error: Some(e.to_string()),
+        }),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct LlmModelsQuery {
+    #[serde(default)]
+    provider: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct LlmModelsResponse {
+    models: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+async fn list_llm_models(
+    State(s): State<AppState>,
+    Query(q): Query<LlmModelsQuery>,
+) -> Json<LlmModelsResponse> {
+    let llm = s.settings.read().llm.clone();
+    let provider = q.provider.unwrap_or_else(|| llm.active_provider.clone());
+    let (key, base, _model, kind) = match resolve_provider_creds(&llm, &provider) {
+        Ok(v) => v,
+        Err(e) => return Json(LlmModelsResponse { models: vec![], error: Some(e) }),
+    };
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
+
+    let res = if kind == "anthropic" {
+        client
+            .get(format!("{base}/models"))
+            .header("x-api-key", &key)
+            .header("anthropic-version", "2023-06-01")
+            .send()
+            .await
+    } else {
+        client
+            .get(format!("{base}/models"))
+            .bearer_auth(&key)
+            .send()
+            .await
+    };
+
+    match res {
+        Ok(r) if r.status().is_success() => {
+            let v: serde_json::Value = r.json().await.unwrap_or(serde_json::Value::Null);
+            let arr = v.get("data").and_then(|d| d.as_array()).cloned().unwrap_or_default();
+            let mut models: Vec<String> = arr
+                .iter()
+                .filter_map(|m| m.get("id").and_then(|i| i.as_str()).map(String::from))
+                .collect();
+            models.sort();
+            Json(LlmModelsResponse { models, error: None })
+        }
+        Ok(r) => {
+            let status = r.status();
+            let body = r.text().await.unwrap_or_default();
+            Json(LlmModelsResponse {
+                models: vec![],
+                error: Some(format!("HTTP {status}: {}", body.chars().take(200).collect::<String>())),
+            })
+        }
+        Err(e) => Json(LlmModelsResponse { models: vec![], error: Some(e.to_string()) }),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Feedback handlers
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+struct CreateFeedbackRequest {
+    #[serde(default = "default_feedback_kind")]
+    kind: String,
+    title: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    screenshot: Option<String>,
+    #[serde(default)]
+    frontend_logs: String,
+    #[serde(default)]
+    user_agent: Option<String>,
+    #[serde(default)]
+    url: Option<String>,
+    #[serde(default)]
+    reporter_email: Option<String>,
+}
+
+fn default_feedback_kind() -> String {
+    "bug".into()
+}
+
+async fn create_feedback(
+    State(s): State<AppState>,
+    Json(req): Json<CreateFeedbackRequest>,
+) -> Result<Json<Feedback>, ApiError> {
+    if req.title.trim().is_empty() {
+        return Err(ApiError::BadRequest("title must not be empty".into()));
+    }
+    let backend_logs = snapshot_recent_logs(200).join("\n");
+    let fb = Feedback {
+        id: 0,
+        created_at: 0,
+        kind: req.kind,
+        title: req.title,
+        description: req.description,
+        screenshot: req.screenshot,
+        frontend_logs: req.frontend_logs,
+        backend_logs,
+        user_agent: req.user_agent,
+        url: req.url,
+        reporter_email: req.reporter_email,
+    };
+    let stored = s.feedbacks.write().insert(fb);
+    Ok(Json(stored))
+}
+
+async fn list_feedbacks(State(s): State<AppState>) -> Json<Vec<Feedback>> {
+    Json(s.feedbacks.read().list())
+}
+
+async fn delete_feedback(
+    State(s): State<AppState>,
+    Path(id): Path<u64>,
+) -> Result<StatusCode, ApiError> {
+    if s.feedbacks.write().remove(id) {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(ApiError::NotFound(format!("feedback {id}")))
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct LogsTailQuery {
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+struct LogsTailResponse {
+    lines: Vec<String>,
+}
+
+async fn logs_tail(Query(q): Query<LogsTailQuery>) -> Json<LogsTailResponse> {
+    let limit = q.limit.unwrap_or(200).min(RECENT_LOGS_CAPACITY);
+    Json(LogsTailResponse {
+        lines: snapshot_recent_logs(limit),
+    })
 }
 
 // ---------------------------------------------------------------------------

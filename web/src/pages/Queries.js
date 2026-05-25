@@ -5,8 +5,11 @@ import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import Card from "../components/Card";
 import StreamingAnswer from "../components/StreamingAnswer";
+// @ts-expect-error JSX module
+import { useConfirm } from "../components/ConfirmDialog.jsx";
 import { createQuery, deleteQuery, getQueries, runQuery, } from "../api";
 export default function Queries() {
+    const confirm = useConfirm();
     const [params] = useSearchParams();
     const initialQ = params.get("q") ?? "";
     const [queries, setQueries] = useState([]);
@@ -63,7 +66,7 @@ export default function Queries() {
         }
     };
     const remove = async (id) => {
-        if (!window.confirm("Delete this saved query?"))
+        if (!(await confirm({ title: "Delete saved query", message: "Delete this saved query?", confirmLabel: "Delete", danger: true })))
             return;
         try {
             await deleteQuery(id);

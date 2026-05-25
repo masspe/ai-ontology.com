@@ -6,6 +6,8 @@ import JSZip from "jszip";
 import Card from "../components/Card";
 import Dropzone from "../components/Dropzone";
 import OntologyGraph from "../components/OntologyGraph";
+// @ts-expect-error JSX module
+import { useConfirm } from "../components/ConfirmDialog.jsx";
 import { ApplyReportView, ReviewPanel, defaultDecisionFor, } from "../components/IngestReview";
 import { analyzeIngest, applyIngest } from "../lib/ingestApi";
 import { mergeProposals } from "../lib/mergeProposals";
@@ -106,6 +108,7 @@ function buildFilesContext(files) {
     ].join("\n");
 }
 export default function OntologyBuilder() {
+    const confirm = useConfirm();
     const [description, setDescription] = useState("");
     const [showExamples, setShowExamples] = useState(false);
     const [ontology, setOntology] = useState(null);
@@ -364,7 +367,7 @@ export default function OntologyBuilder() {
     const clearAll = async () => {
         if (files.length === 0)
             return;
-        if (!window.confirm(`Remove ${files.length} file records? (Ingested data stays in the graph.)`))
+        if (!(await confirm({ title: "Remove file records", message: `Remove ${files.length} file records? Ingested data stays in the graph.`, confirmLabel: "Remove", danger: true })))
             return;
         for (const f of files) {
             try {

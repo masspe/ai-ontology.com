@@ -4,6 +4,10 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import Card from "../components/Card";
 import Sparkline from "../components/Sparkline";
+// @ts-expect-error JSX module
+import { useToast } from "../components/Toast.jsx";
+// @ts-expect-error JSX module
+import { useConfirm } from "../components/ConfirmDialog.jsx";
 import {
   createAction,
   deleteAction,
@@ -287,6 +291,8 @@ function Donut({ data }: { data: { name: string; count: number; color: string }[
 // ---------------------------------------------------------------------------
 
 export default function Actions() {
+  const toast = useToast();
+  const confirm = useConfirm();
   const [actions, setActions] = useState<ActionInstance[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
   const [loading, setLoading] = useState(true);
@@ -393,12 +399,13 @@ export default function Actions() {
   }, [rows]);
 
   async function onDelete(id: number) {
-    if (!confirm("Delete this action?")) return;
+    if (!(await confirm({ title: "Delete action", message: "Delete this action?", confirmLabel: "Delete", danger: true }))) return;
     try {
       await deleteAction(id);
       setActions((rs) => rs.filter((r) => r.id !== id));
+      toast.success("Action deleted.");
     } catch (e) {
-      alert("Delete failed: " + (e as Error).message);
+      toast.error("Delete failed: " + (e as Error).message);
     }
   }
 
@@ -424,7 +431,7 @@ export default function Actions() {
       }
       setEditing(null);
     } catch (e) {
-      alert("Save failed: " + (e as Error).message);
+      toast.error("Save failed: " + (e as Error).message);
     }
   }
 

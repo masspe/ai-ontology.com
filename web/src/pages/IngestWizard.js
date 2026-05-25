@@ -59,7 +59,22 @@ export default function IngestWizard() {
     const toast = useToast();
     const [step, setStep] = useState("upload");
     const [file, setFile] = useState(null);
-    const [provider, setProvider] = useState("default");
+    const [provider, setProvider] = useState(() => {
+        // Default the wizard's provider to whatever the user picked in Settings.
+        try {
+            const raw = typeof window !== "undefined"
+                ? window.localStorage.getItem("ontology.providerConfig")
+                : null;
+            if (raw) {
+                const cfg = JSON.parse(raw);
+                const p = cfg?.activeLLMProvider;
+                if (p === "openai" || p === "anthropic" || p === "infomaniak" || p === "default")
+                    return p;
+            }
+        }
+        catch { /* ignore */ }
+        return "default";
+    });
     const [modelName, setModelName] = useState("");
     const [languageHint, setLanguageHint] = useState("");
     const [proposal, setProposal] = useState(null);
@@ -176,7 +191,7 @@ export default function IngestWizard() {
 }
 // ---------- Upload step ----------
 function UploadStep(props) {
-    return (_jsx(Card, { children: _jsxs("div", { style: { display: "grid", gap: 12 }, children: [_jsxs("label", { style: { display: "grid", gap: 4 }, children: [_jsx("span", { style: { fontSize: 12, color: "#475569" }, children: "Document" }), _jsx("input", { ref: props.fileInput, type: "file", accept: ".txt,.md,.csv,.json,.jsonl,.ndjson,.xlsx,.docx,.pdf", onChange: (e) => props.onFile(e.target.files?.[0] ?? null) })] }), _jsxs("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }, children: [_jsxs("label", { style: { display: "grid", gap: 4 }, children: [_jsx("span", { style: { fontSize: 12, color: "#475569" }, children: "LLM provider" }), _jsxs("select", { value: props.provider, onChange: (e) => props.onProvider(e.target.value), children: [_jsx("option", { value: "default", children: "Default (server-configured)" }), _jsx("option", { value: "openai", children: "OpenAI" }), _jsx("option", { value: "anthropic", children: "Anthropic" })] })] }), _jsxs("label", { style: { display: "grid", gap: 4 }, children: [_jsx("span", { style: { fontSize: 12, color: "#475569" }, children: "Model (optional)" }), _jsx("input", { type: "text", placeholder: "gpt-4o-mini / claude-3-7-sonnet-latest", value: props.model, onChange: (e) => props.onModel(e.target.value) })] }), _jsxs("label", { style: { display: "grid", gap: 4 }, children: [_jsx("span", { style: { fontSize: 12, color: "#475569" }, children: "Language hint (ISO-639-1)" }), _jsx("input", { type: "text", placeholder: "en, fr, it, \u00E2\u20AC\u00A6 (auto-detect if blank)", value: props.languageHint, onChange: (e) => props.onLanguageHint(e.target.value), maxLength: 5 })] })] }), _jsx("div", { style: { display: "flex", justifyContent: "flex-end" }, children: _jsx("button", { onClick: props.onAnalyze, disabled: !props.file, style: {
+    return (_jsx(Card, { children: _jsxs("div", { style: { display: "grid", gap: 12 }, children: [_jsxs("label", { style: { display: "grid", gap: 4 }, children: [_jsx("span", { style: { fontSize: 12, color: "#475569" }, children: "Document" }), _jsx("input", { ref: props.fileInput, type: "file", accept: ".txt,.md,.csv,.json,.jsonl,.ndjson,.xlsx,.docx,.pdf", onChange: (e) => props.onFile(e.target.files?.[0] ?? null) })] }), _jsxs("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }, children: [_jsxs("label", { style: { display: "grid", gap: 4 }, children: [_jsx("span", { style: { fontSize: 12, color: "#475569" }, children: "LLM provider" }), _jsxs("select", { value: props.provider, onChange: (e) => props.onProvider(e.target.value), children: [_jsx("option", { value: "default", children: "Default (server-configured)" }), _jsx("option", { value: "openai", children: "OpenAI" }), _jsx("option", { value: "anthropic", children: "Anthropic" }), _jsx("option", { value: "infomaniak", children: "Infomaniak AI (Swiss cloud)" })] })] }), _jsxs("label", { style: { display: "grid", gap: 4 }, children: [_jsx("span", { style: { fontSize: 12, color: "#475569" }, children: "Model (optional)" }), _jsx("input", { type: "text", placeholder: "gpt-4o-mini / claude-3-7-sonnet-latest", value: props.model, onChange: (e) => props.onModel(e.target.value) })] }), _jsxs("label", { style: { display: "grid", gap: 4 }, children: [_jsx("span", { style: { fontSize: 12, color: "#475569" }, children: "Language hint (ISO-639-1)" }), _jsx("input", { type: "text", placeholder: "en, fr, it, \u00E2\u20AC\u00A6 (auto-detect if blank)", value: props.languageHint, onChange: (e) => props.onLanguageHint(e.target.value), maxLength: 5 })] })] }), _jsx("div", { style: { display: "flex", justifyContent: "flex-end" }, children: _jsx("button", { onClick: props.onAnalyze, disabled: !props.file, style: {
                             padding: "8px 16px",
                             background: props.file ? "#2563eb" : "#94a3b8",
                             color: "white",
