@@ -9,6 +9,7 @@
 // returns the per-item outcome report.
 
 import { apiBase, apiToken, ApiError } from "../api";
+import { getActiveProviderRequestFields, loadProviderConfig } from "./providerConfig";
 import type {
   ApplyDecision,
   ApplyReport,
@@ -18,8 +19,8 @@ import type {
 
 export interface AnalyzeOptions {
   file: File;
-  /** `"default"` (server pipeline LLM), `"openai"`, or `"anthropic"`. */
-  provider?: "default" | "openai" | "anthropic";
+  /** `"default"` (server pipeline LLM), `"openai"`, `"anthropic"`, or `"infomaniak"`. */
+  provider?: "default" | "openai" | "anthropic" | "infomaniak";
   /** Optional model name override (e.g. `gpt-4o`, `claude-3-7-sonnet-latest`). */
   model?: string;
   /** ISO-639-1 hint that bypasses automatic detection. */
@@ -33,6 +34,17 @@ export async function analyzeIngest(opts: AnalyzeOptions): Promise<OntologyPropo
   if (opts.model) form.append("model", opts.model);
   if (opts.languageHint) form.append("language_hint", opts.languageHint);
 
+  // Forward provider-specific credentials / base URL from the Settings store
+  // so the backend can relay to user-configured providers (e.g. Infomaniak).
+  // The endpoint is multipart, so these are appended as form fields rather
+  // than JSON body fields.
+  const cfg = loadProviderConfig();
+  const extra = getActiveProviderRequestFields(cfg, opts.provider);
+  if (extra.api_key) form.append("api_key", extra.api_key);
+  if (extra.base_url) form.append("base_url", extra.base_url);
+  // Fill in a default model from cfg if caller didn't pass one.
+  if (!opts.model && extra.model) form.append("model", extra.model);
+
   const headers: Record<string, string> = {};
   const tok = apiToken();
   if (tok) headers["authorization"] = `Bearer ${tok}`;
@@ -43,14 +55,17 @@ export async function analyzeIngest(opts: AnalyzeOptions): Promise<OntologyPropo
     headers,
   });
   if (!res.ok) {
-    let body: unknown = null;
+    const raw = await res.text().catch(() => "");
+    let body: unknown = raw;
     try {
-      body = await res.json();
+      body = raw ? JSON.parse(raw) : null;
     } catch {
-      /* ignore */
+      /* keep raw text */
     }
+    const detail = typeof body === "string" ? body : raw;
+    const suffix = detail ? ` — ${detail.slice(0, 400)}` : "";
     throw new ApiError(
-      `analyze failed: ${res.status} ${res.statusText}`,
+      `analyze failed: ${res.status} ${res.statusText}${suffix}`,
       res.status,
       body,
     );

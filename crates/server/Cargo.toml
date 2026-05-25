@@ -27,6 +27,7 @@ futures = { workspace = true }
 parking_lot = { workspace = true }
 ahash = { workspace = true }
 jsonwebtoken = { version = "9", default-features = false }
+reqwest = { workspace = true }
 
 [dev-dependencies]
 ontology-graph = { workspace = true }

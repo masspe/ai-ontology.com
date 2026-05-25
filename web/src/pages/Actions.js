@@ -4,6 +4,10 @@ import { jsx as _jsx, jsxs as _jsxs, Fragment as _Fragment } from "react/jsx-run
 import { useEffect, useMemo, useState } from "react";
 import Card from "../components/Card";
 import Sparkline from "../components/Sparkline";
+// @ts-expect-error JSX module
+import { useToast } from "../components/Toast.jsx";
+// @ts-expect-error JSX module
+import { useConfirm } from "../components/ConfirmDialog.jsx";
 import { createAction, deleteAction, getOntology, getStats, listActions, listConcepts, updateAction, } from "../api";
 function actionStatus(a) {
     const raw = a.parameters?.status?.toLowerCase();
@@ -116,6 +120,8 @@ function Donut({ data }) {
 // Page
 // ---------------------------------------------------------------------------
 export default function Actions() {
+    const toast = useToast();
+    const confirm = useConfirm();
     const [actions, setActions] = useState([]);
     const [stats, setStats] = useState(null);
     const [loading, setLoading] = useState(true);
@@ -222,14 +228,15 @@ export default function Actions() {
             .map(([name, count]) => ({ name, count, pct: (count / total) * 100 }));
     }, [rows]);
     async function onDelete(id) {
-        if (!confirm("Delete this action?"))
+        if (!(await confirm({ title: "Delete action", message: "Delete this action?", confirmLabel: "Delete", danger: true })))
             return;
         try {
             await deleteAction(id);
             setActions((rs) => rs.filter((r) => r.id !== id));
+            toast.success("Action deleted.");
         }
         catch (e) {
-            alert("Delete failed: " + e.message);
+            toast.error("Delete failed: " + e.message);
         }
     }
     async function onSaveAction(payload, editingId) {
@@ -253,7 +260,7 @@ export default function Actions() {
             setEditing(null);
         }
         catch (e) {
-            alert("Save failed: " + e.message);
+            toast.error("Save failed: " + e.message);
         }
     }
     const runTotal = runStatus.reduce((s, d) => s + d.count, 0) || 1;

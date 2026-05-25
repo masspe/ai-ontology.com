@@ -4,6 +4,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Card from "../components/Card";
 import Sparkline from "../components/Sparkline";
+// @ts-expect-error JSX module
+import { useConfirm } from "../components/ConfirmDialog.jsx";
 import {
   deleteFile,
   exportGraphUrl,
@@ -116,6 +118,7 @@ const PAGE_SIZE = 6;
 
 
 export default function Files() {
+  const confirm = useConfirm();
   const [files, setFiles] = useState<FileRecord[]>([]);
   const [ontology, setOntology] = useState<Ontology | null>(null);
   const [kind] = useState<string>("jsonl");
@@ -178,7 +181,7 @@ export default function Files() {
   };
 
   const onDelete = async (id: number) => {
-    if (!window.confirm("Remove this file record? (Already ingested data stays in the graph.)")) return;
+    if (!(await confirm({ title: "Remove file record", message: "Remove this file record? Already ingested data stays in the graph.", confirmLabel: "Remove", danger: true }))) return;
     try {
       await deleteFile(id);
       await refresh();

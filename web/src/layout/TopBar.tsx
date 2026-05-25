@@ -3,16 +3,16 @@
 
 import { useNavigate } from "react-router-dom";
 import { useState } from "react";
+import FeedbackModal from "../components/FeedbackModal";
 
 export default function TopBar() {
   const nav = useNavigate();
   const [q, setQ] = useState("");
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
 
   const onSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!q.trim()) return;
-    // Treat top-bar search as a quick Ask: hop to the Builder page with a hint.
-    // For now, navigate to Queries which has a single-shot ask box.
     nav(`/queries?q=${encodeURIComponent(q)}`);
   };
 
@@ -27,10 +27,19 @@ export default function TopBar() {
         />
       </form>
       <div className="topbar-actions">
+        <button
+          className="btn btn-outline"
+          onClick={() => setFeedbackOpen(true)}
+          title="Envoyer un feedback"
+          style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+        >
+          💬 Feedback
+        </button>
         <button className="icon-btn" title="Help">?</button>
         <button className="icon-btn" title="Notifications">⚑</button>
         <div className="avatar" title="Account">U</div>
       </div>
+      <FeedbackModal open={feedbackOpen} onClose={() => setFeedbackOpen(false)} />
     </header>
   );
 }

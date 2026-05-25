@@ -23,11 +23,14 @@ import OAuthCallback from "./pages/OAuthCallback.jsx";
 import ProtectedRoute from "./routes/ProtectedRoute.jsx";
 // @ts-expect-error JSX module
 import { ToastProvider } from "./components/Toast.jsx";
+// @ts-expect-error JSX module
+import { ConfirmProvider } from "./components/ConfirmDialog.jsx";
 
 export default function App() {
   return (
     <BrowserRouter>
       <ToastProvider>
+        <ConfirmProvider>
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route path="/signup" element={<Signup />} />
@@ -46,6 +49,7 @@ export default function App() {
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
         </Routes>
+        </ConfirmProvider>
       </ToastProvider>
     </BrowserRouter>
   );

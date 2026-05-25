@@ -1070,6 +1070,7 @@ dependencies = [
  "ontology-rag",
  "ontology-storage",
  "parking_lot",
+ "reqwest",
  "serde",
  "serde_json",
  "tempfile",

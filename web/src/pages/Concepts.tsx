@@ -5,6 +5,10 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import Card from "../components/Card";
 import Sparkline from "../components/Sparkline";
+// @ts-expect-error JSX module
+import { useToast } from "../components/Toast.jsx";
+// @ts-expect-error JSX module
+import { useConfirm } from "../components/ConfirmDialog.jsx";
 import {
   createConcept,
   createRelation,
@@ -317,6 +321,8 @@ function HierarchyNode({ node, depth }: { node: TreeNode; depth: number }) {
 // ---------------------------------------------------------------------------
 
 export default function Concepts() {
+  const confirm = useConfirm();
+  const [editingConcept, setEditingConcept] = useState<Concept | null>(null);
   const [stats, setStats] = useState<Stats | null>(null);
   const [history, setHistory] = useState<StatsHistory | null>(null);
   const [ontology, setOntology] = useState<Ontology | null>(null);
@@ -351,6 +357,13 @@ export default function Concepts() {
   useEffect(() => {
     setPage(0);
   }, [debouncedSearch, typeFilter, statusFilter, sort]);
+
+  // ---- Clamp page if total shrinks below current offset (e.g. after delete) ----
+  useEffect(() => {
+    if (total === 0) return;
+    const maxPage = Math.max(0, Math.ceil(total / PAGE_SIZE) - 1);
+    if (page > maxPage) setPage(maxPage);
+  }, [total, page]);
 
   // ---- Load stats/history/ontology + coverage ----
   const refreshSidecar = async () => {
@@ -506,16 +519,21 @@ export default function Concepts() {
     }
   };
 
-  const handleEdit = async (c: Concept) => {
-    const name = window.prompt("Concept name", c.name)?.trim();
-    if (name === undefined) return;
-    const description = window.prompt("Definition", c.description ?? "")?.trim() ?? "";
+  const handleEdit = (c: Concept) => {
+    setEditingConcept(c);
+  };
+
+  const submitEdit = async (data: { name: string; description: string }) => {
+    if (!editingConcept) return;
     setBusy(true);
     try {
-      const updated = await updateConcept(c.id, { name, description });
+      const updated = await updateConcept(editingConcept.id, {
+        name: data.name,
+        description: data.description,
+      });
       setInfo(`Concept "${updated.name}" updated.`);
       setSelected(updated);
-      // Reload the visible page.
+      setEditingConcept(null);
       setDebouncedSearch((s) => s);
       await refreshRecent();
     } catch (e: unknown) {
@@ -526,7 +544,13 @@ export default function Concepts() {
   };
 
   const handleDelete = async (c: Concept) => {
-    if (!window.confirm(`Delete concept "${c.name}"? This cannot be undone.`)) return;
+    const ok = await confirm({
+      title: "Delete concept",
+      message: `Delete concept "${c.name}"? This cannot be undone.`,
+      confirmLabel: "Delete",
+      danger: true,
+    });
+    if (!ok) return;
     setBusy(true);
     try {
       await deleteConcept(c.id);
@@ -720,7 +744,11 @@ export default function Concepts() {
                       </div>
                     </td>
                     <td>{dom}</td>
-                    <td className="muted def-cell">{c.description || "—"}</td>
+                    <td className="def-cell">
+                      <div className="def-cell-text muted" title={c.description || ""}>
+                        {c.description || "—"}
+                      </div>
+                    </td>
                     <td><span className={`badge ${st.cls}`}>{st.label}</span></td>
                     <td>{fmtNum(Number(c.properties?.linked ?? 0))}</td>
                     <td>{fmtDate(conceptUpdatedAt(c))}</td>
@@ -917,6 +945,15 @@ export default function Concepts() {
           onSubmit={handleCreateSubmit}
         />
       )}
+
+      {editingConcept && (
+        <EditConceptModal
+          concept={editingConcept}
+          busy={busy}
+          onClose={() => setEditingConcept(null)}
+          onSubmit={submitEdit}
+        />
+      )}
     </>
   );
 }
@@ -1095,6 +1132,78 @@ function CreateConceptModal({ typeNames, busy, onClose, onSubmit }: CreateConcep
 }
 
 // ---------------------------------------------------------------------------
+// Edit-concept modal — name + description (replaces window.prompt pair)
+// ---------------------------------------------------------------------------
+
+interface EditConceptModalProps {
+  concept: Concept;
+  busy: boolean;
+  onClose: () => void;
+  onSubmit: (data: { name: string; description: string }) => void;
+}
+
+function EditConceptModal({ concept, busy, onClose, onSubmit }: EditConceptModalProps) {
+  const [name, setName] = useState(concept.name);
+  const [description, setDescription] = useState(concept.description ?? "");
+
+  const canSubmit = name.trim().length > 0 && !busy;
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!canSubmit) return;
+    onSubmit({ name: name.trim(), description: description.trim() });
+  };
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div
+        className="modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="edit-concept-title"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="modal-head">
+          <h3 id="edit-concept-title">Edit Concept</h3>
+          <button className="modal-close" onClick={onClose} aria-label="Close">×</button>
+        </div>
+
+        <form className="modal-form" onSubmit={handleSubmit}>
+          <label className="modal-label">
+            Name
+            <input
+              className="modal-input"
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              autoFocus
+              required
+            />
+          </label>
+          <label className="modal-label">
+            Definition
+            <textarea
+              className="modal-input"
+              rows={4}
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+            />
+          </label>
+          <div className="modal-actions">
+            <button type="button" className="btn-ghost" onClick={onClose} disabled={busy}>
+              Cancel
+            </button>
+            <button type="submit" className="btn-primary" disabled={!canSubmit}>
+              {busy ? "Saving…" : "Save"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Details sub-component
 // ---------------------------------------------------------------------------
 
@@ -1200,6 +1309,8 @@ interface RelationsPanelProps {
 }
 
 function RelationsPanel({ concept, ontology, allConcepts }: RelationsPanelProps) {
+  const toast = useToast();
+  const confirm = useConfirm();
   const [outgoing, setOutgoing] = useState<Relation[]>([]);
   const [incoming, setIncoming] = useState<Relation[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1266,17 +1377,17 @@ function RelationsPanel({ concept, ontology, allConcepts }: RelationsPanelProps)
       setTargetId("");
       await refresh();
     } catch (err) {
-      alert("Add failed: " + (err as Error).message);
+      toast.error("Add failed: " + (err as Error).message);
     }
   }
 
   async function onDelete(id: number) {
-    if (!confirm("Delete this relation?")) return;
+    if (!(await confirm({ title: "Delete relation", message: "Delete this relation?", confirmLabel: "Delete", danger: true }))) return;
     try {
       await deleteRelation(id);
       await refresh();
     } catch (err) {
-      alert("Delete failed: " + (err as Error).message);
+      toast.error("Delete failed: " + (err as Error).message);
     }
   }
 

@@ -101,7 +101,7 @@ $env:OPENAI_API_KEY = "..."
 .\target\release\ontology.exe --data $env:DATA ask --openai --model gpt-4o-mini "Who wrote about RAG?"
 $env:DEEPSEEK_API_KEY = "..."
 .\target\release\ontology.exe --data $env:DATA ask --deepseek "Who wrote about RAG?"
-.\target\release\ontology.exe --data $env:DATA snapshot
+.\target\release\ontology.exe --data $env:DATA snapshotin
 .\target\release\ontology.exe --data $env:DATA compact          # snapshot + truncate WAL
 .\target\release\ontology.exe --data $env:DATA path `
     --from-type Person --from-name Alice `

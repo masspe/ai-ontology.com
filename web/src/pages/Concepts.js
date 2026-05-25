@@ -5,6 +5,10 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import Card from "../components/Card";
 import Sparkline from "../components/Sparkline";
+// @ts-expect-error JSX module
+import { useToast } from "../components/Toast.jsx";
+// @ts-expect-error JSX module
+import { useConfirm } from "../components/ConfirmDialog.jsx";
 import { createConcept, createRelation, deleteConcept, deleteRelation, generateOntology, getOntology, getStats, getStatsHistory, getSubgraph, listConcepts, listRelations, updateConcept, } from "../api";
 // ---------------------------------------------------------------------------
 // Constants & helpers
@@ -131,6 +135,8 @@ function HierarchyNode({ node, depth }) {
 // Main page
 // ---------------------------------------------------------------------------
 export default function Concepts() {
+    const confirm = useConfirm();
+    const [editingConcept, setEditingConcept] = useState(null);
     const [stats, setStats] = useState(null);
     const [history, setHistory] = useState(null);
     const [ontology, setOntology] = useState(null);
@@ -159,6 +165,14 @@ export default function Concepts() {
     useEffect(() => {
         setPage(0);
     }, [debouncedSearch, typeFilter, statusFilter, sort]);
+    // ---- Clamp page if total shrinks below current offset (e.g. after delete) ----
+    useEffect(() => {
+        if (total === 0)
+            return;
+        const maxPage = Math.max(0, Math.ceil(total / PAGE_SIZE) - 1);
+        if (page > maxPage)
+            setPage(maxPage);
+    }, [total, page]);
     // ---- Load stats/history/ontology + coverage ----
     const refreshSidecar = async () => {
         try {
@@ -314,17 +328,21 @@ export default function Concepts() {
             setBusy(false);
         }
     };
-    const handleEdit = async (c) => {
-        const name = window.prompt("Concept name", c.name)?.trim();
-        if (name === undefined)
+    const handleEdit = (c) => {
+        setEditingConcept(c);
+    };
+    const submitEdit = async (data) => {
+        if (!editingConcept)
             return;
-        const description = window.prompt("Definition", c.description ?? "")?.trim() ?? "";
         setBusy(true);
         try {
-            const updated = await updateConcept(c.id, { name, description });
+            const updated = await updateConcept(editingConcept.id, {
+                name: data.name,
+                description: data.description,
+            });
             setInfo(`Concept "${updated.name}" updated.`);
             setSelected(updated);
-            // Reload the visible page.
+            setEditingConcept(null);
             setDebouncedSearch((s) => s);
             await refreshRecent();
         }
@@ -336,7 +354,13 @@ export default function Concepts() {
         }
     };
     const handleDelete = async (c) => {
-        if (!window.confirm(`Delete concept "${c.name}"? This cannot be undone.`))
+        const ok = await confirm({
+            title: "Delete concept",
+            message: `Delete concept "${c.name}"? This cannot be undone.`,
+            confirmLabel: "Delete",
+            danger: true,
+        });
+        if (!ok)
             return;
         setBusy(true);
         try {
@@ -386,8 +410,8 @@ export default function Concepts() {
                                                 const st = conceptStatus(c);
                                                 const dom = conceptDomain(c, types);
                                                 const isSel = selected?.id === c.id;
-                                                return (_jsxs("tr", { className: isSel ? "row-active" : undefined, onClick: () => setSelected(c), style: { cursor: "pointer" }, children: [_jsx("td", { children: _jsxs("div", { className: "concept-name-cell", children: [_jsx("span", { className: "concept-avatar", style: { background: conceptIconColor(c.name) }, children: initials(c.name) }), _jsx("span", { children: c.name })] }) }), _jsx("td", { children: dom }), _jsx("td", { className: "muted def-cell", children: c.description || "—" }), _jsx("td", { children: _jsx("span", { className: `badge ${st.cls}`, children: st.label }) }), _jsx("td", { children: fmtNum(Number(c.properties?.linked ?? 0)) }), _jsx("td", { children: fmtDate(conceptUpdatedAt(c)) }), _jsxs("td", { className: "actions", children: [_jsx("button", { className: "icon-btn", title: "Edit", onClick: (e) => { e.stopPropagation(); handleEdit(c); }, children: _jsx("span", { style: { width: 16, height: 16, display: "inline-flex" }, children: Icon.pencil }) }), _jsx("button", { className: "icon-btn icon-btn-danger", title: "Delete concept", "aria-label": `Delete concept ${c.name}`, onClick: (e) => { e.stopPropagation(); handleDelete(c); }, children: _jsx("span", { style: { width: 16, height: 16, display: "inline-flex" }, children: Icon.trash }) })] })] }, c.id));
-                                            })] })] }), _jsxs("div", { className: "pagination", children: [_jsxs("span", { className: "muted", children: ["Showing ", showingFrom, "\u2013", showingTo, " of ", fmtNum(total), " concepts"] }), _jsxs("div", { className: "pager", children: [_jsx("button", { disabled: page === 0, onClick: () => setPage((p) => Math.max(0, p - 1)), children: "\u2039" }), Array.from({ length: Math.min(5, totalPages) }, (_, i) => i).map((i) => (_jsx("button", { className: i === page ? "pager-active" : "", onClick: () => setPage(i), children: i + 1 }, i))), totalPages > 5 && _jsx("span", { className: "muted", children: "\u2026" }), totalPages > 5 && (_jsx("button", { onClick: () => setPage(totalPages - 1), children: totalPages })), _jsx("button", { disabled: page + 1 >= totalPages, onClick: () => setPage((p) => Math.min(totalPages - 1, p + 1)), children: "\u203A" })] })] })] }), _jsxs("div", { className: "concepts-side", children: [_jsx(Card, { title: "Concept Details", actions: _jsx("button", { className: "icon-btn", title: "Expand", children: _jsx("span", { style: { width: 16, height: 16, display: "inline-flex" }, children: Icon.expand }) }), children: selected ? (_jsxs(_Fragment, { children: [_jsx(ConceptDetails, { concept: selected, domain: conceptDomain(selected, types), onEdit: () => handleEdit(selected), onDelete: () => handleDelete(selected) }), _jsx(RelationsPanel, { concept: selected, ontology: ontology, allConcepts: concepts })] })) : (_jsx("div", { className: "empty", children: "Select a concept from the library." })) }), _jsx(Card, { title: "Concept Hierarchy", children: hierarchy.length === 0 ? (_jsx("div", { className: "empty", children: "No concept types defined yet." })) : (_jsx("div", { className: "concept-tree", children: hierarchy.map((n) => (_jsx(HierarchyNode, { node: n, depth: 0 }, n.name))) })) })] })] }), _jsxs("div", { className: "dash-row dash-row-three", children: [_jsx(Card, { title: "Recent Concept Activity", actions: _jsx(Link, { to: "/builder", className: "btn-ghost-link", children: "View All" }), children: recent.length === 0 ? (_jsx("div", { className: "empty", children: "No recent activity." })) : (_jsx("ul", { className: "activity-list", children: recent.map((c) => (_jsxs("li", { children: [_jsx("span", { className: "activity-dot", style: { background: conceptIconColor(c.name) } }), _jsxs("span", { className: "activity-text", children: ["Concept ", _jsxs("strong", { children: ["\u201C", c.name, "\u201D"] }), " added"] }), _jsx("span", { className: "activity-time muted", children: fmtDate(conceptUpdatedAt(c)) })] }, c.id))) })) }), _jsx(Card, { title: "Top Domains", actions: _jsx(Link, { to: "/builder", className: "btn-ghost-link", children: "View All" }), children: domainList.length === 0 ? (_jsx("div", { className: "empty", children: "Loading domains\u2026" })) : (_jsx("ul", { className: "domain-list", children: domainList.map((d) => (_jsxs("li", { children: [_jsx("span", { className: "domain-name", children: d.name }), _jsx("span", { className: "domain-bar", children: _jsx("span", { className: "domain-bar-fill", style: { width: `${Math.min(100, d.pct)}%`, background: conceptIconColor(d.name) } }) }), _jsxs("span", { className: "domain-pct muted", children: [d.count, " (", d.pct.toFixed(1), "%)"] })] }, d.name))) })) }), _jsx(Card, { title: "Quick Actions", children: _jsxs("div", { className: "quick-actions", children: [_jsxs(Link, { to: "/files", className: "quick-action qa-blue", children: [_jsx("span", { className: "qa-icon", children: Icon.upload }), _jsxs("div", { children: [_jsx("div", { className: "qa-title", children: "Import Concepts" }), _jsx("div", { className: "qa-sub muted", children: "Import from files or sources" })] })] }), _jsxs(Link, { to: "/builder", className: "quick-action qa-violet", children: [_jsx("span", { className: "qa-icon", children: Icon.spark }), _jsxs("div", { children: [_jsx("div", { className: "qa-title", children: "Generate with AI" }), _jsx("div", { className: "qa-sub muted", children: "Auto-generate concepts" })] })] }), _jsxs("button", { type: "button", className: "quick-action qa-amber", onClick: () => setInfo("Bulk edit coming soon."), children: [_jsx("span", { className: "qa-icon", children: Icon.edit }), _jsxs("div", { style: { textAlign: "left" }, children: [_jsx("div", { className: "qa-title", children: "Bulk Edit" }), _jsx("div", { className: "qa-sub muted", children: "Edit multiple concepts" })] })] }), _jsxs("button", { type: "button", className: "quick-action qa-green", onClick: () => setInfo("Definition validation coming soon."), children: [_jsx("span", { className: "qa-icon", children: Icon.check }), _jsxs("div", { style: { textAlign: "left" }, children: [_jsx("div", { className: "qa-title", children: "Validate Definitions" }), _jsx("div", { className: "qa-sub muted", children: "Check quality & consistency" })] })] })] }) })] }), createOpen && (_jsx(CreateConceptModal, { typeNames: typeNames, busy: busy, onClose: () => setCreateOpen(false), onSubmit: handleCreateSubmit }))] }));
+                                                return (_jsxs("tr", { className: isSel ? "row-active" : undefined, onClick: () => setSelected(c), style: { cursor: "pointer" }, children: [_jsx("td", { children: _jsxs("div", { className: "concept-name-cell", children: [_jsx("span", { className: "concept-avatar", style: { background: conceptIconColor(c.name) }, children: initials(c.name) }), _jsx("span", { children: c.name })] }) }), _jsx("td", { children: dom }), _jsx("td", { className: "def-cell", children: _jsx("div", { className: "def-cell-text muted", title: c.description || "", children: c.description || "—" }) }), _jsx("td", { children: _jsx("span", { className: `badge ${st.cls}`, children: st.label }) }), _jsx("td", { children: fmtNum(Number(c.properties?.linked ?? 0)) }), _jsx("td", { children: fmtDate(conceptUpdatedAt(c)) }), _jsxs("td", { className: "actions", children: [_jsx("button", { className: "icon-btn", title: "Edit", onClick: (e) => { e.stopPropagation(); handleEdit(c); }, children: _jsx("span", { style: { width: 16, height: 16, display: "inline-flex" }, children: Icon.pencil }) }), _jsx("button", { className: "icon-btn icon-btn-danger", title: "Delete concept", "aria-label": `Delete concept ${c.name}`, onClick: (e) => { e.stopPropagation(); handleDelete(c); }, children: _jsx("span", { style: { width: 16, height: 16, display: "inline-flex" }, children: Icon.trash }) })] })] }, c.id));
+                                            })] })] }), _jsxs("div", { className: "pagination", children: [_jsxs("span", { className: "muted", children: ["Showing ", showingFrom, "\u2013", showingTo, " of ", fmtNum(total), " concepts"] }), _jsxs("div", { className: "pager", children: [_jsx("button", { disabled: page === 0, onClick: () => setPage((p) => Math.max(0, p - 1)), children: "\u2039" }), Array.from({ length: Math.min(5, totalPages) }, (_, i) => i).map((i) => (_jsx("button", { className: i === page ? "pager-active" : "", onClick: () => setPage(i), children: i + 1 }, i))), totalPages > 5 && _jsx("span", { className: "muted", children: "\u2026" }), totalPages > 5 && (_jsx("button", { onClick: () => setPage(totalPages - 1), children: totalPages })), _jsx("button", { disabled: page + 1 >= totalPages, onClick: () => setPage((p) => Math.min(totalPages - 1, p + 1)), children: "\u203A" })] })] })] }), _jsxs("div", { className: "concepts-side", children: [_jsx(Card, { title: "Concept Details", actions: _jsx("button", { className: "icon-btn", title: "Expand", children: _jsx("span", { style: { width: 16, height: 16, display: "inline-flex" }, children: Icon.expand }) }), children: selected ? (_jsxs(_Fragment, { children: [_jsx(ConceptDetails, { concept: selected, domain: conceptDomain(selected, types), onEdit: () => handleEdit(selected), onDelete: () => handleDelete(selected) }), _jsx(RelationsPanel, { concept: selected, ontology: ontology, allConcepts: concepts })] })) : (_jsx("div", { className: "empty", children: "Select a concept from the library." })) }), _jsx(Card, { title: "Concept Hierarchy", children: hierarchy.length === 0 ? (_jsx("div", { className: "empty", children: "No concept types defined yet." })) : (_jsx("div", { className: "concept-tree", children: hierarchy.map((n) => (_jsx(HierarchyNode, { node: n, depth: 0 }, n.name))) })) })] })] }), _jsxs("div", { className: "dash-row dash-row-three", children: [_jsx(Card, { title: "Recent Concept Activity", actions: _jsx(Link, { to: "/builder", className: "btn-ghost-link", children: "View All" }), children: recent.length === 0 ? (_jsx("div", { className: "empty", children: "No recent activity." })) : (_jsx("ul", { className: "activity-list", children: recent.map((c) => (_jsxs("li", { children: [_jsx("span", { className: "activity-dot", style: { background: conceptIconColor(c.name) } }), _jsxs("span", { className: "activity-text", children: ["Concept ", _jsxs("strong", { children: ["\u201C", c.name, "\u201D"] }), " added"] }), _jsx("span", { className: "activity-time muted", children: fmtDate(conceptUpdatedAt(c)) })] }, c.id))) })) }), _jsx(Card, { title: "Top Domains", actions: _jsx(Link, { to: "/builder", className: "btn-ghost-link", children: "View All" }), children: domainList.length === 0 ? (_jsx("div", { className: "empty", children: "Loading domains\u2026" })) : (_jsx("ul", { className: "domain-list", children: domainList.map((d) => (_jsxs("li", { children: [_jsx("span", { className: "domain-name", children: d.name }), _jsx("span", { className: "domain-bar", children: _jsx("span", { className: "domain-bar-fill", style: { width: `${Math.min(100, d.pct)}%`, background: conceptIconColor(d.name) } }) }), _jsxs("span", { className: "domain-pct muted", children: [d.count, " (", d.pct.toFixed(1), "%)"] })] }, d.name))) })) }), _jsx(Card, { title: "Quick Actions", children: _jsxs("div", { className: "quick-actions", children: [_jsxs(Link, { to: "/files", className: "quick-action qa-blue", children: [_jsx("span", { className: "qa-icon", children: Icon.upload }), _jsxs("div", { children: [_jsx("div", { className: "qa-title", children: "Import Concepts" }), _jsx("div", { className: "qa-sub muted", children: "Import from files or sources" })] })] }), _jsxs(Link, { to: "/builder", className: "quick-action qa-violet", children: [_jsx("span", { className: "qa-icon", children: Icon.spark }), _jsxs("div", { children: [_jsx("div", { className: "qa-title", children: "Generate with AI" }), _jsx("div", { className: "qa-sub muted", children: "Auto-generate concepts" })] })] }), _jsxs("button", { type: "button", className: "quick-action qa-amber", onClick: () => setInfo("Bulk edit coming soon."), children: [_jsx("span", { className: "qa-icon", children: Icon.edit }), _jsxs("div", { style: { textAlign: "left" }, children: [_jsx("div", { className: "qa-title", children: "Bulk Edit" }), _jsx("div", { className: "qa-sub muted", children: "Edit multiple concepts" })] })] }), _jsxs("button", { type: "button", className: "quick-action qa-green", onClick: () => setInfo("Definition validation coming soon."), children: [_jsx("span", { className: "qa-icon", children: Icon.check }), _jsxs("div", { style: { textAlign: "left" }, children: [_jsx("div", { className: "qa-title", children: "Validate Definitions" }), _jsx("div", { className: "qa-sub muted", children: "Check quality & consistency" })] })] })] }) })] }), createOpen && (_jsx(CreateConceptModal, { typeNames: typeNames, busy: busy, onClose: () => setCreateOpen(false), onSubmit: handleCreateSubmit })), editingConcept && (_jsx(EditConceptModal, { concept: editingConcept, busy: busy, onClose: () => setEditingConcept(null), onSubmit: submitEdit }))] }));
 }
 function CreateConceptModal({ typeNames, busy, onClose, onSubmit }) {
     const [name, setName] = useState("");
@@ -465,6 +489,18 @@ function CreateConceptModal({ typeNames, busy, onClose, onSubmit }) {
           .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
         ` })] }) }));
 }
+function EditConceptModal({ concept, busy, onClose, onSubmit }) {
+    const [name, setName] = useState(concept.name);
+    const [description, setDescription] = useState(concept.description ?? "");
+    const canSubmit = name.trim().length > 0 && !busy;
+    const handleSubmit = (e) => {
+        e.preventDefault();
+        if (!canSubmit)
+            return;
+        onSubmit({ name: name.trim(), description: description.trim() });
+    };
+    return (_jsx("div", { className: "modal-backdrop", onClick: onClose, children: _jsxs("div", { className: "modal", role: "dialog", "aria-modal": "true", "aria-labelledby": "edit-concept-title", onClick: (e) => e.stopPropagation(), children: [_jsxs("div", { className: "modal-head", children: [_jsx("h3", { id: "edit-concept-title", children: "Edit Concept" }), _jsx("button", { className: "modal-close", onClick: onClose, "aria-label": "Close", children: "\u00D7" })] }), _jsxs("form", { className: "modal-form", onSubmit: handleSubmit, children: [_jsxs("label", { className: "modal-label", children: ["Name", _jsx("input", { className: "modal-input", type: "text", value: name, onChange: (e) => setName(e.target.value), autoFocus: true, required: true })] }), _jsxs("label", { className: "modal-label", children: ["Definition", _jsx("textarea", { className: "modal-input", rows: 4, value: description, onChange: (e) => setDescription(e.target.value) })] }), _jsxs("div", { className: "modal-actions", children: [_jsx("button", { type: "button", className: "btn-ghost", onClick: onClose, disabled: busy, children: "Cancel" }), _jsx("button", { type: "submit", className: "btn-primary", disabled: !canSubmit, children: busy ? "Saving…" : "Save" })] })] })] }) }));
+}
 function ConceptDetails({ concept, domain, onEdit, onDelete }) {
     const synonyms = (() => {
         const v = concept.properties?.synonyms;
@@ -479,6 +515,8 @@ function ConceptDetails({ concept, domain, onEdit, onDelete }) {
     return (_jsxs("div", { className: "concept-details", children: [_jsxs("div", { className: "cd-head", children: [_jsx("span", { className: "cd-avatar", style: { background: conceptIconColor(concept.name) }, children: initials(concept.name) }), _jsxs("div", { className: "cd-head-text", children: [_jsxs("div", { className: "cd-name-row", children: [_jsx("h3", { className: "cd-name", children: concept.name }), _jsx("span", { className: "badge badge-accent", children: concept.concept_type })] }), _jsx("p", { className: "cd-desc muted", children: concept.description || "No definition provided." })] })] }), _jsxs("dl", { className: "cd-grid", children: [_jsx("dt", { children: "URI" }), _jsxs("dd", { className: "mono", children: ["urn:concept:", concept.concept_type.toLowerCase(), ":", concept.id] }), _jsx("dt", { children: "Synonyms / Tags" }), _jsx("dd", { children: synonyms.length === 0 ? (_jsx("span", { className: "muted", children: "\u2014" })) : (_jsx("span", { className: "tag-row", children: synonyms.map((s) => _jsx("span", { className: "tag-chip", children: s }, s)) })) }), _jsx("dt", { children: "Domain" }), _jsx("dd", { children: domain }), _jsx("dt", { children: "Owner" }), _jsx("dd", { children: owner }), _jsx("dt", { children: "Last Updated" }), _jsx("dd", { children: fmtDate(updated) })] }), _jsxs("div", { className: "cd-actions", children: [_jsx("button", { onClick: onEdit, children: _jsxs("span", { style: { display: "inline-flex", alignItems: "center", gap: 6 }, children: [_jsx("span", { style: { width: 14, height: 14, display: "inline-flex" }, children: Icon.pencil }), "Edit Concept"] }) }), _jsx(Link, { to: `/graph?seed=${concept.id}`, className: "btn-link-wrap", children: _jsx("button", { children: _jsxs("span", { style: { display: "inline-flex", alignItems: "center", gap: 6 }, children: [_jsx("span", { style: { width: 14, height: 14, display: "inline-flex" }, children: Icon.share }), "View Relations"] }) }) }), _jsx("button", { children: _jsxs("span", { style: { display: "inline-flex", alignItems: "center", gap: 6 }, children: [_jsx("span", { style: { width: 14, height: 14, display: "inline-flex" }, children: Icon.download }), "Export"] }) }), _jsx("button", { className: "btn-danger", onClick: onDelete, children: _jsxs("span", { style: { display: "inline-flex", alignItems: "center", gap: 6 }, children: [_jsx("span", { style: { width: 14, height: 14, display: "inline-flex" }, children: Icon.trash }), "Delete"] }) })] })] }));
 }
 function RelationsPanel({ concept, ontology, allConcepts }) {
+    const toast = useToast();
+    const confirm = useConfirm();
     const [outgoing, setOutgoing] = useState([]);
     const [incoming, setIncoming] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -545,18 +583,18 @@ function RelationsPanel({ concept, ontology, allConcepts }) {
             await refresh();
         }
         catch (err) {
-            alert("Add failed: " + err.message);
+            toast.error("Add failed: " + err.message);
         }
     }
     async function onDelete(id) {
-        if (!confirm("Delete this relation?"))
+        if (!(await confirm({ title: "Delete relation", message: "Delete this relation?", confirmLabel: "Delete", danger: true })))
             return;
         try {
             await deleteRelation(id);
             await refresh();
         }
         catch (err) {
-            alert("Delete failed: " + err.message);
+            toast.error("Delete failed: " + err.message);
         }
     }
     const renderRow = (r, otherId, direction) => {

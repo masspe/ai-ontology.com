@@ -76,7 +76,22 @@ export default function IngestWizard() {
   const toast = useToast();
   const [step, setStep] = useState<Step>("upload");
   const [file, setFile] = useState<File | null>(null);
-  const [provider, setProvider] = useState<"default" | "openai" | "anthropic">("default");
+  const [provider, setProvider] = useState<"default" | "openai" | "anthropic" | "infomaniak">(
+    () => {
+      // Default the wizard's provider to whatever the user picked in Settings.
+      try {
+        const raw = typeof window !== "undefined"
+          ? window.localStorage.getItem("ontology.providerConfig")
+          : null;
+        if (raw) {
+          const cfg = JSON.parse(raw);
+          const p = cfg?.activeLLMProvider;
+          if (p === "openai" || p === "anthropic" || p === "infomaniak" || p === "default") return p;
+        }
+      } catch { /* ignore */ }
+      return "default";
+    },
+  );
   const [modelName, setModelName] = useState("");
   const [languageHint, setLanguageHint] = useState("");
   const [proposal, setProposal] = useState<OntologyProposal | null>(null);
@@ -270,8 +285,8 @@ function UploadStep(props: {
   file: File | null;
   onFile: (f: File | null) => void;
   fileInput: React.RefObject<HTMLInputElement>;
-  provider: "default" | "openai" | "anthropic";
-  onProvider: (v: "default" | "openai" | "anthropic") => void;
+  provider: "default" | "openai" | "anthropic" | "infomaniak";
+  onProvider: (v: "default" | "openai" | "anthropic" | "infomaniak") => void;
   model: string;
   onModel: (v: string) => void;
   languageHint: string;
@@ -297,12 +312,15 @@ function UploadStep(props: {
             <select
               value={props.provider}
               onChange={(e) =>
-                props.onProvider(e.target.value as "default" | "openai" | "anthropic")
+                props.onProvider(
+                  e.target.value as "default" | "openai" | "anthropic" | "infomaniak",
+                )
               }
             >
               <option value="default">Default (server-configured)</option>
               <option value="openai">OpenAI</option>
               <option value="anthropic">Anthropic</option>
+              <option value="infomaniak">Infomaniak AI (Swiss cloud)</option>
             </select>
           </label>
           <label style={{ display: "grid", gap: 4 }}>
