@@ -38,6 +38,7 @@ async fn csv_ingests_concepts_with_properties() {
         parent: None,
         properties: None,
         description: "human".into(),
+        ..Default::default()
     });
     let graph = OntologyGraph::with_arc(ont);
 

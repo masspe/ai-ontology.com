@@ -22,7 +22,7 @@ pub enum Cardinality {
 }
 
 /// A node type in the ontology, e.g. `Person`, `Paper`, `Drug`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ConceptType {
     pub name: String,
     /// Names of properties that may appear on instances of this type.
@@ -36,10 +36,17 @@ pub struct ConceptType {
     /// Human-readable description used by the RAG prompt builder.
     #[serde(default)]
     pub description: String,
+    /// Properties that every instance of this type must define.
+    #[serde(default)]
+    pub required_properties: Vec<String>,
+    /// Sibling concept types that an instance of this type cannot also share
+    /// a (type, lowercase-name) identity with. Auto-symmetrised at insert.
+    #[serde(default)]
+    pub disjoint_with: Vec<String>,
 }
 
 /// An edge type in the ontology, e.g. `authored`, `treats`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RelationType {
     pub name: String,
     pub domain: String,
@@ -50,6 +57,15 @@ pub struct RelationType {
     pub symmetric: bool,
     #[serde(default)]
     pub description: String,
+    #[serde(default)]
+    pub transitive: bool,
+    /// Name of the relation type whose adjacency is the converse of this one.
+    /// Traversals expose virtual edges in both directions when set.
+    #[serde(default)]
+    pub inverse_of: Option<String>,
+    /// Hard ≤1 outgoing of this type per source, independent of cardinality.
+    #[serde(default)]
+    pub functional: bool,
 }
 
 /// A declarative rule attached to the ontology, e.g.
@@ -115,6 +131,8 @@ pub struct Ontology {
     pub rule_types: AHashMap<String, RuleType>,
     #[serde(default)]
     pub action_types: AHashMap<String, ActionType>,
+    #[serde(skip)]
+    descendants_cache: std::sync::OnceLock<AHashMap<String, Vec<String>>>,
 }
 
 impl Ontology {
@@ -122,8 +140,28 @@ impl Ontology {
         Self::default()
     }
 
-    pub fn add_concept_type(&mut self, ct: ConceptType) {
+    pub fn add_concept_type(&mut self, mut ct: ConceptType) {
+        // Auto-symmetrise disjoint_with both ways: pull in back-edges from
+        // any existing sibling that already names us, and push forward-edges
+        // into our declared siblings.
+        let name = ct.name.clone();
+        for (other_name, other) in self.concept_types.iter() {
+            if other.disjoint_with.iter().any(|n| n == &name)
+                && !ct.disjoint_with.iter().any(|n| n == other_name)
+            {
+                ct.disjoint_with.push(other_name.clone());
+            }
+        }
+        let siblings = ct.disjoint_with.clone();
         self.concept_types.insert(ct.name.clone(), ct);
+        for other in siblings {
+            if let Some(o) = self.concept_types.get_mut(&other) {
+                if !o.disjoint_with.iter().any(|n| n == &name) {
+                    o.disjoint_with.push(name.clone());
+                }
+            }
+        }
+        self.invalidate_caches();
     }
 
     pub fn add_relation_type(&mut self, rt: RelationType) -> GraphResult<()> {
@@ -133,8 +171,77 @@ impl Ontology {
         if !self.concept_types.contains_key(&rt.range) {
             return Err(GraphError::UnknownConceptType(rt.range));
         }
+        if let Some(inv) = &rt.inverse_of {
+            if inv.is_empty() {
+                return Err(GraphError::UnknownRelationType(inv.clone()));
+            }
+            if inv == &rt.name && !rt.symmetric {
+                return Err(GraphError::UnknownRelationType(inv.clone()));
+            }
+        }
         self.relation_types.insert(rt.name.clone(), rt);
+        self.invalidate_caches();
         Ok(())
+    }
+
+    /// Cross-check every `inverse_of` reference. Run after all relation types
+    /// are loaded, since inverses may be declared out-of-order.
+    pub fn validate_inverses(&self) -> GraphResult<()> {
+        for rt in self.relation_types.values() {
+            if let Some(inv_name) = &rt.inverse_of {
+                let inv = self
+                    .relation_types
+                    .get(inv_name)
+                    .ok_or_else(|| GraphError::UnknownRelationType(inv_name.clone()))?;
+                if inv.domain != rt.range || inv.range != rt.domain {
+                    return Err(GraphError::SchemaViolation {
+                        relation: format!("inverse_of {}", rt.name),
+                        source_type: inv.domain.clone(),
+                        target_type: inv.range.clone(),
+                        expected_domain: rt.range.clone(),
+                        expected_range: rt.domain.clone(),
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// All concept type names that are `ancestor` or transitively inherit
+    /// from it. Includes `ancestor` itself. Empty slice if unknown.
+    pub fn descendants(&self, ancestor: &str) -> Vec<String> {
+        let cache = self
+            .descendants_cache
+            .get_or_init(|| self.build_descendants_index());
+        cache.get(ancestor).cloned().unwrap_or_default()
+    }
+
+    fn build_descendants_index(&self) -> AHashMap<String, Vec<String>> {
+        let mut children: AHashMap<&str, Vec<&str>> = AHashMap::new();
+        for ct in self.concept_types.values() {
+            if let Some(p) = &ct.parent {
+                children.entry(p.as_str()).or_default().push(ct.name.as_str());
+            }
+        }
+        let mut out: AHashMap<String, Vec<String>> = AHashMap::new();
+        for name in self.concept_types.keys() {
+            let mut acc = vec![name.clone()];
+            let mut stack: Vec<&str> = children.get(name.as_str()).cloned().unwrap_or_default();
+            while let Some(c) = stack.pop() {
+                acc.push(c.to_string());
+                if let Some(grand) = children.get(c) {
+                    stack.extend(grand);
+                }
+            }
+            acc.sort();
+            acc.dedup();
+            out.insert(name.clone(), acc);
+        }
+        out
+    }
+
+    fn invalidate_caches(&mut self) {
+        self.descendants_cache = std::sync::OnceLock::new();
     }
 
     pub fn concept_type(&self, name: &str) -> GraphResult<&ConceptType> {
@@ -158,6 +265,7 @@ impl Ontology {
             }
         }
         self.rule_types.insert(rule.name.clone(), rule);
+        self.invalidate_caches();
         Ok(())
     }
 
@@ -173,6 +281,7 @@ impl Ontology {
             }
         }
         self.action_types.insert(action.name.clone(), action);
+        self.invalidate_caches();
         Ok(())
     }
 
@@ -218,5 +327,43 @@ impl Ontology {
             });
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_inverses_happy_and_sad() {
+        let mut o = Ontology::new();
+        o.add_concept_type(ConceptType { name: "A".into(), ..Default::default() });
+        o.add_concept_type(ConceptType { name: "B".into(), ..Default::default() });
+        o.add_relation_type(RelationType {
+            name: "fwd".into(),
+            domain: "A".into(),
+            range: "B".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        o.add_relation_type(RelationType {
+            name: "bwd".into(),
+            domain: "B".into(),
+            range: "A".into(),
+            inverse_of: Some("fwd".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        o.validate_inverses().unwrap();
+
+        // Sad path: inverse points at non-existent type.
+        let mut bad = o.clone();
+        bad.relation_types.get_mut("bwd").unwrap().inverse_of = Some("nope".into());
+        assert!(bad.validate_inverses().is_err());
+
+        // Sad path: domain/range don't actually mirror.
+        let mut bad2 = o.clone();
+        bad2.relation_types.get_mut("bwd").unwrap().range = "B".into();
+        assert!(bad2.validate_inverses().is_err());
     }
 }

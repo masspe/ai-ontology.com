@@ -65,6 +65,31 @@ pub fn decode_to_utf8(raw: &[u8]) -> DecodedText {
     }
 }
 
+/// Heuristic: does this decoded text look like a binary blob that was
+/// mis-decoded as text (e.g. a `.xlsx`/`.zip`/image fed through the charset
+/// decoder)? Such inputs decode "successfully" but are useless as document
+/// bodies — and, left unbounded, a multi-megabyte blob stored as a concept
+/// description will freeze the UI when rendered.
+///
+/// We flag content containing NUL characters (which never appear in real
+/// text) or whose first few KiB are ≥10% control / replacement characters.
+pub fn looks_binary(text: &str) -> bool {
+    let mut total = 0usize;
+    let mut suspicious = 0usize;
+    // Sample the head — enough to classify, cheap on huge inputs.
+    for ch in text.chars().take(8192) {
+        if ch == '\0' {
+            return true;
+        }
+        total += 1;
+        let printable_control = ch == '\t' || ch == '\n' || ch == '\r';
+        if (ch.is_control() && !printable_control) || ch == '\u{FFFD}' {
+            suspicious += 1;
+        }
+    }
+    total > 0 && suspicious * 10 >= total
+}
+
 /// Choose an encoding by sniffing BOM / running `chardetng`.
 fn sniff_encoding(raw: &[u8]) -> (&'static Encoding, bool) {
     if raw.starts_with(&[0xEF, 0xBB, 0xBF]) {
@@ -136,6 +161,18 @@ mod tests {
         let r = decode_to_utf8(&buf);
         assert_eq!(r.text, "héllo");
         assert!(r.had_bom);
+    }
+
+    #[test]
+    fn looks_binary_flags_blobs_and_spares_text() {
+        // Real prose, even with accents and newlines, is not binary.
+        assert!(!looks_binary("Bonjour le monde.\nDeuxième ligne — café.\n"));
+        assert!(!looks_binary(""));
+        // A NUL byte is an immediate tell.
+        assert!(looks_binary("abc\0def"));
+        // A ZIP/xlsx header decoded as latin-1 is mostly control bytes.
+        let zipish = decode_to_utf8(b"PK\x03\x04\x14\x00\x06\x00\x08\x00\x00\x00\x21\x00");
+        assert!(looks_binary(&zipish.text));
     }
 
     #[test]

@@ -10,6 +10,23 @@ use ontology_graph::{Ontology, Subgraph};
 use ontology_index::ScoredConcept;
 use std::fmt::Write;
 
+/// Turn a `PascalCase` / `snake_case` relation type into a lowercase verb
+/// phrase suitable for prose ("WorksFor" → "works for"). Used as a fallback
+/// when a `RelationType.description` is empty.
+fn humanize_relation(name: &str) -> String {
+    let spaced = name.replace('_', " ");
+    let mut out = String::with_capacity(spaced.len() + 4);
+    let mut prev_lower = false;
+    for ch in spaced.chars() {
+        if ch.is_ascii_uppercase() && prev_lower {
+            out.push(' ');
+        }
+        out.extend(ch.to_lowercase());
+        prev_lower = ch.is_ascii_lowercase() || ch.is_ascii_digit();
+    }
+    out
+}
+
 /// Renders retrieved context into prompt-ready text.
 ///
 /// Output is split into two halves so the caller can route them to different
@@ -67,13 +84,20 @@ impl<'a> PromptBuilder<'a> {
         let mut relation_types: Vec<_> = self.ontology.relation_types.values().collect();
         relation_types.sort_by(|a, b| a.name.cmp(&b.name));
         for rt in relation_types {
+            let mut tags = String::new();
+            if rt.symmetric {
+                tags.push_str(" [symmetric]");
+            }
+            if rt.transitive {
+                tags.push_str(" [transitive]");
+            }
+            if let Some(inv) = &rt.inverse_of {
+                let _ = write!(tags, " [inverse: {}]", inv);
+            }
             let _ = writeln!(
                 out,
                 "- ({}) -[{}]-> ({}){}",
-                rt.domain,
-                rt.name,
-                rt.range,
-                if rt.symmetric { " [symmetric]" } else { "" },
+                rt.domain, rt.name, rt.range, tags,
             );
         }
         if !self.ontology.rule_types.is_empty() {
@@ -133,6 +157,8 @@ impl<'a> PromptBuilder<'a> {
             }
         }
         out.push_str("\n# Subgraph\n");
+        out.push_str("# Each line: `#<id> [depth] (Type) Name — description`. \
+                      Cite the `#<id>` tokens verbatim in your answer.\n");
         for c in &subgraph.concepts {
             let depth = subgraph.depth_of.get(&c.id).copied().unwrap_or(0);
             let desc = if c.description.is_empty() {
@@ -142,7 +168,8 @@ impl<'a> PromptBuilder<'a> {
             };
             let _ = writeln!(
                 out,
-                "- [{}] ({}) {}{}",
+                "- #{} [{}] ({}) {}{}",
+                c.id.0,
                 depth,
                 c.concept_type,
                 c.name,
@@ -156,19 +183,35 @@ impl<'a> PromptBuilder<'a> {
                 break;
             }
         }
-        out.push_str("\n# Edges\n");
+        out.push_str("\n# Facts\n");
         for r in &subgraph.relations {
             let s = subgraph.concepts.iter().find(|c| c.id == r.source);
             let t = subgraph.concepts.iter().find(|c| c.id == r.target);
             if let (Some(s), Some(t)) = (s, t) {
-                let _ = writeln!(out, "- {} -[{}]-> {}", s.name, r.relation_type, t.name);
+                let verb = self
+                    .ontology
+                    .relation_types
+                    .get(&r.relation_type)
+                    .map(|rt| rt.description.as_str())
+                    .filter(|d| !d.is_empty())
+                    .map(|d| d.to_string())
+                    .unwrap_or_else(|| humanize_relation(&r.relation_type));
+                let _ = writeln!(
+                    out,
+                    "- #{} {} — {} {}.   (raw: {} -[{}]-> {})",
+                    s.id.0, s.name, verb, t.name, s.name, r.relation_type, t.name
+                );
             }
             if out.len() >= self.max_context_chars {
                 break;
             }
         }
         if out.len() > self.max_context_chars {
-            out.truncate(self.max_context_chars);
+            let mut cut = self.max_context_chars;
+            while cut > 0 && !out.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            out.truncate(cut);
             out.push_str("\n…[truncated]\n");
         }
         out
@@ -183,10 +226,22 @@ impl<'a> PromptBuilder<'a> {
     }
 
     pub fn system_message() -> &'static str {
-        "You are a question-answering assistant. Use ONLY the supplied \
-         ontology, concept list and edge list to answer. If the answer is not \
-         supported by the supplied context, say you don't know. Cite concept \
-         names verbatim."
+        "You are a question-answering assistant grounded in an ontology graph. \
+         Use ONLY the supplied ontology, top concepts, subgraph and facts. \
+         If the supplied context does not support an answer, reply exactly: \
+         `I don't know based on the supplied context.`\n\
+         \n\
+         Respond in this exact two-line format:\n\
+         Cited: [#<id>, #<id>, …]\n\
+         Answer: <one or more sentences citing concept names verbatim>\n\
+         \n\
+         Rules:\n\
+         - Every `#<id>` in `Cited:` MUST appear in the supplied Subgraph. \
+           Do NOT invent ids.\n\
+         - Cite at least one id when answering; cite zero ids only when \
+           replying `I don't know …`.\n\
+         - Prefer facts at lower depth ([0], [1]) over deeper ones.\n\
+         - Do not restate the ontology schema; use it only to disambiguate."
     }
 
     /// System prompt that instructs the LLM to emit a strict JSON

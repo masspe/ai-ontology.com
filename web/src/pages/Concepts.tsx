@@ -40,6 +40,15 @@ function fmtNum(n: number): string {
   return n.toLocaleString("en-US");
 }
 
+// Cap how much of a concept description ever reaches the DOM. Failed text
+// extraction can leave multi-megabyte binary blobs (e.g. raw .xlsx/.zip bytes)
+// in `description`; rendering one untruncated — as a text node *and* a `title`
+// attribute — freezes the browser. CSS clipping doesn't help: the full string
+// still lives in the DOM. So we truncate the actual values we render.
+function truncate(s: string, max: number): string {
+  return s.length > max ? s.slice(0, max) + "…" : s;
+}
+
 function fmtDate(ts?: number | null): string {
   if (!ts) return "—";
   return new Date(ts * 1000).toLocaleDateString("en-US", {
@@ -745,8 +754,11 @@ export default function Concepts() {
                     </td>
                     <td>{dom}</td>
                     <td className="def-cell">
-                      <div className="def-cell-text muted" title={c.description || ""}>
-                        {c.description || "—"}
+                      <div
+                        className="def-cell-text muted"
+                        title={c.description ? truncate(c.description, 300) : ""}
+                      >
+                        {c.description ? truncate(c.description, 160) : "—"}
                       </div>
                     </td>
                     <td><span className={`badge ${st.cls}`}>{st.label}</span></td>
@@ -1237,7 +1249,9 @@ function ConceptDetails({ concept, domain, onEdit, onDelete }: DetailsProps) {
             <h3 className="cd-name">{concept.name}</h3>
             <span className="badge badge-accent">{concept.concept_type}</span>
           </div>
-          <p className="cd-desc muted">{concept.description || "No definition provided."}</p>
+          <p className="cd-desc muted">
+            {concept.description ? truncate(concept.description, 2000) : "No definition provided."}
+          </p>
         </div>
       </div>
 

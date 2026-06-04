@@ -52,6 +52,18 @@ pub enum GraphError {
         concept_type: String,
     },
 
+    #[error("missing required property `{property}` on concept of type `{concept_type}`")]
+    MissingRequiredProperty {
+        property: String,
+        concept_type: String,
+    },
+
+    #[error("disjoint type violation: `{type_a}` is disjoint with `{type_b}`")]
+    DisjointTypeViolation {
+        type_a: String,
+        type_b: String,
+    },
+
     #[error("serialization error: {0}")]
     Serde(String),
 }

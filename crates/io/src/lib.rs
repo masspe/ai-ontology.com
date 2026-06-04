@@ -30,7 +30,7 @@ pub mod text;
 pub mod triples;
 pub mod xlsx;
 
-pub use charset::{decode_to_utf8, DecodedText};
+pub use charset::{decode_to_utf8, looks_binary, DecodedText};
 pub use csv::CsvSource;
 pub use docx::{extract_docx_text, is_zip};
 pub use extract::extract_from_text;

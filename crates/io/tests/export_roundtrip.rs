@@ -33,12 +33,14 @@ fn ontology() -> Ontology {
         parent: None,
         properties: None,
         description: "".into(),
+        ..Default::default()
     });
     o.add_concept_type(ConceptType {
         name: "Paper".into(),
         parent: None,
         properties: None,
         description: "".into(),
+        ..Default::default()
     });
     o.add_relation_type(RelationType {
         name: "authored".into(),
@@ -47,6 +49,7 @@ fn ontology() -> Ontology {
         cardinality: Default::default(),
         symmetric: false,
         description: "".into(),
+        ..Default::default()
     })
     .unwrap();
     o
@@ -66,6 +69,7 @@ async fn export_roundtrip_preserves_symmetric_count() {
         parent: None,
         properties: None,
         description: "".into(),
+        ..Default::default()
     });
     o.add_relation_type(RelationType {
         name: "related_to".into(),
@@ -74,6 +78,7 @@ async fn export_roundtrip_preserves_symmetric_count() {
         cardinality: Default::default(),
         symmetric: true,
         description: "".into(),
+        ..Default::default()
     })
     .unwrap();
 

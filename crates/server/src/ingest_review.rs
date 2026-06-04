@@ -41,7 +41,9 @@ use ontology_io::{
 use ontology_rag::{
     attach_conflicts, extract_proposal, AnthropicModel, LanguageModel, OpenAiModel,
 };
+use ontology_storage::LogRecord;
 use serde::Deserialize;
+use tracing::warn;
 
 use crate::{ApiError, AppState};
 
@@ -74,6 +76,18 @@ pub(crate) async fn analyze(
 
     // 1. Decode + normalize (BOM strip, NFC).
     let decoded = decode_to_utf8(&bytes);
+
+    // 1b. Reject binary blobs up front. Formats like .xlsx/.zip/images decode
+    // "successfully" into control-character garbage; feeding that to the LLM
+    // wastes a call and risks persisting a multi-megabyte blob downstream.
+    // The client is expected to flatten such formats to text first.
+    if ontology_io::looks_binary(&decoded.text) {
+        return Err(ApiError::Unprocessable(
+            "file looks like a binary format (e.g. .xlsx, .zip, image) rather than text; \
+             convert it to text before ingesting"
+                .into(),
+        ));
+    }
 
     // 2. Language detection (best-effort; empty / very short docs return None).
     let language = form
@@ -183,11 +197,28 @@ pub(crate) async fn apply(
                 },
                 parent: ct.parent.clone(),
                 description: ct.description.clone(),
+                ..Default::default()
             });
             Ok(())
         });
         match res {
             Ok(()) => {
+                // Schema lives in the ontology, which has no per-item log
+                // record — persist a full snapshot so the new type survives a
+                // restart. Replay applies snapshots in order (last wins), so a
+                // snapshot per accepted type is correct if slightly redundant.
+                if let Err(e) = s.store.append(&LogRecord::ontology(s.graph.ontology())).await {
+                    warn!(error=%e, name=%ct.name, "wal append failed for concept type");
+                    report.failed += 1;
+                    report.concept_types.push((
+                        ct.client_ref.clone(),
+                        ApplyOutcome::Failed { error: e.to_string() },
+                    ));
+                    if strict {
+                        return Ok(Json(report));
+                    }
+                    continue;
+                }
                 report.created += 1;
                 report.concept_types.push((
                     ct.client_ref.clone(),
@@ -223,10 +254,23 @@ pub(crate) async fn apply(
                 cardinality: ontology_graph::Cardinality::default(),
                 symmetric: rt.symmetric,
                 description: rt.description.clone(),
+                ..Default::default()
             })
         });
         match res {
             Ok(()) => {
+                if let Err(e) = s.store.append(&LogRecord::ontology(s.graph.ontology())).await {
+                    warn!(error=%e, name=%rt.name, "wal append failed for relation type");
+                    report.failed += 1;
+                    report.relation_types.push((
+                        rt.client_ref.clone(),
+                        ApplyOutcome::Failed { error: e.to_string() },
+                    ));
+                    if strict {
+                        return Ok(Json(report));
+                    }
+                    continue;
+                }
                 report.created += 1;
                 report.relation_types.push((
                     rt.client_ref.clone(),
@@ -256,51 +300,78 @@ pub(crate) async fn apply(
         }
 
         // Merge maps to an existing concept (if any); otherwise behave like CreateNew.
+        // Each arm returns the live id, whether it was a merge, and the WAL
+        // record that makes the change durable.
         let existing_id = s.graph.find_by_name(&c.concept_type, &c.name);
-        let result: Result<(ConceptId, bool), ontology_graph::GraphError> = match (action, existing_id) {
-            (DecisionAction::Merge, Some(id)) => {
-                let patch = ontology_graph::ConceptPatch {
-                    name: Some(c.name.clone()),
-                    description: if c.description.is_empty() {
-                        None
-                    } else {
-                        Some(c.description.clone())
-                    },
-                    properties: if c.properties.is_empty() {
-                        None
-                    } else {
-                        let mut m = ahash::AHashMap::new();
-                        for (k, v) in &c.properties {
-                            m.insert(k.clone(), ontology_graph::PropertyValue::Text(v.clone()));
-                        }
-                        Some(m)
-                    },
-                };
-                s.graph.update_concept(id, patch).map(|_| (id, true))
-            }
-            _ => {
-                let mut concept = Concept::new(ConceptId(0), c.concept_type.clone(), c.name.clone())
-                    .with_description(c.description.clone());
-                // Stamp the detected language onto the concept so search
-                // and downstream filters can disambiguate by locale.
-                if let Some(lang) = proposal.language.as_ref() {
-                    concept.properties.insert(
-                        "lang".into(),
-                        ontology_graph::PropertyValue::Text(lang.code.clone()),
-                    );
+        let result: Result<(ConceptId, bool, LogRecord), ontology_graph::GraphError> =
+            match (action, existing_id) {
+                (DecisionAction::Merge, Some(id)) => {
+                    let patch = ontology_graph::ConceptPatch {
+                        name: Some(c.name.clone()),
+                        description: if c.description.is_empty() {
+                            None
+                        } else {
+                            Some(c.description.clone())
+                        },
+                        properties: if c.properties.is_empty() {
+                            None
+                        } else {
+                            let mut m = ahash::AHashMap::new();
+                            for (k, v) in &c.properties {
+                                m.insert(k.clone(), ontology_graph::PropertyValue::Text(v.clone()));
+                            }
+                            Some(m)
+                        },
+                    };
+                    s.graph
+                        .update_concept(id, patch)
+                        .map(|updated| (id, true, LogRecord::update_concept(updated)))
                 }
-                for (k, v) in &c.properties {
-                    concept.properties.insert(
-                        k.clone(),
-                        ontology_graph::PropertyValue::Text(v.clone()),
-                    );
+                _ => {
+                    let mut concept = Concept::new(ConceptId(0), c.concept_type.clone(), c.name.clone())
+                        .with_description(c.description.clone());
+                    // Stamp the detected language onto the concept so search
+                    // and downstream filters can disambiguate by locale.
+                    if let Some(lang) = proposal.language.as_ref() {
+                        concept.properties.insert(
+                            "lang".into(),
+                            ontology_graph::PropertyValue::Text(lang.code.clone()),
+                        );
+                    }
+                    for (k, v) in &c.properties {
+                        concept.properties.insert(
+                            k.clone(),
+                            ontology_graph::PropertyValue::Text(v.clone()),
+                        );
+                    }
+                    let mut record_concept = concept.clone();
+                    s.graph.upsert_concept(concept).map(|id| {
+                        record_concept.id = id;
+                        (id, false, LogRecord::concept(record_concept))
+                    })
                 }
-                s.graph.upsert_concept(concept).map(|id| (id, false))
-            }
-        };
+            };
 
         match result {
-            Ok((id, merged)) => {
+            Ok((id, merged, record)) => {
+                // Persist before registering the ref / counting success: if the
+                // WAL write fails the concept must not be advertised as created
+                // (and dependent relations must dangle rather than target an
+                // unpersisted node).
+                if let Err(e) = s.store.append(&record).await {
+                    warn!(error=%e, name=%c.name, "wal append failed for concept");
+                    report.failed += 1;
+                    report.concepts.push((
+                        c.client_ref.clone(),
+                        ApplyOutcome::Failed {
+                            error: e.to_string(),
+                        },
+                    ));
+                    if strict {
+                        return Ok(Json(report));
+                    }
+                    continue;
+                }
                 concept_refs.insert(c.client_ref.clone(), id);
                 concept_refs.insert(format!("{}:{}", c.concept_type, c.name), id);
                 let outcome = if merged {
@@ -367,8 +438,24 @@ pub(crate) async fn apply(
         if let Some(w) = r.weight {
             rel.weight = w;
         }
-        match s.graph.add_relation(rel) {
+        match s.graph.add_relation(rel.clone()) {
             Ok(id) => {
+                let mut stored = rel;
+                stored.id = id;
+                if let Err(e) = s.store.append(&LogRecord::relation(stored)).await {
+                    warn!(error=%e, "wal append failed for relation");
+                    report.failed += 1;
+                    report.relations.push((
+                        r.client_ref.clone(),
+                        ApplyOutcome::Failed {
+                            error: e.to_string(),
+                        },
+                    ));
+                    if strict {
+                        return Ok(Json(report));
+                    }
+                    continue;
+                }
                 report.created += 1;
                 report.relations.push((
                     r.client_ref.clone(),
@@ -412,8 +499,24 @@ pub(crate) async fn apply(
                 rule.applies_to.push(id);
             }
         }
+        let mut record_rule = rule.clone();
         match s.graph.upsert_rule(rule) {
             Ok(id) => {
+                record_rule.id = id;
+                if let Err(e) = s.store.append(&LogRecord::rule(record_rule)).await {
+                    warn!(error=%e, "wal append failed for rule");
+                    report.failed += 1;
+                    report.rules.push((
+                        r.client_ref.clone(),
+                        ApplyOutcome::Failed {
+                            error: e.to_string(),
+                        },
+                    ));
+                    if strict {
+                        return Ok(Json(report));
+                    }
+                    continue;
+                }
                 report.created += 1;
                 report.rules.push((
                     r.client_ref.clone(),
@@ -475,8 +578,24 @@ pub(crate) async fn apply(
                 ontology_graph::PropertyValue::Text(v.clone()),
             );
         }
+        let mut record_action = act.clone();
         match s.graph.upsert_action(act) {
             Ok(id) => {
+                record_action.id = id;
+                if let Err(e) = s.store.append(&LogRecord::action(record_action)).await {
+                    warn!(error=%e, "wal append failed for action");
+                    report.failed += 1;
+                    report.actions.push((
+                        a.client_ref.clone(),
+                        ApplyOutcome::Failed {
+                            error: e.to_string(),
+                        },
+                    ));
+                    if strict {
+                        return Ok(Json(report));
+                    }
+                    continue;
+                }
                 report.created += 1;
                 report.actions.push((
                     a.client_ref.clone(),
