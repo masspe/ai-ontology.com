@@ -34,18 +34,21 @@ fn ontology() -> Ontology {
         parent: None,
         properties: None,
         description: "".into(),
+        ..Default::default()
     });
     o.add_concept_type(ConceptType {
         name: "Paper".into(),
         parent: None,
         properties: None,
         description: "".into(),
+        ..Default::default()
     });
     o.add_concept_type(ConceptType {
         name: "Topic".into(),
         parent: None,
         properties: None,
         description: "".into(),
+        ..Default::default()
     });
     o.add_relation_type(RelationType {
         name: "authored".into(),
@@ -54,6 +57,7 @@ fn ontology() -> Ontology {
         cardinality: Default::default(),
         symmetric: false,
         description: "".into(),
+        ..Default::default()
     })
     .unwrap();
     o.add_relation_type(RelationType {
@@ -63,6 +67,7 @@ fn ontology() -> Ontology {
         cardinality: Default::default(),
         symmetric: true,
         description: "".into(),
+        ..Default::default()
     })
     .unwrap();
     o

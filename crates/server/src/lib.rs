@@ -28,7 +28,7 @@ mod openapi;
 
 use axum::{
     extract::{Multipart, Path, Query, State},
-    http::{HeaderValue, Request, StatusCode},
+    http::{header, HeaderMap, HeaderValue, Request, StatusCode},
     middleware::{self, Next},
     response::{
         sse::{Event, KeepAlive, Sse},
@@ -54,6 +54,7 @@ use parking_lot::{Mutex as PlMutex, RwLock as PlRwLock};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::convert::Infallible;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::Arc as StdArc;
 use std::sync::Arc;
@@ -83,6 +84,9 @@ pub struct AppState {
     pub feedbacks: Arc<PlRwLock<FeedbackStore>>,
     /// Server bind time — used by `/settings` for "uptime" display.
     pub started_at: SystemTime,
+    /// Optional path to a JSON file used to persist `settings` across
+    /// restarts. When `None`, settings remain in-memory only.
+    pub settings_path: Option<PathBuf>,
 }
 
 impl AppState {
@@ -105,8 +109,56 @@ impl AppState {
             history: Arc::new(PlRwLock::new(StatsHistory::default())),
             feedbacks: Arc::new(PlRwLock::new(FeedbackStore::default())),
             started_at: SystemTime::now(),
+            settings_path: None,
         }
     }
+
+    /// Configure a JSON file to persist `settings` across restarts. If the
+    /// file exists, its contents are loaded into the in-memory store; the
+    /// path is then remembered so subsequent `PATCH /settings` calls write
+    /// back to it. Failures are logged and swallowed — persistence is
+    /// best-effort.
+    pub fn with_settings_path(mut self, path: PathBuf) -> Self {
+        match std::fs::read_to_string(&path) {
+            Ok(raw) => match serde_json::from_str::<Settings>(&raw) {
+                Ok(loaded) => *self.settings.write() = loaded,
+                Err(e) => tracing::warn!(
+                    error = %e,
+                    path = %path.display(),
+                    "failed to parse settings file; using defaults"
+                ),
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => tracing::warn!(
+                error = %e,
+                path = %path.display(),
+                "failed to read settings file; using defaults"
+            ),
+        }
+        self.settings_path = Some(path);
+        self
+    }
+}
+
+/// Persist the given settings to disk as JSON. Secret API key fields are
+/// stripped from the `Serialize` impl on `LlmSettings` / `OcrSettings`, so
+/// they are re-added manually here — otherwise reloading the file would
+/// produce empty keys and silently log users out of every LLM provider.
+fn persist_settings(path: &std::path::Path, s: &Settings) -> std::io::Result<()> {
+    let mut v = serde_json::to_value(s).map_err(std::io::Error::other)?;
+    if let Some(obj) = v.get_mut("llm").and_then(|x| x.as_object_mut()) {
+        obj.insert("openai_api_key".into(), serde_json::Value::String(s.llm.openai_api_key.clone()));
+        obj.insert("anthropic_api_key".into(), serde_json::Value::String(s.llm.anthropic_api_key.clone()));
+        obj.insert("infomaniak_api_key".into(), serde_json::Value::String(s.llm.infomaniak_api_key.clone()));
+    }
+    if let Some(obj) = v.get_mut("ocr").and_then(|x| x.as_object_mut()) {
+        obj.insert("google_api_key".into(), serde_json::Value::String(s.ocr.google_api_key.clone()));
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let json = serde_json::to_string_pretty(&v).map_err(std::io::Error::other)?;
+    std::fs::write(path, json)
 }
 
 // ---------------------------------------------------------------------------
@@ -1295,6 +1347,18 @@ struct ListConceptsQuery {
     /// Number of matching concepts to skip before returning results.
     #[serde(default)]
     offset: usize,
+    /// When false, stop scanning as soon as the page is full and report
+    /// `total = offset + page.len()` (a lower bound). Default true to keep
+    /// the legacy exact-count behavior.
+    #[serde(default = "default_true")]
+    track_total: bool,
+    /// When true, a `type=X` filter also returns instances of subtypes of `X`.
+    #[serde(default = "default_true")]
+    include_subtypes: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Serialize)]
@@ -1309,35 +1373,37 @@ struct ListConceptsResponse {
 /// across calls.
 async fn list_concepts(
     State(s): State<AppState>,
+    headers: HeaderMap,
     Query(q): Query<ListConceptsQuery>,
-) -> Json<ListConceptsResponse> {
+) -> Response {
+    // ETag = generation tag. The cache key for the client is the full URL
+    // (query string included), so the ETag only needs to vary on the
+    // underlying data version: as long as no concept has been written, the
+    // representation the client already has for this exact URL is still
+    // valid.
+    let gen = s.graph.concepts_generation();
+    let etag = format!("W/\"c{gen}\"");
+    if let Some(if_match) = headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok()) {
+        if if_match == etag {
+            return StatusCode::NOT_MODIFIED.into_response();
+        }
+    }
+
     let needle = q.q.as_ref().map(|s| s.to_lowercase());
-    let mut all: Vec<Concept> = s
-        .graph
-        .all_concepts()
-        .into_iter()
-        .filter(|c| {
-            q.concept_type
-                .as_ref()
-                .map(|t| c.concept_type == *t)
-                .unwrap_or(true)
-        })
-        .filter(|c| {
-            needle
-                .as_ref()
-                .map(|n| c.name.to_lowercase().contains(n))
-                .unwrap_or(true)
-        })
-        .collect();
-    all.sort_by(|a, b| {
-        a.concept_type
-            .cmp(&b.concept_type)
-            .then_with(|| a.name.cmp(&b.name))
-    });
-    let total = all.len();
     let limit = q.limit.unwrap_or(200).min(5_000);
-    let concepts = all.into_iter().skip(q.offset).take(limit).collect();
-    Json(ListConceptsResponse { total, concepts })
+    let (total, concepts) = s.graph.list_concepts_page(
+        q.concept_type.as_deref(),
+        needle.as_deref(),
+        q.offset,
+        limit,
+        q.track_total,
+        q.include_subtypes,
+    );
+    let mut resp = Json(ListConceptsResponse { total, concepts }).into_response();
+    if let Ok(v) = HeaderValue::from_str(&etag) {
+        resp.headers_mut().insert(header::ETAG, v);
+    }
+    resp
 }
 
 /// `GET /ontology` — the concept-type and relation-type schema, served
@@ -1410,6 +1476,8 @@ struct ListRelationsQuery {
     limit: Option<usize>,
     #[serde(default)]
     offset: Option<usize>,
+    #[serde(default = "default_true")]
+    track_total: bool,
 }
 
 #[derive(Serialize)]
@@ -1420,24 +1488,32 @@ struct ListRelationsResponse {
 
 async fn list_relations(
     State(s): State<AppState>,
+    headers: HeaderMap,
     Query(q): Query<ListRelationsQuery>,
-) -> Json<ListRelationsResponse> {
-    let mut all = s.graph.all_relations();
-    if let Some(src) = q.source {
-        all.retain(|r| r.source.0 == src);
+) -> Response {
+    let gen = s.graph.relations_generation();
+    let etag = format!("W/\"r{gen}\"");
+    if let Some(if_match) = headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok()) {
+        if if_match == etag {
+            return StatusCode::NOT_MODIFIED.into_response();
+        }
     }
-    if let Some(tgt) = q.target {
-        all.retain(|r| r.target.0 == tgt);
-    }
-    if let Some(t) = q.relation_type.as_deref() {
-        all.retain(|r| r.relation_type == t);
-    }
-    all.sort_by(|a, b| a.id.0.cmp(&b.id.0));
-    let total = all.len();
+
     let offset = q.offset.unwrap_or(0);
     let limit = q.limit.unwrap_or(100).min(1000);
-    let relations = all.into_iter().skip(offset).take(limit).collect();
-    Json(ListRelationsResponse { total, relations })
+    let (total, relations) = s.graph.list_relations_page(
+        q.source.map(ConceptId),
+        q.target.map(ConceptId),
+        q.relation_type.as_deref(),
+        offset,
+        limit,
+        q.track_total,
+    );
+    let mut resp = Json(ListRelationsResponse { total, relations }).into_response();
+    if let Ok(v) = HeaderValue::from_str(&etag) {
+        resp.headers_mut().insert(header::ETAG, v);
+    }
+    resp
 }
 
 async fn get_relation_handler(
@@ -2077,15 +2153,27 @@ async fn subgraph_handler(
     }
 
     if seeds.is_empty() {
-        for c in s.graph.all_concepts() {
-            if !req.seed_concept_types.is_empty()
-                && !req.seed_concept_types.iter().any(|t| t == &c.concept_type)
-            {
-                continue;
+        // Use the per-type label index when types are constrained, otherwise
+        // pull the first `limit` concepts from the global ordered index. In
+        // both cases we never materialize the whole graph.
+        if req.seed_concept_types.is_empty() {
+            let (_, page) = s
+                .graph
+                .list_concepts_page(None, None, 0, limit, false, true);
+            for c in page {
+                seeds.push(c.id);
             }
-            seeds.push(c.id);
-            if seeds.len() >= limit {
-                break;
+        } else {
+            'outer: for t in &req.seed_concept_types {
+                let (_, page) = s
+                    .graph
+                    .list_concepts_page(Some(t), None, 0, limit - seeds.len(), false, true);
+                for c in page {
+                    seeds.push(c.id);
+                    if seeds.len() >= limit {
+                        break 'outer;
+                    }
+                }
             }
         }
     }
@@ -2156,12 +2244,7 @@ async fn export_handler(
             let body = serde_json::json!({
                 "ontology": s.graph.ontology(),
                 "concepts": s.graph.all_concepts(),
-                "relations": s
-                    .graph
-                    .all_concepts()
-                    .iter()
-                    .flat_map(|c| s.graph.outgoing(c.id))
-                    .collect::<Vec<_>>(),
+                "relations": s.graph.all_relations(),
             });
             Ok(Json(body).into_response())
         }
@@ -2408,7 +2491,14 @@ async fn patch_settings(
             ocr.google_api_key = v;
         }
     }
-    Json(current.clone())
+    let snapshot = current.clone();
+    drop(current);
+    if let Some(path) = s.settings_path.as_ref() {
+        if let Err(e) = persist_settings(path, &snapshot) {
+            tracing::warn!(error = %e, path = %path.display(), "failed to persist settings");
+        }
+    }
+    Json(snapshot)
 }
 
 // ---- OCR engine status ----------------------------------------------------
@@ -2787,6 +2877,11 @@ struct ErrorBody {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, msg) = match &self {
+            ApiError::Graph(ontology_graph::GraphError::MissingRequiredProperty { .. })
+            | ApiError::Graph(ontology_graph::GraphError::DisjointTypeViolation { .. })
+            | ApiError::Graph(ontology_graph::GraphError::CardinalityViolation { .. }) => {
+                (StatusCode::UNPROCESSABLE_ENTITY, self.to_string())
+            }
             ApiError::Graph(_) => (StatusCode::BAD_REQUEST, self.to_string()),
             ApiError::Store(_) => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
             ApiError::Llm(_) => (StatusCode::BAD_GATEWAY, self.to_string()),

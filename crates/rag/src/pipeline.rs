@@ -7,7 +7,7 @@
 // from Winven AI Sarl. See LICENSE and LICENSE-COMMERCIAL.md.
 
 use futures::stream::{BoxStream, StreamExt};
-use ontology_graph::{ConceptId, Subgraph};
+use ontology_graph::{ConceptId, OntologyGraph, Subgraph};
 use ontology_index::{HybridIndex, RetrievalRequest, ScoredConcept};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -33,6 +33,15 @@ pub struct RagAnswer {
     /// cache on this call.
     #[serde(default)]
     pub usage: TokenUsage,
+    /// Concept ids the model cited (parsed from the `Cited: [#…]` line) that
+    /// are present in `subgraph.concepts`. Empty when the model declined to
+    /// answer or emitted no parseable citations.
+    #[serde(default)]
+    pub cited: Vec<ConceptId>,
+    /// Prose answer with the `Cited:` line stripped. Falls back to `answer`
+    /// verbatim when no `Cited:` line was emitted.
+    #[serde(default)]
+    pub answer_body: String,
 }
 
 impl RagAnswer {
@@ -115,7 +124,8 @@ impl RagPipeline {
         &self,
         req: RetrievalRequest,
     ) -> Result<RagAnswer, crate::model::LlmError> {
-        let (scored, subgraph) = self.index.retrieve(&req);
+        let (scored, mut subgraph) = self.index.retrieve(&req);
+        enrich_with_transitive_closures(self.index.graph(), &mut subgraph, 16);
         debug!(
             seeds = scored.len(),
             context_concepts = subgraph.concepts.len(),
@@ -146,6 +156,9 @@ impl RagPipeline {
             temperature: self.temperature,
         };
 
+        let valid_ids: std::collections::HashSet<ConceptId> =
+            subgraph.concepts.iter().map(|c| c.id).collect();
+
         let LlmResponse {
             content,
             model,
@@ -153,14 +166,75 @@ impl RagPipeline {
             usage,
         } = self.llm.generate(&llm_req).await?;
 
+        let parsed = parse_cited_answer(&content);
+        let (cited_valid, invalid_cited): (Vec<_>, Vec<_>) = parsed
+            .cited
+            .iter()
+            .copied()
+            .partition(|id| valid_ids.contains(id));
+
+        // If the model invented ids, retry ONCE with a stricter reminder
+        // listing the allowed id set. Replace the answer only if the retry
+        // produces zero invalid ids OR more valid ids than the first try.
+        let (final_content, final_model, final_stop, final_usage, cited, body) =
+            if !invalid_cited.is_empty() {
+                let allowed: Vec<String> = valid_ids
+                    .iter()
+                    .map(|id| format!("#{}", id.0))
+                    .collect();
+                let reminder = format!(
+                    "Your previous answer cited ids not in the Subgraph: {}. \
+                     Valid ids for this question are exactly: [{}]. \
+                     Re-answer using the same two-line format and cite ONLY ids \
+                     from that set. If none of them support an answer, reply \
+                     `I don't know based on the supplied context.`",
+                    invalid_cited
+                        .iter()
+                        .map(|id| format!("#{}", id.0))
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    allowed.join(", "),
+                );
+                let mut retry_req = llm_req.clone();
+                retry_req.messages.push(Message::assistant(content.clone()));
+                retry_req.messages.push(Message::user(reminder));
+                match self.llm.generate(&retry_req).await {
+                    Ok(retry) => {
+                        let retry_parsed = parse_cited_answer(&retry.content);
+                        let (retry_valid, retry_invalid): (Vec<_>, Vec<_>) = retry_parsed
+                            .cited
+                            .iter()
+                            .copied()
+                            .partition(|id| valid_ids.contains(id));
+                        if retry_invalid.is_empty() || retry_valid.len() > cited_valid.len() {
+                            (
+                                retry.content.clone(),
+                                retry.model,
+                                retry.stop_reason,
+                                retry.usage,
+                                retry_valid,
+                                retry_parsed.body,
+                            )
+                        } else {
+                            (content, model, stop_reason, usage, cited_valid, parsed.body)
+                        }
+                    }
+                    Err(_) => (content, model, stop_reason, usage, cited_valid, parsed.body),
+                }
+            } else {
+                (content, model, stop_reason, usage, cited_valid, parsed.body)
+            };
+
         Ok(RagAnswer {
             query: req.query,
-            answer: content,
+            answer: final_content,
             retrieved: scored,
             subgraph,
-            model,
-            stop_reason,
-            usage,
+            model: final_model,
+            stop_reason: final_stop,
+            usage: final_usage,
+            cited,
+            answer_body: body,
         })
     }
 
@@ -168,7 +242,8 @@ impl RagPipeline {
     /// with the grounding subgraph, then text deltas as the model produces
     /// them, then a final `End` frame with usage totals.
     pub async fn answer_stream(&self, req: RetrievalRequest) -> Result<RagStream, LlmError> {
-        let (scored, subgraph) = self.index.retrieve(&req);
+        let (scored, mut subgraph) = self.index.retrieve(&req);
+        enrich_with_transitive_closures(self.index.graph(), &mut subgraph, 16);
         debug!(
             seeds = scored.len(),
             context_concepts = subgraph.concepts.len(),
@@ -356,6 +431,131 @@ fn extract_json_block(text: &str) -> Option<String> {
     end.map(|e| s[start..e].to_string())
 }
 
+/// Parsed shape of an LLM answer that follows the `Cited:` / `Answer:`
+/// contract from [`PromptBuilder::system_message`].
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ParsedAnswer {
+    pub cited: Vec<ConceptId>,
+    /// Prose with the `Cited:` line removed and a leading `Answer:` prefix
+    /// stripped. Falls back to the raw text trimmed when no `Cited:` line
+    /// is present.
+    pub body: String,
+}
+
+/// Extract `#<id>` tokens from the first `Cited:` line found in `raw`, and
+/// return the remaining prose. Tolerant of: `Cited: [#1, #2]`, `Cited: #1 #2`,
+/// `cited: 1, 2`, surrounding whitespace, and a leading `Answer:` on the
+/// remaining prose.
+pub(crate) fn parse_cited_answer(raw: &str) -> ParsedAnswer {
+    let trimmed = raw.trim_start_matches('\u{feff}').trim();
+    let mut cited_line: Option<&str> = None;
+    let mut cited_idx: Option<usize> = None;
+    for (i, line) in trimmed.lines().enumerate().take(5) {
+        let l = line.trim_start();
+        if l.len() >= 6 && l[..6].eq_ignore_ascii_case("cited:") {
+            cited_line = Some(&l[6..]);
+            cited_idx = Some(i);
+            break;
+        }
+    }
+    let Some(cited_raw) = cited_line else {
+        return ParsedAnswer {
+            cited: Vec::new(),
+            body: trimmed.to_string(),
+        };
+    };
+
+    let mut ids = Vec::new();
+    let mut num = String::new();
+    let flush = |num: &mut String, ids: &mut Vec<ConceptId>| {
+        if !num.is_empty() {
+            if let Ok(n) = num.parse::<u64>() {
+                ids.push(ConceptId(n));
+            }
+            num.clear();
+        }
+    };
+    for ch in cited_raw.chars() {
+        if ch.is_ascii_digit() {
+            num.push(ch);
+        } else {
+            flush(&mut num, &mut ids);
+        }
+    }
+    flush(&mut num, &mut ids);
+    ids.sort_unstable();
+    ids.dedup();
+
+    // Body = everything except the cited line.
+    let idx = cited_idx.unwrap();
+    let body: String = trimmed
+        .lines()
+        .enumerate()
+        .filter(|(i, _)| *i != idx)
+        .map(|(_, l)| l)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let body = body.trim();
+    let body = body
+        .strip_prefix("Answer:")
+        .or_else(|| body.strip_prefix("answer:"))
+        .map(|s| s.trim_start())
+        .unwrap_or(body)
+        .to_string();
+
+    ParsedAnswer { cited: ids, body }
+}
+
+/// Expand the retrieved subgraph along ontology-declared transitive relations
+/// (e.g. `partOf`, `locatedIn`). Capped at `max_extra` new concepts. Bypassed
+/// when `ONTOLOGY_DISABLE_TRANSITIVE_CLOSURE=1`.
+fn enrich_with_transitive_closures(
+    graph: &OntologyGraph,
+    subgraph: &mut Subgraph,
+    max_extra: usize,
+) {
+    if std::env::var("ONTOLOGY_DISABLE_TRANSITIVE_CLOSURE").as_deref() == Ok("1") {
+        debug!("transitive closure disabled via env");
+        return;
+    }
+    let onto = graph.ontology();
+    let transitive: Vec<String> = onto
+        .relation_types
+        .values()
+        .filter(|rt| rt.transitive)
+        .map(|rt| rt.name.clone())
+        .collect();
+    if transitive.is_empty() {
+        return;
+    }
+    let seeds: Vec<ConceptId> = subgraph.seeds.clone();
+    let mut existing: std::collections::HashSet<ConceptId> =
+        subgraph.concepts.iter().map(|c| c.id).collect();
+    let mut added = 0usize;
+    for seed in seeds {
+        for t in &transitive {
+            if added >= max_extra {
+                return;
+            }
+            let extras = graph.closure(seed, t, 3).unwrap_or_default();
+            for id in extras {
+                if !existing.insert(id) {
+                    continue;
+                }
+                if let Ok(c) = graph.get_concept(id) {
+                    let depth = subgraph.depth_of.get(&seed).copied().unwrap_or(0) + 1;
+                    subgraph.depth_of.entry(id).or_insert(depth);
+                    subgraph.concepts.push(c);
+                    added += 1;
+                    if added >= max_extra {
+                        return;
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum OntologyGenError {
     #[error("llm: {0}")]
@@ -377,6 +577,7 @@ mod tests {
             parent: None,
             properties: None,
             description: "subject of study".into(),
+            ..Default::default()
         });
         o.add_relation_type(RelationType {
             name: "related_to".into(),
@@ -385,9 +586,31 @@ mod tests {
             cardinality: Default::default(),
             symmetric: true,
             description: "".into(),
+            ..Default::default()
         })
         .unwrap();
         o
+    }
+
+    #[test]
+    fn parse_cited_bracketed() {
+        let p = parse_cited_answer("Cited: [#1, #42]\nAnswer: hello world");
+        assert_eq!(p.cited, vec![ConceptId(1), ConceptId(42)]);
+        assert_eq!(p.body, "hello world");
+    }
+
+    #[test]
+    fn parse_cited_loose() {
+        let p = parse_cited_answer("cited: 7 9 9\nthe answer is X");
+        assert_eq!(p.cited, vec![ConceptId(7), ConceptId(9)]);
+        assert_eq!(p.body, "the answer is X");
+    }
+
+    #[test]
+    fn parse_cited_missing() {
+        let p = parse_cited_answer("I don't know based on the supplied context.");
+        assert!(p.cited.is_empty());
+        assert_eq!(p.body, "I don't know based on the supplied context.");
     }
 
     #[tokio::test]

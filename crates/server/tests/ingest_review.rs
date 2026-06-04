@@ -65,6 +65,7 @@ fn ontology() -> Ontology {
         parent: None,
         properties: None,
         description: "trading party".into(),
+        ..Default::default()
     });
     o.add_relation_type(RelationType {
         name: "buys_from".into(),
@@ -73,17 +74,26 @@ fn ontology() -> Ontology {
         cardinality: Default::default(),
         symmetric: false,
         description: "".into(),
+        ..Default::default()
     })
     .unwrap();
     o
 }
 
 fn make_state() -> AppState {
+    make_state_with_store().0
+}
+
+/// Like [`make_state`] but also hands back the backing store so tests can
+/// replay the WAL into a fresh graph and assert that applied items were
+/// actually persisted (not just held in memory).
+fn make_state_with_store() -> (AppState, Arc<dyn Store>) {
     let graph = OntologyGraph::with_arc(ontology());
     let index = Arc::new(HybridIndex::with_default_embedder(graph.clone()));
     let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
     let pipeline = Arc::new(RagPipeline::new(index.clone(), Arc::new(FakeLlm::default())));
-    AppState::new(graph, index, store, pipeline)
+    let state = AppState::new(graph, index, store.clone(), pipeline);
+    (state, store)
 }
 
 /// Build a multipart body the dumb way — sufficient for our static fields.
@@ -206,6 +216,85 @@ async fn analyze_then_apply_round_trip() {
         acme["conflict"]["kind"]["kind"].as_str().unwrap(),
         "exists",
         "Acme should be marked as already existing after first apply",
+    );
+}
+
+/// Regression test: `POST /ingest/apply` must persist accepted items to the
+/// store, not merely mutate the in-memory graph. Previously the handler wrote
+/// nothing to the WAL, so concepts/relations vanished on restart even though
+/// they showed up in the UI. We assert persistence by replaying the store into
+/// a brand-new graph and checking the data is there.
+#[tokio::test]
+async fn apply_persists_to_store() {
+    let (state, store) = make_state_with_store();
+    let app = build_router(state);
+
+    // Analyze to obtain a valid proposal.
+    let (ct, body) = multipart_body(
+        "contract.txt",
+        "Acme Corp purchased widgets from Globex.\n".as_bytes(),
+    );
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/ingest/analyze")
+                .header("content-type", ct)
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let proposal = read_body(resp.into_body()).await;
+
+    // Apply, accepting every concept and relation.
+    let decisions: Vec<Value> = proposal["concepts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .chain(proposal["relations"].as_array().unwrap())
+        .map(|item| json!({ "client_ref": item["client_ref"], "action": "create_new" }))
+        .collect();
+    let payload = json!({
+        "proposal": proposal,
+        "decisions": decisions,
+        "strict": false,
+        "default_action": "skip"
+    });
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/ingest/apply")
+                .header("content-type", "application/json")
+                .body(Body::from(payload.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let report = read_body(resp.into_body()).await;
+    assert_eq!(report["created"].as_u64().unwrap(), 3);
+
+    // Replay the store into a fresh graph — this is what a server restart does.
+    let replayed = OntologyGraph::with_arc(ontology());
+    store.load_into(&replayed).await.unwrap();
+
+    let acme = replayed
+        .find_by_name("Party", "Acme")
+        .expect("Acme must survive a store replay");
+    assert!(
+        replayed.find_by_name("Party", "Globex").is_some(),
+        "Globex must survive a store replay",
+    );
+    // The relation must persist too: Acme should have an outgoing edge.
+    let rels = replayed.outgoing(acme);
+    assert_eq!(
+        rels.len(),
+        1,
+        "the buys_from relation must survive a store replay, got {rels:?}",
     );
 }
 

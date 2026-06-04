@@ -36,6 +36,7 @@ fn ontology() -> Ontology {
         parent: None,
         properties: None,
         description: "topic".into(),
+        ..Default::default()
     });
     o.add_relation_type(RelationType {
         name: "related_to".into(),
@@ -44,6 +45,7 @@ fn ontology() -> Ontology {
         cardinality: Default::default(),
         symmetric: true,
         description: "".into(),
+        ..Default::default()
     })
     .unwrap();
     o

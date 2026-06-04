@@ -437,6 +437,10 @@ async fn main() -> Result<()> {
             let llm = build_llm(anthropic, openai, deepseek, model.as_deref())?;
             let pipeline = Arc::new(RagPipeline::new(index.clone(), llm));
             let state = AppState::new(graph.clone(), index.clone(), store.clone(), pipeline);
+            let state = match cli.data.as_ref() {
+                Some(dir) => state.with_settings_path(dir.join("settings.json")),
+                None => state,
+            };
             let bearer = match auth_env {
                 Some(env_name) => Some(
                     std::env::var(&env_name)

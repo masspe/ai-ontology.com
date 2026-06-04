@@ -53,6 +53,12 @@ fn default_lex_w() -> f32 {
     0.5
 }
 
+/// Minimum fused score, expressed as a fraction of the top hit's score, for a
+/// concept to be considered relevant enough to return. Anything below this is
+/// treated as noise from the vector index and dropped before truncation. See
+/// the filtering step in [`HybridIndex::rank`].
+const RELEVANCE_RATIO: f32 = 0.4;
+
 impl Default for RetrievalRequest {
     fn default() -> Self {
         Self {
@@ -187,6 +193,21 @@ impl HybridIndex {
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
+
+        // Drop the weakly-scored long tail. The vector index assigns a small
+        // nonzero score to *every* concept (the hash embedder never returns a
+        // hard zero), so a plain `truncate(top_k)` pads the result with
+        // concepts that don't actually match whenever fewer than `top_k`
+        // genuinely relevant ones exist — surfacing irrelevant concepts in the
+        // grounded answer. Keep only concepts scoring within
+        // `RELEVANCE_RATIO` of the best hit; this trims the noise floor while
+        // preserving every concept that is competitive with the top match.
+        if let Some(best) = out.first().map(|s| s.score) {
+            if best > 0.0 {
+                let floor = best * RELEVANCE_RATIO;
+                out.retain(|s| s.score >= floor);
+            }
+        }
         out.truncate(req.top_k);
         out
     }
@@ -212,6 +233,7 @@ mod tests {
             parent: None,
             properties: None,
             description: "topic".into(),
+            ..Default::default()
         });
         o.add_relation_type(RelationType {
             name: "related_to".into(),
@@ -220,6 +242,7 @@ mod tests {
             cardinality: Default::default(),
             symmetric: true,
             description: "".into(),
+            ..Default::default()
         })
         .unwrap();
         o
@@ -253,6 +276,51 @@ mod tests {
     }
 
     #[test]
+    fn ranking_drops_irrelevant_concepts() {
+        // A query that strongly matches one concept must not pad the result
+        // with concepts that have no real overlap, even though `top_k` leaves
+        // room and the vector index scores everything nonzero.
+        let g = OntologyGraph::with_arc(ontology());
+        let rag = g
+            .upsert_concept(
+                Concept::new(
+                    Default::default(),
+                    "Topic",
+                    "Retrieval Augmented Generation",
+                )
+                .with_description("LLMs grounded with retrieved documents"),
+            )
+            .unwrap();
+        let knitting = g
+            .upsert_concept(
+                Concept::new(Default::default(), "Topic", "Knitting")
+                    .with_description("looping yarn into fabric with needles"),
+            )
+            .unwrap();
+        let baking = g
+            .upsert_concept(
+                Concept::new(Default::default(), "Topic", "Sourdough Baking")
+                    .with_description("fermenting flour and water into bread"),
+            )
+            .unwrap();
+
+        let idx = HybridIndex::with_default_embedder(g.clone());
+        idx.reindex_all();
+
+        let ranked = idx.rank(&RetrievalRequest {
+            query: "retrieval augmented generation".into(),
+            top_k: 8,
+            ..Default::default()
+        });
+        let ids: Vec<_> = ranked.iter().map(|s| s.id).collect();
+        assert!(ids.contains(&rag), "the matching concept must be returned");
+        assert!(
+            !ids.contains(&knitting) && !ids.contains(&baking),
+            "irrelevant concepts must be filtered out, got {ids:?}"
+        );
+    }
+
+    #[test]
     fn concept_type_filter_excludes_other_types() {
         // Two concept types share lexical overlap; the filter must keep
         // only the requested type in the ranking output.
@@ -262,6 +330,7 @@ mod tests {
             parent: None,
             properties: None,
             description: "human".into(),
+            ..Default::default()
         });
         let g = OntologyGraph::with_arc(o);
         let topic = g

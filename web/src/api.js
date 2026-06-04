@@ -359,7 +359,16 @@ export const updateQuery = (id, patch) => http(`/queries/${id}`, {
 });
 export const deleteQuery = (id) => http(`/queries/${id}`, { method: "DELETE", headers: headers() });
 export const runQuery = (id) => http(`/queries/${id}/run`, { method: "POST", headers: headers() });
+export const listFeedbacks = () => http("/feedbacks");
+export const createFeedback = (f) => http("/feedbacks", {
+    method: "POST",
+    headers: headers(true),
+    body: JSON.stringify(f),
+});
+export const deleteFeedback = (id) => http(`/feedbacks/${id}`, { method: "DELETE", headers: headers() });
+export const tailServerLogs = (limit = 200) => http(`/logs/tail?limit=${limit}`);
 export const getSettings = () => http("/settings");
+export const getOcrStatus = () => http("/settings/ocr/status");
 export const patchSettings = (patch) => http("/settings", {
     method: "PATCH",
     headers: headers(true),

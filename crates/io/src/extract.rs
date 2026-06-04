@@ -47,11 +47,16 @@ pub fn extract_from_text(doc_type: &str, doc_name: &str, body: &str) -> Vec<Reco
         parent: None,
         properties: None,
         description: String::new(),
+        ..Default::default()
     }));
 
-    // The document itself.
+    // The document itself. The body is stored as the concept description, but
+    // bounded: failed text extraction (e.g. a binary .xlsx/.zip mis-decoded as
+    // text) must never persist a multi-megabyte blob — it bloats the snapshot
+    // and freezes the UI when rendered. Directive parsing below still runs over
+    // the *full* body, so capping the stored description loses no structure.
     let mut doc = Concept::new(ConceptId(0), doc_type.to_string(), doc_name.to_string());
-    doc.description = body.to_string();
+    doc.description = document_description(body);
     out.push(Record::Concept(doc));
 
     let mut mentions: Vec<(String, String)> = Vec::new();
@@ -75,6 +80,7 @@ pub fn extract_from_text(doc_type: &str, doc_name: &str, body: &str) -> Vec<Reco
                     parent: None,
                     properties: None,
                     description: String::new(),
+                    ..Default::default()
                 }));
                 let mut c = Concept::new(ConceptId(0), ty.clone(), name.clone());
                 if let Some(d) = desc {
@@ -96,6 +102,7 @@ pub fn extract_from_text(doc_type: &str, doc_name: &str, body: &str) -> Vec<Reco
                     cardinality: Default::default(),
                     symmetric: false,
                     description: String::new(),
+                    ..Default::default()
                 }));
                 out.push(Record::NamedRelation {
                     relation_type: rel,
@@ -116,6 +123,7 @@ pub fn extract_from_text(doc_type: &str, doc_name: &str, body: &str) -> Vec<Reco
                         parent: None,
                         properties: None,
                         description: String::new(),
+                        ..Default::default()
                     }));
                 }
                 out.push(Record::RuleTypeDecl(rule));
@@ -127,6 +135,7 @@ pub fn extract_from_text(doc_type: &str, doc_name: &str, body: &str) -> Vec<Reco
                     parent: None,
                     properties: None,
                     description: String::new(),
+                    ..Default::default()
                 }));
                 if let Some(obj) = &action.object {
                     out.push(Record::ConceptTypeDecl(ConceptType {
@@ -134,6 +143,7 @@ pub fn extract_from_text(doc_type: &str, doc_name: &str, body: &str) -> Vec<Reco
                         parent: None,
                         properties: None,
                         description: String::new(),
+                        ..Default::default()
                     }));
                 }
                 out.push(Record::ActionTypeDecl(action));
@@ -156,6 +166,7 @@ pub fn extract_from_text(doc_type: &str, doc_name: &str, body: &str) -> Vec<Reco
             cardinality: Default::default(),
             symmetric: false,
             description: String::new(),
+            ..Default::default()
         }));
         out.push(Record::NamedRelation {
             relation_type: rel,
@@ -168,6 +179,30 @@ pub fn extract_from_text(doc_type: &str, doc_name: &str, body: &str) -> Vec<Reco
     }
 
     out
+}
+
+/// Upper bound on the document body we persist as a concept description.
+/// Real documents are far smaller; this only clamps pathological inputs.
+const MAX_DOC_DESCRIPTION_BYTES: usize = 64 * 1024;
+
+/// Derive the stored description for a document concept from its raw body.
+/// Binary bodies (mis-decoded uploads) are replaced with a short marker
+/// rather than a blob; oversized text bodies are truncated on a char
+/// boundary so the snapshot stays bounded.
+fn document_description(body: &str) -> String {
+    if crate::charset::looks_binary(body) {
+        return "[binary content — text extraction unavailable]".to_string();
+    }
+    if body.len() <= MAX_DOC_DESCRIPTION_BYTES {
+        return body.to_string();
+    }
+    let mut end = MAX_DOC_DESCRIPTION_BYTES;
+    while end > 0 && !body.is_char_boundary(end) {
+        end -= 1;
+    }
+    let mut s = body[..end].to_string();
+    s.push('…');
+    s
 }
 
 fn strip_tag<'a>(line: &'a str, tag: &str) -> Option<&'a str> {
@@ -200,6 +235,7 @@ fn parse_concept_type(s: &str) -> Option<ConceptType> {
         parent: None,
         properties: None,
         description: desc.unwrap_or_default(),
+        ..Default::default()
     })
 }
 
@@ -238,6 +274,7 @@ fn parse_relation_type(s: &str) -> Option<RelationType> {
         cardinality: Default::default(),
         symmetric,
         description: String::new(),
+        ..Default::default()
     })
 }
 
@@ -424,6 +461,37 @@ Some preamble.
         let recs = extract_from_text("Doc", "D", "plain text without any tags\n");
         // Just the doc concept type + the doc concept, nothing else.
         assert_eq!(recs.len(), 2);
+    }
+
+    #[test]
+    fn binary_body_does_not_persist_a_blob() {
+        // A 2 MB mis-decoded blob (NUL-laden) must not become the description.
+        let blob = "\0".repeat(2 * 1024 * 1024);
+        let recs = extract_from_text("Doc", "huge.xlsx", &blob);
+        let doc = recs
+            .iter()
+            .find_map(|r| match r {
+                Record::Concept(c) if c.name == "huge.xlsx" => Some(c),
+                _ => None,
+            })
+            .expect("document concept missing");
+        assert!(doc.description.len() < 256, "binary blob was persisted");
+        assert!(doc.description.contains("binary content"));
+    }
+
+    #[test]
+    fn oversized_text_body_is_truncated() {
+        let big = "a".repeat(MAX_DOC_DESCRIPTION_BYTES + 5_000);
+        let recs = extract_from_text("Doc", "big.txt", &big);
+        let doc = recs
+            .iter()
+            .find_map(|r| match r {
+                Record::Concept(c) if c.name == "big.txt" => Some(c),
+                _ => None,
+            })
+            .expect("document concept missing");
+        assert!(doc.description.len() <= MAX_DOC_DESCRIPTION_BYTES + 4);
+        assert!(doc.description.ends_with('…'));
     }
 
     #[test]

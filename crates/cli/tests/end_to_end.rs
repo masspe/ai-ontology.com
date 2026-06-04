@@ -26,18 +26,21 @@ async fn ingest_persist_retrieve_answer() {
         parent: None,
         properties: None,
         description: "human".into(),
+        ..Default::default()
     });
     ont.add_concept_type(ontology_graph::ConceptType {
         name: "Paper".into(),
         parent: None,
         properties: None,
         description: "paper".into(),
+        ..Default::default()
     });
     ont.add_concept_type(ontology_graph::ConceptType {
         name: "Topic".into(),
         parent: None,
         properties: None,
         description: "topic".into(),
+        ..Default::default()
     });
     ont.add_relation_type(ontology_graph::RelationType {
         name: "authored".into(),
@@ -46,6 +49,7 @@ async fn ingest_persist_retrieve_answer() {
         cardinality: Default::default(),
         symmetric: false,
         description: "".into(),
+        ..Default::default()
     })
     .unwrap();
     ont.add_relation_type(ontology_graph::RelationType {
@@ -55,6 +59,7 @@ async fn ingest_persist_retrieve_answer() {
         cardinality: Default::default(),
         symmetric: false,
         description: "".into(),
+        ..Default::default()
     })
     .unwrap();
 
