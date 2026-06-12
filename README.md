@@ -53,6 +53,104 @@ answers in retrieved subgraphs.
 * The pipeline is `Send + Sync + Clone`, so a single `RagPipeline` value can
   serve many concurrent answers.
 
+## Graph algorithms & optimizations
+
+The graph layer keeps traversal **bounded, typed, and read-lock-free** so that
+retrieval stays predictable even on dense ontologies. Everything below is
+implemented in `ontology-graph` and `ontology-index`.
+
+### Traversal & pathfinding (`crates/graph/src/traversal.rs`)
+
+| Algorithm | Function | What it does |
+| --------- | -------- | ------------ |
+| **Bounded BFS shortest path** | `shortest_path` | Undirected breadth-first search between two concepts with unit edge weights, capped by `max_depth`. Tracks `parent` + incident `RelationId` to reconstruct the full edge-labelled path. Exposed as `POST /path`. |
+| **N-hop subgraph expansion** | `expand` | Level-by-level BFS from a set of seeds, hard-bounded by both `max_depth` **and** `max_nodes`. Optional filters on relation type, concept type, and direction (`outgoing` / `incoming` / `both`). Returns the `Subgraph` fed to the prompt builder. |
+| **Typed relation closure** | `closure` | BFS along a single relation type (in *and* out edges) to compute transitive chains such as `partOf` / `locatedIn`, used by the RAG layer to pull in implied context. |
+
+All three are **depth- and node-capped on entry**, so a pathological "expand the
+whole graph" request degrades gracefully instead of blowing up — the cost of a
+retrieval is a function of `top_k` and `TraversalSpec`, not of total graph size.
+
+### Indexing & ranking optimizations (`crates/index`)
+
+* **Inverted-index lexical search** (`lexical.rs`) — a TF-IDF / BM25-style
+  inverted index. Per-term IDF is `ln((n − df + 0.5) / (df + 0.5) + 1.0)`; the
+  per-document weight is length-normalized as `sqrt(tf / doc_len) · idf`. Only
+  documents that actually contain a query term are scored (no full scan).
+* **Flat cosine vector search** (`vector.rs`, `embed.rs`) — vectors are
+  **L2-normalized at insertion**, so similarity collapses to a plain dot
+  product `Σ q[i]·doc[i]` — no per-query normalization in the hot loop.
+* **Hybrid fusion with min-max normalization** (`hybrid.rs::rank`) — lexical and
+  vector scores are each normalized to `[0,1]` against their own max, then
+  blended:
+
+  ```text
+  score = lexical_weight · (lex / lex_max) + (1 − lexical_weight) · (vec / vec_max)
+  ```
+
+  `lexical_weight` is a per-request knob (default `0.5`).
+* **Relevance-ratio noise floor** — candidates scoring below `0.4 ×` the top
+  hit are dropped, so weak tail matches never reach the LLM prompt.
+* **Adaptive candidate pools** — when a request adds type filters the candidate
+  pool is widened (`4×` → `16×` `top_k`) so enough survivors remain after
+  post-filtering, without paying that cost on unfiltered queries.
+* **Trigram substring index** (`graph.rs`) — concept-name substring search uses
+  a `[char; 3]` trigram inverted index; matching intersects the candidate sets
+  for the query's trigrams instead of scanning every name (falls back to a
+  linear scan only for queries shorter than 3 chars).
+
+### Concurrency & memory optimizations
+
+* **Sharded, lock-free reads** — concepts, relations, and typed in/out adjacency
+  lists live in `DashMap`s; reads never take a global lock.
+* **Generation-counter cache invalidation** — `AtomicU64` generation counters
+  (`concepts_gen` / `relations_gen`) bump on any mutation and invalidate the
+  bounded (capacity 256) pagination caches in one cheap compare, avoiding
+  per-entry eviction bookkeeping.
+* **Lock-free ID allocation** — `IdAllocator` hands out ids with a single
+  `AtomicU64::fetch_add`; restore reconciles the watermark with
+  `compare_exchange_weak`.
+* **Typed adjacency** — edges are bucketed by relation type, so a
+  relation-filtered expansion walks only the relevant bucket instead of every
+  incident edge.
+
+> Out of scope by design: there is **no** weighted shortest path (Dijkstra/A\*),
+> centrality/PageRank, or approximate-nearest-neighbor (ANN) vector index. Edges
+> are unit-weight and the vector index is exact/flat. These are natural
+> extension points rather than current behavior.
+
+## Why this solution (advantages)
+
+* **Grounded answers, not hallucinations.** Every `/ask` response is built from
+  a retrieved, type-validated subgraph, so the LLM cites concepts that actually
+  exist in your knowledge base instead of inventing them.
+* **Hybrid retrieval beats either half alone.** Lexical (exact-term) and vector
+  (semantic) signals are fused per request; `lexical_weight` lets you dial
+  between keyword precision and semantic recall without redeploying.
+* **Structure-aware context.** Graph expansion and typed closures pull in
+  *related* concepts (parties of a contract, line items of an invoice), giving
+  the model context a flat vector store would miss.
+* **Predictable, bounded cost.** Depth/node caps mean retrieval latency tracks
+  `top_k` and traversal spec — not the size of the graph — so it scales to large
+  ontologies without runaway queries.
+* **Built for concurrency.** Lock-free sharded reads and a
+  `Send + Sync + Clone` pipeline let one process serve many simultaneous
+  answers; no per-request graph cloning.
+* **Schema-validated ingestion.** Concepts and relations are checked against the
+  ontology schema on the way in, so the graph stays consistent and the index
+  never sees malformed nodes.
+* **Durable + crash-safe storage.** An append-only WAL plus bincode snapshots
+  (with `compact` to truncate) gives fast restarts and a clean recovery story
+  behind a pluggable `Store` trait.
+* **Provider-agnostic LLM layer with caching.** Anthropic, OpenAI, DeepSeek, or
+  an offline echo model behind one `LanguageModel` trait — with prompt/prefix
+  caching that drops repeat-query input cost to ≈10% on a stable knowledge base.
+* **Production-ready surface.** Bearer-auth middleware (constant-time, env-fed),
+  Prometheus `/metrics`, SSE streaming, multipart upload, and a React UI ship in
+  the box.
+* **No lock-in, dual-licensed.** Pure Rust workspace, open formats (JSONL /
+  triples / CSV / XLSX), AGPL **or** commercial — adopt on whichever track fits.
+
 ## Quickstart
 
 ### POSIX shell
