@@ -26,6 +26,7 @@ pub mod jsonl;
 pub mod lang;
 pub mod proposal;
 pub mod record;
+pub mod template;
 pub mod text;
 pub mod triples;
 pub mod xlsx;
@@ -43,6 +44,10 @@ pub use proposal::{
     ProposalRelationType, ProposalRule, ProposalSource,
 };
 pub use record::{Record, RecordPayload};
+pub use template::{
+    builtin_invoice_template, record_to_proposal, ExtractedArray, ExtractedField, ExtractedRecord,
+    ExtractionTemplate, FieldType, TemplateField, TemplateMapping, TemplateUi,
+};
 pub use text::TextDocumentSource;
 pub use triples::TripleSource;
 pub use xlsx::XlsxSource;
