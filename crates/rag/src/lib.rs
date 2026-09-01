@@ -26,8 +26,8 @@ pub mod prompt;
 
 pub use extract::{attach_conflicts, extract_proposal, ExtractError};
 pub use model::{
-    AnthropicModel, EchoModel, LanguageModel, LlmError, LlmRequest, LlmResponse, LlmStream,
-    Message, OpenAiModel, Role, StreamChunk, TokenUsage,
+    infomaniak_base_url, v1_api_url, AnthropicModel, EchoModel, LanguageModel, LlmError,
+    LlmRequest, LlmResponse, LlmStream, Message, OpenAiModel, Role, StreamChunk, TokenUsage,
 };
 pub use pipeline::{
     GeneratedRule, OntologyGenError, RagAnswer, RagPipeline, RagStream, RagStreamEvent,

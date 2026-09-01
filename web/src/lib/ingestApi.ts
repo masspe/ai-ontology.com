@@ -9,7 +9,6 @@
 // returns the per-item outcome report.
 
 import { apiBase, apiToken, ApiError } from "../api";
-import { getActiveProviderRequestFields, loadProviderConfig } from "./providerConfig";
 import type {
   ApplyDecision,
   ApplyReport,
@@ -19,9 +18,13 @@ import type {
 
 export interface AnalyzeOptions {
   file: File;
-  /** `"default"` (server pipeline LLM), `"openai"`, `"anthropic"`, or `"infomaniak"`. */
+  /**
+   * Provider to route this analysis to, or `"default"` / omitted to use the
+   * one selected in Settings. Credentials are resolved server-side from the
+   * settings store — the browser never holds or forwards an API key.
+   */
   provider?: "default" | "openai" | "anthropic" | "infomaniak";
-  /** Optional model name override (e.g. `gpt-4o`, `claude-3-7-sonnet-latest`). */
+  /** Model override. Omitted: the configured model for that provider. */
   model?: string;
   /** ISO-639-1 hint that bypasses automatic detection. */
   languageHint?: string;
@@ -33,17 +36,6 @@ export async function analyzeIngest(opts: AnalyzeOptions): Promise<OntologyPropo
   if (opts.provider) form.append("provider", opts.provider);
   if (opts.model) form.append("model", opts.model);
   if (opts.languageHint) form.append("language_hint", opts.languageHint);
-
-  // Forward provider-specific credentials / base URL from the Settings store
-  // so the backend can relay to user-configured providers (e.g. Infomaniak).
-  // The endpoint is multipart, so these are appended as form fields rather
-  // than JSON body fields.
-  const cfg = loadProviderConfig();
-  const extra = getActiveProviderRequestFields(cfg, opts.provider);
-  if (extra.api_key) form.append("api_key", extra.api_key);
-  if (extra.base_url) form.append("base_url", extra.base_url);
-  // Fill in a default model from cfg if caller didn't pass one.
-  if (!opts.model && extra.model) form.append("model", extra.model);
 
   const headers: Record<string, string> = {};
   const tok = apiToken();

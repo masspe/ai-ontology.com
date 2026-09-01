@@ -289,6 +289,11 @@ export interface SavedQuery {
   last_run_at?: number | null;
 }
 
+/**
+ * Server-side LLM configuration. Raw API keys are never part of this shape:
+ * the server strips every secret field from its responses and exposes a
+ * masked `*_api_key_hint` instead. Send keys with `LlmSettingsPatch`.
+ */
 export interface LlmSettings {
   active_provider: "default" | "openai" | "anthropic" | "infomaniak" | string;
   openai_api_key_hint: string;
@@ -298,6 +303,9 @@ export interface LlmSettings {
   anthropic_base_url: string;
   anthropic_model: string;
   infomaniak_api_key_hint: string;
+  /** AI Tools product id; the OpenAI-compatible base URL is derived from it. */
+  infomaniak_product_id: string;
+  /** Advanced override for the derived base URL. Empty in a normal setup. */
   infomaniak_base_url: string;
   infomaniak_model: string;
   temperature: number;
@@ -313,6 +321,7 @@ export interface LlmSettingsPatch {
   anthropic_base_url?: string;
   anthropic_model?: string;
   infomaniak_api_key?: string;
+  infomaniak_product_id?: string;
   infomaniak_base_url?: string;
   infomaniak_model?: string;
   temperature?: number;
@@ -754,6 +763,81 @@ export const deleteFeedback = (id: number) =>
 
 export const tailServerLogs = (limit = 200) =>
   http<{ lines: string[] }>(`/logs/tail?limit=${limit}`);
+
+/**
+ * Unsaved provider credentials, merged over the stored settings for one
+ * request and never persisted. Lets the UI validate a key, resolve a product
+ * id or list models before the user commits to saving.
+ */
+export interface LlmOverrides {
+  provider?: string;
+  api_key?: string;
+  base_url?: string;
+  product_id?: string;
+  model?: string;
+}
+
+/** One entry of a provider's model catalogue. */
+export interface LlmModelInfo {
+  /** Value to send as the model name. */
+  id: string;
+  /** Display label; equals `id` unless the provider ships a nicer name. */
+  label: string;
+  /** Context window, when the provider advertises one. */
+  max_input_tokens?: number;
+  /** Provider-declared family — Infomaniak uses `"llm"`, `"image"`, … */
+  kind?: string;
+  beta?: boolean;
+}
+
+export interface LlmModelsResponse {
+  models: LlmModelInfo[];
+  /** Endpoint that was queried. Useful when a 404 needs explaining. */
+  endpoint?: string;
+  error?: string;
+}
+
+export interface LlmTestResponse {
+  ok: boolean;
+  provider: string;
+  endpoint?: string;
+  model?: string;
+  error?: string;
+}
+
+export interface InfomaniakProduct {
+  product_id: string;
+  name?: string;
+}
+
+export interface InfomaniakProductsResponse {
+  products: InfomaniakProduct[];
+  error?: string;
+}
+
+/** Probe a provider. Never throws on a provider-side failure: read `ok`. */
+export const testLlm = (ov: LlmOverrides = {}) =>
+  http<LlmTestResponse>("/settings/llm/test", {
+    method: "POST",
+    headers: headers(true),
+    body: JSON.stringify(ov),
+  });
+
+/** Model catalogue, optionally using credentials that are not saved yet. */
+export const listLlmModels = (ov: LlmOverrides = {}) =>
+  http<LlmModelsResponse>("/settings/llm/models", {
+    method: "POST",
+    headers: headers(true),
+    body: JSON.stringify(ov),
+  });
+
+/** Resolve the Infomaniak AI Tools product id(s) a token can reach. */
+export const listInfomaniakProducts = (api_key?: string) =>
+  http<InfomaniakProductsResponse>("/settings/llm/infomaniak/products", {
+    method: "POST",
+    headers: headers(true),
+    body: JSON.stringify(api_key ? { api_key } : {}),
+  });
 
 export const getSettings = () => http<Settings>("/settings");
 export const getOcrStatus = () => http<OcrStatus>("/settings/ocr/status");

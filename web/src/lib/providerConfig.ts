@@ -1,18 +1,22 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Winven-Commercial
 // Copyright (C) 2026 Winven AI Sarl
 //
-// Load/save helpers for the provider config store. Mirrors the ontology API
-// URL + bearer token to the legacy `ontology.apiBase` / `ontology.apiToken`
-// keys so existing `apiBase()` / `apiToken()` callers keep working without
-// any change in precedence.
+// Load/save helpers for the client-side connection store. Mirrors the ontology
+// API URL + bearer token to the legacy `ontology.apiBase` / `ontology.apiToken`
+// keys so existing `apiBase()` / `apiToken()` callers keep working without any
+// change in precedence.
+//
+// No provider credential passes through here any more: keys, base URLs and
+// model names live in the server settings store. See `types/providerConfig.ts`.
 //
 // IMPORTANT: do NOT import from `../api` here — `api.ts` falls back to this
 // module and a circular import would break the bundler.
 
 import {
   DEFAULT_PROVIDER_CONFIG,
+  LEGACY_PROVIDER_FIELDS,
   PROVIDER_CONFIG_STORAGE_KEY,
-  type LLMProvider,
+  type LegacyProviderSecrets,
   type ProviderConfig,
 } from "../types/providerConfig";
 
@@ -23,7 +27,12 @@ export function loadProviderConfig(): ProviderConfig {
     const raw = window.localStorage.getItem(PROVIDER_CONFIG_STORAGE_KEY);
     if (!raw) return { ...DEFAULT_PROVIDER_CONFIG };
     const parsed = JSON.parse(raw) as Partial<ProviderConfig>;
-    return { ...DEFAULT_PROVIDER_CONFIG, ...parsed };
+    return {
+      ontologyApiUrl: parsed.ontologyApiUrl ?? DEFAULT_PROVIDER_CONFIG.ontologyApiUrl,
+      ontologyBearerToken:
+        parsed.ontologyBearerToken ?? DEFAULT_PROVIDER_CONFIG.ontologyBearerToken,
+      authApiUrl: parsed.authApiUrl ?? DEFAULT_PROVIDER_CONFIG.authApiUrl,
+    };
   } catch {
     return { ...DEFAULT_PROVIDER_CONFIG };
   }
@@ -32,18 +41,27 @@ export function loadProviderConfig(): ProviderConfig {
 /**
  * Persist the config and mirror the ontology URL + token to legacy keys so
  * `apiBase()` / `apiToken()` consumers continue working unchanged.
+ *
+ * Only the three transport fields are written: any legacy provider block left
+ * in the stored object is dropped, which is also how it finally disappears
+ * from browsers that had one.
  */
 export function saveProviderConfig(cfg: ProviderConfig): void {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(PROVIDER_CONFIG_STORAGE_KEY, JSON.stringify(cfg));
+    const clean: ProviderConfig = {
+      ontologyApiUrl: cfg.ontologyApiUrl,
+      ontologyBearerToken: cfg.ontologyBearerToken,
+      authApiUrl: cfg.authApiUrl,
+    };
+    window.localStorage.setItem(PROVIDER_CONFIG_STORAGE_KEY, JSON.stringify(clean));
 
     // Mirror to legacy keys (backward compat).
-    const url = cfg.ontologyApiUrl.trim().replace(/\/$/, "");
+    const url = clean.ontologyApiUrl.trim().replace(/\/$/, "");
     if (url) window.localStorage.setItem("ontology.apiBase", url);
     else window.localStorage.removeItem("ontology.apiBase");
 
-    const tok = cfg.ontologyBearerToken.trim();
+    const tok = clean.ontologyBearerToken.trim();
     if (tok) window.localStorage.setItem("ontology.apiToken", tok);
     else window.localStorage.removeItem("ontology.apiToken");
   } catch {
@@ -51,37 +69,31 @@ export function saveProviderConfig(cfg: ProviderConfig): void {
   }
 }
 
-/** Return the API key that corresponds to a given provider, or `""`. */
-export function apiKeyForProvider(cfg: ProviderConfig, provider: LLMProvider): string {
-  switch (provider) {
-    case "openai":
-      return cfg.openaiKey;
-    case "anthropic":
-      return cfg.anthropicKey;
-    case "infomaniak":
-      return cfg.infomaniakKey;
-    default:
-      return "";
+/**
+ * Provider credentials an older build left in this browser, or `null` when
+ * there are none. Returned so the UI can offer to move them to the server
+ * before deleting them, rather than silently discarding a key the user may
+ * not have written down anywhere else.
+ */
+export function readLegacyProviderSecrets(): LegacyProviderSecrets | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = window.localStorage.getItem(PROVIDER_CONFIG_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const found: LegacyProviderSecrets = {};
+    for (const field of LEGACY_PROVIDER_FIELDS) {
+      const value = parsed[field];
+      if (typeof value === "string" && value.trim()) found[field] = value.trim();
+    }
+    return Object.keys(found).length > 0 ? found : null;
+  } catch {
+    return null;
   }
 }
 
-/**
- * Extra fields to forward to `/ingest/analyze` (and similar endpoints) so the
- * backend can route to a user-configured provider. Returns only fields with
- * non-empty values.
- */
-export function getActiveProviderRequestFields(
-  cfg: ProviderConfig = loadProviderConfig(),
-  override?: LLMProvider,
-): { provider?: LLMProvider; model?: string; base_url?: string; api_key?: string } {
-  const provider = override ?? cfg.activeLLMProvider;
-  const out: { provider?: LLMProvider; model?: string; base_url?: string; api_key?: string } = {};
-  if (provider && provider !== "default") out.provider = provider;
-  const key = apiKeyForProvider(cfg, provider);
-  if (key) out.api_key = key;
-  if (provider === "infomaniak") {
-    if (cfg.infomaniakBaseUrl) out.base_url = cfg.infomaniakBaseUrl;
-    if (cfg.infomaniakModel) out.model = cfg.infomaniakModel;
-  }
-  return out;
+/** Delete the legacy provider block, keeping the transport fields intact. */
+export function purgeLegacyProviderSecrets(): void {
+  if (typeof window === "undefined") return;
+  saveProviderConfig(loadProviderConfig());
 }

@@ -38,9 +38,7 @@ use ontology_io::{
     decode_to_utf8, detect_language, ApplyDecision, ApplyOutcome, ApplyReport, DecisionAction,
     OntologyProposal, ProposalSource,
 };
-use ontology_rag::{
-    attach_conflicts, extract_proposal, AnthropicModel, LanguageModel, OpenAiModel,
-};
+use ontology_rag::{attach_conflicts, extract_proposal, LanguageModel};
 use ontology_storage::LogRecord;
 use serde::Deserialize;
 use tracing::warn;
@@ -677,115 +675,29 @@ async fn read_analyze_form(mut form: Multipart) -> Result<AnalyzeForm, ApiError>
 
 /// Choose the LLM client for an analyze request.
 ///
-/// * `"default"` / unset → the pipeline's pre-configured LLM (tests use
-///   this to inject a deterministic fake).
-/// * `"openai"`   → fresh [`OpenAiModel`] from `$OPENAI_API_KEY`.
-/// * `"anthropic"`→ fresh [`AnthropicModel`] from `$ANTHROPIC_API_KEY`.
+/// * `"default"` / unset → the pipeline's own LLM. Tests inject a
+///   deterministic fake there, and it is also what a plain `ontology serve`
+///   with no provider configured falls back to.
+/// * anything else → built from the persisted settings by
+///   [`crate::model_for`], the single resolution path shared with `/ask`.
+///
+/// No environment variable is consulted: credentials live in the settings
+/// store and nowhere else.
 fn pick_model(
     s: &AppState,
     provider: Option<&str>,
     model_override: Option<String>,
 ) -> Result<Arc<dyn LanguageModel>, ApiError> {
-    // Resolve the effective provider: explicit > settings.llm.active_provider
-    // > "default". This lets the UI configure everything via /settings.
-    let llm_cfg = s.settings.read().llm.clone();
-    let effective = match provider {
-        Some(p) if !p.is_empty() && p != "default" => p.to_string(),
-        _ => {
-            if llm_cfg.active_provider != "default" && !llm_cfg.active_provider.is_empty() {
-                llm_cfg.active_provider.clone()
-            } else {
-                "default".to_string()
-            }
-        }
+    let llm = s.settings.read().llm.clone();
+    let overrides = crate::LlmOverrides {
+        provider: provider.map(str::to_string),
+        model: model_override,
+        ..Default::default()
     };
-
-    match effective.as_str() {
-        "default" | "" => Ok(s.pipeline.llm.clone()),
-        "openai" => {
-            let key = if !llm_cfg.openai_api_key.is_empty() {
-                llm_cfg.openai_api_key.clone()
-            } else {
-                std::env::var("OPENAI_API_KEY").map_err(|_| {
-                    ApiError::BadRequest(
-                        "Clé OpenAI manquante — configurez-la dans Settings".into(),
-                    )
-                })?
-            };
-            let mut m = OpenAiModel::new(key);
-            let model = model_override
-                .or_else(|| {
-                    if llm_cfg.openai_model.is_empty() {
-                        None
-                    } else {
-                        Some(llm_cfg.openai_model.clone())
-                    }
-                });
-            if let Some(model) = model {
-                m = m.with_model(model);
-            }
-            if !llm_cfg.openai_base_url.is_empty() {
-                m = m.with_base_url(llm_cfg.openai_base_url.clone());
-            }
-            Ok(Arc::new(m))
-        }
-        "anthropic" => {
-            let key = if !llm_cfg.anthropic_api_key.is_empty() {
-                llm_cfg.anthropic_api_key.clone()
-            } else {
-                std::env::var("ANTHROPIC_API_KEY").map_err(|_| {
-                    ApiError::BadRequest(
-                        "Clé Anthropic manquante — configurez-la dans Settings".into(),
-                    )
-                })?
-            };
-            let mut m = AnthropicModel::new(key);
-            let model = model_override
-                .or_else(|| {
-                    if llm_cfg.anthropic_model.is_empty() {
-                        None
-                    } else {
-                        Some(llm_cfg.anthropic_model.clone())
-                    }
-                });
-            if let Some(model) = model {
-                m = m.with_model(model);
-            }
-            if !llm_cfg.anthropic_base_url.is_empty() {
-                m = m.with_base_url(llm_cfg.anthropic_base_url.clone());
-            }
-            Ok(Arc::new(m))
-        }
-        "infomaniak" => {
-            // Infomaniak exposes an OpenAI-compatible chat-completions API.
-            let key = if !llm_cfg.infomaniak_api_key.is_empty() {
-                llm_cfg.infomaniak_api_key.clone()
-            } else {
-                return Err(ApiError::BadRequest(
-                    "Clé Infomaniak manquante — configurez-la dans Settings".into(),
-                ));
-            };
-            let mut m = OpenAiModel::new(key);
-            let base = if llm_cfg.infomaniak_base_url.is_empty() {
-                "https://api.infomaniak.com/1/ai".to_string()
-            } else {
-                llm_cfg.infomaniak_base_url.clone()
-            };
-            m = m.with_base_url(base);
-            let model = model_override.or_else(|| {
-                if llm_cfg.infomaniak_model.is_empty() {
-                    None
-                } else {
-                    Some(llm_cfg.infomaniak_model.clone())
-                }
-            });
-            if let Some(model) = model {
-                m = m.with_model(model);
-            }
-            Ok(Arc::new(m))
-        }
-        other => Err(ApiError::BadRequest(format!("unknown provider: {other}"))),
+    if crate::effective_provider(&llm, &overrides) == "default" {
+        return Ok(s.pipeline.llm.clone());
     }
+    crate::model_for(&llm, &overrides).map_err(ApiError::BadRequest)
 }
 
 fn resolve_ref(

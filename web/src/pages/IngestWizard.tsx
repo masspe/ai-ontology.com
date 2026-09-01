@@ -20,6 +20,7 @@ import { useEffect, useRef, useState } from "react";
 import Card from "../components/Card";
 // @ts-expect-error JSX module
 import { useToast } from "../components/Toast.jsx";
+import { getSettings } from "../api";
 import { analyzeIngest, applyIngest } from "../lib/ingestApi";
 import { prepareForIngest, terminateOcrWorker } from "../lib/extractText";import type {
   ApplyDecision,
@@ -76,22 +77,32 @@ export default function IngestWizard() {
   const toast = useToast();
   const [step, setStep] = useState<Step>("upload");
   const [file, setFile] = useState<File | null>(null);
+  // "default" routes to whatever the server has applied, so it is both the
+  // initial value and a valid final one. The effect below only makes the
+  // active provider *visible* in the selector.
   const [provider, setProvider] = useState<"default" | "openai" | "anthropic" | "infomaniak">(
-    () => {
-      // Default the wizard's provider to whatever the user picked in Settings.
-      try {
-        const raw = typeof window !== "undefined"
-          ? window.localStorage.getItem("ontology.providerConfig")
-          : null;
-        if (raw) {
-          const cfg = JSON.parse(raw);
-          const p = cfg?.activeLLMProvider;
-          if (p === "openai" || p === "anthropic" || p === "infomaniak" || p === "default") return p;
-        }
-      } catch { /* ignore */ }
-      return "default";
-    },
+    "default",
   );
+  const [providerTouched, setProviderTouched] = useState(false);
+
+  // Reflect the provider configured in Settings, which is the single source of
+  // truth. Skipped once the user has picked one here, so a slow response never
+  // overwrites a deliberate choice.
+  useEffect(() => {
+    let cancelled = false;
+    getSettings()
+      .then((s) => {
+        if (cancelled || providerTouched) return;
+        const p = s.llm.active_provider;
+        if (p === "openai" || p === "anthropic" || p === "infomaniak") setProvider(p);
+      })
+      .catch(() => {
+        /* selector stays on "default" — the server decides anyway */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [providerTouched]);
   const [modelName, setModelName] = useState("");
   const [languageHint, setLanguageHint] = useState("");
   const [proposal, setProposal] = useState<OntologyProposal | null>(null);
@@ -200,7 +211,10 @@ export default function IngestWizard() {
           onFile={setFile}
           fileInput={fileInput}
           provider={provider}
-          onProvider={setProvider}
+          onProvider={(p) => {
+            setProviderTouched(true);
+            setProvider(p);
+          }}
           model={modelName}
           onModel={setModelName}
           languageHint={languageHint}

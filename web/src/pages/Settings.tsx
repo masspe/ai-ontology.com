@@ -3,9 +3,32 @@
 
 import { useEffect, useState } from "react";
 import Card from "../components/Card";
-import { apiBase, getSettings, getStats, patchSettings, listFeedbacks, deleteFeedback, getOcrStatus, type Feedback, type LlmSettingsPatch, type OcrStatus, type Settings as ServerSettings } from "../api";
-import { loadProviderConfig, saveProviderConfig } from "../lib/providerConfig";
-import type { LLMProvider, ProviderConfig } from "../types/providerConfig";
+import {
+  apiBase,
+  deleteFeedback,
+  getOcrStatus,
+  getSettings,
+  getStats,
+  listFeedbacks,
+  listInfomaniakProducts,
+  listLlmModels,
+  patchSettings,
+  testLlm,
+  type Feedback,
+  type InfomaniakProduct,
+  type LlmModelInfo,
+  type LlmOverrides,
+  type LlmSettingsPatch,
+  type OcrStatus,
+  type Settings as ServerSettings,
+} from "../api";
+import {
+  loadProviderConfig,
+  purgeLegacyProviderSecrets,
+  readLegacyProviderSecrets,
+  saveProviderConfig,
+} from "../lib/providerConfig";
+import type { LegacyProviderSecrets, ProviderConfig } from "../types/providerConfig";
 
 interface TestResult { ok: boolean; message: string; }
 
@@ -17,12 +40,8 @@ export default function Settings() {
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
 
-  // Provider & Keys state
+  // Client-side connection state. Provider credentials are server-side.
   const [cfg, setCfg] = useState<ProviderConfig>(() => loadProviderConfig());
-  const [openSection, setOpenSection] = useState<"provider" | "keys" | null>("provider");
-  const [showOpenaiKey, setShowOpenaiKey] = useState(false);
-  const [showAnthropicKey, setShowAnthropicKey] = useState(false);
-  const [showInfomaniakKey, setShowInfomaniakKey] = useState(false);
   const [showBearer, setShowBearer] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<TestResult | null>(null);
@@ -49,7 +68,7 @@ export default function Settings() {
 
   const handleSave = () => {
     saveProviderConfig(cfg);
-    setInfo("Provider & connection settings saved. Refresh other tabs to pick up the new values.");
+    setInfo("Connexion serveur enregistrée. Rechargez les autres onglets pour la prendre en compte.");
     setError(null);
   };
 
@@ -124,14 +143,6 @@ export default function Settings() {
           error={error}
           info={info}
           cfg={cfg}
-          openSection={openSection}
-          setOpenSection={setOpenSection}
-          showOpenaiKey={showOpenaiKey}
-          setShowOpenaiKey={setShowOpenaiKey}
-          showAnthropicKey={showAnthropicKey}
-          setShowAnthropicKey={setShowAnthropicKey}
-          showInfomaniakKey={showInfomaniakKey}
-          setShowInfomaniakKey={setShowInfomaniakKey}
           showBearer={showBearer}
           setShowBearer={setShowBearer}
           testing={testing}
@@ -151,14 +162,6 @@ interface GeneralSettingsProps {
   error: string | null;
   info: string | null;
   cfg: ProviderConfig;
-  openSection: "provider" | "keys" | null;
-  setOpenSection: (v: "provider" | "keys" | null) => void;
-  showOpenaiKey: boolean;
-  setShowOpenaiKey: React.Dispatch<React.SetStateAction<boolean>>;
-  showAnthropicKey: boolean;
-  setShowAnthropicKey: React.Dispatch<React.SetStateAction<boolean>>;
-  showInfomaniakKey: boolean;
-  setShowInfomaniakKey: React.Dispatch<React.SetStateAction<boolean>>;
   showBearer: boolean;
   setShowBearer: React.Dispatch<React.SetStateAction<boolean>>;
   testing: boolean;
@@ -170,15 +173,14 @@ interface GeneralSettingsProps {
 }
 
 function GeneralSettings({
-  s, error, info, cfg, openSection, setOpenSection,
-  showOpenaiKey, setShowOpenaiKey, showAnthropicKey, setShowAnthropicKey,
-  showInfomaniakKey, setShowInfomaniakKey, showBearer, setShowBearer,
+  s, error, info, cfg, showBearer, setShowBearer,
   testing, testResult, apply, updateCfg, handleSave, handleTest,
 }: GeneralSettingsProps) {
   return (
     <>
       {error && <div className="error-banner">{error}</div>}
       {info && <div className="success-banner">{info}</div>}
+      <LegacyKeysBanner apply={apply} />
 
       <div className="grid grid-2" style={{ alignItems: "start", marginBottom: 16 }}>
         <Card title="Retrieval defaults">
@@ -280,103 +282,10 @@ function GeneralSettings({
         />
       )}
 
-      <Card title="Provider & Keys" subtitle="API keys and server endpoints. Stored in your browser only.">
-        {/* LLM Provider section */}
-        <div className="provider-section">
-          <div
-            className="provider-section-header"
-            onClick={() => setOpenSection(openSection === "provider" ? null : "provider")}
-          >
-            <span>LLM provider</span>
-            <span>{openSection === "provider" ? "▾" : "▸"}</span>
-          </div>
-          {openSection === "provider" && (
-            <div className="provider-section-body">
-              <label className="field">
-                <span>Active provider</span>
-                <select
-                  value={cfg.activeLLMProvider}
-                  onChange={(e) => updateCfg("activeLLMProvider", e.target.value as LLMProvider)}
-                >
-                  <option value="default">Default (server-configured)</option>
-                  <option value="openai">OpenAI</option>
-                  <option value="anthropic">Anthropic</option>
-                  <option value="infomaniak">Infomaniak AI (Swiss cloud)</option>
-                </select>
-                <p className="field-hint">
-                  This provider is used by the ingest wizard and ontology builder
-                  when the per-page selector is left on "default".
-                </p>
-              </label>
-              {cfg.activeLLMProvider === "infomaniak" && (
-                <>
-                  <label className="field">
-                    <span>Infomaniak base URL</span>
-                    <input
-                      type="text"
-                      value={cfg.infomaniakBaseUrl}
-                      onChange={(e) => updateCfg("infomaniakBaseUrl", e.target.value)}
-                      placeholder="https://api.infomaniak.com/1/ai"
-                    />
-                  </label>
-                  <label className="field">
-                    <span>Infomaniak model (optional)</span>
-                    <input
-                      type="text"
-                      value={cfg.infomaniakModel}
-                      onChange={(e) => updateCfg("infomaniakModel", e.target.value)}
-                      placeholder="mixtral8x22b"
-                    />
-                  </label>
-                </>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* API Keys section */}
-        <div className="provider-section">
-          <div
-            className="provider-section-header"
-            onClick={() => setOpenSection(openSection === "keys" ? null : "keys")}
-          >
-            <span>API keys</span>
-            <span>{openSection === "keys" ? "▾" : "▸"}</span>
-          </div>
-          {openSection === "keys" && (
-            <div className="provider-section-body">
-              <KeyField
-                label="OpenAI API key"
-                value={cfg.openaiKey}
-                onChange={(v) => updateCfg("openaiKey", v)}
-                show={showOpenaiKey}
-                onToggle={() => setShowOpenaiKey((v) => !v)}
-                placeholder="sk-…"
-              />
-              <KeyField
-                label="Anthropic API key"
-                value={cfg.anthropicKey}
-                onChange={(v) => updateCfg("anthropicKey", v)}
-                show={showAnthropicKey}
-                onToggle={() => setShowAnthropicKey((v) => !v)}
-                placeholder="sk-ant-…"
-              />
-              <KeyField
-                label="Infomaniak API key"
-                value={cfg.infomaniakKey}
-                onChange={(v) => updateCfg("infomaniakKey", v)}
-                show={showInfomaniakKey}
-                onToggle={() => setShowInfomaniakKey((v) => !v)}
-                placeholder="(Infomaniak personal API token)"
-              />
-              <p className="field-hint">
-                Keys are stored in plaintext in this browser&apos;s localStorage.
-                Only enter them on trusted devices.
-              </p>
-            </div>
-          )}
-        </div>
-
+      <Card
+        title="Connexion serveur"
+        subtitle="Adresses des backends et jeton d'accès. Stockés dans ce navigateur uniquement — les clés des fournisseurs LLM sont côté serveur."
+      >
         {/* Server URLs (always visible) */}
         <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 12 }}>
           <label className="field">
@@ -427,6 +336,77 @@ function GeneralSettings({
         </p>
       </Card>
     </>
+  );
+}
+
+// -- Migration of browser-stored keys ---------------------------------------
+
+/**
+ * Provider keys a previous version left in this browser.
+ *
+ * Nothing reads them any more, so the only useful actions are to move them to
+ * the server once, or delete them. The banner stays until one of the two
+ * happens: silently discarding a key the user may not have written down
+ * anywhere else is worse than asking.
+ */
+function LegacyKeysBanner({
+  apply,
+}: {
+  apply: (patch: Parameters<typeof patchSettings>[0]) => Promise<void>;
+}) {
+  const [legacy, setLegacy] = useState<LegacyProviderSecrets | null>(() =>
+    readLegacyProviderSecrets(),
+  );
+  const [busy, setBusy] = useState(false);
+
+  if (!legacy) return null;
+
+  const importToServer = async () => {
+    setBusy(true);
+    try {
+      const patch: LlmSettingsPatch = {};
+      if (legacy.openaiKey) patch.openai_api_key = legacy.openaiKey;
+      if (legacy.anthropicKey) patch.anthropic_api_key = legacy.anthropicKey;
+      if (legacy.infomaniakKey) patch.infomaniak_api_key = legacy.infomaniakKey;
+      if (legacy.infomaniakModel) patch.infomaniak_model = legacy.infomaniakModel;
+      if (legacy.activeLLMProvider && legacy.activeLLMProvider !== "default") {
+        patch.active_provider = legacy.activeLLMProvider;
+      }
+      // `infomaniakBaseUrl` is deliberately not carried over: the value that
+      // build wrote (`/1/ai`) never served chat completions. The product id
+      // replaces it.
+      if (Object.keys(patch).length > 0) await apply({ llm: patch });
+      purgeLegacyProviderSecrets();
+      setLegacy(null);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const discard = () => {
+    purgeLegacyProviderSecrets();
+    setLegacy(null);
+  };
+
+  const names = Object.keys(legacy).join(", ");
+
+  return (
+    <div className="warn-banner" style={{ marginBottom: 16 }}>
+      <p style={{ margin: 0 }}>
+        <strong>Clés stockées dans ce navigateur.</strong> Une version
+        précédente conservait la configuration des fournisseurs en
+        localStorage ({names}). Elle n&apos;est plus utilisée : la
+        configuration vit désormais côté serveur.
+      </p>
+      <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+        <button className="btn btn-primary" onClick={importToServer} disabled={busy}>
+          {busy ? "Import…" : "↑ Importer vers le serveur"}
+        </button>
+        <button className="btn btn-outline" onClick={discard} disabled={busy}>
+          🗑 Supprimer du navigateur
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -741,7 +721,19 @@ function cfgHas(key: keyof ProviderConfig): boolean {
   }
 }
 
-// -- Server-stored LLM section (clés/URL envoyées au backend) ---------------
+// -- Server-stored LLM section ----------------------------------------------
+//
+// Single source of truth for provider credentials: everything here is read
+// from and written to the server's settings store. The browser holds no key.
+//
+// Two rules shape this form:
+//
+//   * probing never saves. "Détecter", "Charger les modèles" and "Tester"
+//     send the typed-but-unsaved values as request overrides, so an unvalidated
+//     key is never made live. Only "Appliquer" writes.
+//   * the model list comes from the provider, not from a hard-coded table.
+//     Infomaniak's catalogue changes over time and a stale name is an opaque
+//     400 at generation time.
 
 interface LlmServerSectionProps {
   settings: ServerSettings;
@@ -751,178 +743,220 @@ interface LlmServerSectionProps {
 const PROVIDER_LABELS: Record<string, string> = {
   openai: "OpenAI",
   anthropic: "Anthropic",
-  infomaniak: "Infomaniak AI",
+  infomaniak: "Infomaniak AI (Suisse)",
 };
 
-const BASE_URL_PRESETS: Record<string, Array<{ value: string; label: string }>> = {
+/**
+ * Offline fallback for the model picker. Deliberately empty for Infomaniak:
+ * its catalogue is account-dependent and versioned, so guessing a name here
+ * would only produce a plausible-looking selection that fails on first use.
+ */
+const MODEL_FALLBACKS: Record<string, LlmModelInfo[]> = {
   openai: [
-    { value: "", label: "Par défaut (api.openai.com)" },
-    { value: "https://eu.api.openai.com/v1", label: "Europe (eu.api.openai.com)" },
-    { value: "https://YOUR-RESOURCE.openai.azure.com", label: "Azure OpenAI (personnalisé)" },
+    { id: "gpt-4o", label: "gpt-4o" },
+    { id: "gpt-4o-mini", label: "gpt-4o-mini" },
+    { id: "gpt-4.1", label: "gpt-4.1" },
   ],
   anthropic: [
-    { value: "", label: "Par défaut (api.anthropic.com)" },
+    { id: "claude-opus-4-7", label: "claude-opus-4-7" },
+    { id: "claude-sonnet-4-6", label: "claude-sonnet-4-6" },
+    { id: "claude-haiku-4-5", label: "claude-haiku-4-5" },
   ],
-  infomaniak: [
-    { value: "https://api.infomaniak.com/1/ai", label: "Infomaniak (Suisse)" },
-  ],
+  infomaniak: [],
 };
 
-const MODEL_PRESETS: Record<string, Array<{ value: string; label: string }>> = {
-  openai: [
-    { value: "gpt-4o", label: "GPT-4o (Recommandé)" },
-    { value: "gpt-4o-mini", label: "GPT-4o mini" },
-    { value: "gpt-4.1", label: "GPT-4.1" },
-    { value: "gpt-4-turbo", label: "GPT-4 Turbo" },
-    { value: "gpt-3.5-turbo", label: "GPT-3.5 Turbo" },
-  ],
-  anthropic: [
-    { value: "claude-opus-4-7", label: "Claude Opus 4.7 (Recommandé)" },
-    { value: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
-    { value: "claude-haiku-4-5", label: "Claude Haiku 4.5" },
-  ],
-  infomaniak: [
-    { value: "mixtral8x22b", label: "Mixtral 8x22B" },
-    { value: "llama3.1-70b", label: "LLaMA 3.1 70B" },
-  ],
-};
+type LlmFeedback = { kind: "ok" | "warn" | "err"; text: string };
 
 function LlmServerSection({ settings, onPatch }: LlmServerSectionProps) {
   const llm = settings.llm;
-  const initialProvider = (llm.active_provider && llm.active_provider !== "default")
-    ? llm.active_provider : "openai";
+  const initialProvider =
+    llm.active_provider && llm.active_provider !== "default" ? llm.active_provider : "openai";
+
   const [provider, setProvider] = useState<string>(initialProvider);
   const [apiKey, setApiKey] = useState("");
   const [showKey, setShowKey] = useState(false);
+  const [productId, setProductId] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [model, setModel] = useState("");
-  const [models, setModels] = useState<Array<{ value: string; label: string }>>(MODEL_PRESETS.openai);
-  const [temperature, setTemperature] = useState<number>(llm.temperature ?? 0.3);
-  const [maxTokens, setMaxTokens] = useState<number>(llm.max_tokens ?? 1000);
-  const [saving, setSaving] = useState(false);
-  const [testing, setTesting] = useState(false);
-  const [loadingModels, setLoadingModels] = useState(false);
-  const [testMsg, setTestMsg] = useState<string | null>(null);
+  const [models, setModels] = useState<LlmModelInfo[]>(MODEL_FALLBACKS.openai);
+  const [products, setProducts] = useState<InfomaniakProduct[]>([]);
+  const [temperature, setTemperature] = useState<number>(llm.temperature);
+  const [maxTokens, setMaxTokens] = useState<number>(llm.max_tokens);
+  const [busy, setBusy] = useState<null | "save" | "test" | "models" | "detect">(null);
+  const [msg, setMsg] = useState<LlmFeedback | null>(null);
 
-  // Re-sync local form when server settings or selected provider change.
+  // Re-sync the form whenever the server state or the selected provider
+  // changes. Models reset to the offline fallback: a catalogue fetched for one
+  // provider must not linger in another's picker.
   useEffect(() => {
     if (provider === "openai") {
       setBaseUrl(llm.openai_base_url);
-      setModel(llm.openai_model || "gpt-4o");
+      setModel(llm.openai_model);
     } else if (provider === "anthropic") {
       setBaseUrl(llm.anthropic_base_url);
-      setModel(llm.anthropic_model || "claude-opus-4-7");
+      setModel(llm.anthropic_model);
     } else if (provider === "infomaniak") {
       setBaseUrl(llm.infomaniak_base_url);
-      setModel(llm.infomaniak_model || "mixtral8x22b");
+      setModel(llm.infomaniak_model);
+      setProductId(llm.infomaniak_product_id);
     }
-    setModels(MODEL_PRESETS[provider] ?? []);
+    setModels(MODEL_FALLBACKS[provider] ?? []);
+    setProducts([]);
     setTemperature(llm.temperature);
     setMaxTokens(llm.max_tokens);
   }, [provider, llm]);
 
-  const hint = provider === "openai" ? llm.openai_api_key_hint
-    : provider === "anthropic" ? llm.anthropic_api_key_hint
-    : provider === "infomaniak" ? llm.infomaniak_api_key_hint
-    : "";
+  const hint =
+    provider === "openai"
+      ? llm.openai_api_key_hint
+      : provider === "anthropic"
+        ? llm.anthropic_api_key_hint
+        : provider === "infomaniak"
+          ? llm.infomaniak_api_key_hint
+          : "";
   const configured = Boolean(hint);
   const providerLabel = PROVIDER_LABELS[provider] ?? provider;
+  const isInfomaniak = provider === "infomaniak";
 
-  const buildPatch = (includeKey: boolean): LlmSettingsPatch => {
-    const patch: LlmSettingsPatch = {
-      active_provider: provider,
-      temperature,
-      max_tokens: maxTokens,
-    };
-    if (provider === "openai") {
-      if (includeKey && apiKey.trim()) patch.openai_api_key = apiKey.trim();
-      patch.openai_base_url = baseUrl;
-      patch.openai_model = model;
-    } else if (provider === "anthropic") {
-      if (includeKey && apiKey.trim()) patch.anthropic_api_key = apiKey.trim();
-      patch.anthropic_base_url = baseUrl;
-      patch.anthropic_model = model;
-    } else if (provider === "infomaniak") {
-      if (includeKey && apiKey.trim()) patch.infomaniak_api_key = apiKey.trim();
-      patch.infomaniak_base_url = baseUrl;
-      patch.infomaniak_model = model;
-    }
-    return patch;
+  /** Applied right now, as the server sees it. */
+  const applied = (() => {
+    if (!llm.active_provider || llm.active_provider === "default") return null;
+    const name = PROVIDER_LABELS[llm.active_provider] ?? llm.active_provider;
+    const activeModel =
+      llm.active_provider === "openai"
+        ? llm.openai_model
+        : llm.active_provider === "anthropic"
+          ? llm.anthropic_model
+          : llm.active_provider === "infomaniak"
+            ? llm.infomaniak_model
+            : "";
+    return { name, model: activeModel };
+  })();
+
+  /**
+   * The form as request overrides. Sent with a probe so the typed values are
+   * used without being stored; an empty field means "fall back to what is
+   * saved" (the server treats blank as unset).
+   */
+  const overrides = (): LlmOverrides => {
+    const ov: LlmOverrides = { provider };
+    if (apiKey.trim()) ov.api_key = apiKey.trim();
+    if (baseUrl.trim()) ov.base_url = baseUrl.trim();
+    if (isInfomaniak && productId.trim()) ov.product_id = productId.trim();
+    if (model.trim()) ov.model = model.trim();
+    return ov;
   };
 
-  const save = async () => {
-    setSaving(true);
+  const run = async (kind: NonNullable<typeof busy>, fn: () => Promise<void>) => {
+    setBusy(kind);
+    setMsg(null);
     try {
-      await onPatch(buildPatch(true));
-      setApiKey("");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const testConnection = async () => {
-    setTesting(true);
-    setTestMsg(null);
-    try {
-      await onPatch(buildPatch(true));
-      const res = await fetch(`${apiBase()}/settings/llm/test`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          ...(localStorage.getItem("msBE.token")
-            ? { authorization: `Bearer ${localStorage.getItem("msBE.token")}` }
-            : {}),
-        },
-        body: JSON.stringify({ provider }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (res.ok && data.ok) {
-        setTestMsg(`✅ Connexion ${providerLabel} OK${data.model ? ` (modèle: ${data.model})` : ""}`);
-      } else {
-        setTestMsg(`❌ ${data.error || `HTTP ${res.status}`}`);
-      }
-      setApiKey("");
+      await fn();
     } catch (e) {
-      setTestMsg(`❌ ${e instanceof Error ? e.message : String(e)}`);
+      setMsg({ kind: "err", text: e instanceof Error ? e.message : String(e) });
     } finally {
-      setTesting(false);
+      setBusy(null);
     }
   };
 
-  const loadModelsFromApi = async () => {
-    setLoadingModels(true);
-    try {
-      await onPatch(buildPatch(true));
-      const res = await fetch(`${apiBase()}/settings/llm/models?provider=${provider}`, {
-        headers: localStorage.getItem("msBE.token")
-          ? { authorization: `Bearer ${localStorage.getItem("msBE.token")}` }
-          : {},
-      });
-      const data = await res.json().catch(() => ({}));
-      if (res.ok && Array.isArray(data.models)) {
-        const fetched: Array<{ value: string; label: string }> = data.models.map((m: string) => ({
-          value: m, label: m,
-        }));
-        if (fetched.length > 0) {
-          setModels(fetched);
-          setTestMsg(`✅ ${fetched.length} modèles chargés depuis l'API`);
-        } else {
-          setTestMsg("⚠️ Aucun modèle retourné");
-        }
-      } else {
-        setTestMsg(`❌ ${data.error || `HTTP ${res.status}`}`);
+  /** Persist and activate. The only write in this component. */
+  const applyConfig = () =>
+    run("save", async () => {
+      const patch: LlmSettingsPatch = {
+        active_provider: provider,
+        temperature,
+        max_tokens: maxTokens,
+      };
+      const key = apiKey.trim() || undefined;
+      if (provider === "openai") {
+        if (key) patch.openai_api_key = key;
+        patch.openai_base_url = baseUrl;
+        patch.openai_model = model;
+      } else if (provider === "anthropic") {
+        if (key) patch.anthropic_api_key = key;
+        patch.anthropic_base_url = baseUrl;
+        patch.anthropic_model = model;
+      } else if (provider === "infomaniak") {
+        if (key) patch.infomaniak_api_key = key;
+        patch.infomaniak_product_id = productId;
+        patch.infomaniak_base_url = baseUrl;
+        patch.infomaniak_model = model;
       }
+      await onPatch(patch);
       setApiKey("");
-    } catch (e) {
-      setTestMsg(`❌ ${e instanceof Error ? e.message : String(e)}`);
-    } finally {
-      setLoadingModels(false);
-    }
-  };
+      setMsg({
+        kind: "ok",
+        text: model
+          ? `${providerLabel} appliqué avec le modèle ${model}. Effectif immédiatement.`
+          : `${providerLabel} enregistré. Choisissez un modèle pour pouvoir générer.`,
+      });
+    });
 
-  const baseUrlPresets = BASE_URL_PRESETS[provider] ?? [];
-  const isCustomUrl = baseUrl !== "" && !baseUrlPresets.some((p) => p.value === baseUrl);
-  const isCustomModel = model !== "" && !models.some((m) => m.value === model);
+  const testConnection = () =>
+    run("test", async () => {
+      const res = await testLlm(overrides());
+      if (res.ok) {
+        const where = res.endpoint ? ` — ${res.endpoint}` : "";
+        setMsg({
+          kind: "ok",
+          text: `Connexion ${providerLabel} OK${res.model ? ` (modèle ${res.model})` : ""}${where}`,
+        });
+      } else {
+        setMsg({
+          kind: "err",
+          text: `${res.error ?? "échec"}${res.endpoint ? ` — appel : ${res.endpoint}` : ""}`,
+        });
+      }
+    });
+
+  const loadModels = () =>
+    run("models", async () => {
+      const res = await listLlmModels(overrides());
+      if (res.error && res.models.length === 0) {
+        setMsg({
+          kind: "err",
+          text: `${res.error}${res.endpoint ? ` — appel : ${res.endpoint}` : ""}`,
+        });
+        return;
+      }
+      setModels(res.models);
+      // Keep a model the provider no longer lists rather than silently
+      // switching the selection under the user.
+      const stillThere = res.models.some((m) => m.id === model);
+      setMsg({
+        kind: stillThere || !model ? "ok" : "warn",
+        text: stillThere || !model
+          ? `${res.models.length} modèle(s) chargé(s) depuis ${providerLabel}.`
+          : `${res.models.length} modèle(s) chargé(s), mais « ${model} » n'y figure pas.`,
+      });
+    });
+
+  const detectProduct = () =>
+    run("detect", async () => {
+      const res = await listInfomaniakProducts(apiKey.trim() || undefined);
+      if (res.products.length === 0) {
+        setMsg({ kind: "err", text: res.error ?? "Aucun produit AI Tools trouvé." });
+        return;
+      }
+      setProducts(res.products);
+      if (res.products.length === 1) {
+        setProductId(res.products[0].product_id);
+        setMsg({
+          kind: "ok",
+          text: `Product ID détecté : ${res.products[0].product_id}${
+            res.products[0].name ? ` (${res.products[0].name})` : ""
+          }`,
+        });
+      } else {
+        setMsg({
+          kind: "warn",
+          text: `${res.products.length} produits AI Tools — choisissez-en un.`,
+        });
+      }
+    });
+
+  const modelIsCustom = model !== "" && !models.some((m) => m.id === model);
 
   return (
     <Card
@@ -932,7 +966,7 @@ function LlmServerSection({ settings, onPatch }: LlmServerSectionProps) {
           Configuration {providerLabel}
         </span>
       }
-      subtitle="Clé API pour l'extraction intelligente avec IA"
+      subtitle="Fournisseur, clé et modèle. Enregistrés côté serveur, appliqués sans redémarrage."
       actions={
         configured ? (
           <span className="badge badge-success">⊘ Configuré</span>
@@ -941,150 +975,203 @@ function LlmServerSection({ settings, onPatch }: LlmServerSectionProps) {
         )
       }
     >
-      <label className="field" style={{ marginBottom: 4 }}>
+      {applied ? (
+        <p className="field-hint" style={{ marginTop: 0, marginBottom: 12 }}>
+          Actif : <strong>{applied.name}</strong>
+          {applied.model ? (
+            <>
+              {" · "}
+              <code>{applied.model}</code>
+            </>
+          ) : (
+            " — aucun modèle sélectionné"
+          )}
+        </p>
+      ) : (
+        <p className="field-hint" style={{ marginTop: 0, marginBottom: 12 }}>
+          Aucun fournisseur actif : les réponses utilisent le modèle « echo »
+          hors-ligne.
+        </p>
+      )}
+
+      <label className="field">
         <span>Fournisseur</span>
         <select value={provider} onChange={(e) => setProvider(e.target.value)}>
           {Object.entries(PROVIDER_LABELS).map(([k, v]) => (
-            <option key={k} value={k}>{v}</option>
+            <option key={k} value={k}>
+              {v}
+            </option>
           ))}
         </select>
       </label>
 
       <label className="field" style={{ marginTop: 16 }}>
         <span>Clé API {providerLabel}</span>
-        <div style={{ display: "flex", gap: 8 }}>
-          <div className="key-field-wrapper" style={{ flex: 1 }}>
-            <input
-              type={showKey ? "text" : "password"}
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              placeholder={configured ? "••••••••••" : "sk-proj-…"}
-              autoComplete="off"
-              spellCheck={false}
-            />
-            <button
-              type="button"
-              className="key-toggle-btn"
-              onClick={() => setShowKey((v) => !v)}
-              title={showKey ? "Masquer" : "Afficher"}
-            >👁</button>
-          </div>
+        <div className="key-field-wrapper">
+          <input
+            type={showKey ? "text" : "password"}
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            placeholder={configured ? "•••••••••• (laisser vide pour conserver)" : "sk-…"}
+            autoComplete="off"
+            spellCheck={false}
+          />
           <button
-            className="btn btn-primary"
-            onClick={save}
-            disabled={saving}
-            style={{ whiteSpace: "nowrap" }}
+            type="button"
+            className="key-toggle-btn"
+            onClick={() => setShowKey((v) => !v)}
+            title={showKey ? "Masquer" : "Afficher"}
           >
-            {saving ? "Sauvegarde…" : "💾 Sauvegarder"}
+            👁
           </button>
         </div>
         {configured && (
-          <div
-            style={{
-              marginTop: 8,
-              padding: "8px 12px",
-              background: "var(--panel-2)",
-              border: "1px solid var(--border)",
-              borderRadius: "var(--radius-sm)",
-              display: "flex",
-              justifyContent: "space-between",
-              fontSize: 13,
-            }}
-          >
-            <span style={{ color: "var(--muted)" }}>Clé actuelle :</span>
-            <code>{hint}</code>
-          </div>
+          <p className="field-hint">
+            Clé enregistrée : <code>{hint}</code>. Le serveur ne la renvoie
+            jamais ; laissez le champ vide pour la conserver.
+          </p>
         )}
         {provider === "openai" && (
-          <p className="field-hint" style={{ marginTop: 6 }}>
-            Format: sk-proj-… Obtenez votre clé sur{" "}
-            <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">
+          <p className="field-hint">
+            Format sk-proj-… —{" "}
+            <a
+              href="https://platform.openai.com/api-keys"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
               platform.openai.com
             </a>
           </p>
         )}
         {provider === "anthropic" && (
-          <p className="field-hint" style={{ marginTop: 6 }}>
-            Format: sk-ant-… Obtenez votre clé sur{" "}
-            <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener noreferrer">
+          <p className="field-hint">
+            Format sk-ant-… —{" "}
+            <a
+              href="https://console.anthropic.com/settings/keys"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
               console.anthropic.com
             </a>
           </p>
         )}
+        {isInfomaniak && (
+          <p className="field-hint">
+            Jeton créé dans le Manager Infomaniak avec le scope{" "}
+            <code>ai-tools</code>.
+          </p>
+        )}
       </label>
 
+      {isInfomaniak && (
+        <label className="field" style={{ marginTop: 16 }}>
+          <span>Product ID AI Tools</span>
+          <div style={{ display: "flex", gap: 8 }}>
+            <input
+              type="text"
+              value={productId}
+              onChange={(e) => setProductId(e.target.value)}
+              placeholder="101112"
+              inputMode="numeric"
+              style={{ flex: 1 }}
+            />
+            <button
+              className="btn btn-outline"
+              onClick={detectProduct}
+              disabled={busy !== null || (!apiKey.trim() && !configured)}
+              title={
+                apiKey.trim() || configured
+                  ? "Lire le product ID depuis /1/ai"
+                  : "Saisissez d'abord la clé API"
+              }
+              style={{ whiteSpace: "nowrap" }}
+            >
+              {busy === "detect" ? "…" : "🔍 Détecter"}
+            </button>
+          </div>
+          {products.length > 1 && (
+            <select
+              value={productId}
+              onChange={(e) => setProductId(e.target.value)}
+              style={{ marginTop: 8 }}
+            >
+              <option value="">— choisir un produit —</option>
+              {products.map((p) => (
+                <option key={p.product_id} value={p.product_id}>
+                  {p.name ? `${p.name} (${p.product_id})` : p.product_id}
+                </option>
+              ))}
+            </select>
+          )}
+          <p className="field-hint">
+            L'URL appelée en découle :{" "}
+            <code>
+              api.infomaniak.com/2/ai/{productId || "{product_id}"}/openai/v1
+            </code>
+          </p>
+        </label>
+      )}
+
       <label className="field" style={{ marginTop: 16 }}>
-        <span>URL de base API (optionnel)</span>
+        <span style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <span>Modèle</span>
+          <button
+            type="button"
+            onClick={loadModels}
+            disabled={busy !== null || (!configured && !apiKey.trim())}
+            style={{
+              background: "none",
+              border: "none",
+              color: "var(--accent)",
+              cursor: busy === null ? "pointer" : "not-allowed",
+              fontSize: 12,
+              padding: 0,
+            }}
+            title="Interroger le catalogue du fournisseur"
+          >
+            {busy === "models" ? "…" : "↻ Charger les modèles"}
+          </button>
+        </span>
         <select
-          value={isCustomUrl ? "__custom__" : baseUrl}
-          onChange={(e) => {
-            if (e.target.value === "__custom__") setBaseUrl("https://");
-            else setBaseUrl(e.target.value);
-          }}
+          value={modelIsCustom ? "__custom__" : model}
+          onChange={(e) => setModel(e.target.value === "__custom__" ? "" : e.target.value)}
         >
-          {baseUrlPresets.map((p) => (
-            <option key={p.value || "default"} value={p.value}>{p.label}</option>
+          <option value="">— aucun —</option>
+          {models.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.label}
+              {m.max_input_tokens ? ` · ${Math.round(m.max_input_tokens / 1000)}k ctx` : ""}
+              {m.beta ? " · beta" : ""}
+              {m.kind && m.kind !== "llm" ? ` · ${m.kind}` : ""}
+            </option>
           ))}
-          <option value="__custom__">Personnalisé…</option>
+          <option value="__custom__">Saisir manuellement…</option>
         </select>
-        {(isCustomUrl || baseUrl.startsWith("https://Y")) && (
+        {modelIsCustom && (
           <input
             type="text"
-            value={baseUrl}
-            onChange={(e) => setBaseUrl(e.target.value)}
-            placeholder="https://votre-endpoint/v1"
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            placeholder="nom-du-modèle"
             style={{ marginTop: 8 }}
           />
         )}
-        <p className="field-hint">
-          Utilisez une URL personnalisée pour Azure OpenAI, proxies régionaux (Suisse, Europe) ou endpoints privés.
-        </p>
+        {models.length === 0 && (
+          <p className="field-hint">
+            {isInfomaniak
+              ? "Le catalogue Infomaniak dépend de votre compte : cliquez sur « Charger les modèles »."
+              : "Aucun modèle chargé — cliquez sur « Charger les modèles »."}
+          </p>
+        )}
+        {models.some((m) => m.kind && m.kind !== "llm") && (
+          <p className="field-hint">
+            Le catalogue contient aussi des modèles non conversationnels
+            (image, audio…), signalés par leur type.
+          </p>
+        )}
       </label>
 
-      <div className="grid grid-3" style={{ gap: 16, marginTop: 16 }}>
-        <label className="field">
-          <span style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <span>Modèle</span>
-            <button
-              type="button"
-              className="link-btn"
-              onClick={loadModelsFromApi}
-              disabled={loadingModels || !configured}
-              style={{
-                background: "none",
-                border: "none",
-                color: "var(--accent)",
-                cursor: configured ? "pointer" : "not-allowed",
-                fontSize: 12,
-                padding: 0,
-              }}
-              title={configured ? "Charger les modèles depuis l'API" : "Sauvegardez la clé d'abord"}
-            >
-              {loadingModels ? "…" : "↻ Charger depuis API"}
-            </button>
-          </span>
-          <select
-            value={isCustomModel ? "__custom__" : model}
-            onChange={(e) => {
-              if (e.target.value === "__custom__") setModel("");
-              else setModel(e.target.value);
-            }}
-          >
-            {models.map((m) => (
-              <option key={m.value} value={m.value}>{m.label}</option>
-            ))}
-            <option value="__custom__">Personnalisé…</option>
-          </select>
-          {isCustomModel && (
-            <input
-              type="text"
-              value={model}
-              onChange={(e) => setModel(e.target.value)}
-              placeholder="nom-du-modèle"
-              style={{ marginTop: 8 }}
-            />
-          )}
-        </label>
+      <div className="grid grid-2" style={{ gap: 16, marginTop: 16 }}>
         <label className="field">
           <span>Température ({temperature.toFixed(2)})</span>
           <input
@@ -1097,7 +1184,7 @@ function LlmServerSection({ settings, onPatch }: LlmServerSectionProps) {
           />
         </label>
         <label className="field">
-          <span>Max Tokens</span>
+          <span>Max tokens</span>
           <input
             type="number"
             min={1}
@@ -1108,28 +1195,70 @@ function LlmServerSection({ settings, onPatch }: LlmServerSectionProps) {
         </label>
       </div>
 
-      <button
-        className="btn btn-outline"
-        onClick={testConnection}
-        disabled={testing}
-        style={{
-          marginTop: 20,
-          width: "100%",
-          padding: "12px",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          gap: 8,
-        }}
-      >
-        {testing ? "Test en cours…" : <>✦ Tester la connexion {providerLabel}</>}
-      </button>
-      {testMsg && (
+      <div style={{ marginTop: 16 }}>
+        <button
+          type="button"
+          onClick={() => setShowAdvanced((v) => !v)}
+          style={{
+            background: "none",
+            border: "none",
+            color: "var(--muted)",
+            cursor: "pointer",
+            fontSize: 13,
+            padding: 0,
+          }}
+        >
+          {showAdvanced ? "▾" : "▸"} Avancé — URL de base
+        </button>
+        {showAdvanced && (
+          <label className="field" style={{ marginTop: 8 }}>
+            <span>URL de base (laisser vide sauf proxy / préproduction)</span>
+            <input
+              type="text"
+              value={baseUrl}
+              onChange={(e) => setBaseUrl(e.target.value)}
+              placeholder={
+                isInfomaniak ? "(déduite du product ID)" : "(URL par défaut du fournisseur)"
+              }
+            />
+            <p className="field-hint">
+              Le segment <code>/v1</code> est ajouté seulement s'il manque : les
+              deux écritures d'une URL fonctionnent.
+            </p>
+          </label>
+        )}
+      </div>
+
+      <div style={{ display: "flex", gap: 8, marginTop: 20 }}>
+        <button
+          className="btn btn-primary"
+          onClick={applyConfig}
+          disabled={busy !== null}
+          style={{ flex: 1, padding: 12 }}
+        >
+          {busy === "save" ? "Application…" : "✓ Appliquer"}
+        </button>
+        <button
+          className="btn btn-outline"
+          onClick={testConnection}
+          disabled={busy !== null}
+          style={{ flex: 1, padding: 12 }}
+        >
+          {busy === "test" ? "Test…" : `✦ Tester ${providerLabel}`}
+        </button>
+      </div>
+      <p className="field-hint" style={{ marginTop: 8 }}>
+        « Détecter », « Charger les modèles » et « Tester » utilisent les valeurs
+        saisies sans les enregistrer. Seul « Appliquer » écrit la configuration.
+      </p>
+      {msg && (
         <div
-          className={testMsg.startsWith("✅") ? "success-banner" : testMsg.startsWith("⚠️") ? "warn-banner" : "error-banner"}
+          className={
+            msg.kind === "ok" ? "success-banner" : msg.kind === "warn" ? "warn-banner" : "error-banner"
+          }
           style={{ marginTop: 12 }}
         >
-          {testMsg}
+          {msg.text}
         </div>
       )}
     </Card>
