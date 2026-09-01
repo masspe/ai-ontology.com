@@ -140,6 +140,11 @@ pub enum LlmError {
     Api(String),
     #[error("decode: {0}")]
     Decode(String),
+    /// Misconfiguration caught before any network call: no model selected,
+    /// no product id, unusable base URL. Callers should surface these as a
+    /// 4xx ("fix your settings"), never as an upstream 5xx.
+    #[error("config: {0}")]
+    Config(String),
 }
 
 /// Abstract chat-completion endpoint. All RAG pipeline tests can use
@@ -229,8 +234,14 @@ impl AnthropicModel {
         self
     }
 
+    /// Override the API root. A blank URL is ignored, so an empty "custom
+    /// base URL" settings field falls back to the default instead of
+    /// producing a relative, unusable URL.
     pub fn with_base_url(mut self, url: impl Into<String>) -> Self {
-        self.base_url = url.into();
+        let url = url.into();
+        if !url.trim().is_empty() {
+            self.base_url = url;
+        }
         self
     }
 
@@ -532,7 +543,7 @@ impl LanguageModel for AnthropicModel {
             stream: false,
         };
 
-        let url = format!("{}/v1/messages", self.base_url);
+        let url = v1_api_url(&self.base_url, "messages");
 
         let mut attempt: u32 = 0;
         let parsed: AnthropicResponse = loop {
@@ -635,7 +646,7 @@ impl LanguageModel for AnthropicModel {
             stream: true,
         };
 
-        let url = format!("{}/v1/messages", self.base_url);
+        let url = v1_api_url(&self.base_url, "messages");
         let resp = self
             .http
             .post(&url)
@@ -727,6 +738,47 @@ impl LanguageModel for AnthropicModel {
 ///
 /// Retries 408 / 409 / 429 and any 5xx response with full-jitter
 /// exponential backoff (default 3 retries). Honors `retry-after`.
+/// Join an API root with a path, guaranteeing exactly one `/v1` segment
+/// between them. Covers every endpoint this crate calls: OpenAI-compatible
+/// (`"chat/completions"`, `"models"`) and Anthropic (`"messages"`,
+/// `"models"`), which both version their API as `/v1`.
+///
+/// Providers publish their root inconsistently: OpenAI documents
+/// `https://api.openai.com/v1`, Anthropic documents
+/// `https://api.anthropic.com`, Infomaniak documents
+/// `https://api.infomaniak.com/2/ai/{product_id}/openai/v1`, and this crate
+/// historically stored the bare host and appended `/v1/…` itself. Any of
+/// those pasted into a settings field must yield a working URL, so the `/v1`
+/// segment is added only when the base does not already end with it —
+/// neither a doubled `/v1/v1/chat/completions` nor a version-less 404 is
+/// reachable from here. Trailing slashes on `base` and leading slashes on
+/// `path` are absorbed.
+///
+/// Azure OpenAI, whose paths are `/openai/deployments/{id}/…?api-version=…`,
+/// does not follow this layout and is out of scope for this helper.
+pub fn v1_api_url(base: &str, path: &str) -> String {
+    let base = base.trim().trim_end_matches('/');
+    let path = path.trim().trim_start_matches('/');
+    if base.ends_with("/v1") {
+        format!("{base}/{path}")
+    } else {
+        format!("{base}/v1/{path}")
+    }
+}
+
+/// Root of Infomaniak's OpenAI-compatible AI Tools API for one product.
+///
+/// `product_id` identifies the AI Tools product; it is read from
+/// `GET https://api.infomaniak.com/1/ai` using the same token, which must
+/// carry the `ai-tools` scope. Chat completions then live at
+/// `{root}/chat/completions` and the model catalogue at `{root}/models`.
+pub fn infomaniak_base_url(product_id: &str) -> String {
+    format!(
+        "https://api.infomaniak.com/2/ai/{}/openai/v1",
+        product_id.trim().trim_matches('/')
+    )
+}
+
 pub struct OpenAiModel {
     http: reqwest::Client,
     api_key: String,
@@ -761,13 +813,35 @@ impl OpenAiModel {
         }
     }
 
+    /// Pre-configured for **Infomaniak AI Tools** — Swiss-hosted models
+    /// behind an OpenAI-compatible API. `product_id` comes from
+    /// `GET https://api.infomaniak.com/1/ai`.
+    ///
+    /// No default model is set: Infomaniak's catalogue changes over time, so
+    /// callers pick one from `GET {base}/models` and pass it to
+    /// [`OpenAiModel::with_model`]. Generating without one fails with
+    /// [`LlmError::Config`] rather than sending `"model": ""` upstream.
+    pub fn infomaniak(api_key: impl Into<String>, product_id: &str) -> Self {
+        Self {
+            model: String::new(),
+            base_url: infomaniak_base_url(product_id),
+            ..Self::new(api_key)
+        }
+    }
+
     pub fn with_model(mut self, model: impl Into<String>) -> Self {
         self.model = model.into();
         self
     }
 
+    /// Override the API root. A blank URL is ignored, so an empty "custom
+    /// base URL" settings field falls back to the default instead of
+    /// producing a relative, unusable URL.
     pub fn with_base_url(mut self, url: impl Into<String>) -> Self {
-        self.base_url = url.into();
+        let url = url.into();
+        if !url.trim().is_empty() {
+            self.base_url = url;
+        }
         self
     }
 
@@ -779,6 +853,18 @@ impl OpenAiModel {
     pub fn with_initial_backoff(mut self, d: Duration) -> Self {
         self.initial_backoff = d;
         self
+    }
+
+    /// Resolve the chat-completions URL, refusing to dispatch a request with
+    /// no model name. Infomaniak answers `"model": ""` with an opaque 400, so
+    /// failing here keeps the cause visible to the user.
+    fn chat_completions_url(&self) -> Result<String, LlmError> {
+        if self.model.trim().is_empty() {
+            return Err(LlmError::Config(
+                "no model name configured; call OpenAiModel::with_model first".into(),
+            ));
+        }
+        Ok(v1_api_url(&self.base_url, "chat/completions"))
     }
 }
 
@@ -986,7 +1072,7 @@ impl LanguageModel for OpenAiModel {
             stream_options: None,
         };
 
-        let url = format!("{}/v1/chat/completions", self.base_url);
+        let url = self.chat_completions_url()?;
 
         let mut attempt: u32 = 0;
         let parsed: OpenAiResponse = loop {
@@ -1070,7 +1156,7 @@ impl LanguageModel for OpenAiModel {
             stream_options: Some(OpenAiStreamOptions { include_usage: true }),
         };
 
-        let url = format!("{}/v1/chat/completions", self.base_url);
+        let url = self.chat_completions_url()?;
         let resp = self
             .http
             .post(&url)
@@ -1276,5 +1362,121 @@ mod tests {
         let mut buf = b"data: {\"a\":1}\n\n".to_vec();
         let frame = take_one_openai_sse_frame(&mut buf).unwrap();
         assert_eq!(frame.as_deref(), Some("{\"a\":1}"));
+    }
+    // -- OpenAI-compatible URL construction --------------------------------
+
+    #[test]
+    fn v1_api_url_inserts_v1_when_base_lacks_it() {
+        assert_eq!(
+            v1_api_url("https://api.openai.com", "chat/completions"),
+            "https://api.openai.com/v1/chat/completions"
+        );
+        assert_eq!(
+            v1_api_url("https://api.deepseek.com", "models"),
+            "https://api.deepseek.com/v1/models"
+        );
+    }
+
+    #[test]
+    fn v1_api_url_does_not_double_v1() {
+        assert_eq!(
+            v1_api_url("https://api.openai.com/v1", "chat/completions"),
+            "https://api.openai.com/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn v1_api_url_absorbs_stray_slashes() {
+        assert_eq!(
+            v1_api_url("  https://api.openai.com/v1/  ", "/chat/completions"),
+            "https://api.openai.com/v1/chat/completions"
+        );
+        assert_eq!(
+            v1_api_url("https://api.openai.com/", "chat/completions"),
+            "https://api.openai.com/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn v1_api_url_leaves_a_v1_lookalike_segment_alone() {
+        // `/v1beta` must not be mistaken for `/v1`.
+        assert_eq!(
+            v1_api_url("https://example.test/v1beta", "models"),
+            "https://example.test/v1beta/v1/models"
+        );
+    }
+
+    #[test]
+    fn infomaniak_base_url_is_product_scoped_v2_openai_root() {
+        assert_eq!(
+            infomaniak_base_url("101112"),
+            "https://api.infomaniak.com/2/ai/101112/openai/v1"
+        );
+        // Stray whitespace / slashes from a copy-paste are absorbed.
+        assert_eq!(
+            infomaniak_base_url(" /101112/ "),
+            "https://api.infomaniak.com/2/ai/101112/openai/v1"
+        );
+    }
+
+    #[test]
+    fn infomaniak_chat_url_matches_the_documented_endpoint() {
+        let m = OpenAiModel::infomaniak("tok", "101112").with_model("mixtral");
+        assert_eq!(
+            m.chat_completions_url().unwrap(),
+            "https://api.infomaniak.com/2/ai/101112/openai/v1/chat/completions"
+        );
+    }
+
+    #[test]
+    fn infomaniak_sets_no_default_model() {
+        let m = OpenAiModel::infomaniak("tok", "101112");
+        assert_eq!(m.model, "");
+        assert!(matches!(m.chat_completions_url(), Err(LlmError::Config(_))));
+    }
+
+    #[test]
+    fn openai_with_base_url_ignores_a_blank_override() {
+        let m = OpenAiModel::new("k").with_base_url("   ");
+        assert_eq!(m.base_url, "https://api.openai.com");
+        let m = OpenAiModel::new("k").with_base_url("https://proxy.test/v1");
+        assert_eq!(m.base_url, "https://proxy.test/v1");
+    }
+
+    #[test]
+    fn anthropic_with_base_url_ignores_a_blank_override() {
+        let m = AnthropicModel::new("k").with_base_url("");
+        assert_eq!(m.base_url, "https://api.anthropic.com");
+    }
+
+    #[tokio::test]
+    async fn openai_generate_without_a_model_fails_before_any_request() {
+        // The base URL points at a port nothing listens on, so reaching the
+        // network would surface as LlmError::Http — a Config error proves we
+        // bailed out before dispatching anything.
+        let m = OpenAiModel::new("k")
+            .with_model("")
+            .with_base_url("http://127.0.0.1:1/v1");
+        let err = m
+            .generate(&LlmRequest {
+                messages: vec![Message::user("hi")],
+                ..Default::default()
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, LlmError::Config(_)), "got {err:?}");
+
+        // `LlmStream` is not Debug, so unwrap_err() is unavailable here.
+        match m
+            .generate_stream(&LlmRequest {
+                messages: vec![Message::user("hi")],
+                ..Default::default()
+            })
+            .await
+        {
+            Err(LlmError::Config(_)) => {}
+            Err(other) => panic!("expected Config, got {other:?}"),
+            Ok(_) => panic!("expected Config error, got a stream"),
+        }
     }
 }

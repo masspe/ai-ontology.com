@@ -6,7 +6,7 @@
 // Dual-licensed: AGPL-3.0-or-later OR a commercial license
 // from Winven AI Sarl. See LICENSE and LICENSE-COMMERCIAL.md.
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
 use ontology_graph::{Ontology, OntologyGraph};
 use ontology_index::{HybridIndex, RetrievalRequest};
@@ -14,10 +14,12 @@ use ontology_io::{
     export_graph, ingest_records, CsvSource, JsonlSink, JsonlSource, TextDocumentSource,
     TripleSource, XlsxSource,
 };
-use ontology_rag::{AnthropicModel, EchoModel, OpenAiModel, RagPipeline};
-use ontology_server::AppState;
+use ontology_rag::{EchoModel, LanguageModel, RagPipeline};
+use ontology_server::{
+    configured_model, AppState, ConfiguredModel, LlmOverrides, Settings, SettingsRoutedModel,
+};
 use ontology_storage::{FileStore, MemoryStore, Store};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing_subscriber::{fmt, EnvFilter};
 
@@ -27,6 +29,12 @@ struct Cli {
     /// Persistent data directory. Omit for an ephemeral in-memory store.
     #[arg(long, global = true)]
     data: Option<PathBuf>,
+
+    /// Settings file holding the LLM provider configuration and API keys.
+    /// Defaults to `<data>/settings.json`, or `./.ontology/settings.json`
+    /// when there is no data directory.
+    #[arg(long, global = true)]
+    settings: Option<PathBuf>,
 
     #[command(subcommand)]
     cmd: Cmd,
@@ -74,27 +82,20 @@ enum Cmd {
         #[arg(long, default_value_t = 2)]
         depth: u32,
     },
-    /// Run the full RAG pipeline. Uses the EchoModel by default; pass
-    /// --anthropic, --openai, or --deepseek to call a live provider
-    /// (each requires its own API-key env var).
+    /// Run the full RAG pipeline against the configured provider.
+    ///
+    /// The provider and its API key come from the settings file (see
+    /// `--settings`), which the web UI writes; no environment variable is
+    /// read. With nothing configured the EchoModel answers, so this still
+    /// works offline.
     Ask {
         query: String,
         #[arg(long, default_value_t = 8)]
         top_k: usize,
         #[arg(long, default_value_t = 2)]
         depth: u32,
-        /// Use the Anthropic Messages API. Requires `ANTHROPIC_API_KEY`.
-        #[arg(long, conflicts_with_all = ["openai", "deepseek"])]
-        anthropic: bool,
-        /// Use the OpenAI chat completions API. Requires `OPENAI_API_KEY`.
-        #[arg(long, conflicts_with_all = ["anthropic", "deepseek"])]
-        openai: bool,
-        /// Use the DeepSeek chat completions API (OpenAI-compatible).
-        /// Requires `DEEPSEEK_API_KEY`.
-        #[arg(long, conflicts_with_all = ["anthropic", "openai"])]
-        deepseek: bool,
-        /// Override the model name. Defaults: claude-opus-4-7 (anthropic),
-        /// gpt-4o-mini (openai), deepseek-chat (deepseek).
+        /// Use this model for this run only, instead of the configured one.
+        /// Not written back to the settings file.
         #[arg(long)]
         model: Option<String>,
     },
@@ -121,19 +122,6 @@ enum Cmd {
     Serve {
         #[arg(long, default_value = "127.0.0.1:5000")]
         bind: String,
-        /// Use the Anthropic Messages API. Requires `ANTHROPIC_API_KEY`.
-        #[arg(long, conflicts_with_all = ["openai", "deepseek"])]
-        anthropic: bool,
-        /// Use the OpenAI chat completions API. Requires `OPENAI_API_KEY`.
-        #[arg(long, conflicts_with_all = ["anthropic", "deepseek"])]
-        openai: bool,
-        /// Use the DeepSeek chat completions API. Requires `DEEPSEEK_API_KEY`.
-        #[arg(long, conflicts_with_all = ["anthropic", "openai"])]
-        deepseek: bool,
-        /// Override the model name. Defaults: claude-opus-4-7 (anthropic),
-        /// gpt-4o-mini (openai), deepseek-chat (deepseek).
-        #[arg(long)]
-        model: Option<String>,
         /// Optional bearer token. When set, every route except /healthz
         /// requires `Authorization: Bearer <token>`. Reads from the env
         /// var named here, NOT the literal value, so the secret never
@@ -189,6 +177,9 @@ async fn main() -> Result<()> {
 
     let index = Arc::new(HybridIndex::with_default_embedder(graph.clone()));
     index.reindex_all();
+
+    // Resolved before the match, which moves the subcommand out of `cli`.
+    let settings_file = settings_path(&cli);
 
     match cli.cmd {
         Cmd::Ingest {
@@ -307,12 +298,9 @@ async fn main() -> Result<()> {
             query,
             top_k,
             depth,
-            anthropic,
-            openai,
-            deepseek,
             model,
         } => {
-            let llm = build_llm(anthropic, openai, deepseek, model.as_deref())?;
+            let llm = build_llm(&settings_file, model.as_deref())?;
             let pipe = RagPipeline::new(index.clone(), llm);
             let mut req = RetrievalRequest {
                 query,
@@ -386,10 +374,6 @@ async fn main() -> Result<()> {
         }
         Cmd::Serve {
             bind,
-            anthropic,
-            openai,
-            deepseek,
-            model,
             auth_env,
             jwt_secret_env,
             jwt_issuer,
@@ -434,13 +418,21 @@ async fn main() -> Result<()> {
                     );
                 }
             }
-            let llm = build_llm(anthropic, openai, deepseek, model.as_deref())?;
-            let pipeline = Arc::new(RagPipeline::new(index.clone(), llm));
-            let state = AppState::new(graph.clone(), index.clone(), store.clone(), pipeline);
-            let state = match cli.data.as_ref() {
-                Some(dir) => state.with_settings_path(dir.join("settings.json")),
-                None => state,
-            };
+            // The LLM is resolved per request from the settings store, so
+            // picking a provider/model in the UI applies immediately instead
+            // of at the next restart. EchoModel answers until one is set.
+            let index_for_pipeline = index.clone();
+            let state = AppState::assemble(
+                graph.clone(),
+                index.clone(),
+                store.clone(),
+                Some(settings_file),
+                move |settings| {
+                    let llm: Arc<dyn LanguageModel> =
+                        Arc::new(SettingsRoutedModel::new(settings, Arc::new(EchoModel)));
+                    Arc::new(RagPipeline::new(index_for_pipeline, llm))
+                },
+            );
             let bearer = match auth_env {
                 Some(env_name) => Some(
                     std::env::var(&env_name)
@@ -481,41 +473,50 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// Resolve the `--anthropic` / `--openai` / `--deepseek` triple plus an
-/// optional model override to a concrete `LanguageModel`. clap already
-/// guarantees at most one of the three flags is set.
-fn build_llm(
-    anthropic: bool,
-    openai: bool,
-    deepseek: bool,
-    model: Option<&str>,
-) -> Result<Arc<dyn ontology_rag::LanguageModel>> {
-    if anthropic {
-        let key = std::env::var("ANTHROPIC_API_KEY")
-            .context("ANTHROPIC_API_KEY required for --anthropic")?;
-        let mut m = AnthropicModel::new(key);
-        if let Some(name) = model {
-            m = m.with_model(name);
+/// Where the settings file lives: `--settings` wins, else
+/// `<data>/settings.json`, else `./.ontology/settings.json`.
+///
+/// Settings are always persisted to a real path. They hold every provider
+/// credential now that no environment variable does, so an in-memory-only
+/// config would mean re-entering keys after every restart.
+fn settings_path(cli: &Cli) -> PathBuf {
+    if let Some(path) = cli.settings.as_ref() {
+        return path.clone();
+    }
+    match cli.data.as_ref() {
+        Some(dir) => dir.join("settings.json"),
+        None => PathBuf::from(".ontology").join("settings.json"),
+    }
+}
+
+/// Resolve the LLM for a one-shot CLI command from the persisted settings.
+///
+/// Credentials come from the settings file — written by the web UI or by
+/// `PATCH /settings` — and nowhere else: no environment variable is consulted.
+/// With no provider configured the command answers through [`EchoModel`] so it
+/// still works offline; a provider that *is* selected but misconfigured is an
+/// error rather than a silent downgrade to an echo.
+///
+/// `model_override` retargets the configured provider for this run only.
+fn build_llm(settings_path: &Path, model_override: Option<&str>) -> Result<Arc<dyn LanguageModel>> {
+    let settings = Settings::load_or_default(settings_path);
+    let overrides = LlmOverrides {
+        model: model_override.map(str::to_string),
+        ..Default::default()
+    };
+    match configured_model(&settings, &overrides) {
+        ConfiguredModel::Ready(llm) => Ok(llm),
+        ConfiguredModel::NotConfigured => {
+            tracing::info!(
+                path = %settings_path.display(),
+                "no LLM provider configured; answering with the echo model"
+            );
+            Ok(Arc::new(EchoModel))
         }
-        Ok(Arc::new(m))
-    } else if openai {
-        let key = std::env::var("OPENAI_API_KEY")
-            .context("OPENAI_API_KEY required for --openai")?;
-        let mut m = OpenAiModel::new(key);
-        if let Some(name) = model {
-            m = m.with_model(name);
-        }
-        Ok(Arc::new(m))
-    } else if deepseek {
-        let key = std::env::var("DEEPSEEK_API_KEY")
-            .context("DEEPSEEK_API_KEY required for --deepseek")?;
-        let mut m = OpenAiModel::deepseek(key);
-        if let Some(name) = model {
-            m = m.with_model(name);
-        }
-        Ok(Arc::new(m))
-    } else {
-        Ok(Arc::new(EchoModel))
+        ConfiguredModel::Invalid(message) => Err(anyhow!(
+            "configuration LLM inutilisable dans {} : {message}",
+            settings_path.display()
+        )),
     }
 }
 

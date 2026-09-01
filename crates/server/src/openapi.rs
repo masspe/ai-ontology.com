@@ -582,8 +582,18 @@ const SPEC_JSON: &str = r##"{
                 "post": { "summary": "Execute a saved query", "tags": ["queries"], "responses": { "200": { "description": "Result" } } }
             },
             "/settings": {
-                "get":   { "summary": "Get runtime settings",   "tags": ["admin"], "responses": { "200": { "description": "Settings" } } },
+                "get":   { "summary": "Get runtime settings (secrets redacted)", "tags": ["admin"], "responses": { "200": { "description": "Settings" } } },
                 "patch": { "summary": "Patch runtime settings", "tags": ["admin"], "responses": { "200": { "description": "Updated" } } }
+            },
+            "/settings/llm/test": {
+                "post": { "summary": "Probe the LLM provider; accepts unsaved credentials", "tags": ["admin"], "responses": { "200": { "description": "Result, ok=false on failure" } } }
+            },
+            "/settings/llm/models": {
+                "get":  { "summary": "Model catalogue for the stored provider config", "tags": ["admin"], "responses": { "200": { "description": "Models" } } },
+                "post": { "summary": "Model catalogue, with unsaved credentials in the body", "tags": ["admin"], "responses": { "200": { "description": "Models" } } }
+            },
+            "/settings/llm/infomaniak/products": {
+                "post": { "summary": "Resolve the Infomaniak AI Tools product id(s) a token can reach", "tags": ["admin"], "responses": { "200": { "description": "Products" } } }
             }
         }
     }"##;

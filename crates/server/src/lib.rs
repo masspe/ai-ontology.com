@@ -48,7 +48,11 @@ use ontology_io::{
     export_graph, ingest_records, CsvSource, IngestStats, JsonlSink, JsonlSource,
     TextDocumentSource, TripleSource, XlsxSource,
 };
-use ontology_rag::{GeneratedRule, OntologyGenError, RagAnswer, RagPipeline, RagStreamEvent};
+use ontology_rag::{
+    infomaniak_base_url, v1_api_url, AnthropicModel, GeneratedRule, LanguageModel, LlmError,
+    LlmRequest, LlmResponse, LlmStream, OntologyGenError, OpenAiModel, RagAnswer, RagPipeline,
+    RagStreamEvent,
+};
 use ontology_storage::{LogRecord, Store};
 use parking_lot::{Mutex as PlMutex, RwLock as PlRwLock};
 use serde::{Deserialize, Serialize};
@@ -113,52 +117,163 @@ impl AppState {
         }
     }
 
+    /// Assemble the state so the pipeline can see the live settings store.
+    ///
+    /// `build_pipeline` receives the very handle the `/settings` handlers
+    /// write to, which is what lets a [`SettingsRoutedModel`] inside the
+    /// pipeline pick up an applied provider change with no restart. The
+    /// settings file, when given, is loaded *before* `build_pipeline` runs, so
+    /// the first request already uses the persisted provider.
+    ///
+    /// Prefer this over `new().with_settings_path(..)` whenever the pipeline
+    /// needs the settings: it makes the only correct ordering the only
+    /// available one.
+    pub fn assemble(
+        graph: Arc<OntologyGraph>,
+        index: Arc<HybridIndex>,
+        store: Arc<dyn Store>,
+        settings_path: Option<PathBuf>,
+        build_pipeline: impl FnOnce(Arc<PlRwLock<Settings>>) -> Arc<RagPipeline>,
+    ) -> Self {
+        let settings = Arc::new(PlRwLock::new(Settings::default()));
+        if let Some(path) = settings_path.as_deref() {
+            load_settings_into(&settings, path);
+        }
+        let pipeline = build_pipeline(settings.clone());
+        let mut state = Self::new(graph, index, store, pipeline);
+        state.settings = settings;
+        state.settings_path = settings_path;
+        state
+    }
+
     /// Configure a JSON file to persist `settings` across restarts. If the
     /// file exists, its contents are loaded into the in-memory store; the
     /// path is then remembered so subsequent `PATCH /settings` calls write
     /// back to it. Failures are logged and swallowed — persistence is
     /// best-effort.
     pub fn with_settings_path(mut self, path: PathBuf) -> Self {
-        match std::fs::read_to_string(&path) {
-            Ok(raw) => match serde_json::from_str::<Settings>(&raw) {
-                Ok(loaded) => *self.settings.write() = loaded,
-                Err(e) => tracing::warn!(
-                    error = %e,
-                    path = %path.display(),
-                    "failed to parse settings file; using defaults"
-                ),
-            },
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => tracing::warn!(
-                error = %e,
-                path = %path.display(),
-                "failed to read settings file; using defaults"
-            ),
-        }
+        load_settings_into(&self.settings, &path);
         self.settings_path = Some(path);
         self
     }
 }
 
-/// Persist the given settings to disk as JSON. Secret API key fields are
-/// stripped from the `Serialize` impl on `LlmSettings` / `OcrSettings`, so
-/// they are re-added manually here — otherwise reloading the file would
-/// produce empty keys and silently log users out of every LLM provider.
+/// Read and migrate a settings file, or `None` when nothing usable is there.
+///
+/// A missing, unreadable or unparseable file is logged and swallowed: a bad
+/// settings file must never stop the server (or a CLI command) from starting.
+fn load_settings(path: &std::path::Path) -> Option<Settings> {
+    match std::fs::read_to_string(path) {
+        Ok(raw) => match serde_json::from_str::<Settings>(&raw) {
+            Ok(mut loaded) => {
+                loaded.migrate();
+                tracing::info!(path = %path.display(), "settings loaded");
+                Some(loaded)
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    path = %path.display(),
+                    "failed to parse settings file; using defaults"
+                );
+                None
+            }
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            tracing::info!(path = %path.display(), "no settings file yet; using defaults");
+            None
+        }
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                path = %path.display(),
+                "failed to read settings file; using defaults"
+            );
+            None
+        }
+    }
+}
+
+fn load_settings_into(settings: &Arc<PlRwLock<Settings>>, path: &std::path::Path) {
+    if let Some(loaded) = load_settings(path) {
+        *settings.write() = loaded;
+    }
+}
+
+/// Persist the given settings to disk as JSON, secrets included — with no
+/// environment variables left in the picture, this file *is* the credential
+/// store. `Settings` now serializes completely and redaction happens only at
+/// the HTTP boundary ([`settings_view`]), so a secret field added later can
+/// no longer be silently dropped on restart.
+///
+/// On Unix the file is created with mode 0600. An already-existing file keeps
+/// its current mode, and Windows ACLs are not touched — the file inherits the
+/// data directory, so keep that directory out of shared locations.
 fn persist_settings(path: &std::path::Path, s: &Settings) -> std::io::Result<()> {
-    let mut v = serde_json::to_value(s).map_err(std::io::Error::other)?;
-    if let Some(obj) = v.get_mut("llm").and_then(|x| x.as_object_mut()) {
-        obj.insert("openai_api_key".into(), serde_json::Value::String(s.llm.openai_api_key.clone()));
-        obj.insert("anthropic_api_key".into(), serde_json::Value::String(s.llm.anthropic_api_key.clone()));
-        obj.insert("infomaniak_api_key".into(), serde_json::Value::String(s.llm.infomaniak_api_key.clone()));
-    }
-    if let Some(obj) = v.get_mut("ocr").and_then(|x| x.as_object_mut()) {
-        obj.insert("google_api_key".into(), serde_json::Value::String(s.ocr.google_api_key.clone()));
-    }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let json = serde_json::to_string_pretty(&v).map_err(std::io::Error::other)?;
-    std::fs::write(path, json)
+    let json = serde_json::to_string_pretty(s).map_err(std::io::Error::other)?;
+    write_private(path, json.as_bytes())
+}
+
+#[cfg(unix)]
+fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)?;
+    f.write_all(bytes)
+}
+
+#[cfg(not(unix))]
+fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    std::fs::write(path, bytes)
+}
+
+/// Field-name suffixes that mark a value as secret.
+///
+/// Redaction is pattern-based on purpose: a secret added to [`Settings`]
+/// later is masked at the HTTP boundary without anyone having to remember to
+/// update a list. Note that `max_tokens` and the `*_api_key_hint` fields do
+/// not match — they are meant to reach the client.
+const SECRET_FIELD_SUFFIXES: [&str; 3] = ["_api_key", "_secret", "_token"];
+
+fn is_secret_field(name: &str) -> bool {
+    SECRET_FIELD_SUFFIXES
+        .iter()
+        .any(|suffix| name.ends_with(suffix))
+}
+
+/// Recursively drop secret-looking fields from a JSON tree.
+fn redact_secrets(v: &mut serde_json::Value) {
+    match v {
+        serde_json::Value::Object(map) => {
+            map.retain(|k, _| !is_secret_field(k));
+            for (_, child) in map.iter_mut() {
+                redact_secrets(child);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                redact_secrets(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// [`Settings`] as the API returns them: the whole struct minus every secret
+/// field. Raw keys never leave the process; the UI works off the
+/// `*_api_key_hint` previews instead.
+fn settings_view(s: &Settings) -> serde_json::Value {
+    let mut v = serde_json::to_value(s).unwrap_or(serde_json::Value::Null);
+    redact_secrets(&mut v);
+    v
 }
 
 // ---------------------------------------------------------------------------
@@ -305,22 +420,25 @@ impl SavedQueryStore {
     }
 }
 
-/// User-facing settings. LLM `provider` / `model` are sourced from the
-/// running pipeline and are read-only (bound at `ontology serve` start);
-/// the rest may be patched at runtime.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// User-facing settings, patchable at runtime and persisted to disk.
+///
+/// `#[serde(default)]` on every settings struct is load-bearing: it makes a
+/// file written by an older build (missing fields added since) deserialize
+/// instead of being rejected wholesale, which would drop the user back to
+/// defaults and wipe their stored credentials on upgrade.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Settings {
     pub retrieval: RetrievalDefaults,
     pub ui: UiPrefs,
-    #[serde(default)]
     pub llm: LlmSettings,
-    #[serde(default)]
     pub ocr: OcrSettings,
 }
 
 /// OCR engine configuration. The Google Cloud Vision API key is write-only
 /// over the wire; `google_api_key_hint` exposes a masked preview.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct OcrSettings {
     /// `"tesseract" | "google_vision"`.
     pub provider: String,
@@ -333,7 +451,8 @@ pub struct OcrSettings {
     /// Tesseract language pack expression, e.g. `"fra+deu+eng"`.
     pub tesseract_languages: String,
 
-    #[serde(skip_serializing)]
+    /// Serialized so the credential survives a restart; stripped from HTTP
+    /// responses by [`settings_view`].
     pub google_api_key: String,
     pub google_api_key_hint: String,
 }
@@ -360,30 +479,38 @@ pub struct OcrSettingsPatch {
     pub google_api_key: Option<String>,
 }
 
-/// LLM provider configuration. Keys are returned masked over the wire — the
-/// raw `*_api_key` fields are write-only via `PATCH /settings`. The matching
-/// `*_api_key_hint` field exposes only the last 4 chars so the UI can show
-/// "sk-...1XAA" without round-tripping the secret.
+/// LLM provider configuration — the single source of truth for provider
+/// credentials, entered through `PATCH /settings` and persisted to disk. No
+/// environment variable feeds these fields.
+///
+/// Keys are write-only over the wire: they serialize (so they survive a
+/// restart) but [`settings_view`] strips them from every HTTP response. The
+/// matching `*_api_key_hint` exposes the first 3 + last 4 chars so the UI can
+/// show "sk-...1XAA" without round-tripping the secret.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct LlmSettings {
     /// `"default" | "openai" | "anthropic" | "infomaniak"`.
     pub active_provider: String,
 
-    #[serde(skip_serializing)]
     pub openai_api_key: String,
     pub openai_api_key_hint: String,
     pub openai_base_url: String,
     pub openai_model: String,
 
-    #[serde(skip_serializing)]
     pub anthropic_api_key: String,
     pub anthropic_api_key_hint: String,
     pub anthropic_base_url: String,
     pub anthropic_model: String,
 
-    #[serde(skip_serializing)]
     pub infomaniak_api_key: String,
     pub infomaniak_api_key_hint: String,
+    /// AI Tools product id, from `GET https://api.infomaniak.com/1/ai`. The
+    /// OpenAI-compatible base URL is derived from it, so this is the only
+    /// Infomaniak-specific value a user supplies beyond the token.
+    pub infomaniak_product_id: String,
+    /// Advanced override for the derived base URL. Empty means "derive from
+    /// `infomaniak_product_id`", which is what a normal setup wants.
     pub infomaniak_base_url: String,
     pub infomaniak_model: String,
 
@@ -405,11 +532,60 @@ impl Default for LlmSettings {
             anthropic_model: "claude-sonnet-4-6".into(),
             infomaniak_api_key: String::new(),
             infomaniak_api_key_hint: String::new(),
-            infomaniak_base_url: "https://api.infomaniak.com/1/ai".into(),
+            infomaniak_product_id: String::new(),
+            infomaniak_base_url: String::new(),
             infomaniak_model: String::new(),
             temperature: 0.3,
             max_tokens: 1000,
         }
+    }
+}
+
+impl LlmSettings {
+    /// Recompute the masked hints from the live keys. Run after loading a
+    /// settings file so a hand-edited key still reads as "configured" in the
+    /// UI instead of showing a stale or blank hint.
+    fn refresh_key_hints(&mut self) {
+        self.openai_api_key_hint = key_hint(&self.openai_api_key);
+        self.anthropic_api_key_hint = key_hint(&self.anthropic_api_key);
+        self.infomaniak_api_key_hint = key_hint(&self.infomaniak_api_key);
+    }
+}
+
+impl OcrSettings {
+    fn refresh_key_hints(&mut self) {
+        self.google_api_key_hint = key_hint(&self.google_api_key);
+    }
+}
+
+impl Settings {
+    /// Bring a settings file written by an older build up to date.
+    ///
+    /// Builds before Infomaniak became product-scoped stored
+    /// `infomaniak_base_url = "https://api.infomaniak.com/1/ai"`. That URL
+    /// cannot serve chat completions — the real root is
+    /// `/2/ai/{product_id}/openai/v1` — and, being an explicit override, it
+    /// would keep shadowing the derived URL forever. Clearing it hands
+    /// control back to `infomaniak_product_id`. Only that exact value is
+    /// touched: anything a user typed themselves is left alone.
+    pub fn migrate(&mut self) {
+        const DEAD_INFOMANIAK_BASE: &str = "https://api.infomaniak.com/1/ai";
+        let base = self.llm.infomaniak_base_url.trim().trim_end_matches('/');
+        if base == DEAD_INFOMANIAK_BASE {
+            tracing::info!(
+                "clearing obsolete infomaniak_base_url; it is now derived from the product id"
+            );
+            self.llm.infomaniak_base_url.clear();
+        }
+        self.llm.refresh_key_hints();
+        self.ocr.refresh_key_hints();
+    }
+
+    /// Read a settings file, falling back to defaults when it is absent or
+    /// unusable — the same tolerance the server applies at startup, so a CLI
+    /// command and the server always agree on what the stored config is.
+    pub fn load_or_default(path: &std::path::Path) -> Self {
+        load_settings(path).unwrap_or_default()
     }
 }
 
@@ -424,32 +600,35 @@ fn key_hint(key: &str) -> String {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct RetrievalDefaults {
     pub top_k: usize,
     pub lexical_weight: f32,
     pub expansion_depth: u32,
 }
 
+impl Default for RetrievalDefaults {
+    fn default() -> Self {
+        Self {
+            top_k: 8,
+            lexical_weight: 0.5,
+            expansion_depth: 2,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct UiPrefs {
     pub theme: String,
     pub graph_layout: String,
 }
 
-impl Default for Settings {
+impl Default for UiPrefs {
     fn default() -> Self {
         Self {
-            retrieval: RetrievalDefaults {
-                top_k: 8,
-                lexical_weight: 0.5,
-                expansion_depth: 2,
-            },
-            ui: UiPrefs {
-                theme: "light".into(),
-                graph_layout: "dagre".into(),
-            },
-            llm: LlmSettings::default(),
-            ocr: OcrSettings::default(),
+            theme: "light".into(),
+            graph_layout: "dagre".into(),
         }
     }
 }
@@ -474,6 +653,7 @@ pub struct LlmSettingsPatch {
     pub anthropic_base_url: Option<String>,
     pub anthropic_model: Option<String>,
     pub infomaniak_api_key: Option<String>,
+    pub infomaniak_product_id: Option<String>,
     pub infomaniak_base_url: Option<String>,
     pub infomaniak_model: Option<String>,
     pub temperature: Option<f32>,
@@ -838,7 +1018,14 @@ fn build_router_inner(
         .route("/queries/:id/run", post(run_query))
         .route("/settings", get(get_settings).patch(patch_settings))
         .route("/settings/llm/test", post(test_llm_connection))
-        .route("/settings/llm/models", get(list_llm_models))
+        .route(
+            "/settings/llm/models",
+            get(list_llm_models).post(list_llm_models_with_overrides),
+        )
+        .route(
+            "/settings/llm/infomaniak/products",
+            post(list_infomaniak_products),
+        )
         .route("/settings/ocr/status", get(get_ocr_status))
         .route("/feedbacks", get(list_feedbacks).post(create_feedback))
         .route("/feedbacks/:id", delete(delete_feedback))
@@ -1977,10 +2164,9 @@ struct GenerateOntologyResponse {
 }
 
 /// `POST /ontology/generate` — natural-language → ontology schema. The body
-/// is `{description: "…"}`. The configured LLM (set at server start via
-/// `--anthropic` / `--openai` / `--deepseek`) renders a strict JSON
-/// document; this handler parses it. Malformed JSON surfaces a 422 with
-/// the raw response so the UI can show it to the user.
+/// is `{description: "…"}`. The LLM selected in the settings store renders a
+/// strict JSON document; this handler parses it. Malformed JSON surfaces a
+/// 422 with the raw response so the UI can show it to the user.
 async fn generate_ontology_handler(
     State(s): State<AppState>,
     Json(req): Json<GenerateOntologyRequest>,
@@ -2402,14 +2588,14 @@ async fn run_query(
 
 // ---- Settings --------------------------------------------------------------
 
-async fn get_settings(State(s): State<AppState>) -> Json<Settings> {
-    Json(s.settings.read().clone())
+async fn get_settings(State(s): State<AppState>) -> Json<serde_json::Value> {
+    Json(settings_view(&s.settings.read()))
 }
 
 async fn patch_settings(
     State(s): State<AppState>,
     Json(patch): Json<SettingsPatch>,
-) -> Json<Settings> {
+) -> Json<serde_json::Value> {
     let mut current = s.settings.write();
     if let Some(r) = patch.retrieval {
         if let Some(v) = r.top_k {
@@ -2459,8 +2645,11 @@ async fn patch_settings(
             llm.infomaniak_api_key_hint = key_hint(&v);
             llm.infomaniak_api_key = v;
         }
+        if let Some(v) = l.infomaniak_product_id {
+            llm.infomaniak_product_id = v.trim().to_string();
+        }
         if let Some(v) = l.infomaniak_base_url {
-            llm.infomaniak_base_url = v;
+            llm.infomaniak_base_url = v.trim().to_string();
         }
         if let Some(v) = l.infomaniak_model {
             llm.infomaniak_model = v;
@@ -2498,7 +2687,7 @@ async fn patch_settings(
             tracing::warn!(error = %e, path = %path.display(), "failed to persist settings");
         }
     }
-    Json(snapshot)
+    Json(settings_view(&snapshot))
 }
 
 // ---- OCR engine status ----------------------------------------------------
@@ -2580,121 +2769,482 @@ async fn get_ocr_status(State(s): State<AppState>) -> Json<OcrStatusResponse> {
     })
 }
 
-// ---- LLM provider test & model discovery ---------------------------------
+// ---- LLM provider resolution, connection test & model discovery ----------
 
-#[derive(Debug, Deserialize)]
-struct LlmTestRequest {
+/// Wire dialect spoken by a provider endpoint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProviderKind {
+    /// OpenAI `chat/completions` shape — OpenAI, Infomaniak AI Tools, and any
+    /// other OpenAI-compatible gateway.
+    OpenAiCompatible,
+    /// Anthropic Messages API.
+    Anthropic,
+}
+
+/// Everything needed to reach one provider, after the stored settings and the
+/// per-request overrides have been merged.
+#[derive(Debug, Clone)]
+struct ProviderCreds {
+    api_key: String,
+    /// API root, already product-scoped for Infomaniak. Combine with
+    /// [`v1_api_url`] to build a concrete endpoint.
+    base_url: String,
+    /// Selected model. Empty is legal here — listing the catalogue is how a
+    /// user finds a model to select — but not in [`model_for`].
+    model: String,
+    kind: ProviderKind,
+    /// Resolved provider name, for responses and error messages.
+    provider: String,
+}
+
+impl ProviderCreds {
+    /// Hash of the fields that shape a client, so [`SettingsRoutedModel`] can
+    /// tell "same configuration" from "reconfigured" without keeping its own
+    /// copy of the API key around.
+    fn fingerprint(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        self.provider.hash(&mut h);
+        self.base_url.hash(&mut h);
+        self.model.hash(&mut h);
+        self.api_key.hash(&mut h);
+        h.finish()
+    }
+}
+
+/// Per-request provider overrides, merged over the stored settings and
+/// **never persisted**.
+///
+/// This is what lets the UI test a key, discover a product id or list models
+/// before the user commits to saving anything; without it the frontend had to
+/// PATCH a half-filled form first, quietly making unvalidated config live.
+#[derive(Debug, Default, Deserialize)]
+pub struct LlmOverrides {
     #[serde(default)]
-    provider: Option<String>,
+    pub provider: Option<String>,
+    #[serde(default)]
+    pub api_key: Option<String>,
+    #[serde(default)]
+    pub base_url: Option<String>,
+    #[serde(default)]
+    pub product_id: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+}
+
+/// Provider actually in force: an explicit override wins over
+/// `settings.llm.active_provider`, and both fall back to `"default"` — the
+/// LLM the server booted with.
+pub(crate) fn effective_provider(llm: &LlmSettings, ov: &LlmOverrides) -> String {
+    let explicit = ov.provider.as_deref().unwrap_or_default().trim();
+    if !explicit.is_empty() && explicit != "default" {
+        return explicit.to_string();
+    }
+    let active = llm.active_provider.trim();
+    if active.is_empty() {
+        "default".to_string()
+    } else {
+        active.to_string()
+    }
+}
+
+/// Take the override when it carries a value, else the stored setting. Both
+/// sides are trimmed, so a field holding only spaces counts as unset.
+fn pick(stored: &str, override_value: &Option<String>) -> String {
+    override_value
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .unwrap_or(stored.trim())
+        .to_string()
+}
+
+fn resolve_provider_creds(llm: &LlmSettings, ov: &LlmOverrides) -> Result<ProviderCreds, String> {
+    let provider = effective_provider(llm, ov);
+    match provider.as_str() {
+        "openai" => {
+            let api_key = pick(&llm.openai_api_key, &ov.api_key);
+            if api_key.is_empty() {
+                return Err("Clé API OpenAI manquante — saisissez-la dans Settings.".into());
+            }
+            let mut base_url = pick(&llm.openai_base_url, &ov.base_url);
+            if base_url.is_empty() {
+                base_url = "https://api.openai.com".to_string();
+            }
+            Ok(ProviderCreds {
+                api_key,
+                base_url,
+                model: pick(&llm.openai_model, &ov.model),
+                kind: ProviderKind::OpenAiCompatible,
+                provider,
+            })
+        }
+        "anthropic" => {
+            let api_key = pick(&llm.anthropic_api_key, &ov.api_key);
+            if api_key.is_empty() {
+                return Err("Clé API Anthropic manquante — saisissez-la dans Settings.".into());
+            }
+            let mut base_url = pick(&llm.anthropic_base_url, &ov.base_url);
+            if base_url.is_empty() {
+                base_url = "https://api.anthropic.com".to_string();
+            }
+            Ok(ProviderCreds {
+                api_key,
+                base_url,
+                model: pick(&llm.anthropic_model, &ov.model),
+                kind: ProviderKind::Anthropic,
+                provider,
+            })
+        }
+        "infomaniak" => {
+            let api_key = pick(&llm.infomaniak_api_key, &ov.api_key);
+            if api_key.is_empty() {
+                return Err("Clé API Infomaniak manquante — saisissez-la dans Settings.".into());
+            }
+            // The root is derived from the product id. An explicit base URL
+            // stays available as an escape hatch (staging hosts, proxies).
+            let mut base_url = pick(&llm.infomaniak_base_url, &ov.base_url);
+            if base_url.is_empty() {
+                let product_id = pick(&llm.infomaniak_product_id, &ov.product_id);
+                if product_id.is_empty() {
+                    return Err(
+                        "Product ID Infomaniak manquant — utilisez « Détecter » pour le récupérer."
+                            .into(),
+                    );
+                }
+                base_url = infomaniak_base_url(&product_id);
+            }
+            Ok(ProviderCreds {
+                api_key,
+                base_url,
+                model: pick(&llm.infomaniak_model, &ov.model),
+                kind: ProviderKind::OpenAiCompatible,
+                provider,
+            })
+        }
+        "default" => Err(
+            "Aucun fournisseur LLM actif — choisissez-en un dans Settings puis appliquez.".into(),
+        ),
+        other => Err(format!("Fournisseur inconnu : {other}")),
+    }
+}
+
+/// Build a live LLM client from the stored settings plus per-request
+/// overrides.
+///
+/// The only place that turns configuration into a client: `/ask`,
+/// `/ask/stream` and `/ingest/analyze` all route through it, so applying a
+/// provider/model in the UI takes effect everywhere at once, without a
+/// restart.
+pub(crate) fn model_for(
+    llm: &LlmSettings,
+    ov: &LlmOverrides,
+) -> Result<Arc<dyn LanguageModel>, String> {
+    client_from_creds(resolve_provider_creds(llm, ov)?)
+}
+
+/// Instantiate the client for already-resolved credentials.
+///
+/// A model name is mandatory here even though it is optional in
+/// [`resolve_provider_creds`]: listing a catalogue legitimately happens before
+/// a model is chosen, but generating without one would send `"model": ""`
+/// upstream and come back as an opaque provider error.
+fn client_from_creds(creds: ProviderCreds) -> Result<Arc<dyn LanguageModel>, String> {
+    if creds.model.is_empty() {
+        return Err(format!(
+            "Aucun modèle sélectionné pour {} — chargez la liste des modèles et choisissez-en un.",
+            creds.provider
+        ));
+    }
+    match creds.kind {
+        ProviderKind::Anthropic => Ok(Arc::new(
+            AnthropicModel::new(creds.api_key)
+                .with_base_url(creds.base_url)
+                .with_model(creds.model),
+        )),
+        ProviderKind::OpenAiCompatible => Ok(Arc::new(
+            OpenAiModel::new(creds.api_key)
+                .with_base_url(creds.base_url)
+                .with_model(creds.model),
+        )),
+    }
+}
+
+/// A [`LanguageModel`] that resolves the provider from the live settings on
+/// **every call**, falling back to `fallback` while the active provider is
+/// `"default"`.
+///
+/// This is what makes "Apply" in the UI reach `/ask` and `/ask/stream`:
+/// [`RagPipeline`] holds one `Arc<dyn LanguageModel>` bound at startup, so
+/// without this indirection a provider or model change stayed invisible until
+/// the process restarted.
+///
+/// The built client is cached behind its config fingerprint. Rebuilding per
+/// call would hand every question a fresh `reqwest` connection pool — a new
+/// TLS handshake each time — while never rebuilding would defeat the point.
+pub struct SettingsRoutedModel {
+    settings: Arc<PlRwLock<Settings>>,
+    fallback: Arc<dyn LanguageModel>,
+    cached: PlMutex<Option<(u64, Arc<dyn LanguageModel>)>>,
+}
+
+impl SettingsRoutedModel {
+    /// `settings` must be the same handle the `/settings` handlers write to —
+    /// [`AppState::assemble`] hands it over for exactly this.
+    ///
+    /// `fallback` serves requests while no provider is configured; `ontology
+    /// serve` passes `EchoModel` so an unconfigured server still answers
+    /// deterministically instead of erroring.
+    pub fn new(settings: Arc<PlRwLock<Settings>>, fallback: Arc<dyn LanguageModel>) -> Self {
+        Self {
+            settings,
+            fallback,
+            cached: PlMutex::new(None),
+        }
+    }
+
+    /// Client for the configuration in force right now.
+    fn current(&self) -> Result<Arc<dyn LanguageModel>, LlmError> {
+        let llm = self.settings.read().llm.clone();
+        let ov = LlmOverrides::default();
+        if effective_provider(&llm, &ov) == "default" {
+            return Ok(self.fallback.clone());
+        }
+        let creds = resolve_provider_creds(&llm, &ov).map_err(LlmError::Config)?;
+        let fingerprint = creds.fingerprint();
+
+        let mut cached = self.cached.lock();
+        if let Some((known, model)) = cached.as_ref() {
+            if *known == fingerprint {
+                return Ok(model.clone());
+            }
+        }
+        let model = client_from_creds(creds).map_err(LlmError::Config)?;
+        *cached = Some((fingerprint, model.clone()));
+        Ok(model)
+    }
+}
+
+#[async_trait::async_trait]
+impl LanguageModel for SettingsRoutedModel {
+    async fn generate(&self, req: &LlmRequest) -> Result<LlmResponse, LlmError> {
+        self.current()?.generate(req).await
+    }
+
+    async fn generate_stream(&self, req: &LlmRequest) -> Result<LlmStream, LlmError> {
+        self.current()?.generate_stream(req).await
+    }
+}
+
+/// Outcome of resolving the persisted provider configuration.
+///
+/// Three-way on purpose: "nothing configured" is a normal state whose answer
+/// is caller-specific — the server keeps its boot-time fallback, the CLI uses
+/// `EchoModel` — whereas "configured but unusable" is a user error worth
+/// reporting instead of silently downgrading to an echo.
+pub enum ConfiguredModel {
+    /// No provider selected; the caller's own fallback applies.
+    NotConfigured,
+    /// Client built from the stored credentials.
+    Ready(Arc<dyn LanguageModel>),
+    /// A provider is selected but its configuration is incomplete. The
+    /// payload is a message meant for the user.
+    Invalid(String),
+}
+
+/// Resolve the LLM the given settings select, for callers outside the HTTP
+/// layer. `ov` applies per-invocation overrides (the CLI's `--model`) and is
+/// never persisted.
+pub fn configured_model(settings: &Settings, ov: &LlmOverrides) -> ConfiguredModel {
+    if effective_provider(&settings.llm, ov) == "default" {
+        return ConfiguredModel::NotConfigured;
+    }
+    match model_for(&settings.llm, ov) {
+        Ok(model) => ConfiguredModel::Ready(model),
+        Err(message) => ConfiguredModel::Invalid(message),
+    }
+}
+
+/// Short-timeout client for the control-plane calls below (model catalogue,
+/// connection test, product discovery). Completions go through the clients in
+/// `ontology-rag`, which carry their own retry policy.
+fn control_plane_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
+}
+
+/// GET `url` with the auth headers `kind` expects, returning decoded JSON or
+/// a message fit to show a user.
+async fn get_provider_json(
+    url: &str,
+    api_key: &str,
+    kind: ProviderKind,
+) -> Result<serde_json::Value, String> {
+    let client = control_plane_client();
+    let req = match kind {
+        ProviderKind::Anthropic => client
+            .get(url)
+            .header("x-api-key", api_key)
+            .header("anthropic-version", "2023-06-01"),
+        ProviderKind::OpenAiCompatible => client.get(url).bearer_auth(api_key),
+    };
+    let resp = req.send().await.map_err(|e| e.to_string())?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!(
+            "HTTP {status}: {}",
+            body.chars().take(200).collect::<String>()
+        ));
+    }
+    resp.json().await.map_err(|e| e.to_string())
 }
 
 #[derive(Debug, Serialize)]
 struct LlmTestResponse {
     ok: bool,
+    /// Provider actually tested, once overrides and settings are resolved.
+    provider: String,
+    /// Endpoint that was called. Echoed back so a 404 or 401 is diagnosable
+    /// from the UI alone; it carries no secret.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    endpoint: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
 }
 
-fn resolve_provider_creds(
-    llm: &LlmSettings,
-    provider: &str,
-) -> Result<(String, String, String, &'static str), String> {
-    // Returns (api_key, base_url, model, kind) where kind is "openai-compatible"
-    // or "anthropic".
-    match provider {
-        "openai" => {
-            if llm.openai_api_key.is_empty() {
-                return Err("Clé API OpenAI manquante".into());
-            }
-            let base = if llm.openai_base_url.is_empty() {
-                "https://api.openai.com/v1".to_string()
-            } else {
-                llm.openai_base_url.trim_end_matches('/').to_string()
-            };
-            Ok((llm.openai_api_key.clone(), base, llm.openai_model.clone(), "openai"))
+/// `POST /settings/llm/test` — probe the provider's model catalogue with the
+/// merged config. Credentials in the body are used as-is and never persisted.
+async fn test_llm_connection(
+    State(s): State<AppState>,
+    Json(ov): Json<LlmOverrides>,
+) -> Json<LlmTestResponse> {
+    let llm = s.settings.read().llm.clone();
+    let creds = match resolve_provider_creds(&llm, &ov) {
+        Ok(c) => c,
+        Err(error) => {
+            return Json(LlmTestResponse {
+                ok: false,
+                provider: effective_provider(&llm, &ov),
+                endpoint: None,
+                model: None,
+                error: Some(error),
+            })
         }
-        "anthropic" => {
-            if llm.anthropic_api_key.is_empty() {
-                return Err("Clé API Anthropic manquante".into());
-            }
-            let base = if llm.anthropic_base_url.is_empty() {
-                "https://api.anthropic.com/v1".to_string()
+    };
+    let endpoint = v1_api_url(&creds.base_url, "models");
+    match get_provider_json(&endpoint, &creds.api_key, creds.kind).await {
+        Ok(_) => Json(LlmTestResponse {
+            ok: true,
+            provider: creds.provider,
+            endpoint: Some(endpoint),
+            model: if creds.model.is_empty() {
+                None
             } else {
-                llm.anthropic_base_url.trim_end_matches('/').to_string()
-            };
-            Ok((llm.anthropic_api_key.clone(), base, llm.anthropic_model.clone(), "anthropic"))
-        }
-        "infomaniak" => {
-            if llm.infomaniak_api_key.is_empty() {
-                return Err("Clé API Infomaniak manquante".into());
-            }
-            let base = if llm.infomaniak_base_url.is_empty() {
-                "https://api.infomaniak.com/1/ai".to_string()
-            } else {
-                llm.infomaniak_base_url.trim_end_matches('/').to_string()
-            };
-            Ok((llm.infomaniak_api_key.clone(), base, llm.infomaniak_model.clone(), "openai"))
-        }
-        other => Err(format!("Fournisseur inconnu : {other}")),
+                Some(creds.model)
+            },
+            error: None,
+        }),
+        Err(error) => Json(LlmTestResponse {
+            ok: false,
+            provider: creds.provider,
+            endpoint: Some(endpoint),
+            model: None,
+            error: Some(error),
+        }),
     }
 }
 
-async fn test_llm_connection(
-    State(s): State<AppState>,
-    Json(req): Json<LlmTestRequest>,
-) -> Json<LlmTestResponse> {
-    let llm = s.settings.read().llm.clone();
-    let provider = req
-        .provider
-        .unwrap_or_else(|| llm.active_provider.clone());
-    let (key, base, model, kind) = match resolve_provider_creds(&llm, &provider) {
-        Ok(v) => v,
-        Err(e) => return Json(LlmTestResponse { ok: false, model: None, error: Some(e) }),
+/// One entry of a provider's model catalogue.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct LlmModelInfo {
+    /// Value to send as `model` in a completion request.
+    pub id: String,
+    /// Display label; equals `id` unless the provider ships a nicer name.
+    pub label: String,
+    /// Context window advertised by the provider, when it advertises one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_input_tokens: Option<u32>,
+    /// Provider-declared family, passed through verbatim — Infomaniak uses it
+    /// to separate `llm` from image/audio products. Deliberately not filtered
+    /// server-side: a kind we have never seen must not silently vanish.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// Provider flagged the model as beta.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub beta: bool,
+}
+
+/// Parse a model catalogue from either wire shape.
+///
+/// * OpenAI-compatible (`GET {base}/v1/models`):
+///   `{"data":[{"id":"gpt-4o","object":"model"}]}` — `id` is the string a
+///   completion request expects.
+/// * Infomaniak's account catalogue (`GET /1/ai/models`):
+///   `{"result":"success","data":[{"id":57064,"name":"mixtral","type":"llm",
+///   "max_token_input":32000,"meta":{"is_beta":false}}]}` — there `id` is a
+///   numeric database key and **`name`** is the value to send, so reading
+///   `id` as a string (what this endpoint used to do) returns an empty list.
+///
+/// Rows with no usable name are skipped, duplicate ids collapse, and the
+/// result is sorted by label so the picker order is stable across calls.
+fn parse_model_catalogue(v: &serde_json::Value) -> Vec<LlmModelInfo> {
+    let rows = match v.get("data").and_then(|d| d.as_array()) {
+        Some(rows) => rows,
+        None => return Vec::new(),
     };
-
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(15))
-        .build()
-        .unwrap_or_else(|_| reqwest::Client::new());
-
-    let res = if kind == "anthropic" {
-        client
-            .get(format!("{base}/models"))
-            .header("x-api-key", &key)
-            .header("anthropic-version", "2023-06-01")
-            .send()
-            .await
-    } else {
-        client
-            .get(format!("{base}/models"))
-            .bearer_auth(&key)
-            .send()
-            .await
-    };
-
-    match res {
-        Ok(r) if r.status().is_success() => Json(LlmTestResponse {
-            ok: true,
-            model: if model.is_empty() { None } else { Some(model) },
-            error: None,
-        }),
-        Ok(r) => {
-            let status = r.status();
-            let body = r.text().await.unwrap_or_default();
-            Json(LlmTestResponse {
-                ok: false,
-                model: None,
-                error: Some(format!("HTTP {status}: {}", body.chars().take(200).collect::<String>())),
-            })
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for row in rows {
+        let id = match row
+            .get("id")
+            .and_then(|i| i.as_str())
+            .or_else(|| row.get("name").and_then(|n| n.as_str()))
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            Some(id) => id.to_string(),
+            None => continue,
+        };
+        if !seen.insert(id.clone()) {
+            continue;
         }
-        Err(e) => Json(LlmTestResponse {
-            ok: false,
-            model: None,
-            error: Some(e.to_string()),
-        }),
+        let label = row
+            .get("name")
+            .and_then(|n| n.as_str())
+            .map(str::trim)
+            .filter(|n| !n.is_empty() && *n != id.as_str())
+            .map(|n| format!("{n} ({id})"))
+            .unwrap_or_else(|| id.clone());
+        let max_input_tokens = ["max_token_input", "max_input_tokens", "context_length"]
+            .iter()
+            .find_map(|k| row.get(*k).and_then(|v| v.as_u64()))
+            .and_then(|v| u32::try_from(v).ok());
+        let kind = row
+            .get("type")
+            .and_then(|t| t.as_str())
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .map(str::to_string);
+        let beta = row
+            .get("meta")
+            .and_then(|m| m.get("is_beta"))
+            .and_then(|b| b.as_bool())
+            .unwrap_or(false);
+        out.push(LlmModelInfo {
+            id,
+            label,
+            max_input_tokens,
+            kind,
+            beta,
+        });
     }
+    out.sort_by_key(|m| m.label.to_lowercase());
+    out
 }
 
 #[derive(Debug, Deserialize)]
@@ -2705,62 +3255,152 @@ struct LlmModelsQuery {
 
 #[derive(Debug, Serialize)]
 struct LlmModelsResponse {
-    models: Vec<String>,
+    models: Vec<LlmModelInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    endpoint: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
 }
 
+/// `GET /settings/llm/models?provider=…` — catalogue for the stored config.
 async fn list_llm_models(
     State(s): State<AppState>,
     Query(q): Query<LlmModelsQuery>,
 ) -> Json<LlmModelsResponse> {
+    let ov = LlmOverrides {
+        provider: q.provider,
+        ..Default::default()
+    };
+    Json(fetch_models(&s, &ov).await)
+}
+
+/// `POST /settings/llm/models` — same, but with unsaved credentials in the
+/// body so the picker can be populated before anything is stored.
+async fn list_llm_models_with_overrides(
+    State(s): State<AppState>,
+    Json(ov): Json<LlmOverrides>,
+) -> Json<LlmModelsResponse> {
+    Json(fetch_models(&s, &ov).await)
+}
+
+async fn fetch_models(s: &AppState, ov: &LlmOverrides) -> LlmModelsResponse {
     let llm = s.settings.read().llm.clone();
-    let provider = q.provider.unwrap_or_else(|| llm.active_provider.clone());
-    let (key, base, _model, kind) = match resolve_provider_creds(&llm, &provider) {
-        Ok(v) => v,
-        Err(e) => return Json(LlmModelsResponse { models: vec![], error: Some(e) }),
+    let creds = match resolve_provider_creds(&llm, ov) {
+        Ok(c) => c,
+        Err(error) => {
+            return LlmModelsResponse {
+                models: Vec::new(),
+                endpoint: None,
+                error: Some(error),
+            }
+        }
     };
+    let endpoint = v1_api_url(&creds.base_url, "models");
+    match get_provider_json(&endpoint, &creds.api_key, creds.kind).await {
+        Ok(v) => LlmModelsResponse {
+            models: parse_model_catalogue(&v),
+            endpoint: Some(endpoint),
+            error: None,
+        },
+        Err(error) => LlmModelsResponse {
+            models: Vec::new(),
+            endpoint: Some(endpoint),
+            error: Some(error),
+        },
+    }
+}
 
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(15))
-        .build()
-        .unwrap_or_else(|_| reqwest::Client::new());
+/// Account-level AI Tools endpoint listing the products a token can reach.
+/// Not product-scoped, so it cannot be derived from the provider base URL.
+const INFOMANIAK_PRODUCTS_URL: &str = "https://api.infomaniak.com/1/ai";
 
-    let res = if kind == "anthropic" {
-        client
-            .get(format!("{base}/models"))
-            .header("x-api-key", &key)
-            .header("anthropic-version", "2023-06-01")
-            .send()
-            .await
-    } else {
-        client
-            .get(format!("{base}/models"))
-            .bearer_auth(&key)
-            .send()
-            .await
+#[derive(Debug, Default, Deserialize)]
+pub struct InfomaniakProductsRequest {
+    /// Token to probe with; falls back to the stored Infomaniak key. Carried
+    /// in the body, never in a query string, so it stays out of access logs.
+    #[serde(default)]
+    pub api_key: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct InfomaniakProduct {
+    pub product_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct InfomaniakProductsResponse {
+    products: Vec<InfomaniakProduct>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+/// Parse `GET /1/ai`. Rows carry the id under `product_id` or `id`, as a
+/// number or a string depending on the endpoint version, so both are read.
+fn parse_infomaniak_products(v: &serde_json::Value) -> Vec<InfomaniakProduct> {
+    let rows = match v.get("data").and_then(|d| d.as_array()) {
+        Some(rows) => rows,
+        None => return Vec::new(),
     };
-
-    match res {
-        Ok(r) if r.status().is_success() => {
-            let v: serde_json::Value = r.json().await.unwrap_or(serde_json::Value::Null);
-            let arr = v.get("data").and_then(|d| d.as_array()).cloned().unwrap_or_default();
-            let mut models: Vec<String> = arr
+    rows.iter()
+        .filter_map(|row| {
+            let product_id = ["product_id", "id"].iter().find_map(|k| match row.get(*k) {
+                Some(serde_json::Value::String(s)) if !s.trim().is_empty() => {
+                    Some(s.trim().to_string())
+                }
+                Some(serde_json::Value::Number(n)) => Some(n.to_string()),
+                _ => None,
+            })?;
+            let name = ["name", "customer_name", "label"]
                 .iter()
-                .filter_map(|m| m.get("id").and_then(|i| i.as_str()).map(String::from))
-                .collect();
-            models.sort();
-            Json(LlmModelsResponse { models, error: None })
+                .find_map(|k| row.get(*k).and_then(|n| n.as_str()))
+                .map(str::trim)
+                .filter(|n| !n.is_empty())
+                .map(str::to_string);
+            Some(InfomaniakProduct { product_id, name })
+        })
+        .collect()
+}
+
+/// `POST /settings/llm/infomaniak/products` — resolve the AI Tools product
+/// id(s) a token can reach, so nobody has to hunt for it in the Infomaniak
+/// manager and paste it by hand.
+async fn list_infomaniak_products(
+    State(s): State<AppState>,
+    Json(req): Json<InfomaniakProductsRequest>,
+) -> Json<InfomaniakProductsResponse> {
+    let stored = s.settings.read().llm.infomaniak_api_key.clone();
+    let api_key = pick(&stored, &req.api_key);
+    if api_key.is_empty() {
+        return Json(InfomaniakProductsResponse {
+            products: Vec::new(),
+            error: Some("Clé API Infomaniak manquante — saisissez-la d'abord.".into()),
+        });
+    }
+    match get_provider_json(
+        INFOMANIAK_PRODUCTS_URL,
+        &api_key,
+        ProviderKind::OpenAiCompatible,
+    )
+    .await
+    {
+        Ok(v) => {
+            let products = parse_infomaniak_products(&v);
+            let error = if products.is_empty() {
+                Some(
+                    "Aucun produit AI Tools sur ce compte — vérifiez que le token porte le scope « ai-tools »."
+                        .into(),
+                )
+            } else {
+                None
+            };
+            Json(InfomaniakProductsResponse { products, error })
         }
-        Ok(r) => {
-            let status = r.status();
-            let body = r.text().await.unwrap_or_default();
-            Json(LlmModelsResponse {
-                models: vec![],
-                error: Some(format!("HTTP {status}: {}", body.chars().take(200).collect::<String>())),
-            })
-        }
-        Err(e) => Json(LlmModelsResponse { models: vec![], error: Some(e.to_string()) }),
+        Err(error) => Json(InfomaniakProductsResponse {
+            products: Vec::new(),
+            error: Some(error),
+        }),
     }
 }
 
@@ -2890,5 +3530,559 @@ impl IntoResponse for ApiError {
             ApiError::Unprocessable(_) => (StatusCode::UNPROCESSABLE_ENTITY, self.to_string()),
         };
         (status, Json(ErrorBody { error: msg })).into_response()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Unit tests: provider resolution, catalogue parsing, redaction, migration
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod provider_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn infomaniak_settings() -> LlmSettings {
+        LlmSettings {
+            active_provider: "infomaniak".into(),
+            infomaniak_api_key: "tok-abcd".into(),
+            infomaniak_product_id: "101112".into(),
+            infomaniak_model: "mixtral".into(),
+            ..Default::default()
+        }
+    }
+
+    // -- effective_provider -------------------------------------------------
+
+    #[test]
+    fn override_provider_beats_active_provider() {
+        let llm = infomaniak_settings();
+        let ov = LlmOverrides {
+            provider: Some("openai".into()),
+            ..Default::default()
+        };
+        assert_eq!(effective_provider(&llm, &ov), "openai");
+    }
+
+    #[test]
+    fn blank_or_default_override_falls_back_to_active_provider() {
+        let llm = infomaniak_settings();
+        for probe in [None, Some("".to_string()), Some("  ".to_string()), Some("default".to_string())] {
+            let ov = LlmOverrides {
+                provider: probe.clone(),
+                ..Default::default()
+            };
+            assert_eq!(
+                effective_provider(&llm, &ov),
+                "infomaniak",
+                "probe {probe:?} should defer to active_provider"
+            );
+        }
+    }
+
+    #[test]
+    fn empty_active_provider_reads_as_default() {
+        let llm = LlmSettings {
+            active_provider: String::new(),
+            ..Default::default()
+        };
+        assert_eq!(
+            effective_provider(&llm, &LlmOverrides::default()),
+            "default"
+        );
+    }
+
+    // -- resolve_provider_creds --------------------------------------------
+
+    #[test]
+    fn infomaniak_base_url_is_derived_from_the_product_id() {
+        let creds =
+            resolve_provider_creds(&infomaniak_settings(), &LlmOverrides::default()).unwrap();
+        assert_eq!(
+            creds.base_url,
+            "https://api.infomaniak.com/2/ai/101112/openai/v1"
+        );
+        assert_eq!(creds.kind, ProviderKind::OpenAiCompatible);
+        assert_eq!(creds.model, "mixtral");
+        // And the endpoint the control plane derives from it:
+        assert_eq!(
+            v1_api_url(&creds.base_url, "models"),
+            "https://api.infomaniak.com/2/ai/101112/openai/v1/models"
+        );
+    }
+
+    #[test]
+    fn infomaniak_without_a_product_id_is_a_clear_error() {
+        let llm = LlmSettings {
+            infomaniak_product_id: String::new(),
+            ..infomaniak_settings()
+        };
+        let err = resolve_provider_creds(&llm, &LlmOverrides::default()).unwrap_err();
+        assert!(err.contains("Product ID"), "unhelpful error: {err}");
+    }
+
+    #[test]
+    fn infomaniak_without_a_key_is_a_clear_error() {
+        let llm = LlmSettings {
+            infomaniak_api_key: String::new(),
+            ..infomaniak_settings()
+        };
+        let err = resolve_provider_creds(&llm, &LlmOverrides::default()).unwrap_err();
+        assert!(err.contains("Infomaniak"), "unhelpful error: {err}");
+    }
+
+    #[test]
+    fn explicit_base_url_overrides_the_derived_one() {
+        let llm = LlmSettings {
+            infomaniak_base_url: "https://staging.example.test/openai/v1".into(),
+            ..infomaniak_settings()
+        };
+        let creds = resolve_provider_creds(&llm, &LlmOverrides::default()).unwrap();
+        assert_eq!(creds.base_url, "https://staging.example.test/openai/v1");
+    }
+
+    #[test]
+    fn request_overrides_win_over_stored_settings() {
+        let ov = LlmOverrides {
+            api_key: Some("tok-fresh".into()),
+            product_id: Some("999".into()),
+            model: Some("granite".into()),
+            ..Default::default()
+        };
+        let llm = LlmSettings {
+            infomaniak_product_id: String::new(),
+            ..infomaniak_settings()
+        };
+        let creds = resolve_provider_creds(&llm, &ov).unwrap();
+        assert_eq!(creds.api_key, "tok-fresh");
+        assert_eq!(creds.model, "granite");
+        assert_eq!(
+            creds.base_url,
+            "https://api.infomaniak.com/2/ai/999/openai/v1"
+        );
+    }
+
+    #[test]
+    fn whitespace_only_override_does_not_shadow_a_stored_value() {
+        let ov = LlmOverrides {
+            api_key: Some("   ".into()),
+            ..Default::default()
+        };
+        let creds = resolve_provider_creds(&infomaniak_settings(), &ov).unwrap();
+        assert_eq!(creds.api_key, "tok-abcd");
+    }
+
+    #[test]
+    fn openai_and_anthropic_defaults_carry_no_duplicate_v1() {
+        let llm = LlmSettings {
+            active_provider: "openai".into(),
+            openai_api_key: "sk-x".into(),
+            ..Default::default()
+        };
+        let creds = resolve_provider_creds(&llm, &LlmOverrides::default()).unwrap();
+        assert_eq!(
+            v1_api_url(&creds.base_url, "models"),
+            "https://api.openai.com/v1/models"
+        );
+
+        let llm = LlmSettings {
+            active_provider: "anthropic".into(),
+            anthropic_api_key: "sk-ant".into(),
+            // A user who pasted the documented "with /v1" spelling must not
+            // end up on /v1/v1/models.
+            anthropic_base_url: "https://api.anthropic.com/v1".into(),
+            ..Default::default()
+        };
+        let creds = resolve_provider_creds(&llm, &LlmOverrides::default()).unwrap();
+        assert_eq!(creds.kind, ProviderKind::Anthropic);
+        assert_eq!(
+            v1_api_url(&creds.base_url, "models"),
+            "https://api.anthropic.com/v1/models"
+        );
+    }
+
+    #[test]
+    fn default_provider_and_unknown_provider_are_distinct_errors() {
+        let llm = LlmSettings::default();
+        let err = resolve_provider_creds(&llm, &LlmOverrides::default()).unwrap_err();
+        assert!(err.contains("Aucun fournisseur"), "got: {err}");
+
+        let ov = LlmOverrides {
+            provider: Some("mistral".into()),
+            ..Default::default()
+        };
+        let err = resolve_provider_creds(&llm, &ov).unwrap_err();
+        assert!(err.contains("mistral"), "got: {err}");
+    }
+
+    // -- model_for ---------------------------------------------------------
+
+    #[test]
+    fn model_for_refuses_to_build_a_client_without_a_model() {
+        let llm = LlmSettings {
+            infomaniak_model: String::new(),
+            ..infomaniak_settings()
+        };
+        // Arc<dyn LanguageModel> is not Debug, so unwrap_err() is unavailable.
+        let err = match model_for(&llm, &LlmOverrides::default()) {
+            Err(e) => e,
+            Ok(_) => panic!("expected a missing-model error, got a client"),
+        };
+        assert!(err.contains("Aucun modèle"), "got: {err}");
+    }
+
+    #[test]
+    fn model_for_builds_a_client_for_a_complete_config() {
+        assert!(model_for(&infomaniak_settings(), &LlmOverrides::default()).is_ok());
+    }
+
+    // -- parse_model_catalogue --------------------------------------------
+
+    #[test]
+    fn parses_the_openai_catalogue_shape() {
+        let v = json!({
+            "object": "list",
+            "data": [
+                { "id": "gpt-4o", "object": "model" },
+                { "id": "gpt-4o-mini", "object": "model" }
+            ]
+        });
+        let models = parse_model_catalogue(&v);
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0].id, "gpt-4o");
+        assert_eq!(models[0].label, "gpt-4o");
+        assert_eq!(models[0].max_input_tokens, None);
+        assert!(!models[0].beta);
+    }
+
+    #[test]
+    fn parses_the_infomaniak_catalogue_where_id_is_numeric() {
+        // The regression this pins: reading `id` as a string here yields an
+        // empty list, because the model name lives in `name`.
+        let v = json!({
+            "result": "success",
+            "data": [
+                {
+                    "id": 57064,
+                    "name": "mixtral",
+                    "type": "llm",
+                    "max_token_input": 32000,
+                    "meta": { "is_beta": false, "is_coder": false }
+                },
+                {
+                    "id": 57065,
+                    "name": "granite",
+                    "type": "llm",
+                    "max_token_input": 8192,
+                    "meta": { "is_beta": true }
+                }
+            ]
+        });
+        let models = parse_model_catalogue(&v);
+        assert_eq!(models.len(), 2);
+
+        let granite = &models[0];
+        assert_eq!(granite.id, "granite");
+        assert_eq!(granite.label, "granite");
+        assert_eq!(granite.max_input_tokens, Some(8192));
+        assert_eq!(granite.kind.as_deref(), Some("llm"));
+        assert!(granite.beta);
+
+        let mixtral = &models[1];
+        assert_eq!(mixtral.id, "mixtral");
+        assert_eq!(mixtral.max_input_tokens, Some(32000));
+        assert!(!mixtral.beta);
+    }
+
+    #[test]
+    fn catalogue_keeps_non_llm_kinds_visible_rather_than_dropping_them() {
+        let v = json!({ "data": [ { "id": 1, "name": "whisper", "type": "transcription" } ] });
+        let models = parse_model_catalogue(&v);
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].kind.as_deref(), Some("transcription"));
+    }
+
+    #[test]
+    fn catalogue_skips_unusable_rows_and_dedups() {
+        let v = json!({
+            "data": [
+                { "object": "model" },
+                { "id": "  " },
+                { "id": "gpt-4o" },
+                { "id": "gpt-4o" }
+            ]
+        });
+        let models = parse_model_catalogue(&v);
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id, "gpt-4o");
+    }
+
+    #[test]
+    fn catalogue_labels_a_distinct_display_name_with_its_id() {
+        let v = json!({ "data": [ { "id": "llama-3.3-70b", "name": "Llama 3.3 70B" } ] });
+        let models = parse_model_catalogue(&v);
+        assert_eq!(models[0].id, "llama-3.3-70b");
+        assert_eq!(models[0].label, "Llama 3.3 70B (llama-3.3-70b)");
+    }
+
+    #[test]
+    fn catalogue_is_empty_when_data_is_missing_or_not_an_array() {
+        assert!(parse_model_catalogue(&json!({})).is_empty());
+        assert!(parse_model_catalogue(&json!({ "data": "nope" })).is_empty());
+    }
+
+    #[test]
+    fn catalogue_is_sorted_case_insensitively_by_label() {
+        let v = json!({ "data": [ { "id": "zeta" }, { "id": "Alpha" }, { "id": "beta" } ] });
+        let labels: Vec<_> = parse_model_catalogue(&v)
+            .into_iter()
+            .map(|m| m.id)
+            .collect();
+        assert_eq!(labels, vec!["Alpha", "beta", "zeta"]);
+    }
+
+    // -- parse_infomaniak_products ----------------------------------------
+
+    #[test]
+    fn parses_products_with_numeric_and_string_ids() {
+        let v = json!({
+            "result": "success",
+            "data": [
+                { "product_id": 101112, "name": "AI Tools" },
+                { "id": "202122" }
+            ]
+        });
+        let products = parse_infomaniak_products(&v);
+        assert_eq!(
+            products,
+            vec![
+                InfomaniakProduct {
+                    product_id: "101112".into(),
+                    name: Some("AI Tools".into())
+                },
+                InfomaniakProduct {
+                    product_id: "202122".into(),
+                    name: None
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn products_skip_rows_without_an_id() {
+        let v = json!({ "data": [ { "name": "orphan" } ] });
+        assert!(parse_infomaniak_products(&v).is_empty());
+    }
+
+    // -- redaction ---------------------------------------------------------
+
+    #[test]
+    fn settings_view_strips_every_secret_but_keeps_hints_and_limits() {
+        let mut settings = Settings::default();
+        settings.llm.openai_api_key = "sk-openai-1234".into();
+        settings.llm.anthropic_api_key = "sk-ant-5678".into();
+        settings.llm.infomaniak_api_key = "tok-info-9012".into();
+        settings.ocr.google_api_key = "goog-3456".into();
+        settings.llm.refresh_key_hints();
+        settings.ocr.refresh_key_hints();
+
+        let view = settings_view(&settings);
+        let flat = view.to_string();
+        for secret in [
+            "sk-openai-1234",
+            "sk-ant-5678",
+            "tok-info-9012",
+            "goog-3456",
+        ] {
+            assert!(!flat.contains(secret), "secret leaked in {flat}");
+        }
+        assert!(view["llm"].get("openai_api_key").is_none());
+        assert_eq!(view["llm"]["openai_api_key_hint"], "sk-...1234");
+        assert_eq!(view["llm"]["infomaniak_api_key_hint"], "tok...9012");
+        assert_eq!(view["ocr"]["google_api_key_hint"], "goo...3456");
+        // Non-secret fields whose names flirt with the suffix list survive.
+        assert_eq!(view["llm"]["max_tokens"], 1000);
+    }
+
+    #[test]
+    fn redaction_reaches_nested_objects_and_arrays() {
+        let mut v = json!({
+            "outer": { "some_api_key": "x", "keep": 1 },
+            "list": [ { "auth_token": "y", "keep": 2 } ]
+        });
+        redact_secrets(&mut v);
+        assert!(v["outer"].get("some_api_key").is_none());
+        assert_eq!(v["outer"]["keep"], 1);
+        assert!(v["list"][0].get("auth_token").is_none());
+        assert_eq!(v["list"][0]["keep"], 2);
+    }
+
+    // -- persistence round-trip & migration -------------------------------
+
+    #[test]
+    fn secrets_survive_a_serialize_deserialize_round_trip() {
+        let mut settings = Settings::default();
+        settings.llm.infomaniak_api_key = "tok-info-9012".into();
+        settings.ocr.google_api_key = "goog-3456".into();
+
+        let json = serde_json::to_string(&settings).unwrap();
+        let back: Settings = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.llm.infomaniak_api_key, "tok-info-9012");
+        assert_eq!(back.ocr.google_api_key, "goog-3456");
+    }
+
+    #[test]
+    fn a_settings_file_from_an_older_build_still_loads() {
+        // No `infomaniak_product_id`, no `ocr` block, no `ui` block: every
+        // absent field must fall back to its default instead of failing the
+        // whole parse and wiping the stored credentials.
+        let raw = r#"{
+            "retrieval": { "top_k": 12 },
+            "llm": { "active_provider": "infomaniak", "infomaniak_api_key": "tok-old" }
+        }"#;
+        let loaded: Settings = serde_json::from_str(raw).unwrap();
+        assert_eq!(loaded.retrieval.top_k, 12);
+        assert_eq!(loaded.retrieval.lexical_weight, 0.5);
+        assert_eq!(loaded.ui.theme, "light");
+        assert_eq!(loaded.llm.infomaniak_api_key, "tok-old");
+        assert_eq!(loaded.llm.infomaniak_product_id, "");
+        assert_eq!(loaded.ocr.provider, "tesseract");
+    }
+
+    #[test]
+    fn migrate_clears_the_dead_infomaniak_base_url_and_rebuilds_hints() {
+        let mut settings = Settings::default();
+        settings.llm.infomaniak_base_url = "https://api.infomaniak.com/1/ai/".into();
+        settings.llm.infomaniak_api_key = "tok-info-9012".into();
+        settings.llm.infomaniak_api_key_hint.clear();
+
+        settings.migrate();
+
+        assert_eq!(settings.llm.infomaniak_base_url, "");
+        assert_eq!(settings.llm.infomaniak_api_key_hint, "tok...9012");
+    }
+
+    #[test]
+    fn migrate_leaves_a_user_supplied_base_url_alone() {
+        let mut settings = Settings::default();
+        settings.llm.infomaniak_base_url = "https://staging.example.test/openai/v1".into();
+        settings.migrate();
+        assert_eq!(
+            settings.llm.infomaniak_base_url,
+            "https://staging.example.test/openai/v1"
+        );
+    }
+
+    // -- SettingsRoutedModel ----------------------------------------------
+    //
+    // No test here reaches the network, and none needs to: routing is checked
+    // by identity against the fallback client, and the one case that does call
+    // generate() fails on validation before a request is dispatched. The
+    // 127.0.0.1:1 base URL is a tripwire — if resolution ever started
+    // dispatching where it should not, the test would hang on a refused
+    // connection instead of passing.
+
+    fn routed(settings: Settings) -> (Arc<PlRwLock<Settings>>, SettingsRoutedModel) {
+        let shared = Arc::new(PlRwLock::new(settings));
+        let model = SettingsRoutedModel::new(shared.clone(), Arc::new(ontology_rag::EchoModel));
+        (shared, model)
+    }
+
+    /// Provider fully configured against a port nothing listens on.
+    fn unreachable_infomaniak() -> Settings {
+        let mut settings = Settings::default();
+        settings.llm.active_provider = "infomaniak".into();
+        settings.llm.infomaniak_api_key = "tok-abcd".into();
+        settings.llm.infomaniak_base_url = "http://127.0.0.1:1/v1".into();
+        settings.llm.infomaniak_model = "mixtral".into();
+        settings
+    }
+
+    fn ping() -> LlmRequest {
+        LlmRequest {
+            messages: vec![ontology_rag::Message::user("hi")],
+            max_tokens: 8,
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn routed_model_delegates_to_the_fallback_while_no_provider_is_configured() {
+        let (_shared, model) = routed(Settings::default());
+        let resp = model.generate(&ping()).await.unwrap();
+        assert_eq!(resp.content, "[echo] hi");
+    }
+
+    #[test]
+    fn routed_model_picks_up_an_applied_provider_without_a_restart() {
+        let (shared, model) = routed(Settings::default());
+        // Unconfigured: the fallback itself, not a copy of it.
+        let before = model.current().unwrap();
+        assert!(
+            Arc::ptr_eq(&before, &model.fallback),
+            "an unconfigured server should answer from the fallback"
+        );
+
+        // Exactly what PATCH /settings does to the shared store.
+        *shared.write() = unreachable_infomaniak();
+
+        let after = model.current().unwrap();
+        assert!(
+            !Arc::ptr_eq(&after, &model.fallback),
+            "provider change ignored: still routing to the fallback"
+        );
+    }
+
+    #[tokio::test]
+    async fn routed_model_reports_a_misconfiguration_as_config_not_upstream() {
+        let mut settings = unreachable_infomaniak();
+        settings.llm.infomaniak_model.clear();
+        let (_shared, model) = routed(settings);
+
+        let err = match model.generate(&ping()).await {
+            Err(e) => e,
+            Ok(r) => panic!("expected a config error, got {r:?}"),
+        };
+        assert!(matches!(err, LlmError::Config(_)), "got {err:?}");
+    }
+
+    #[test]
+    fn routed_model_reuses_its_client_until_the_config_changes() {
+        let (shared, model) = routed(unreachable_infomaniak());
+
+        let first = model.current().unwrap();
+        let second = model.current().unwrap();
+        assert!(
+            Arc::ptr_eq(&first, &second),
+            "client rebuilt for an unchanged configuration"
+        );
+
+        shared.write().llm.infomaniak_model = "granite".into();
+        let third = model.current().unwrap();
+        assert!(
+            !Arc::ptr_eq(&first, &third),
+            "client reused across a model change"
+        );
+    }
+
+    #[test]
+    fn fingerprint_changes_with_every_field_that_shapes_a_client() {
+        let base = resolve_provider_creds(&infomaniak_settings(), &LlmOverrides::default()).unwrap();
+        let reference = base.fingerprint();
+
+        for mutate in [
+            (|c: &mut ProviderCreds| c.api_key = "other".into()) as fn(&mut ProviderCreds),
+            |c: &mut ProviderCreds| c.base_url = "http://other.test/v1".into(),
+            |c: &mut ProviderCreds| c.model = "other".into(),
+            |c: &mut ProviderCreds| c.provider = "openai".into(),
+        ] {
+            let mut altered = base.clone();
+            mutate(&mut altered);
+            assert_ne!(
+                altered.fingerprint(),
+                reference,
+                "fingerprint blind to a change that shapes the client"
+            );
+        }
     }
 }

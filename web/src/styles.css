@@ -327,6 +327,16 @@ label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px
   font-size: 13px;
   margin-bottom: 12px;
 }
+/* Same shape as the other two banners. Was referenced by the settings forms
+   long before it existed, so warnings rendered unstyled. */
+.warn-banner {
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--warn-soft);
+  color: var(--warn);
+  font-size: 13px;
+  margin-bottom: 12px;
+}
 .row { display: flex; align-items: center; gap: 8px; }
 .spacer { flex: 1; }
 

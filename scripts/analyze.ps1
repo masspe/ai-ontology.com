@@ -10,7 +10,7 @@
 #
 # Exemples :
 #   ./scripts/analyze.ps1                            # jeu d'exemple « finance »
-#   ./scripts/analyze.ps1 -Provider openai
+#   ./scripts/analyze.ps1 -Model gpt-4o              # surcharge le modele configure
 #   ./scripts/analyze.ps1 -DataDir .\data-prod -Reset
 #   ./scripts/analyze.ps1 -Ontology .\my-onto.json `
 #                         -Inputs .\docs,.\rows.csv `
@@ -61,11 +61,8 @@ param(
         "Qui a signe le contrat C-2025-002 ?"
     ),
 
-    # Backend LLM : echo (defaut, hors-ligne), anthropic, openai, deepseek.
-    [ValidateSet("echo", "anthropic", "openai", "deepseek")]
-    [string]$Provider = "echo",
-
-    # Modele a passer au backend (optionnel, defaut par provider).
+    # Modele a utiliser pour cette execution uniquement. Sans valeur, le
+    # modele configure dans settings.json s'applique.
     [string]$Model,
 
     # Top-K et profondeur d'expansion pour la retrieval.
@@ -124,24 +121,21 @@ if ($Reset -and (Test-Path $DataDir)) {
     Remove-Item $DataDir -Recurse -Force
 }
 
-# -- Verification de la cle API si un provider distant est demande ----------
+# -- Provider LLM ------------------------------------------------------------
+#
+# Le fournisseur et sa cle viennent de $DataDir\settings.json (ecrit par
+# l'interface web ou par PATCH /settings) : plus aucune variable
+# d'environnement. Sans configuration, la CLI repond via le modele « echo »,
+# donc ce script reste utilisable hors-ligne.
 
-$envKey = switch ($Provider) {
-    "anthropic" { "ANTHROPIC_API_KEY" }
-    "openai"    { "OPENAI_API_KEY" }
-    "deepseek"  { "DEEPSEEK_API_KEY" }
-    default     { $null }
-}
-if ($envKey -and -not [string]::IsNullOrEmpty([Environment]::GetEnvironmentVariable($envKey))) {
-    Write-Host "Provider=$Provider  ($envKey detecte)" -ForegroundColor Green
-} elseif ($envKey) {
-    throw "Variable d'environnement $envKey manquante pour --$Provider."
+$SettingsFile = Join-Path $DataDir "settings.json"
+if (Test-Path $SettingsFile) {
+    Write-Host "Provider: configure dans $SettingsFile" -ForegroundColor Green
 } else {
-    Write-Host "Provider=echo (mode hors-ligne, pas d'appel reseau)" -ForegroundColor Yellow
+    Write-Host "Provider: aucun ($SettingsFile absent) -> modele echo, hors-ligne" -ForegroundColor Yellow
 }
 
 $ProviderArgs = @()
-if ($Provider -ne "echo") { $ProviderArgs += "--$Provider" }
 if ($Model) { $ProviderArgs += "--model"; $ProviderArgs += $Model }
 
 # -- Ingestion ---------------------------------------------------------------
@@ -213,7 +207,7 @@ foreach ($q in $Queries) {
     Write-Section "Retrieve : $q"
     Invoke-Ontology --data $DataDir retrieve --top-k $TopK --depth $Depth $q
 
-    Write-Section "Ask ($Provider) : $q"
+    Write-Section "Ask : $q"
     Invoke-Ontology --data $DataDir ask --top-k $TopK --depth $Depth @ProviderArgs $q
 }
 

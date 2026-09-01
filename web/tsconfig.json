@@ -6,6 +6,10 @@
     "moduleResolution": "bundler",
     "jsx": "react-jsx",
     "strict": true,
+    // Type-check only. Emitting next to the sources put .js files in src/,
+    // which Vite then resolved *before* the .ts they came from — the app ran
+    // stale output. `vite build` does the transpiling.
+    "noEmit": true,
     "skipLibCheck": true,
     "esModuleInterop": true,
     "isolatedModules": true,

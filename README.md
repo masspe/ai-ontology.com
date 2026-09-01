@@ -162,13 +162,11 @@ DATA=./data
     --ontology examples/sample-ontology.json examples/sample.triples
 ./target/release/ontology --data $DATA stats
 ./target/release/ontology --data $DATA retrieve "retrieval augmented generation"
-./target/release/ontology --data $DATA ask "Who wrote about RAG?"            # echo
-ANTHROPIC_API_KEY=... ./target/release/ontology --data $DATA \
-    ask --anthropic "Who wrote about RAG?"
-OPENAI_API_KEY=... ./target/release/ontology --data $DATA \
-    ask --openai --model gpt-4o-mini "Who wrote about RAG?"
-DEEPSEEK_API_KEY=... ./target/release/ontology --data $DATA \
-    ask --deepseek "Who wrote about RAG?"
+# Answers through the provider configured in $DATA/settings.json — see
+# "Configuring an LLM provider" below. With none configured: echo model.
+./target/release/ontology --data $DATA ask "Who wrote about RAG?"
+# One-off model override, not written back to the config:
+./target/release/ontology --data $DATA ask --model gpt-4o-mini "Who wrote about RAG?"
 ./target/release/ontology --data $DATA snapshot
 ./target/release/ontology --data $DATA compact          # snapshot + truncate WAL
 ./target/release/ontology --data $DATA path \
@@ -192,13 +190,11 @@ $env:DATA = ".\data"
     --ontology examples/sample-ontology.json examples/sample.triples
 .\target\release\ontology.exe --data $env:DATA stats
 .\target\release\ontology.exe --data $env:DATA retrieve "retrieval augmented generation"
-.\target\release\ontology.exe --data $env:DATA ask "Who wrote about RAG?"            # echo
-$env:ANTHROPIC_API_KEY = "..."
-.\target\release\ontology.exe --data $env:DATA ask --anthropic "Who wrote about RAG?"
-$env:OPENAI_API_KEY = "..."
-.\target\release\ontology.exe --data $env:DATA ask --openai --model gpt-4o-mini "Who wrote about RAG?"
-$env:DEEPSEEK_API_KEY = "..."
-.\target\release\ontology.exe --data $env:DATA ask --deepseek "Who wrote about RAG?"
+# Answers through the provider configured in $env:DATA\settings.json — see
+# "Configuring an LLM provider" below. With none configured: echo model.
+.\target\release\ontology.exe --data $env:DATA ask "Who wrote about RAG?"
+# One-off model override, not written back to the config:
+.\target\release\ontology.exe --data $env:DATA ask --model gpt-4o-mini "Who wrote about RAG?"
 .\target\release\ontology.exe --data $env:DATA snapshotin
 .\target\release\ontology.exe --data $env:DATA compact          # snapshot + truncate WAL
 .\target\release\ontology.exe --data $env:DATA path `
@@ -275,21 +271,21 @@ setup (Google, Microsoft).
 
 #### 2. Ontology API (`http://127.0.0.1:5000`)
 
-The Rust HTTP server. To enable **Generate Ontology** from the UI, export
-an LLM key before starting it (Anthropic, OpenAI or DeepSeek):
+The Rust HTTP server. It takes no provider flags and reads no API-key
+environment variable: the LLM is picked in the UI under **Settings →
+Configuration**, saved to `<data>/settings.json`, and applied to the running
+server without a restart.
 
 ```powershell
 cargo build --release
-$env:ANTHROPIC_API_KEY = "sk-ant-..."     # or OPENAI_API_KEY / DEEPSEEK_API_KEY
-.\target\release\ontology.exe --data .\data serve --bind 127.0.0.1:5000 --anthropic
+.\target\release\ontology.exe --data .\data serve --bind 127.0.0.1:5000
 ```
 
 POSIX equivalent:
 
 ```bash
 cargo build --release
-ANTHROPIC_API_KEY=sk-ant-... \
-  ./target/release/ontology --data ./data serve --bind 127.0.0.1:5000 --anthropic
+./target/release/ontology --data ./data serve --bind 127.0.0.1:5000
 ```
 
 #### 3. Frontend (`http://localhost:5173`)
@@ -345,9 +341,10 @@ and finally `relations.jsonl`.
    snapshot). The schema is then visible across **Graph**, **Concepts**,
    **Rules**, etc., and ready to receive ingested data via **Files**.
 
-> If **Generate Ontology** returns `503 no language model configured`,
-> restart the ontology API with one of `--anthropic` / `--openai` /
-> `--deepseek` and the matching `*_API_KEY` env var.
+> If **Generate Ontology** reports that no model is configured, open
+> **Settings → Configuration**, enter a provider key, load the model list,
+> pick a model and click **Appliquer**. It takes effect immediately — no
+> restart.
 
 ## Observability
 
@@ -364,28 +361,87 @@ Wire it into your Prometheus scrape config alongside the bearer token.
 
 ## LLM providers
 
-Four `LanguageModel` implementations ship in `ontology-rag`:
+`ontology-rag` ships these `LanguageModel` implementations:
 
-| Backend            | Constructor                                | Env var              | Default model    |
-| ------------------ | ------------------------------------------ | -------------------- | ---------------- |
-| Echo (offline fake)| `EchoModel`                                | —                    | `echo`           |
-| Anthropic Messages | `AnthropicModel::new(key)`                 | `ANTHROPIC_API_KEY`  | `claude-opus-4-7`|
-| OpenAI Chat        | `OpenAiModel::new(key)`                    | `OPENAI_API_KEY`     | `gpt-4o-mini`    |
-| DeepSeek Chat      | `OpenAiModel::deepseek(key)`               | `DEEPSEEK_API_KEY`   | `deepseek-chat`  |
+| Backend             | Constructor                             | Default model     |
+| ------------------- | --------------------------------------- | ----------------- |
+| Echo (offline fake) | `EchoModel`                             | `echo`            |
+| Anthropic Messages  | `AnthropicModel::new(key)`              | `claude-opus-4-7` |
+| OpenAI Chat         | `OpenAiModel::new(key)`                 | `gpt-4o-mini`     |
+| DeepSeek Chat       | `OpenAiModel::deepseek(key)`            | `deepseek-chat`   |
+| Infomaniak AI Tools | `OpenAiModel::infomaniak(key, product)` | *(none — pick one)* |
 
-DeepSeek's API is OpenAI-compatible byte-for-byte (including streaming
-SSE and the `usage` block) so it shares `OpenAiModel` with a different
-base URL. All three HTTP clients support streaming, retry 408 / 409 /
-429 / 5xx with full-jitter exponential backoff (default 3 retries),
-and honor server-sent `retry-after`.
+DeepSeek and Infomaniak are OpenAI-compatible byte-for-byte (streaming SSE
+and the `usage` block included), so they share `OpenAiModel` with a different
+base URL. Every HTTP client supports streaming, retries 408 / 409 / 429 / 5xx
+with full-jitter exponential backoff (3 retries by default), and honors
+server-sent `retry-after`.
 
-Select a backend on the CLI with mutually-exclusive flags on `ask` and
-`serve`:
+`v1_api_url(base, path)` builds every endpoint and inserts the `/v1` segment
+only when the base URL does not already carry one, so both documented
+spellings of a base URL work.
+
+## Configuring an LLM provider
+
+**Credentials live in the settings file, never in the environment.** There is
+no `*_API_KEY` variable and no provider flag on `ontology serve`.
+
+* The file is `<data>/settings.json`, or `./.ontology/settings.json` when no
+  `--data` directory is given. Override with `--settings <path>`.
+* It is created on the first save and holds the raw keys, so it survives
+  restarts. On Unix it is created mode 0600; on Windows it inherits the
+  directory, so keep the data directory out of shared locations.
+* Keys never travel back out: `GET /settings` strips every secret-shaped
+  field and returns a masked `*_api_key_hint` instead.
+* Applying a provider or model takes effect on the next request — `/ask`,
+  `/ask/stream` and `/ingest/analyze` all resolve it per call.
+
+Configure it in the UI (**Settings → Configuration**), or over the API:
 
 ```bash
-ontology --data $DATA ask --anthropic               "Who wrote about RAG?"
-ontology --data $DATA ask --openai --model gpt-4o   "Who wrote about RAG?"
-ontology --data $DATA ask --deepseek                "Who wrote about RAG?"
+curl -s -XPATCH localhost:5000/settings -H 'content-type: application/json' -d '{
+  "llm": {
+    "active_provider": "infomaniak",
+    "infomaniak_api_key": "…",
+    "infomaniak_product_id": "101112",
+    "infomaniak_model": "mixtral"
+  }
+}'
+```
+
+Supporting endpoints, all of which accept unsaved credentials in the body so
+you can validate before saving:
+
+| Endpoint | Purpose |
+| -------- | ------- |
+| `POST /settings/llm/test` | Probe the provider; echoes the resolved endpoint. |
+| `GET  /settings/llm/models?provider=…` | Model catalogue for the stored config. |
+| `POST /settings/llm/models` | Same, with credentials supplied in the body. |
+| `POST /settings/llm/infomaniak/products` | Resolve the AI Tools `product_id`. |
+
+### Infomaniak AI Tools
+
+Swiss-hosted open-source models behind an OpenAI-compatible API.
+
+1. Create an API token in the Infomaniak manager with the **`ai-tools`**
+   scope.
+2. Paste it into **Settings → Configuration** and click **Détecter** to read
+   the `product_id` from `GET https://api.infomaniak.com/1/ai`.
+3. Click **Charger les modèles** (`GET {base}/models`), pick one, then
+   **Appliquer**.
+
+Requests then go to
+`https://api.infomaniak.com/2/ai/{product_id}/openai/v1/chat/completions`.
+The base URL is derived from the product id; the "base URL" field is an
+advanced override for proxies and staging hosts, and is normally left empty.
+
+The CLI uses whatever the settings file selects; `--model` overrides the
+model for one run:
+
+```bash
+ontology --data $DATA ask                    "Who wrote about RAG?"
+ontology --data $DATA ask --model gpt-4o     "Who wrote about RAG?"
+ontology --settings ./staging/settings.json ask "Who wrote about RAG?"
 ```
 
 ## Prompt caching

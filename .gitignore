@@ -8,3 +8,10 @@ Cargo.lock.bak
 data/
 *.db/
 *.zip
+# Default settings file when no --data directory is given.
+.ontology/
+# TypeScript output must never land next to the sources: Vite resolves
+# .js before .ts and would serve stale artifacts.
+web/src/**/*.js
+!web/src/lib/msBE.js
+web/dist/
