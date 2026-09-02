@@ -1,0 +1,537 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  /* Enveloppe pour la lecture hors ligne : reproduit ce que l'hôte
+     d'artefacts injecte, plus color-scheme pour que le thème sombre du
+     système soit respecté par les contrôles natifs. */
+  :root { color-scheme: light dark; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin: 0; }
+  img { max-width: 100%; }
+  [hidden] { display: none !important; }
+</style>
+<title>Rendre l'ontologie facile</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+</head>
+<body>
+<style>
+  :root {
+    --ground: #f6f9f8;
+    --surface: #ffffff;
+    --surface-2: #eef3f2;
+    --ink: #131f1e;
+    --ink-2: #566866;
+    --ink-3: #7d8f8d;
+    --rule: #dae3e2;
+    --rule-strong: #bcc9c7;
+    --accent: #0f766e;
+    --accent-soft: #d6ece9;
+    --ok: #15803d;
+    --ok-soft: #ddf0e3;
+    --warn: #a55a06;
+    --warn-soft: #fbeddb;
+    --gap: #b3261e;
+    --gap-soft: #fbe4e2;
+    --shadow: 0 1px 2px rgba(19, 31, 30, .06), 0 8px 24px -16px rgba(19, 31, 30, .18);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #0d1413;
+      --surface: #141d1c;
+      --surface-2: #1b2625;
+      --ink: #e7eeed;
+      --ink-2: #9bacaa;
+      --ink-3: #7b8b89;
+      --rule: #263231;
+      --rule-strong: #374644;
+      --accent: #5eead4;
+      --accent-soft: #12312d;
+      --ok: #6ee7a0;
+      --ok-soft: #102a1b;
+      --warn: #f0b464;
+      --warn-soft: #2e2113;
+      --gap: #f2857d;
+      --gap-soft: #2f1614;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 8px 24px -16px rgba(0, 0, 0, .7);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground: #0d1413;
+    --surface: #141d1c;
+    --surface-2: #1b2625;
+    --ink: #e7eeed;
+    --ink-2: #9bacaa;
+    --ink-3: #7b8b89;
+    --rule: #263231;
+    --rule-strong: #374644;
+    --accent: #5eead4;
+    --accent-soft: #12312d;
+    --ok: #6ee7a0;
+    --ok-soft: #102a1b;
+    --warn: #f0b464;
+    --warn-soft: #2e2113;
+    --gap: #f2857d;
+    --gap-soft: #2f1614;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 8px 24px -16px rgba(0, 0, 0, .7);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+    font-size: 15.5px;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 1020px;
+    margin: 0 auto;
+    padding: 40px 28px 96px;
+    display: flex;
+    flex-direction: column;
+    gap: 46px;
+  }
+
+  h1, h2, h3 {
+    font-family: "IBM Plex Sans Condensed", "IBM Plex Sans", sans-serif;
+    text-wrap: balance;
+    margin: 0;
+    letter-spacing: -.01em;
+  }
+
+  h1 { font-size: 40px; font-weight: 700; line-height: 1.08; }
+  h2 { font-size: 25px; font-weight: 600; line-height: 1.2; }
+  h3 { font-size: 18px; font-weight: 600; }
+
+  p { margin: 0; max-width: 68ch; }
+
+  code, .mono { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: .88em; }
+  code { background: var(--surface-2); padding: .1em .34em; border-radius: 3px; }
+
+  a { color: var(--accent); }
+  a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .eyebrow {
+    font-family: "IBM Plex Sans Condensed", sans-serif;
+    text-transform: uppercase;
+    letter-spacing: .13em;
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--ink-3);
+  }
+
+  header { display: flex; flex-direction: column; gap: 14px; }
+  .lede { font-size: 17.5px; color: var(--ink-2); max-width: 66ch; }
+
+  section { display: flex; flex-direction: column; gap: 20px; }
+
+  /* -- règle du jeu -- */
+  .creed {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-left: 3px solid var(--accent);
+    border-radius: 5px;
+    padding: 20px 22px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    box-shadow: var(--shadow);
+  }
+  .creed .test { font-family: "IBM Plex Sans Condensed", sans-serif; font-size: 19px; font-weight: 600; color: var(--accent); max-width: none; }
+
+  /* -- figure -- */
+  figure { margin: 0; display: flex; flex-direction: column; gap: 10px; }
+  .scroll { overflow-x: auto; padding-bottom: 4px; }
+  figure svg { max-width: 100%; height: auto; min-width: 720px; display: block; }
+  figcaption { font-size: 13px; color: var(--ink-2); max-width: 70ch; }
+
+  /* -- propositions classées -- */
+  .ranked { display: flex; flex-direction: column; gap: 14px; counter-reset: prop; }
+
+  .prop {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 5px;
+    padding: 20px 22px 18px;
+    display: grid;
+    grid-template-columns: 44px 1fr;
+    column-gap: 18px;
+    row-gap: 10px;
+    box-shadow: var(--shadow);
+  }
+
+  .prop::before {
+    counter-increment: prop;
+    content: counter(prop, decimal-leading-zero);
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 15px;
+    font-weight: 500;
+    color: var(--ink-3);
+    grid-row: 1 / span 5;
+    padding-top: 3px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .prop .head { grid-column: 2; display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: baseline; justify-content: space-between; }
+  .prop .tags { display: flex; gap: 6px; flex-shrink: 0; }
+  .prop p { grid-column: 2; }
+  .prop .neutral {
+    grid-column: 2;
+    font-size: 13.5px;
+    color: var(--ink-2);
+    border-top: 1px dashed var(--rule-strong);
+    padding-top: 10px;
+    display: flex;
+    gap: 8px;
+  }
+  .prop .neutral b { font-family: "IBM Plex Sans Condensed", sans-serif; text-transform: uppercase; letter-spacing: .07em; font-size: 11px; color: var(--ink-3); flex-shrink: 0; padding-top: 2px; }
+  .prop blockquote {
+    grid-column: 2;
+    margin: 0;
+    font-style: italic;
+    color: var(--ink-2);
+    border-left: 2px solid var(--rule-strong);
+    padding-left: 14px;
+    max-width: 62ch;
+  }
+
+  .chip {
+    display: inline-block;
+    font-family: "IBM Plex Sans Condensed", sans-serif;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+    padding: 2px 7px;
+    border-radius: 3px;
+    white-space: nowrap;
+  }
+  .chip.hi { background: var(--accent-soft); color: var(--accent); }
+  .chip.s { background: var(--ok-soft); color: var(--ok); }
+  .chip.m { background: var(--warn-soft); color: var(--warn); }
+  .chip.l { background: var(--gap-soft); color: var(--gap); }
+
+  /* -- robustesse -- */
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(285px, 1fr)); gap: 16px; }
+  .card { background: var(--surface); border: 1px solid var(--rule); border-radius: 5px; padding: 18px 20px; display: flex; flex-direction: column; gap: 8px; }
+  .card h3 { font-size: 16px; }
+  .card p { font-size: 13.8px; color: var(--ink-2); }
+
+  /* -- garde-fous -- */
+  .avoid { display: flex; flex-direction: column; gap: 12px; }
+  .avoid div { display: grid; grid-template-columns: auto 1fr; gap: 14px; align-items: start; padding: 15px 18px; background: var(--gap-soft); border-radius: 5px; }
+  .avoid span.x { font-family: "IBM Plex Mono", monospace; color: var(--gap); font-weight: 500; }
+  .avoid p { font-size: 14px; color: var(--ink); }
+  .avoid strong { color: var(--gap); }
+
+  .footnote { font-size: 13px; color: var(--ink-3); max-width: 70ch; border-top: 1px solid var(--rule); padding-top: 14px; }
+
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+
+<div class="wrap">
+
+  <header>
+    <span class="eyebrow">Pistes produit · 2 septembre 2026</span>
+    <h1>Faire dire à un expert ce qu'il sait déjà</h1>
+    <p class="lede">
+      Le premier utilisateur visé gère le réapprovisionnement d'une
+      quincaillerie. Il connaît ses seuils, ses remises, ce qui se commande au
+      carton — mais sous forme d'habitudes, pas de modèle. Tout l'enjeu du
+      produit est là : sortir cette connaissance de sa tête sans lui demander
+      de devenir ontologue.
+    </p>
+  </header>
+
+  <div class="creed">
+    <p class="test">Chaque proposition ci-dessous doit passer un test : « serait-elle encore juste pour un cabinet d'avocats ou un organigramme RH ? »</p>
+    <p>
+      Si la réponse est non, c'est un raccourci métier déguisé en
+      fonctionnalité. Le produit vise plusieurs domaines : la quincaillerie
+      sert à éprouver les mécanismes, jamais à les définir. Chaque piste
+      indique donc explicitement ce qui la garde générique.
+    </p>
+  </div>
+
+  <section>
+    <span class="eyebrow">Le vrai obstacle</span>
+    <h2>Une page blanche demande à l'utilisateur d'être architecte</h2>
+    <figure>
+      <div class="scroll">
+        <svg viewBox="0 0 860 340" role="img" aria-label="À gauche, le flux actuel : une zone de texte vide oblige l'utilisateur à inventer les types avant de décrire son métier, en un seul essai. À droite, l'entretien guidé : le système pose une question, l'utilisateur répond dans ses mots, le schéma s'enrichit, et la boucle recommence en s'appuyant sur ce qui existe déjà.">
+          <defs>
+            <marker id="b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 1 L 9 5 L 0 9 z" fill="currentColor"></path>
+            </marker>
+            <marker id="bt" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 1 L 9 5 L 0 9 z" fill="var(--accent)"></path>
+            </marker>
+          </defs>
+          <g font-family="IBM Plex Sans, sans-serif" font-size="12.5" fill="currentColor">
+
+            <!-- colonne gauche : aujourd'hui -->
+            <text x="0" y="14" font-size="11" letter-spacing="1.4" fill="var(--ink-3)">AUJOURD'HUI</text>
+            <g stroke="currentColor" stroke-opacity=".35" fill="var(--surface)">
+              <rect x="0" y="28" width="330" height="46" rx="3"></rect>
+              <rect x="0" y="112" width="330" height="46" rx="3"></rect>
+              <rect x="0" y="196" width="330" height="46" rx="3"></rect>
+              <rect x="0" y="280" width="330" height="46" rx="3"></rect>
+            </g>
+            <text x="14" y="56">Zone de texte vide</text>
+            <text x="14" y="140">L'utilisateur invente les types</text>
+            <text x="14" y="224">Le LLM propose tout le schéma</text>
+            <text x="14" y="308">Il valide, ou il abandonne</text>
+            <g stroke="currentColor" stroke-opacity=".5" marker-end="url(#b)">
+              <line x1="165" y1="74" x2="165" y2="106"></line>
+              <line x1="165" y1="158" x2="165" y2="190"></line>
+              <line x1="165" y1="242" x2="165" y2="274"></line>
+            </g>
+            <text x="175" y="96" font-size="10.5" fill="var(--gap)">effort de modélisation</text>
+            <text x="175" y="264" font-size="10.5" fill="var(--gap)">un seul essai</text>
+
+            <!-- colonne droite : entretien -->
+            <text x="470" y="14" font-size="11" letter-spacing="1.4" fill="var(--accent)">ENTRETIEN GUIDÉ</text>
+            <g stroke="var(--accent)" stroke-opacity=".55" fill="var(--accent-soft)">
+              <rect x="470" y="28" width="330" height="46" rx="3"></rect>
+              <rect x="470" y="112" width="330" height="46" rx="3"></rect>
+              <rect x="470" y="196" width="330" height="46" rx="3"></rect>
+              <rect x="470" y="280" width="330" height="46" rx="3"></rect>
+            </g>
+            <text x="484" y="50">Le système pose une question</text>
+            <text x="484" y="66" font-size="11" fill="var(--ink-2)">« que suivez-vous pour un article ? »</text>
+            <text x="484" y="140">Il répond dans ses mots</text>
+            <text x="484" y="224">Le schéma s'enrichit d'un cran</text>
+            <text x="484" y="304">Il voit le graphe grandir</text>
+            <text x="484" y="320" font-size="11" fill="var(--ink-2)">et corrige tout de suite</text>
+            <g stroke="var(--accent)" stroke-opacity=".7" marker-end="url(#bt)">
+              <line x1="635" y1="74" x2="635" y2="106"></line>
+              <line x1="635" y1="158" x2="635" y2="190"></line>
+              <line x1="635" y1="242" x2="635" y2="274"></line>
+            </g>
+            <!-- la boucle : ce qui change vraiment -->
+            <path d="M 800 303 L 840 303 L 840 51 L 800 51" stroke="var(--accent)" fill="none" marker-end="url(#bt)"></path>
+            <text x="700" y="190" font-size="10.5" fill="var(--accent)" text-anchor="middle">la question suivante</text>
+            <text x="700" y="204" font-size="10.5" fill="var(--accent)" text-anchor="middle">dépend du graphe obtenu</text>
+
+            <!-- séparateur -->
+            <line x1="400" y1="28" x2="400" y2="326" stroke="currentColor" stroke-opacity=".18" stroke-dasharray="3 4"></line>
+          </g>
+        </svg>
+      </div>
+      <figcaption>
+        La différence n'est pas cosmétique : c'est la boucle. À droite, chaque
+        réponse restreint la question suivante, donc l'utilisateur n'a jamais à
+        tenir le modèle entier dans sa tête — il répond juste sur son métier.
+      </figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <span class="eyebrow">Par ordre de levier</span>
+    <h2>Dix pistes, du plus rentable au plus accessoire</h2>
+
+    <div class="ranked">
+
+      <article class="prop">
+        <div class="head"><h3>L'entretien guidé</h3><div class="tags"><span class="chip hi">levier maximal</span><span class="chip m">effort moyen</span></div></div>
+        <p>
+          Remplacer la zone de texte libre par un dialogue : le modèle pose une
+          question à la fois, déduite de ce que le graphe contient déjà, et
+          propose un petit incrément de schéma que l'utilisateur accepte ou
+          reformule. Le graphe se dessine à côté, en direct.
+        </p>
+        <blockquote>« Qu'est-ce que vous suivez pour un article ? » se répond en dix secondes. « Décrivez votre domaine » ne se répond pas.</blockquote>
+        <div class="neutral"><b>reste générique</b><span>Les questions sont dérivées du graphe et du schéma courants, pas d'un gabarit métier. Aucun vocabulaire de quincaillerie n'entre dans le code.</span></div>
+      </article>
+
+      <article class="prop">
+        <div class="head"><h3>Des règles qui s'exécutent, et qui disent pourquoi</h3><div class="tags"><span class="chip hi">levier maximal</span><span class="chip l">effort élevé</span></div></div>
+        <p>
+          L'essentiel de ce que sait cet utilisateur <em>est</em> une règle :
+          une condition, une conséquence. Aujourd'hui l'application sait les
+          stocker et pas les appliquer. Un langage minimal et typé — condition
+          sur les propriétés d'un concept, production d'un fait dérivé ou d'une
+          alerte — plus une route d'évaluation, et surtout une trace lisible
+          « cette alerte vient de telle règle, sur tel concept ».
+        </p>
+        <p>
+          La trace compte autant que le moteur : c'est ce qui transforme une
+          sortie invérifiable en quelque chose qu'un expert peut corriger.
+        </p>
+        <div class="neutral"><b>reste générique</b><span>Le langage ne parle que de types, propriétés et relations. Un seuil de réapprovisionnement et une clause de résiliation s'y écrivent de la même façon.</span></div>
+      </article>
+
+      <article class="prop">
+        <div class="head"><h3>De vrais vecteurs</h3><div class="tags"><span class="chip hi">levier maximal</span><span class="chip s">effort faible</span></div></div>
+        <p>
+          L'embedder actuel est une signature hachée : « vis à bois », « vis
+          bois » et une référence fournisseur ne se ressemblent pas. Tant que
+          c'est le cas, toute recherche exige le mot exact et les réponses
+          plafonnent. Brancher un fournisseur d'embeddings et mettre les
+          vecteurs en cache dans le store est un remplacement de composant, pas
+          une refonte.
+        </p>
+        <div class="neutral"><b>reste générique</b><span>C'est une pièce d'infrastructure, indifférente au domaine — et le fournisseur se configure déjà comme le modèle de génération.</span></div>
+      </article>
+
+      <article class="prop">
+        <div class="head"><h3>L'import tableur avec mappage des colonnes</h3><div class="tags"><span class="chip hi">levier fort</span><span class="chip m">effort moyen</span></div></div>
+        <p>
+          Cet utilisateur vit dans un tableur. Aujourd'hui l'import exige de
+          choisir un type de concept unique, et l'association colonne → propriété
+          n'existe qu'en ligne de commande. Un assistant qui montre les vingt
+          premières lignes, propose un mappage, laisse corriger, puis prévisualise
+          ce qui sera créé, transforme son fichier existant en graphe sans qu'il
+          ressaisisse quoi que ce soit.
+        </p>
+        <div class="neutral"><b>reste générique</b><span>Un mappeur de colonnes ne connaît que des en-têtes et des types du schéma courant.</span></div>
+      </article>
+
+      <article class="prop">
+        <div class="head"><h3>Fusionner les doublons au lieu de les empiler</h3><div class="tags"><span class="chip hi">levier fort</span><span class="chip m">effort moyen</span></div></div>
+        <p>
+          Le même article arrive écrit de trois façons selon la source. La
+          détection de conflits existe déjà dans le pipeline d'ingestion ; il
+          manque l'écran qui propose « ces trois-là n'en font qu'un ? » et
+          applique la fusion. Sans ça, le graphe se dégrade à chaque import et
+          l'utilisateur perd confiance en ses propres chiffres.
+        </p>
+        <div class="neutral"><b>reste générique</b><span>La proximité se calcule sur les noms et les propriétés, pas sur une notion de « référence article ».</span></div>
+      </article>
+
+      <article class="prop">
+        <div class="head"><h3>Voir ce qui va changer, et pouvoir revenir</h3><div class="tags"><span class="chip hi">levier fort</span><span class="chip s">effort faible</span></div></div>
+        <p>
+          Un utilisateur non technique ose cliquer quand il sait ce qui va se
+          passer et qu'il peut annuler. Chaque application écrit déjà dans un
+          journal : exposer « voici les 34 concepts et 12 relations qui vont
+          être créés », puis un retour arrière depuis ce journal, coûte peu et
+          change complètement le rapport au produit.
+        </p>
+        <div class="neutral"><b>reste générique</b><span>Le différentiel et le retour arrière opèrent sur des entrées de journal, sans rien savoir du contenu.</span></div>
+      </article>
+
+      <article class="prop">
+        <div class="head"><h3>Partir d'un modèle, pas d'une page blanche</h3><div class="tags"><span class="chip hi">levier moyen</span><span class="chip s">effort faible</span></div></div>
+        <p>
+          La mécanique existe déjà : un dossier d'exemple et une option
+          d'amorçage au démarrage. Il suffit de l'exposer dans l'interface sous
+          forme de plusieurs points de départ — stock et approvisionnement,
+          contrats, organisation — que l'utilisateur adapte au lieu de créer
+          ex nihilo. Adapter est bien plus facile que concevoir.
+        </p>
+        <div class="neutral"><b>reste générique</b><span>Les modèles sont des données, pas du code, et il en faut plusieurs dès le premier jour pour qu'aucun domaine ne soit privilégié.</span></div>
+      </article>
+
+      <article class="prop">
+        <div class="head"><h3>Son vocabulaire, pas celui du système</h3><div class="tags"><span class="chip hi">levier moyen</span><span class="chip s">effort faible</span></div></div>
+        <p>
+          « Type de concept », « cardinalité », « relation typée » : l'interface
+          parle le langage du modèle de données. Un champ d'alias et de libellé
+          d'affichage sur chaque type permet à l'utilisateur de retrouver ses
+          propres mots dans les écrans — et rend au passage la recherche plus
+          tolérante, puisque les alias deviennent des synonymes exploitables.
+        </p>
+        <div class="neutral"><b>reste générique</b><span>Un alias est un champ de texte sur un type ; chaque domaine y met ses propres termes.</span></div>
+      </article>
+
+      <article class="prop">
+        <div class="head"><h3>Ne rien perdre entre deux sessions</h3><div class="tags"><span class="chip hi">levier moyen</span><span class="chip s">effort faible</span></div></div>
+        <p>
+          Les fichiers importés, les requêtes sauvegardées, l'historique et les
+          retours vivent en mémoire et disparaissent au redémarrage. Pour
+          l'utilisateur, ce n'est pas une limite technique : c'est une
+          application qui oublie son travail.
+        </p>
+        <div class="neutral"><b>reste générique</b><span>Le mécanisme de persistance des réglages sert déjà de modèle ; il suffit de l'étendre.</span></div>
+      </article>
+
+      <article class="prop">
+        <div class="head"><h3>Des réponses qui montrent leur travail</h3><div class="tags"><span class="chip hi">levier utile</span><span class="chip s">effort faible</span></div></div>
+        <p>
+          Les citations existent déjà dans la réponse. Les rendre cliquables et
+          afficher le sous-graphe qui a servi d'appui, à côté du texte, permet à
+          l'expert de faire ce qu'il fait de mieux : repérer en un coup d'œil
+          que le raisonnement s'appuie sur la mauvaise donnée.
+        </p>
+        <div class="neutral"><b>reste générique</b><span>Le sous-graphe d'appui est déjà renvoyé par l'API pour toute question, quel que soit le domaine.</span></div>
+      </article>
+
+    </div>
+  </section>
+
+  <section>
+    <span class="eyebrow">Solidité</span>
+    <h2>Ce qui doit tenir avant d'ouvrir à quelqu'un d'autre</h2>
+    <div class="grid2">
+      <div class="card">
+        <h3>Cloisonner par utilisateur</h3>
+        <p>L'authentification identifie déjà les comptes, mais tout le monde partage un unique graphe. Correct en mono-utilisateur, faux dès le deuxième — et coûteux à rattraper après coup, parce que ça touche le stockage.</p>
+      </div>
+      <div class="card">
+        <h3>Sauvegarder et restaurer</h3>
+        <p>Le journal et les instantanés existent ; il manque le bouton. Un export complet et une restauration vérifiée sont le filet sans lequel personne ne confie ses données réelles.</p>
+      </div>
+      <div class="card">
+        <h3>Rendre la CI verte</h3>
+        <p>Elle échoue sur le formatage et sur les avertissements de <code>clippy</code>, indépendamment des derniers travaux. Une CI rouge en permanence cesse d'être un signal : la prochaine vraie régression passera inaperçue.</p>
+      </div>
+      <div class="card">
+        <h3>Tester le frontend</h3>
+        <p>Aucun test sur la partie où l'utilisateur passe tout son temps. Quelques tests sur les chemins critiques — ingestion, application des propositions, réglages — suffiraient à couvrir l'essentiel.</p>
+      </div>
+      <div class="card">
+        <h3>Encadrer les gros imports</h3>
+        <p>Un catalogue de plusieurs milliers de lignes passe aujourd'hui par une requête synchrone. Une file d'attente avec progression et reprise évite le blocage et le doute.</p>
+      </div>
+      <div class="card">
+        <h3>Décider du sort des secrets</h3>
+        <p>Les clés sont en clair dans un fichier lisible par le serveur — acceptable en développement, à trancher avant une mise en ligne : coffre externe, chiffrement au repos, ou clés par utilisateur.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <span class="eyebrow">Garde-fous</span>
+    <h2>Ce que je ne recommande pas</h2>
+    <div class="avoid">
+      <div>
+        <span class="x">non</span>
+        <p><strong>Coder la logique de réapprovisionnement.</strong> Seuils, remises, quantités par carton : tout cela doit être des données dans le graphe et des règles écrites par l'utilisateur. Dès que ces notions entrent dans le code, le produit devient un logiciel de quincaillerie et le cabinet d'avocats est perdu.</p>
+      </div>
+      <div>
+        <span class="x">non</span>
+        <p><strong>Construire un langage de règles complet d'emblée.</strong> Commencer par ce qui couvre l'essentiel — comparaison de propriétés, existence d'une relation, agrégat simple — et n'étendre que sur une règle réelle qu'on n'arrive pas à écrire. Un langage conçu à l'avance devient une deuxième chose à apprendre.</p>
+      </div>
+      <div>
+        <span class="x">non</span>
+        <p><strong>Ajouter l'OCR côté serveur pour ce cas d'usage.</strong> Le navigateur traite déjà PDF, images et DOCX sans consommer de serveur. L'OCR serveur ne se justifie que pour une ingestion en lot, sans navigateur.</p>
+      </div>
+      <div>
+        <span class="x">non</span>
+        <p><strong>Ajouter des écrans avant de brancher ceux qui existent.</strong> Trois cartes de réglages n'ont aucun effet et deux boutons annoncent « bientôt ». Chaque élément inerte enseigne à l'utilisateur que l'interface n'est pas fiable, et cette leçon-là se retient.</p>
+      </div>
+    </div>
+  </section>
+
+  <p class="footnote">
+    Les pistes sont classées par rapport effet/effort tel qu'estimé après
+    lecture du code existant, en réutilisant au maximum ce qui est déjà
+    construit — détection de conflits, journal d'écritures, amorçage par
+    exemple, persistance des réglages. Aucune ne suppose de refonte du socle
+    Rust.
+  </p>
+
+</div>
+
+</body>
+</html>
