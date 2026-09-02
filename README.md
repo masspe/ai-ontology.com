@@ -252,65 +252,106 @@ Pages:
 
 ### Running the full stack locally
 
-Three services cooperate. Start them in three terminals (or use the
-combined script in step 3 to run the ontology API + web together).
+Three services must all be up for the app to work:
 
-#### 1. Auth server (`http://localhost:4000`)
+| Service | Port | Started by |
+| ------- | ---- | ---------- |
+| Vite dev server (SPA) | 5173 | `npm run dev:web` |
+| Ontology API (Rust) | 5000 | `npm run dev:server` |
+| Auth server (Node) | 4000 | `npm run dev:auth` |
 
-Issues JWTs consumed by the SPA. Required for login / signup / OAuth.
+**The normal way — one command, all three:**
 
-```powershell
-cd auth-server
-npm install
-Copy-Item .env.example .env       # then edit: JWT_SECRET, OAUTH_STATE_SECRET, provider keys
+```bash
+cd web
+npm install                       # first time only
 npm run dev
 ```
 
-See [auth-server/README.md](./auth-server/README.md) for OAuth provider
-setup (Google, Microsoft).
+That runs the three scripts above in parallel through `concurrently`, tagged
+`server` / `auth` / `web` in the output. Open <http://localhost:5173>.
 
-#### 2. Ontology API (`http://127.0.0.1:5000`)
-
-The Rust HTTP server. It takes no provider flags and reads no API-key
-environment variable: the LLM is picked in the UI under **Settings →
-Configuration**, saved to `<data>/settings.json`, and applied to the running
-server without a restart.
-
-```powershell
-cargo build --release
-.\target\release\ontology.exe --data .\data serve --bind 127.0.0.1:5000
-```
-
-POSIX equivalent:
+First-time setup for the auth server (it will not boot without its `.env`):
 
 ```bash
+cd auth-server
+npm install
+cp .env.example .env              # then set JWT_SECRET and OAUTH_STATE_SECRET
+```
+
+See [auth-server/README.md](./auth-server/README.md) for Google / Microsoft
+OAuth setup. The ontology API needs no environment variable at all — the LLM
+provider is configured in the UI (**Settings → Configuration**) and stored in
+`data/settings.json`.
+
+#### Things that will cost you an hour if you do not know them
+
+* **`npm run dev:web` alone gives you a broken app.** It starts only Vite, so
+  every request fails with `NetworkError` / `ECONNREFUSED 127.0.0.1:5000` (or
+  `:4000` on login). The page loads; nothing in it works. Use `npm run dev`.
+* **`concurrently` runs with `-k`: if one service dies, it kills the other
+  two.** So a Rust compile error or a crashed auth server takes the whole
+  stack down, and the error you see may be on a service you never touched.
+  Scroll up to the first failure rather than debugging the last one.
+* **`EADDRINUSE` means an orphan is holding the port.** Usually a backend left
+  running from a previous session or started by hand. Find and kill it:
+
+  ```powershell
+  Get-NetTCPConnection -State Listen | Where-Object LocalPort -in 4000,5000,5173
+  Stop-Process -Id <OwningProcess> -Force
+  ```
+
+  ```bash
+  lsof -ti:4000,5000,5173 | xargs kill -9
+  ```
+
+* **`node --watch` does not recover from a failed boot.** After an
+  `EADDRINUSE`, the auth server prints *"Waiting for file changes before
+  restarting"* and stays down even once the port frees up. Restart
+  `npm run dev`.
+* **The Rust binary locks itself while running.** `cargo test` and
+  `cargo build` fail with `Accès refusé (os error 5)` / `Permission denied` on
+  `target/debug/ontology.exe` while a server is up. Stop it first.
+
+#### Running the services separately
+
+Useful when you want a release build of the backend, or a service in its own
+terminal:
+
+```bash
+# Ontology API — release build
 cargo build --release
 ./target/release/ontology --data ./data serve --bind 127.0.0.1:5000
+
+# Auth server
+npm --prefix auth-server run dev
+
+# Frontend only (backends must already be up)
+npm --prefix web run dev:web
 ```
 
-#### 3. Frontend (`http://localhost:5173`)
+Vite proxies `/settings`, `/ask`, `/ingest`, `/auth`, … to the two backends
+(see [`web/vite.config.ts`](./web/vite.config.ts)), so the SPA needs no URL
+configuration in development. `VITE_API_BASE` and `VITE_AUTH_API_BASE` only
+matter when serving the built bundle from a different host. Overriding the
+proxy targets is possible with `ONTOLOGY_API_URL` and `AUTH_API_URL`.
 
-```powershell
-cd web
-npm install
-$env:VITE_API_BASE = "http://127.0.0.1:5000"
-$env:VITE_AUTH_BASE = "http://localhost:4000"
-npm run dev:web
+#### Seeding the demo graph
+
+The dev scripts do **not** seed anything. To start from the bundled finance
+example, pass `--seed` yourself on a fresh `data/` directory:
+
+```bash
+cargo run -p ontology-cli -- --data ./data serve --bind 127.0.0.1:5000 \
+  --seed ./examples/finance
 ```
 
-Shortcut: `npm run dev` inside `web/` launches the ontology API
-(`cargo run -p ontology-cli -- ... serve`) **and** the Vite dev server in
-parallel via `concurrently`. Use this when you do not need a release build
-of the backend. The auth server still needs to be started separately.
+That loads the finance demo — Companies, People, Contracts, Invoices,
+LineItems and their relations, visible at `GET /stats`. Seeding is skipped
+when the persistent store already contains concepts, so restarts are
+idempotent; delete the `data/` folder to force a re-seed.
 
-The `dev:server` script also passes `--seed ../examples/finance`, so on a
-fresh `data/` directory the API starts with the bundled finance demo
-already loaded (Companies, People, Contracts, Invoices, LineItems and
-their relations — visible at `GET /stats`). Seeding is skipped when the
-persistent store already contains concepts, so restarts are idempotent;
-delete the `data/` folder to force a re-seed.
-
-To seed from another example, pass `--seed` to `ontology serve` directly:
+PowerShell equivalent:
 
 ```powershell
 .\target\release\ontology.exe --data .\data serve `

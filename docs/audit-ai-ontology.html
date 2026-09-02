@@ -1,0 +1,694 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  /* Enveloppe pour la lecture hors ligne : reproduit ce que l'hôte
+     d'artefacts injecte, plus color-scheme pour que le thème sombre du
+     système soit respecté par les contrôles natifs. */
+  :root { color-scheme: light dark; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin: 0; }
+  img { max-width: 100%; }
+  [hidden] { display: none !important; }
+</style>
+<title>Audit ai-ontology</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+</head>
+<body>
+<style>
+  /* ---- Tokens : palette claire complète sur :root ------------------ */
+  :root {
+    --ground: #f6f9f8;
+    --surface: #ffffff;
+    --surface-2: #eef3f2;
+    --ink: #131f1e;
+    --ink-2: #566866;
+    --ink-3: #7d8f8d;
+    --rule: #dae3e2;
+    --rule-strong: #bcc9c7;
+    --accent: #0f766e;
+    --accent-soft: #d6ece9;
+    --ok: #15803d;
+    --ok-soft: #ddf0e3;
+    --warn: #a55a06;
+    --warn-soft: #fbeddb;
+    --gap: #b3261e;
+    --gap-soft: #fbe4e2;
+    --shadow: 0 1px 2px rgba(19, 31, 30, .06), 0 8px 24px -16px rgba(19, 31, 30, .18);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #0d1413;
+      --surface: #141d1c;
+      --surface-2: #1b2625;
+      --ink: #e7eeed;
+      --ink-2: #9bacaa;
+      --ink-3: #7b8b89;
+      --rule: #263231;
+      --rule-strong: #374644;
+      --accent: #5eead4;
+      --accent-soft: #12312d;
+      --ok: #6ee7a0;
+      --ok-soft: #102a1b;
+      --warn: #f0b464;
+      --warn-soft: #2e2113;
+      --gap: #f2857d;
+      --gap-soft: #2f1614;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 8px 24px -16px rgba(0, 0, 0, .7);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground: #0d1413;
+    --surface: #141d1c;
+    --surface-2: #1b2625;
+    --ink: #e7eeed;
+    --ink-2: #9bacaa;
+    --ink-3: #7b8b89;
+    --rule: #263231;
+    --rule-strong: #374644;
+    --accent: #5eead4;
+    --accent-soft: #12312d;
+    --ok: #6ee7a0;
+    --ok-soft: #102a1b;
+    --warn: #f0b464;
+    --warn-soft: #2e2113;
+    --gap: #f2857d;
+    --gap-soft: #2f1614;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 8px 24px -16px rgba(0, 0, 0, .7);
+  }
+
+  /* ---- Base -------------------------------------------------------- */
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+    font-size: 15.5px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 1020px;
+    margin: 0 auto;
+    padding: 40px 28px 96px;
+    display: flex;
+    flex-direction: column;
+    gap: 44px;
+  }
+
+  h1, h2, h3 {
+    font-family: "IBM Plex Sans Condensed", "IBM Plex Sans", sans-serif;
+    text-wrap: balance;
+    margin: 0;
+    letter-spacing: -.01em;
+  }
+
+  h1 { font-size: 40px; font-weight: 700; line-height: 1.08; }
+  h2 { font-size: 25px; font-weight: 600; line-height: 1.2; }
+  h3 { font-size: 17px; font-weight: 600; }
+
+  p { margin: 0; max-width: 68ch; }
+
+  code, .mono {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .88em;
+  }
+
+  code {
+    background: var(--surface-2);
+    padding: .1em .34em;
+    border-radius: 3px;
+  }
+
+  a { color: var(--accent); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+  a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .eyebrow {
+    font-family: "IBM Plex Sans Condensed", sans-serif;
+    text-transform: uppercase;
+    letter-spacing: .13em;
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--ink-3);
+  }
+
+  /* ---- En-tête ------------------------------------------------------ */
+  header { display: flex; flex-direction: column; gap: 14px; }
+
+  .lede { font-size: 17.5px; color: var(--ink-2); max-width: 66ch; }
+
+  .meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 18px;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 12px;
+    color: var(--ink-3);
+    padding-top: 6px;
+    border-top: 1px solid var(--rule);
+  }
+
+  /* ---- Bandeau verdict ---------------------------------------------- */
+  .verdict {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 1px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+    border-radius: 5px;
+    overflow: hidden;
+  }
+
+  .verdict div { background: var(--surface); padding: 16px 18px; display: flex; flex-direction: column; gap: 3px; }
+  .verdict .n {
+    font-family: "IBM Plex Sans Condensed", sans-serif;
+    font-size: 30px;
+    font-weight: 700;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+  }
+  .verdict .k { font-size: 12.5px; color: var(--ink-2); }
+  .verdict .bad .n { color: var(--gap); }
+  .verdict .mid .n { color: var(--warn); }
+
+  section { display: flex; flex-direction: column; gap: 18px; }
+
+  /* ---- Figure ------------------------------------------------------- */
+  figure { margin: 0; display: flex; flex-direction: column; gap: 10px; }
+  .scroll { overflow-x: auto; padding-bottom: 4px; }
+  figure svg { max-width: 100%; height: auto; min-width: 760px; display: block; }
+  figcaption { font-size: 13px; color: var(--ink-2); max-width: 70ch; }
+
+  /* ---- Tableaux ----------------------------------------------------- */
+  table { border-collapse: collapse; width: 100%; font-size: 14.5px; }
+  thead th {
+    text-align: left;
+    font-family: "IBM Plex Sans Condensed", sans-serif;
+    text-transform: uppercase;
+    letter-spacing: .09em;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--ink-3);
+    padding: 0 12px 8px 0;
+    border-bottom: 1px solid var(--rule-strong);
+    white-space: nowrap;
+  }
+  tbody td { padding: 11px 12px 11px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  tbody tr:last-child td { border-bottom: none; }
+  td.layer { font-weight: 500; width: 27%; }
+  td.note { color: var(--ink-2); font-size: 13.5px; }
+
+  /* jauge : chiffre + barre, alignés en colonne */
+  .gauge { display: flex; align-items: center; gap: 9px; width: 122px; }
+  .gauge b {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 13px;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+    width: 38px;
+    text-align: right;
+  }
+  .bar { flex: 1; height: 5px; background: var(--surface-2); border-radius: 3px; overflow: hidden; }
+  .bar i { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+  .bar.w i { background: var(--warn); }
+  .bar.g i { background: var(--gap); }
+
+  /* ---- Puces d'état ------------------------------------------------- */
+  .chip {
+    display: inline-block;
+    font-family: "IBM Plex Sans Condensed", sans-serif;
+    font-size: 11.5px;
+    font-weight: 600;
+    letter-spacing: .05em;
+    text-transform: uppercase;
+    padding: 2px 7px;
+    border-radius: 3px;
+    white-space: nowrap;
+  }
+  .chip.ok { background: var(--ok-soft); color: var(--ok); }
+  .chip.part { background: var(--warn-soft); color: var(--warn); }
+  .chip.none { background: var(--gap-soft); color: var(--gap); }
+  .chip.live { background: var(--accent-soft); color: var(--accent); }
+
+  /* ---- Cartes « faux » ---------------------------------------------- */
+  .hollow { display: flex; flex-direction: column; gap: 1px; background: var(--rule); border: 1px solid var(--rule); border-radius: 5px; overflow: hidden; }
+  .hollow article { background: var(--surface); padding: 15px 18px; display: grid; grid-template-columns: 1fr auto; gap: 4px 14px; align-items: baseline; border-left: 3px solid var(--gap); }
+  .hollow article.soft { border-left-color: var(--warn); }
+  .hollow h3 { grid-column: 1; }
+  .hollow .chip { grid-column: 2; grid-row: 1; justify-self: end; }
+  .hollow p { grid-column: 1 / -1; font-size: 13.5px; color: var(--ink-2); max-width: 74ch; }
+  .hollow .where { grid-column: 1 / -1; font-family: "IBM Plex Mono", monospace; font-size: 11.5px; color: var(--ink-3); }
+
+  /* ---- Colonnes persistance ----------------------------------------- */
+  .split { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 18px; }
+  .panel { background: var(--surface); border: 1px solid var(--rule); border-radius: 5px; padding: 18px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 10px; }
+  .panel ul { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; font-size: 14px; }
+  .panel ul li::marker { color: var(--ink-3); }
+
+  /* ---- Reste à construire ------------------------------------------- */
+  .todo { display: flex; flex-direction: column; gap: 10px; }
+  .todo details {
+    background: var(--surface);
+    border: 1px solid var(--rule);
+    border-radius: 5px;
+    padding: 14px 18px;
+  }
+  .todo summary { cursor: pointer; font-family: "IBM Plex Sans Condensed", sans-serif; font-weight: 600; font-size: 16px; display: flex; gap: 10px; align-items: baseline; }
+  .todo summary::marker { color: var(--ink-3); }
+  .todo ul { margin: 12px 0 0; padding-left: 18px; display: flex; flex-direction: column; gap: 8px; font-size: 14px; color: var(--ink-2); }
+  .todo strong { color: var(--ink); font-weight: 500; }
+
+  .footnote { font-size: 13px; color: var(--ink-3); max-width: 70ch; border-top: 1px solid var(--rule); padding-top: 14px; }
+
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+
+<div class="wrap">
+
+  <header>
+    <span class="eyebrow">Audit de l'état réel · 2 septembre 2026</span>
+    <h1>Ce que fait ai-ontology, et ce qu'il fait semblant de faire</h1>
+    <p class="lede">
+      Base de graphe ontologique avec récupération hybride et réponses ancrées
+      dans le graphe. Le socle Rust est solide et testé ; l'interface expose
+      plusieurs fonctionnalités que rien n'implémente derrière. Ce document
+      sépare les deux, couche par couche.
+    </p>
+    <div class="meta">
+      <span>commits ec71462 · b5bb985</span>
+      <span>7 crates Rust + web React + auth Node</span>
+      <span>~40 routes HTTP</span>
+      <span>138 tests backend</span>
+    </div>
+  </header>
+
+  <div class="verdict">
+    <div>
+      <span class="n">~60 %</span>
+      <span class="k">du produit cohérent est fonctionnel</span>
+    </div>
+    <div>
+      <span class="n">138 / 0</span>
+      <span class="k">tests backend / frontend</span>
+    </div>
+    <div class="bad">
+      <span class="n">8</span>
+      <span class="k">éléments d'UI sans implémentation</span>
+    </div>
+    <div class="mid">
+      <span class="n">4 sur 5</span>
+      <span class="k">stores perdus à chaque redémarrage</span>
+    </div>
+  </div>
+
+  <section>
+    <span class="eyebrow">Intention</span>
+    <h2>Ce que le projet est censé faire</h2>
+    <p>
+      Transformer la connaissance d'un métier en un graphe typé, puis répondre à
+      des questions en langage naturel <em>en s'appuyant sur ce graphe</em>
+      plutôt que sur la mémoire du modèle. La chaîne visée : on décrit son
+      domaine ou on dépose ses documents, un LLM propose des types de concepts
+      et de relations, un humain valide, le graphe grandit ; ensuite chaque
+      question déclenche une récupération hybride (lexicale + vectorielle),
+      étend un sous-graphe autour des meilleurs candidats, et n'envoie que ce
+      sous-graphe au modèle — d'où des réponses citées et vérifiables.
+    </p>
+    <p>
+      Trois promesses supplémentaires figurent dans le modèle de données :
+      un <strong>schéma contraignant</strong> (propriétés obligatoires, types
+      disjoints, cardinalités), des <strong>règles</strong> métier, et des
+      <strong>actions</strong>. La première est réelle et appliquée à chaque
+      écriture. Les deux autres n'existent qu'en tant que données.
+    </p>
+  </section>
+
+  <section>
+    <span class="eyebrow">Mécanisme</span>
+    <h2>Le parcours utilisateur, et où il s'arrête</h2>
+    <figure>
+      <div class="scroll">
+        <svg viewBox="0 0 900 660" role="img" aria-label="Trois chemins d'entrée convergent vers le graphe validé, qui alimente la persistance WAL et l'index, puis les réponses citées ; la branche Règles et Actions se termine sans moteur d'évaluation.">
+          <defs>
+            <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 1 L 9 5 L 0 9 z" fill="currentColor"></path>
+            </marker>
+            <marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 1 L 9 5 L 0 9 z" fill="var(--gap)"></path>
+            </marker>
+          </defs>
+
+          <g font-family="IBM Plex Sans, sans-serif" font-size="12.5" fill="currentColor">
+
+            <!-- bandeau 1 : entrées utilisateur -->
+            <text x="0" y="14" font-size="11" letter-spacing="1.4" fill="var(--ink-3)">UTILISATEUR</text>
+            <g stroke="currentColor" stroke-opacity=".35" fill="var(--surface)">
+              <rect x="0" y="26" width="272" height="52" rx="3"></rect>
+              <rect x="300" y="26" width="272" height="52" rx="3"></rect>
+              <rect x="600" y="26" width="272" height="52" rx="3"></rect>
+            </g>
+            <text x="16" y="47">Décrire son domaine</text>
+            <text x="16" y="65" fill="var(--ink-2)" font-size="11.5">en langage naturel</text>
+            <text x="316" y="47">Déposer des documents</text>
+            <text x="316" y="65" fill="var(--ink-2)" font-size="11.5">pdf · docx · images · csv</text>
+            <text x="616" y="47">Saisir à la main</text>
+            <text x="616" y="65" fill="var(--ink-2)" font-size="11.5">concepts et relations</text>
+
+            <!-- flèches vers bandeau 2 -->
+            <g stroke="currentColor" stroke-opacity=".5" marker-end="url(#a)">
+              <line x1="136" y1="78" x2="136" y2="112"></line>
+              <line x1="436" y1="78" x2="436" y2="112"></line>
+              <line x1="736" y1="78" x2="736" y2="112"></line>
+            </g>
+
+            <!-- bandeau 2 : traitement -->
+            <text x="0" y="106" font-size="11" letter-spacing="1.4" fill="var(--ink-3)">TRAITEMENT</text>
+            <g stroke="currentColor" stroke-opacity=".35" fill="var(--surface-2)">
+              <rect x="0" y="118" width="272" height="46" rx="3"></rect>
+              <rect x="300" y="118" width="272" height="46" rx="3"></rect>
+              <rect x="600" y="118" width="272" height="46" rx="3"></rect>
+            </g>
+            <text x="16" y="140" font-family="IBM Plex Mono, monospace" font-size="11.5">POST /ontology/generate</text>
+            <text x="16" y="156" fill="var(--ink-2)" font-size="11">le LLM propose un schéma</text>
+            <text x="316" y="140" fill="var(--ink-2)" font-size="11.5">extraction + OCR dans le navigateur</text>
+            <text x="316" y="156" font-family="IBM Plex Mono, monospace" font-size="11.5">POST /ingest/analyze</text>
+            <text x="616" y="140" font-family="IBM Plex Mono, monospace" font-size="11.5">POST /concepts</text>
+            <text x="616" y="156" font-family="IBM Plex Mono, monospace" font-size="11.5">POST /relations</text>
+
+            <!-- revue humaine, uniquement sur le chemin du milieu -->
+            <line x1="436" y1="164" x2="436" y2="192" stroke="currentColor" stroke-opacity=".5" marker-end="url(#a)"></line>
+            <rect x="300" y="198" width="272" height="46" rx="3" stroke="var(--accent)" stroke-opacity=".8" fill="var(--accent-soft)"></rect>
+            <text x="316" y="220" fill="var(--accent)" font-weight="600">Revue humaine</text>
+            <text x="316" y="236" fill="var(--accent)" font-size="11">accepter / ignorer, item par item</text>
+
+            <!-- convergence vers le graphe -->
+            <g stroke="currentColor" stroke-opacity=".5" fill="none" marker-end="url(#a)">
+              <path d="M 136 164 L 136 288 L 236 288"></path>
+              <line x1="436" y1="244" x2="436" y2="288"></line>
+              <path d="M 736 164 L 736 288 L 640 288"></path>
+            </g>
+            <text x="146" y="282" font-size="10.5" fill="var(--ink-3)">écrit</text>
+            <text x="446" y="270" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="var(--ink-3)">/ingest/apply</text>
+
+            <!-- bandeau 3 : coeur -->
+            <rect x="236" y="296" width="404" height="60" rx="3" stroke="currentColor" fill="var(--surface)"></rect>
+            <text x="252" y="320" font-weight="600">OntologyGraph</text>
+            <text x="252" y="340" fill="var(--ink-2)" font-size="11.5">validation du schéma à chaque écriture</text>
+
+            <!-- persistance + index -->
+            <g stroke="currentColor" stroke-opacity=".5" marker-end="url(#a)">
+              <path d="M 330 356 L 330 396" fill="none"></path>
+              <path d="M 546 356 L 546 396" fill="none"></path>
+            </g>
+            <text x="338" y="380" font-size="10.5" fill="var(--ink-3)">ajoute</text>
+            <text x="554" y="380" font-size="10.5" fill="var(--ink-3)">réindexe</text>
+
+            <g stroke="currentColor" stroke-opacity=".35" fill="var(--surface)">
+              <rect x="200" y="402" width="240" height="52" rx="3"></rect>
+              <rect x="460" y="402" width="240" height="52" rx="3"></rect>
+            </g>
+            <text x="216" y="424">WAL + instantanés</text>
+            <text x="216" y="442" fill="var(--ok)" font-size="11">seul état durable sur disque</text>
+            <text x="476" y="424">HybridIndex</text>
+            <text x="476" y="442" fill="var(--warn)" font-size="11">lexical réel · vecteurs par hachage</text>
+
+            <!-- sorties -->
+            <line x1="580" y1="454" x2="580" y2="492" stroke="currentColor" stroke-opacity=".5" marker-end="url(#a)"></line>
+            <text x="0" y="486" font-size="11" letter-spacing="1.4" fill="var(--ink-3)">USAGE</text>
+            <g stroke="currentColor" stroke-opacity=".35" fill="var(--surface)">
+              <rect x="460" y="498" width="240" height="52" rx="3"></rect>
+              <rect x="720" y="498" width="180" height="52" rx="3"></rect>
+            </g>
+            <text x="476" y="520">Question en langage naturel</text>
+            <text x="476" y="538" fill="var(--ink-2)" font-size="11">réponse citée, en flux</text>
+            <text x="736" y="520">Exploration</text>
+            <text x="736" y="538" fill="var(--ink-2)" font-size="11">vue graphe</text>
+            <path d="M 640 340 L 810 340 L 810 492" stroke="currentColor" stroke-opacity=".5" fill="none" marker-end="url(#a)"></path>
+
+            <!-- fournisseur LLM -->
+            <rect x="0" y="402" width="150" height="90" rx="3" stroke="currentColor" stroke-opacity=".35" fill="var(--surface-2)" stroke-dasharray="3 3"></rect>
+            <text x="14" y="424" font-size="11.5">Fournisseur LLM</text>
+            <text x="14" y="441" fill="var(--ink-2)" font-size="10.5">Infomaniak · OpenAI</text>
+            <text x="14" y="456" fill="var(--ink-2)" font-size="10.5">Anthropic · echo</text>
+            <text x="14" y="478" font-family="IBM Plex Mono, monospace" font-size="10" fill="var(--ink-3)">settings.json</text>
+            <path d="M 75 402 L 75 190 L 300 190" stroke="currentColor" stroke-opacity=".3" fill="none" stroke-dasharray="4 3" marker-end="url(#a)"></path>
+            <path d="M 150 447 L 176 447 L 176 524 L 460 524" stroke="currentColor" stroke-opacity=".3" fill="none" stroke-dasharray="4 3" marker-end="url(#a)"></path>
+
+            <!-- branche morte : règles et actions -->
+            <path d="M 438 356 L 438 588" stroke="var(--gap)" stroke-opacity=".8" fill="none" stroke-dasharray="5 4" marker-end="url(#ag)"></path>
+            <rect x="236" y="594" width="404" height="52" rx="3" stroke="var(--gap)" fill="var(--gap-soft)"></rect>
+            <text x="252" y="616" fill="var(--gap)" font-weight="600">Règles &amp; Actions</text>
+            <text x="252" y="634" fill="var(--gap)" font-size="11.5">créées, typées, générables par LLM — jamais évaluées</text>
+            <text x="448" y="470" fill="var(--gap)" font-size="10.5">aucun moteur</text>
+          </g>
+        </svg>
+      </div>
+      <figcaption>
+        Les trois chemins d'entrée convergent vers un graphe validé, dont le WAL
+        est le seul état durable. La branche rouge est le trou principal : on
+        peut déclarer une règle, aucun code ne l'exécute jamais.
+      </figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <span class="eyebrow">Inventaire</span>
+    <h2>Couche par couche</h2>
+    <p>
+      Le pourcentage est la part de la capacité <em>visée</em> qui fonctionne
+      aujourd'hui — un jugement d'ingénieur après lecture du code, pas une
+      mesure. Il répond à « puis-je m'appuyer dessus ? », pas à « combien de
+      lignes reste-t-il ? ».
+    </p>
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr><th>Couche</th><th>État</th><th>Fonctionnel</th><th>Ce qui manque</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="layer">Graphe typé + schéma</td>
+            <td><span class="chip ok">solide</span></td>
+            <td><div class="gauge"><b>90 %</b><span class="bar"><i style="width:90%"></i></span></div></td>
+            <td class="note">Propriétés obligatoires, types disjoints et cardinalités vérifiés à chaque écriture. Traversées bornées en profondeur et en nœuds.</td>
+          </tr>
+          <tr>
+            <td class="layer">Persistance du graphe</td>
+            <td><span class="chip ok">solide</span></td>
+            <td><div class="gauge"><b>85 %</b><span class="bar"><i style="width:85%"></i></span></div></td>
+            <td class="note">WAL append-only, instantanés bincode, compaction, rejeu au démarrage. Pas de sauvegarde ni de restauration depuis l'interface.</td>
+          </tr>
+          <tr>
+            <td class="layer">Ingestion déterministe</td>
+            <td><span class="chip ok">solide</span></td>
+            <td><div class="gauge"><b>80 %</b><span class="bar"><i style="width:80%"></i></span></div></td>
+            <td class="note">JSONL, triples, CSV, XLSX, DOCX texte, détection de charset et de langue, export aller-retour. Aucun PDF ni image côté serveur.</td>
+          </tr>
+          <tr>
+            <td class="layer">Ingestion assistée par LLM</td>
+            <td><span class="chip ok">solide</span></td>
+            <td><div class="gauge"><b>75 %</b><span class="bar"><i style="width:75%"></i></span></div></td>
+            <td class="note">Extraction navigateur, proposition, détection de conflits, revue item par item, application transactionnelle. Pas de déduplication d'entités.</td>
+          </tr>
+          <tr>
+            <td class="layer">Récupération — plomberie</td>
+            <td><span class="chip ok">solide</span></td>
+            <td><div class="gauge"><b>75 %</b><span class="bar"><i style="width:75%"></i></span></div></td>
+            <td class="note">Index inversé TF-IDF, cosinus, fusion min-max, plancher de pertinence, index trigrammes. Les réglages de l'UI ne l'atteignent pas.</td>
+          </tr>
+          <tr>
+            <td class="layer">Récupération — sémantique</td>
+            <td><span class="chip none">factice</span></td>
+            <td><div class="gauge"><b>20 %</b><span class="bar g"><i style="width:20%"></i></span></div></td>
+            <td class="note">L'embedder par défaut est un sac de mots haché sur 256 dimensions, documenté comme « pas aussi bon qu'un vrai modèle ». Deux synonymes ne se ressemblent pas.</td>
+          </tr>
+          <tr>
+            <td class="layer">Réponse citée + streaming</td>
+            <td><span class="chip ok">solide</span></td>
+            <td><div class="gauge"><b>80 %</b><span class="bar"><i style="width:80%"></i></span></div></td>
+            <td class="note">Sous-graphe injecté dans le prompt, citations, SSE, cache de prompt, réessais avec backoff. Pas de mémoire de conversation.</td>
+          </tr>
+          <tr>
+            <td class="layer">Configuration des fournisseurs</td>
+            <td><span class="chip live">neuf</span></td>
+            <td><div class="gauge"><b>95 %</b><span class="bar"><i style="width:95%"></i></span></div></td>
+            <td class="note">Clé, product ID, catalogue de modèles, application à chaud, persistance chiffrée en clair côté serveur, jamais renvoyée au navigateur.</td>
+          </tr>
+          <tr>
+            <td class="layer">Règles &amp; Actions</td>
+            <td><span class="chip none">coquille</span></td>
+            <td><div class="gauge"><b>25 %</b><span class="bar g"><i style="width:25%"></i></span></div></td>
+            <td class="note">Modèle de données, CRUD, génération par LLM. <strong>Aucun moteur d'évaluation ni d'exécution.</strong> <code>when</code> et <code>then</code> sont du texte libre.</td>
+          </tr>
+          <tr>
+            <td class="layer">Interface web</td>
+            <td><span class="chip ok">solide</span></td>
+            <td><div class="gauge"><b>80 %</b><span class="bar"><i style="width:80%"></i></span></div></td>
+            <td class="note">Dix pages, navigation, CRUD complet, vue graphe, assistant d'ingestion, diagnostics. Aucun test automatisé.</td>
+          </tr>
+          <tr>
+            <td class="layer">Écran Réglages</td>
+            <td><span class="chip part">à moitié</span></td>
+            <td><div class="gauge"><b>45 %</b><span class="bar w"><i style="width:45%"></i></span></div></td>
+            <td class="note">La configuration LLM est réelle. Trois cartes sur cinq n'ont aucun effet — détail plus bas.</td>
+          </tr>
+          <tr>
+            <td class="layer">Authentification</td>
+            <td><span class="chip ok">solide</span></td>
+            <td><div class="gauge"><b>80 %</b><span class="bar"><i style="width:80%"></i></span></div></td>
+            <td class="note">Inscription, connexion, OAuth Google et Microsoft, JWT HS256 partagé avec l'API Rust. Utilisateurs dans un fichier JSON, <strong>aucun cloisonnement des données par utilisateur</strong>.</td>
+          </tr>
+          <tr>
+            <td class="layer">Persistance hors graphe</td>
+            <td><span class="chip none">absente</span></td>
+            <td><div class="gauge"><b>0 %</b><span class="bar g"><i style="width:2%"></i></span></div></td>
+            <td class="note">Fichiers, requêtes sauvegardées, historique de statistiques et retours utilisateurs vivent en mémoire et disparaissent à chaque redémarrage.</td>
+          </tr>
+          <tr>
+            <td class="layer">Observabilité</td>
+            <td><span class="chip part">partielle</span></td>
+            <td><div class="gauge"><b>60 %</b><span class="bar w"><i style="width:60%"></i></span></div></td>
+            <td class="note">Jauges Prometheus, identifiant de requête, tampon de logs consultable, panneau de diagnostic. Pas de traçage ni d'alerte.</td>
+          </tr>
+          <tr>
+            <td class="layer">Tests &amp; intégration continue</td>
+            <td><span class="chip part">déséquilibrée</span></td>
+            <td><div class="gauge"><b>55 %</b><span class="bar w"><i style="width:55%"></i></span></div></td>
+            <td class="note">138 tests backend, dont les chemins critiques. Zéro test frontend. La CI est rouge sur <code>rustfmt</code> et <code>clippy</code> depuis avant ces travaux.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <span class="eyebrow">Le point sensible</span>
+    <h2>Affiché, mais rien derrière</h2>
+    <p>
+      Huit éléments présentent une capacité que le code n'a pas. Ils coûtent
+      plus que des fonctionnalités manquantes : un utilisateur règle un
+      paramètre, croit avoir agi, et construit sa confiance sur du vide.
+    </p>
+    <div class="hollow">
+      <article>
+        <h3>Règles</h3><span class="chip none">aucun moteur</span>
+        <p>Page complète de création, modification, suppression, et même génération par LLM. Rien n'évalue jamais une règle. Les champs <code>when</code> / <code>then</code> sont des chaînes libres qu'aucun interpréteur ne lit.</p>
+        <span class="where">crates/graph/src/model.rs · aucune fonction evaluate / fire / infer dans le workspace</span>
+      </article>
+      <article>
+        <h3>Actions</h3><span class="chip none">aucune exécution</span>
+        <p>Sujet, objet, paramètres, effet : le modèle est là, l'interface aussi. Aucune route ne déclenche une action, aucun code ne l'interprète.</p>
+        <span class="where">crates/graph/src/model.rs · routes /actions en CRUD seul</span>
+      </article>
+      <article>
+        <h3>Moteur OCR</h3><span class="chip none">réglages inertes</span>
+        <p>Le sélecteur Tesseract / Google Vision, les langues, le seuil de bascule et le repli automatique ne sont lus par aucun code. L'OCR réel tourne dans le navigateur, en <code>eng+fra</code> codé en dur — donc l'allemand annoncé par le réglage par défaut n'est jamais reconnu. Le badge « indisponible » mesure un binaire serveur que rien n'appellerait.</p>
+        <span class="where">crates/server/src/lib.rs · web/src/lib/extractText.ts:297</span>
+      </article>
+      <article>
+        <h3>Défauts de récupération</h3><span class="chip none">sans effet</span>
+        <p>Top-K, poids lexical et profondeur d'expansion sont enregistrés et persistés, puis jamais appliqués : le serveur prend ces valeurs dans chaque requête, et le frontend ne lit pas les réglages.</p>
+        <span class="where">patch_settings les écrit ; aucun handler ne les relit</span>
+      </article>
+      <article>
+        <h3>Préférences d'interface</h3><span class="chip none">sans effet</span>
+        <p>Thème et disposition du graphe sont sauvegardés côté serveur et jamais relus par le frontend.</p>
+        <span class="where">web/src/api.ts définit le type, personne ne le consomme</span>
+      </article>
+      <article>
+        <h3>Recherche « vectorielle »</h3><span class="chip none">trompeuse</span>
+        <p>Présentée comme sémantique, elle repose sur une signature hachée. « vis » et « boulon » n'ont aucune proximité. C'est le plafond réel de la qualité des réponses.</p>
+        <span class="where">crates/index/src/embed.rs · HashEmbedder, 256 dimensions</span>
+      </article>
+      <article class="soft">
+        <h3>Édition en masse · Validation des définitions</h3><span class="chip part">annoncées</span>
+        <p>Deux boutons de la page Concepts affichent « coming soon » au clic. Au moins l'aveu est explicite.</p>
+        <span class="where">web/src/pages/Concepts.tsx:929 et :940</span>
+      </article>
+      <article class="soft">
+        <h3>Fichiers, requêtes, historique, retours</h3><span class="chip part">volatils</span>
+        <p>Ces quatre listes s'affichent comme des données du produit mais ne survivent pas à un redémarrage : elles n'ont aucun support disque.</p>
+        <span class="where">AppState : seuls le graphe et les réglages ont un chemin de persistance</span>
+      </article>
+    </div>
+  </section>
+
+  <section>
+    <span class="eyebrow">Durabilité</span>
+    <h2>Ce qui survit à un redémarrage</h2>
+    <div class="split">
+      <div class="panel">
+        <h3><span class="chip ok">persistant</span></h3>
+        <ul>
+          <li><strong>Le graphe</strong> — journal append-only + instantanés, rejoué au démarrage, compactable.</li>
+          <li><strong>Les réglages</strong> — <code>&lt;data&gt;/settings.json</code>, clés incluses, mode 0600 sous Unix, tolérant aux fichiers d'anciennes versions.</li>
+          <li><strong>Les comptes</strong> — fichier JSON de l'auth-server.</li>
+        </ul>
+      </div>
+      <div class="panel">
+        <h3><span class="chip none">perdu au redémarrage</span></h3>
+        <ul>
+          <li><strong>La liste des fichiers</strong> ingérés et leurs statistiques.</li>
+          <li><strong>Les requêtes sauvegardées</strong> — la fonctionnalité entière.</li>
+          <li><strong>L'historique de statistiques</strong> qui alimente les courbes du tableau de bord.</li>
+          <li><strong>Les retours utilisateurs</strong> envoyés depuis l'interface, captures comprises.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <span class="eyebrow">Suite</span>
+    <h2>Ce qu'il reste à construire</h2>
+    <div class="todo">
+      <details open>
+        <summary><span class="chip none">bloquant</span> Avant tout usage réel par un métier</summary>
+        <ul>
+          <li><strong>Un moteur de règles.</strong> Sans lui, la moitié du modèle de données est décorative. Un langage minimal et typé — condition sur les propriétés d'un concept, production d'un fait dérivé ou d'une alerte — plus une route d'évaluation et une explication « quelle règle a produit ça » suffisent à rendre la promesse vraie.</li>
+          <li><strong>De vrais vecteurs.</strong> Remplacer l'embedder haché par un fournisseur d'embeddings et mettre les vecteurs en cache dans le store. C'est le plafond de qualité de toutes les réponses.</li>
+          <li><strong>Persister fichiers, requêtes, historique et retours.</strong> Une application qui oublie le travail de la veille n'est pas utilisable, quelle que soit la qualité du reste.</li>
+          <li><strong>Cloisonner les données par utilisateur.</strong> L'authentification identifie, mais tout le monde partage un seul graphe. Acceptable en mono-utilisateur, faux dès le deuxième compte.</li>
+        </ul>
+      </details>
+      <details>
+        <summary><span class="chip part">important</span> Pour que ça tienne dans le temps</summary>
+        <ul>
+          <li><strong>Retirer ou brancher les réglages inertes.</strong> Chaque bouton sans effet est une dette de confiance ; les trois cartes concernées se corrigent en une demi-journée.</li>
+          <li><strong>Rendre la CI verte.</strong> Elle échoue sur <code>rustfmt</code> (une centaine de blocs, vingt fichiers) et sur <code>clippy -D warnings</code> (douze avertissements), tous antérieurs à ces travaux. Une passe mécanique suffit, mais elle doit être son propre commit.</li>
+          <li><strong>Des tests frontend.</strong> Zéro aujourd'hui, sur la partie où l'utilisateur passe tout son temps.</li>
+          <li><strong>Sauvegarde et restauration</strong> depuis l'interface, avec vue du différentiel avant application.</li>
+          <li><strong>Déduplication à l'ingestion.</strong> La détection de conflits existe déjà ; il manque l'écran de fusion.</li>
+        </ul>
+      </details>
+      <details>
+        <summary><span class="chip live">confort</span> Ce qui peut attendre</summary>
+        <ul>
+          <li><strong>OCR côté serveur</strong> — utile seulement pour une ingestion sans navigateur, en lot ou planifiée. Le navigateur couvre déjà l'usage interactif.</li>
+          <li><strong>Mémoire de conversation</strong> dans les questions successives.</li>
+          <li><strong>Traçage et alertes</strong> au-delà des jauges actuelles.</li>
+          <li><strong>Édition en masse et validation des définitions</strong>, les deux boutons annoncés.</li>
+        </ul>
+      </details>
+    </div>
+  </section>
+
+  <p class="footnote">
+    Établi par lecture du code aux commits <span class="mono">ec71462</span> et
+    <span class="mono">b5bb985</span>, en vérifiant pour chaque écran quel
+    appel il déclenche et quel code lit la donnée écrite. Les pourcentages sont
+    des jugements argumentés, pas des mesures ; les constats de mécanisme
+    (moteur absent, réglage non relu, store volatil) sont vérifiables ligne à
+    ligne aux emplacements cités.
+  </p>
+
+</div>
+
+</body>
+</html>
