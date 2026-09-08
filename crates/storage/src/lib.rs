@@ -22,6 +22,7 @@ pub mod file;
 pub mod log;
 pub mod memory;
 pub mod periodic;
+pub mod segment;
 pub mod snapshot;
 pub mod store;
 pub mod testing;

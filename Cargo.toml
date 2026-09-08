@@ -38,6 +38,9 @@ tower = "0.5"
 hyper = "1"
 http = "1"
 calamine = "0.30"
+memmap2 = "0.9"
+crc32c = "0.6"
+proptest = "1"
 
 ontology-graph = { path = "crates/graph" }
 ontology-storage = { path = "crates/storage" }

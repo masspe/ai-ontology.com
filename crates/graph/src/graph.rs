@@ -338,7 +338,12 @@ impl OntologyGraph {
         if concept.id.0 == 0 {
             concept.id = self.ids.next_concept();
         } else {
-            self.ids.observe(concept.id.0);
+            self.ids.observe_concept(concept.id);
+        }
+        // Invariant of the storage format (STORAGE.md D6), checked where the
+        // id is born rather than assumed downstream.
+        if !concept.id.fits_storage() {
+            return Err(GraphError::ConceptIdOutOfRange(concept.id));
         }
         Ok(())
     }
@@ -363,7 +368,7 @@ impl OntologyGraph {
                 ));
             }
         }
-        self.ids.observe(concept.id.0);
+        self.ids.observe_concept(concept.id);
         self.name_index.insert(key, concept.id);
         let id = concept.id;
         let sort_key = (concept.concept_type.clone(), concept.name.clone(), id);
@@ -448,6 +453,12 @@ impl OntologyGraph {
         }
         drop(src);
         drop(tgt);
+        // Endpoints are packed as (source << 32) | target on disk (D6).
+        for end in [rel.source, rel.target] {
+            if !end.fits_storage() {
+                return Err(GraphError::ConceptIdOutOfRange(end));
+            }
+        }
         let rt = self
             .ontology
             .read()
@@ -501,7 +512,7 @@ impl OntologyGraph {
             // inverse. Reassign rather than silently overwrite.
             rel.id = self.ids.next_relation();
         } else {
-            self.ids.observe(rel.id.0);
+            self.ids.observe_relation(rel.id);
         }
         Ok(())
     }
@@ -526,7 +537,7 @@ impl OntologyGraph {
             .read()
             .relation_type(&rel.relation_type)?
             .symmetric;
-        self.ids.observe(rel.id.0);
+        self.ids.observe_relation(rel.id);
 
         let id = rel.id;
         let (s, t) = (rel.source, rel.target);
@@ -1008,7 +1019,7 @@ impl OntologyGraph {
         if rule.id.0 == 0 {
             rule.id = self.ids.next_rule();
         } else {
-            self.ids.observe(rule.id.0);
+            self.ids.observe_rule(rule.id);
         }
         Ok(())
     }
@@ -1019,7 +1030,7 @@ impl OntologyGraph {
         if rule.id.0 == 0 {
             return Err(GraphError::NotPrepared("rule"));
         }
-        self.ids.observe(rule.id.0);
+        self.ids.observe_rule(rule.id);
         let id = rule.id;
         let sort_key = (rule.rule_type.clone(), rule.name.clone(), id);
         if let Some(prev) = self.rules.insert(id, rule) {
@@ -1159,7 +1170,7 @@ impl OntologyGraph {
         if action.id.0 == 0 {
             action.id = self.ids.next_action();
         } else {
-            self.ids.observe(action.id.0);
+            self.ids.observe_action(action.id);
         }
         Ok(())
     }
@@ -1170,7 +1181,7 @@ impl OntologyGraph {
         if action.id.0 == 0 {
             return Err(GraphError::NotPrepared("action"));
         }
-        self.ids.observe(action.id.0);
+        self.ids.observe_action(action.id);
         let id = action.id;
         let sort_key = (action.action_type.clone(), action.name.clone(), id);
         if let Some(prev) = self.actions.insert(id, action) {
