@@ -43,6 +43,29 @@ sans ambiguïté dans le code et les commits.
 - Écriture concurrente multi-processus sur le même store. Un seul processus
   écrivain, verrou de fichier au démarrage.
 
+### Stratégie et cible de dimensionnement
+
+**La mémoire d'abord, le disque quand il faut.** Le mode nominal est P0 :
+le graphe entier, payloads compris, vit en RAM et le disque ne sert qu'à la
+durabilité (§8.0). Les paliers P1 à P5 ne s'activent que si le budget
+mémoire ne couvre plus le graphe, par domaine, sous pression, avec
+hystérésis. Le format décrit ici a pour seule raison d'être de rendre cette
+descente possible **sans changer de version de fichier** le jour où elle
+devient nécessaire : tout ce qu'un palier relâche en mémoire doit déjà avoir
+sa forme disque (R15).
+
+Cible de dimensionnement retenue le 2026-09-08 : **un store = un tenant**,
+et un store doit servir **10⁷ concepts et 5×10⁷ relations sur un nœud de
+16 Go** — en P0 tant que les payloads le permettent, en P1 sinon. C'est le
+jeu de données du banc de la phase 4 de `STORAGE-PLAN.md`. Le plafond dur
+du format est 2³² concepts par store (§10.4).
+
+Deux murs arrivent avant ceux du stockage et sont traités hors de ce
+document : l'index de retrieval (`crates/index`, reconstruit à chaque
+démarrage, recherche vectorielle en O(N)) et les payloads de plusieurs Mo
+(documents entiers dans la description d'un concept). Voir
+`STORAGE-PLAN.md` §8 (chantiers R et G).
+
 ---
 
 ## 2. Hypothèses fondatrices
@@ -50,10 +73,10 @@ sans ambiguïté dans le code et les commits.
 | # | Hypothèse | Conséquence |
 |---|---|---|
 | H11 | Le log est strictement append-only ; un enregistrement scellé n'est jamais réécrit | Les segments scellés sont immuables → `mmap` sûr, index construit une fois, CRC vérifié une fois |
-| H12 | `seq` est alloué par un compteur global unique, monotone, sans trou | L'entrée d'index est **adressée directement** (`base + (seq − base_seq) × 32`), pas recherchée |
+| H12 | `seq` est alloué par un compteur global unique, monotone, sans trou | Ordre total sur tous les flux : le recovery et `next_seq` en dépendent. **Pas** d'adressage direct par `seq` dans un `.idx` : une partition ne reçoit qu'une fraction des `seq` (les autres vont dans d'autres `ns`), son index est donc **positionnel** (l'entrée *i* est le *i*-ème enregistrement de la partition) et une recherche par `seq` est une recherche binaire — cf. §4.3, décision D1 |
 | H13 | Le `ns` (domaine) d'un type de concept est déclaré dans l'ontologie et stable | Le routage d'écriture est statique : aucune résolution d'entité pour choisir la partition |
 | H14 | `relation_type.domain` / `.range` déterminent le `ns` source et cible | Une relation inter-domaine est routable **avant** d'inspecter ses extrémités |
-| H15 | Les `ConceptId` sont attribués séquentiellement | Les zone maps `entity_min`/`entity_max` du MANIFEST sont sélectives. **Faux si passage aux UUID** — cf. §9.4 |
+| H15 | Les `ConceptId` sont attribués séquentiellement, par un compteur **propre aux concepts** | Les zone maps `entity_min`/`entity_max` du MANIFEST sont sélectives. Le compteur unique partagé entre concepts, relations, règles et actions (état du code avant la phase 2) laisse des trous et avance quatre fois trop vite vers 2³² ; il est scindé par famille en phase 2. **Faux si passage aux UUID** — décision D6, §10.4 : on reste en `u64` |
 | H16 | Le payload domine le volume, l'entité domine le nombre | Séparer index et données fait gagner un ordre de grandeur à l'hydratation |
 | H17 | Un seul processus écrit dans le store | Pas de coordination inter-processus ; le `fsync` seul assure la durabilité |
 | H18 | Les segments scellés tiennent dans l'espace d'adressage, pas nécessairement en RAM | `mmap` + page cache OS ; H1 de `PERFORMANCE.md` s'assouplit en « les *index mémoire* tiennent en RAM » |
@@ -205,7 +228,7 @@ L'octet `codec` rend le conteneur agnostique au format de payload : JSON
 aujourd'hui, `bincode` demain, sans casser les fichiers existants (§7.1).
 `flags` réserve la compression par enregistrement.
 
-### 4.3 Entrée d'index — 32 o, taille fixe
+### 4.3 Entrée d'index — 48 o, taille fixe
 
 | Offset | Champ |
 |---|---|
@@ -214,14 +237,37 @@ aujourd'hui, `bincode` demain, sans casser les fichiers existants (§7.1).
 | 16 | `payload_len` u32 |
 | 20 | `kind` u8, `flags` u8 |
 | 22 | `ns_id` u16 |
-| 24 | `entity_id` u64 |
+| 24 | `entity_id` u64 — l'id de l'entité (`ConceptId`, `RelationId`, `RuleId`, `ActionId` selon `kind`) |
+| 32 | `endpoints` u64 — `(source << 32) \| target` pour une relation, 0 sinon |
+| 40 | `rtype_sym` u32 — symbole du type de relation (table gelée du MANIFEST), 0 sinon |
+| 44 | réservé u32 |
 
-`entity_id` s'interprète selon `kind` : `id` pour un `Concept`,
-`(source << 32) | target` pour une `Relation`. C'est ce qui permet de
-reconstruire toute l'adjacence **sans ouvrir un seul `.data`**.
+**Décision D2 (2026-09-08).** L'entrée porte l'id de l'entité **et**, pour
+une relation, ses extrémités et son type. Sans l'id, `DeleteRelation` et
+`UpdateRelation` ne se rejouent pas depuis l'index ; sans le type,
+l'adjacence typée (`out_edges_typed`) ne se reconstruit pas. Or l'objectif
+« hydrater sans ouvrir un `.data` » et les paliers P1-P4 en dépendent.
+Seize octets de plus par enregistrement (16 Mo à 10⁶) évitent un changement
+de version du fichier plus tard. Les symboles `rtype_sym` sont attribués
+une fois et gelés dans le MANIFEST, jamais réutilisés — même règle que les
+`ns_id` (R10).
 
-Sous H12, l'adressage est direct : `entry = 32 + (seq − base_seq) × 32`.
-Pas de recherche binaire, pas de comparaison.
+**Décision D1 (2026-09-08).** L'index est **positionnel et dense** : l'entrée
+*i* décrit le *i*-ème enregistrement de la partition, `entry = 32 + i × 48`.
+Le `seq` de chaque entrée est croissant dans une partition ; le retrouver
+est une recherche binaire, qui ne sert qu'au recovery et aux outils — le
+chemin chaud ne cherche jamais par `seq`, la `Loc` d'un slot pointe
+directement `(part, off, len)`.
+
+### 4.3 bis Flux de destination par `kind` — décision D3
+
+| `RecordKind` | Flux | Pourquoi |
+|---|---|---|
+| `Ontology` | `meta` | Rejoué intégralement, nécessaire au routage |
+| `Concept`, `UpdateConcept`, `DeleteConcept` | `graph/<ns>` avec `ns = ns_of_type(concept_type)` | H13. Pour `DeleteConcept(id)`, le type est résolu en mémoire avant l'append (l'entité existe encore) |
+| `Relation`, `UpdateRelation`, `DeleteRelation` | `graph/<ns_source>` + entrée `.xref` dans `ns_cible` si différent | H14 |
+| `Rule`, `Action`, `DeleteRule`, `DeleteAction` | `meta` | Peu nombreux (H3), transverses aux domaines (`applies_to`, `subject`). Leur validation à l'hydratation tolère un id de concept d'un domaine non chargé |
+| `Clear` | **supprimé** | Jamais écrit ; si `DELETE /graph` revient, c'est une compaction de chaque domaine vers un segment vide |
 
 ### 4.4 Fichiers auxiliaires
 
@@ -242,25 +288,37 @@ Pas de recherche binaire, pas de comparaison.
 ### 4.5 MANIFEST
 
 JSON, petit, réécrit atomiquement (write + rename). Porte les `ns_id` gelés
-(R10) et, par partition, les zone maps : `base_seq`/`last_seq`,
-`entity_min`/`entity_max`, bitmap des `kind`, compteur d'enregistrements.
-Une requête bornée à un domaine élague ses partitions avant d'ouvrir un
-fichier.
+(R10), la table des `rtype_sym` gelés (D2), les quatre compteurs d'ids par
+famille (H15) et, par partition, les zone maps : `base_seq`/`last_seq`,
+`entity_min`/`entity_max`, bitmap des `kind`, compteur d'enregistrements,
+`payload_bytes` et `edges` (nécessaires à l'estimation R14). Une requête
+bornée à un domaine élague ses partitions avant d'ouvrir un fichier.
 
 ---
 
 ## 5. Hydratation
 
 ```
-meta  → rejeu intégral (ontologie complète, toujours)
-graph → lecture des .idx uniquement (32 o/enregistrement)
+meta  → rejeu intégral (ontologie, règles, actions — toujours)
+graph → lecture des .idx (48 o/enregistrement) → slots + adjacence
       + .xref (24 o/arête entrante inter-domaine)
-      → aucun .data touché
+      puis, en P0 seulement : lecture séquentielle des .data → payloads
 ```
 
-Sous H16, c'est le gain principal du format. Sur le `graph.log` actuel
-(39 enregistrements, 52 915 o) : **1,2 Ko lus** au lieu de 52 Ko. À 10⁶
-enregistrements de taille comparable : ~32 Mo séquentiels au lieu de ~1,3 Go.
+**Décision D4 (2026-09-08).** En P0 les payloads vivent en heap (§8.0), donc
+l'hydratation P0 lit **aussi** les `.data`, en un seul passage séquentiel
+par partition (`madvise(Sequential)`, CRC vérifié au passage — §7.3). Le
+démarrage « index seul » est une propriété des paliers **P1 et au-delà**,
+où les payloads restent sur disque et se relisent via `Loc`. Conséquence
+honnête : en phases 2 et 3, le format n'accélère pas le démarrage — le
+parsing des payloads domine (§7.1) — il apporte la durabilité, l'isolation
+par domaine et la préparation de P1. Le gain de démarrage en P0 vient du
+codec binaire (phase 4) ; en P1 le problème disparaît.
+
+Ordres de grandeur à 10⁶ enregistrements de ~1,3 Ko : index ~48 Mo
+séquentiels ; payloads ~1,3 Go, parsés en ~30 s en JSON, ~2-3 s en codec
+binaire. À 10⁷ : ~5 min en JSON en P0 — c'est là que P1 ou le codec cessent
+d'être optionnels.
 
 Le chargement est **sélectif** : `hydrate(&NsSet)` n'ouvre que les
 partitions dont le `ns` est demandé. Un voisin vivant dans un domaine non
@@ -431,13 +489,19 @@ La `Loc` du slot (§6.2) reste renseignée en P0 — elle ne coûte que 12 o et
 c'est elle qui rend la descente vers P1+ possible sans reconstruire quoi que
 ce soit — mais elle n'est **pas empruntée** tant qu'on est en P0.
 
-Le comportement sous contrainte est un choix explicite, pas une surprise :
+Le comportement sous contrainte est un choix explicite, pas une surprise.
+**Décision D5 (2026-09-08)** : le budget mémoire est une propriété du
+déploiement, pas du store — le même répertoire peut tourner sur 2 Go ou
+64 Go — il ne vit donc ni dans le MANIFEST ni dans `settings.json` (lu
+*après* l'ouverture du store, modifiable à chaud). Il se donne au démarrage :
 
-```toml
-[memory]
-mode = "adaptive"   # "strict" | "adaptive"
-heap_fraction = 0.6
 ```
+ontology serve --memory-mode adaptive --heap-fraction 0.6
+ONTOLOGY_MEMORY_MODE=strict ONTOLOGY_HEAP_FRACTION=0.5   # équivalent Docker
+```
+
+Les valeurs effectives (budget calculé, mode, palier par domaine) sont
+exposées dans `GET /metrics`.
 
 - `strict` — le store refuse de démarrer si le graphe n'entre pas dans le
   budget (R17), avec le requis et le disponible. À utiliser sur un
@@ -663,7 +727,8 @@ format binaire        55 696 o   (+5,3 %)
   dont MANIFEST           960 o
 ```
 
-Le surcoût est l'index (32 o/enregistrement) et le padding d'alignement. Il
+Le surcoût est l'index (48 o/enregistrement depuis D2, 32 o lors de cette
+mesure) et le padding d'alignement. Il
 s'inverse dès le passage à un codec binaire (§7.1).
 
 ### 10.3 Collision de vocabulaire `domain`
@@ -672,12 +737,41 @@ Dans l'ontologie, `relation_type.domain` / `.range` désignent le **type
 source** et le **type cible**. Le partitionnement métier utilise donc `ns`,
 jamais `domain`. Ne pas réintroduire le mot dans le code de stockage.
 
-### 10.4 Zone maps et UUID
+### 10.4 Zone maps et UUID — décision D6 : `u64` séquentiels
 
 L'élagage par `entity_min`/`entity_max` suppose des ids séquentiels (H15).
-Un passage aux UUID rend ces zone maps inutiles ; il ne resterait que
-l'élagage par `ns` et la recherche binaire dans `.ent`. Décision à prendre
-avant, pas après.
+Un passage aux UUID rendrait ces zone maps inutiles, casserait l'encodage
+`(source << 32) | target` et les lignes CSR du `.adj`. **Tranché le
+2026-09-08 : on reste en `u64` séquentiels.** Un besoin de fusion de stores
+ou de fédération se traite par une propriété métier stable sur le concept,
+pas par l'identifiant interne.
+
+Deux corollaires :
+- un compteur **par famille** (concepts, relations, règles, actions) au lieu
+  du compteur unique actuel — sûr puisque les quatre types d'ids sont
+  distincts, et quatre fois plus de marge sous 2³² ;
+- `ConceptId < 2³²` est une **invariante vérifiée** dans `prepare_relation`
+  et au démarrage, pas une hypothèse. 4,29 milliards de concepts par store
+  est le plafond dur du format.
+
+### 10.7 Gros payloads
+
+H16 suppose des payloads d'environ 1,3 Ko. L'ingest de documents texte met
+aujourd'hui le texte entier du fichier dans la description du concept : un
+corpus de documents de quelques Mo sature la heap en P0 bien avant le
+million d'entités, et l'index lexical indexe ce texte. Ce n'est pas le
+format qui est en cause mais le modèle : découper les documents en fragments
+ou stocker le texte hors du graphe avec une référence. À trancher avant la
+phase 3 (chantier G de `STORAGE-PLAN.md`), car le choix influence le seuil de
+roulement des segments et l'estimation R14.
+
+### 10.8 Un store par tenant
+
+Le `ns` sert la localité, la rétention et les droits, pas la répartition
+horizontale (H20 le borne à quelques dizaines). Le multi-tenant est **un
+store par tenant**. Reste à décider un processus par tenant ou un processus
+multi-store ; dans le second cas, le nombre de fichiers ouverts (§7.5) et le
+plancher (§8.7) se multiplient par le nombre de tenants.
 
 ### 10.5 Déséquilibre entre domaines
 
@@ -709,6 +803,8 @@ mauvais : le bon découpage minimise les arêtes qui traversent.
    R12 est violée.
 6. Les hypothèses H11-H25 tiennent-elles encore ? H15 (ids séquentiels) et
    H5 de `PERFORMANCE.md` (type immutable, cf. R13) sont les plus fragiles.
+   `ConceptId < 2³²` (D6) est une invariante, pas une hypothèse : la
+   vérifier, pas la supposer.
 7. La feature ajoute-t-elle une structure dont la taille croît avec N ? Si
    oui, R15 exige sa forme disque, son chemin dégradé et son palier.
 8. Le plancher (§8.7) augmente-t-il ? Une nouvelle donnée par partition dans
@@ -729,9 +825,9 @@ append_concept(id, payload)                 hydrate(NsSet)
   ├─ ns  = ns_of_type(concept_type)   (H13)   │                 (intégral)
   │                                           │
   ├─ .data ← [hdr 32 o][payload][pad]         ├─ pour chaque ns demandé :
-  ├─ .idx  ← [seq|off|len|kind|ns|ent]        │    .idx  → slots + adjacence
-  │         (32 o, jamais fsyncé — R7)        │    .xref → arêtes entrantes
-  │                                           │    (aucun .data lu — H16)
+  ├─ .idx  ← [seq|off|len|kind|ns|ent|ends|rt] │    .idx  → slots + adjacence
+  │         (48 o, jamais fsyncé — R7)        │    .xref → arêtes entrantes
+  │                                           │    (.data lus en P0 seulement — D4)
   ├─ commit_group : 1 fsync / ns touché       │
   │                 (§7.2)                    └─ CSR construite en 2 passes
   │                                              (§6.3)

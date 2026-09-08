@@ -14,17 +14,26 @@ Convention : `H*` / `R*` renvoient aux hypothèses et règles de
 
 | Phase | Contenu | Dépend de | Taille (j·h, indicative) | Livrable |
 |---|---|---|---|---|
-| 1 | Chemin d'écriture : R8, `fsync`, group commit, recovery tolérante | — | 4-6 | Store actuel durable et correct |
-| 2 | Conteneur binaire mono-flux : `.data`/`.idx`, MANIFEST, CRC, recovery, migration | 1, décisions D1-D4 | 10-14 | `SegmentStore` remplace `FileStore` |
-| 3 | Partitionnement par `ns` : routage, `.xref`, roulement, scellement `mmap`, compaction | 2, D2 | 10-14 | Store conforme à STORAGE.md §4-§7, §9 |
-| 4 | Mesure et codec : générateur de store, benchs, `bincode`/`postcard` | 2 | 4-6 | Chiffres réels, codec binaire activé si gain mesuré |
-| 5 | Mémoire contrainte P1-P5 : budget, `Loc`, `.adj`/`.srt`, paliers, hystérésis | 3, 4, D5 | 15-25 | Mode `adaptive` / `strict` |
-| T | Transverse : curseur de pagination, CI Windows+Linux, métriques, docs | — (curseur avant 5) | 3-5 | — |
+| 1 | Chemin d'écriture : R8, `fsync`, group commit, recovery tolérante | — | 4-6 | **Livré** (§3.6) |
+| 2 | Conteneur binaire mono-flux : `.data`/`.idx` 48 o, MANIFEST, CRC, recovery, migration, compteurs d'ids par famille | 1, D1-D6 | 10-14 | `SegmentStore` remplace `FileStore` |
+| G | Décision gros documents : fragments ou texte hors graphe | — | 1 | Décision consignée dans STORAGE.md §10.7, avant la phase 3 |
+| 3 | Partitionnement par `ns` : routage, `.xref`, roulement, scellement `mmap`, compaction, group commit inter-requêtes | 2, G | 10-14 | Store conforme à STORAGE.md §4-§7, §9 |
+| T1 | Pagination par curseur | — | 2 | API prête pour P3 ; à livrer avant 5a |
+| 4 | Mesure et codec : générateur 10⁷ / 5×10⁷, benchs, `postcard` | 2 | 4-6 | Chiffres réels sur la cible ; codec activé si gain mesuré |
+| 5a | **P1** : budget mémoire, mode `strict`/`adaptive`, slot + `Loc`, payloads relus depuis le disque | 3, 4, T1 | 8-12 | Capacité 10⁷ concepts sur 16 Go |
+| 5b | P2-P5 : `.adj`/`.srt`, paliers, hystérésis | 5a | 8-12 | Uniquement sur mesure ou besoin client |
+| R | Index de retrieval : persistance des vecteurs, index approximatif | indépendant | 8-12 | Retrieval en O(log N), démarrage sans réindexation |
+| T | CI Windows+Linux (**livré**), métriques, docs, position un store par tenant | — | 2-3 | — |
 
-Les phases 1 à 3 s'exécutent **maintenant** (STORAGE.md §10.1 : « écrire le
-format maintenant, garder l'index mémoire trivial »). Les phases 4 et 5 sont
-**conditionnées à une mesure** sur un store de taille réaliste ; la phase 5
-en particulier ne démarre que si un client réel dépasse la machine.
+**Stratégie (validée le 2026-09-08)** : la mémoire d'abord, le disque quand
+il faut. P0 reste le mode nominal ; le format est écrit maintenant pour que
+la descente vers P1+ soit possible sans changer de version de fichier.
+Cible de dimensionnement : 10⁷ concepts et 5×10⁷ relations par store sur un
+nœud de 16 Go (STORAGE.md §1). Les phases 2 et 3 s'exécutent maintenant.
+**P1 (5a) n'est pas optionnel à cette cible** : en JSON et en P0, 10⁷
+concepts représentent ~14 Go de heap et ~5 min de démarrage ; P1 est ce qui
+fait passer de 10⁶ à 10⁸ concepts par nœud. Il suit la phase 4 sans
+attendre un incident client. P2-P5 restent conditionnés à une mesure.
 
 ---
 
@@ -71,9 +80,14 @@ Constatés par lecture du code, chacun avec son emplacement.
 
 ---
 
-## 2. Décisions à prendre avant la phase 2
+## 2. Décisions prises avant la phase 2
 
-Chacune bloque une phase ; la recommandation est en gras.
+**Toutes validées le 2026-09-08 dans le sens de la recommandation** (en
+gras ci-dessous) et reportées dans STORAGE.md : D1 → H12 et §4.3, D2 → §4.3
+(entrée 48 o, `rtype_sym` gelé dans le MANIFEST), D3 → §4.3 bis, D4 → §5,
+D5 → §8.0, D6 → H15 et §10.4 (compteur par famille, `ConceptId < 2³²`
+vérifié). Le texte des six analyses est conservé ci-dessous comme
+justification.
 
 ### D1 — Adressage direct du `.idx` sous un `seq` global
 
@@ -503,10 +517,40 @@ Matrice `ubuntu-latest` × `windows-latest` dès la phase 2 ; `cargo test
 `sync_data` cumulés, durée de la dernière compaction ; par domaine, palier
 courant (phase 5).
 
+### G — Gros documents (décision avant la phase 3)
+
+L'ingest texte met le fichier entier dans la description du concept
+(STORAGE.md §10.7). Options : (a) découper en fragments liés au document
+par une relation `part_of`, chaque fragment restant un payload de l'ordre
+du Ko ; (b) stocker le texte hors du graphe (fichier ou flux `blob` par
+domaine) et ne garder qu'une référence et un extrait. **Recommandation :
+(a)**, qui ne demande aucun nouveau type de fichier et améliore le
+retrieval (les fragments sont l'unité naturelle du RAG). À trancher avant
+la phase 3 : le choix fixe le seuil de roulement et l'estimation R14.
+
+### R — Index de retrieval (indépendant du stockage, en parallèle)
+
+`HybridIndex` est reconstruit à chaque démarrage (`reindex_all`) et la
+recherche vectorielle est un cosinus brute force en O(N). À la cible de
+10⁷ concepts c'est des secondes par requête et des minutes au démarrage,
+avant que l'embedding lui-même ne coûte quand un vrai modèle remplacera
+l'embedder par défaut. Chantier : (1) persister les vecteurs dans un fichier
+dérivé par domaine, reconstructible (R7), invalidé par le hash du texte
+indexé ; (2) index approximatif (HNSW) construit au scellement d'un segment,
+`mmap` ; (3) index lexical incrémental plutôt que reconstruit. Peut avancer
+en parallèle de la phase 2, il ne touche pas au format des `.data`.
+
+### T5 — Un store par tenant
+
+Position à écrire dans le README et à honorer dans le code : le `ns` n'est
+pas une clé de répartition horizontale ; le multi-tenant est un store par
+tenant (STORAGE.md §10.8). Décider processus par tenant ou processus
+multi-store avant la phase 3 (impact : fichiers ouverts, plancher §8.7).
+
 ### T4 — Documentation
 
-- STORAGE.md : amender H12/§4.3 (D1), §4.3 entrée 48 o (D2), §5 (D4), §8.0
-  config (D5), §10.4 (D6), ajouter Windows en §7.6 et §8.1.
+- STORAGE.md : D1-D6 reportés le 2026-09-08 (H12, H15, §1, §4.3, §4.3 bis,
+  §4.5, §5, §8.0, §10.4, §10.7, §10.8). Reste : Windows en §7.6 et §8.1.
 - PERFORMANCE.md : mis à jour le 2026-09-08 pour renvoyer à STORAGE.md (H1
   assouplie, R4↔R9, non-objectif levé, pagination par curseur).
 - README : section « Stockage » remplaçant « WAL + bincode snapshots »
@@ -517,24 +561,26 @@ courant (phase 5).
 ## 9. Ordre d'exécution et jalons
 
 ```
-S1-S2   Phase 1  ─────────────┐
-S2      Décisions D1-D6 ─────┤  (revue de STORAGE.md amendé)
-S3-S5   Phase 2  ─────────────┤── T2 (CI Windows) en parallèle
-S5      T1 curseur            │
+S1-S2   Phase 1 ─ livré ──────┐
+S2      Décisions D1-D6 ─ validées ┤
+S3-S5   Phase 2  ─────────────┤── T2 (CI Windows, livré) ; R en parallèle
+S5      G (gros documents) + T1 curseur
 S6-S8   Phase 3  ─────────────┘
-S9      Phase 4 : générateur + benchs → GO / NO-GO codec, bulk_load
-S10+    Phase 5 : uniquement sur besoin mesuré ; P1 d'abord
+S9      Phase 4 : générateur 10⁷ + benchs → GO / NO-GO codec, bulk_load
+S10-S12 Phase 5a : P1 (budget, strict/adaptive, slot + Loc)
+S13+    Phase 5b : P2-P5 uniquement sur mesure
 ```
 
 Jalons vérifiables :
 
 | Jalon | Preuve |
 |---|---|
-| J1 (fin phase 1) | Test « append échoué → mémoire inchangée » vert ; `sync_data` présent |
+| J1 (fin phase 1) | **Atteint** : test « append échoué → mémoire inchangée » vert sur les 13 endpoints ; `sync_data` présent ; 136 tests, CI 2 OS |
 | J2 (fin phase 2) | `data/graph.log` migré, `serve` démarre dessus, tests HTTP identiques sur les deux stores, CI verte sur 2 OS |
 | J3 (fin phase 3) | Deux domaines réels dans `examples/finance` (ex. `modele` / `source`), hydratation sélective démontrée, 2 `fsync` pour 100 écritures sur 2 domaines |
-| J4 (fin phase 4) | Tableau §7.7 de STORAGE.md rempli de chiffres mesurés à 10⁶ |
-| J5 (P1) | RSS divisée par ≥ 5 sur le store généré, P95 `GET /concepts/{id}` < 2× P0 |
+| J4 (fin phase 4) | Tableau §7.7 de STORAGE.md rempli de chiffres mesurés sur 10⁷ concepts / 5×10⁷ relations |
+| J5 (P1) | Le store cible tient sur un nœud de 16 Go : RSS divisée par ≥ 5 par rapport à P0, P95 `GET /concepts/{id}` < 2× P0 |
+| JR (retrieval) | `reindex_all` supprimé du démarrage ; recherche vectorielle en O(log N) mesurée à 10⁷ |
 
 ---
 
