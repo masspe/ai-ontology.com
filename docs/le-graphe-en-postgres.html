@@ -1,0 +1,820 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  /* Enveloppe pour la lecture hors ligne : reproduit ce que l'hôte
+     d'artefacts injecte, plus color-scheme pour que le thème sombre du
+     système soit respecté par les contrôles natifs. */
+  :root { color-scheme: light dark; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin: 0; }
+  img { max-width: 100%; }
+  [hidden] { display: none !important; }
+</style>
+<title>Le graphe en Postgres</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+</head>
+<body>
+<style>
+  :root {
+    --ground: #f6f9f8;
+    --surface: #ffffff;
+    --surface-2: #eef3f2;
+    --ink: #131f1e;
+    --ink-2: #566866;
+    --ink-3: #7d8f8d;
+    --rule: #dae3e2;
+    --rule-strong: #bcc9c7;
+    --accent: #0f766e;
+    --accent-soft: #d6ece9;
+    --ok: #15803d;
+    --ok-soft: #ddf0e3;
+    --warn: #a55a06;
+    --warn-soft: #fbeddb;
+    --gap: #b3261e;
+    --gap-soft: #fbe4e2;
+    --code-bg: #f0f4f3;
+    --shadow: 0 1px 2px rgba(19, 31, 30, .06), 0 8px 24px -16px rgba(19, 31, 30, .18);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #0d1413;
+      --surface: #141d1c;
+      --surface-2: #1b2625;
+      --ink: #e7eeed;
+      --ink-2: #9bacaa;
+      --ink-3: #7b8b89;
+      --rule: #263231;
+      --rule-strong: #374644;
+      --accent: #5eead4;
+      --accent-soft: #12312d;
+      --ok: #6ee7a0;
+      --ok-soft: #102a1b;
+      --warn: #f0b464;
+      --warn-soft: #2e2113;
+      --gap: #f2857d;
+      --gap-soft: #2f1614;
+      --code-bg: #101817;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 8px 24px -16px rgba(0, 0, 0, .7);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground: #0d1413;
+    --surface: #141d1c;
+    --surface-2: #1b2625;
+    --ink: #e7eeed;
+    --ink-2: #9bacaa;
+    --ink-3: #7b8b89;
+    --rule: #263231;
+    --rule-strong: #374644;
+    --accent: #5eead4;
+    --accent-soft: #12312d;
+    --ok: #6ee7a0;
+    --ok-soft: #102a1b;
+    --warn: #f0b464;
+    --warn-soft: #2e2113;
+    --gap: #f2857d;
+    --gap-soft: #2f1614;
+    --code-bg: #101817;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 8px 24px -16px rgba(0, 0, 0, .7);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+    font-size: 15.5px;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 1060px;
+    margin: 0 auto;
+    padding: 40px 28px 96px;
+    display: flex;
+    flex-direction: column;
+    gap: 46px;
+  }
+
+  h1, h2, h3, h4 {
+    font-family: "IBM Plex Sans Condensed", "IBM Plex Sans", sans-serif;
+    text-wrap: balance;
+    margin: 0;
+    letter-spacing: -.01em;
+  }
+
+  h1 { font-size: 40px; font-weight: 700; line-height: 1.08; }
+  h2 { font-size: 26px; font-weight: 600; line-height: 1.2; }
+  h3 { font-size: 18.5px; font-weight: 600; }
+  h4 { font-size: 15px; font-weight: 600; text-transform: uppercase; letter-spacing: .07em; color: var(--ink-3); }
+
+  p { margin: 0; max-width: 70ch; }
+
+  code {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .87em;
+    background: var(--surface-2);
+    padding: .1em .34em;
+    border-radius: 3px;
+  }
+
+  pre {
+    margin: 0;
+    background: var(--code-bg);
+    border: 1px solid var(--rule);
+    border-radius: 5px;
+    padding: 15px 17px;
+    overflow-x: auto;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 12.8px;
+    line-height: 1.62;
+    tab-size: 2;
+  }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  pre .c { color: var(--ink-3); }
+  pre .k { color: var(--accent); font-weight: 500; }
+
+  a { color: var(--accent); }
+  a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .eyebrow {
+    font-family: "IBM Plex Sans Condensed", sans-serif;
+    text-transform: uppercase;
+    letter-spacing: .13em;
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--ink-3);
+  }
+
+  header { display: flex; flex-direction: column; gap: 14px; }
+  .lede { font-size: 17.5px; color: var(--ink-2); max-width: 68ch; }
+
+  .meta {
+    display: flex; flex-wrap: wrap; gap: 6px 18px;
+    font-family: "IBM Plex Mono", monospace; font-size: 12px;
+    color: var(--ink-3); padding-top: 6px; border-top: 1px solid var(--rule);
+  }
+
+  section { display: flex; flex-direction: column; gap: 20px; }
+  .sub { display: flex; flex-direction: column; gap: 12px; }
+
+  figure { margin: 0; display: flex; flex-direction: column; gap: 10px; }
+  .scroll { overflow-x: auto; padding-bottom: 4px; }
+  figure svg { max-width: 100%; height: auto; min-width: 800px; display: block; }
+  figcaption { font-size: 13px; color: var(--ink-2); max-width: 72ch; }
+
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  thead th {
+    text-align: left;
+    font-family: "IBM Plex Sans Condensed", sans-serif;
+    text-transform: uppercase; letter-spacing: .09em;
+    font-size: 11px; font-weight: 600; color: var(--ink-3);
+    padding: 0 12px 8px 0; border-bottom: 1px solid var(--rule-strong); white-space: nowrap;
+  }
+  tbody td { padding: 10px 12px 10px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody td:first-child { font-family: "IBM Plex Mono", monospace; font-size: 12.4px; white-space: nowrap; }
+  td.txt { color: var(--ink-2); font-family: "IBM Plex Sans", sans-serif !important; font-size: 13.6px; white-space: normal !important; }
+
+  .chip {
+    display: inline-block; font-family: "IBM Plex Sans Condensed", sans-serif;
+    font-size: 11px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase;
+    padding: 2px 7px; border-radius: 3px; white-space: nowrap;
+  }
+  .chip.ok { background: var(--ok-soft); color: var(--ok); }
+  .chip.warn { background: var(--warn-soft); color: var(--warn); }
+  .chip.gap { background: var(--gap-soft); color: var(--gap); }
+  .chip.acc { background: var(--accent-soft); color: var(--accent); }
+
+  /* règles de perf : encart numéroté */
+  .rules { display: flex; flex-direction: column; gap: 14px; counter-reset: r; }
+  .rule {
+    background: var(--surface); border: 1px solid var(--rule); border-radius: 5px;
+    padding: 18px 20px; box-shadow: var(--shadow);
+    display: grid; grid-template-columns: 34px 1fr; column-gap: 16px; row-gap: 10px;
+  }
+  .rule::before {
+    counter-increment: r; content: "R" counter(r);
+    font-family: "IBM Plex Mono", monospace; font-size: 13px; font-weight: 600;
+    color: var(--accent); grid-row: 1 / span 6; padding-top: 3px;
+  }
+  .rule > * { grid-column: 2; }
+  .rule .top { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: baseline; justify-content: space-between; }
+
+  .callout {
+    border-left: 3px solid var(--gap); background: var(--gap-soft);
+    border-radius: 5px; padding: 15px 18px; display: flex; flex-direction: column; gap: 8px;
+  }
+  .callout.good { border-left-color: var(--ok); background: var(--ok-soft); }
+  .callout p { max-width: 74ch; }
+  .callout strong { font-weight: 600; }
+
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px; }
+  .card { background: var(--surface); border: 1px solid var(--rule); border-radius: 5px; padding: 16px 18px; display: flex; flex-direction: column; gap: 7px; }
+  .card p { font-size: 13.6px; color: var(--ink-2); }
+
+  .footnote { font-size: 13px; color: var(--ink-3); max-width: 72ch; border-top: 1px solid var(--rule); padding-top: 14px; }
+
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+
+<div class="wrap">
+
+  <header>
+    <span class="eyebrow">Architecture cible · pour 500 000 concepts et plus</span>
+    <h1>Le graphe, une fois qu'il vit dans Postgres</h1>
+    <p class="lede">
+      Schéma, index, et les règles de performance qui décident si une requête
+      dure 8 ms ou 8 secondes. Chaque index cible ici remplace une structure
+      écrite à la main dans <code>ontology-graph</code> ou
+      <code>ontology-index</code> — la migration retire plus de code qu'elle
+      n'en ajoute.
+    </p>
+    <div class="meta">
+      <span>PostgreSQL 16 + pgvector ≥ 0.7 + pg_trgm</span>
+      <span>~500 K concepts · ~2,5 M relations</span>
+      <span>sept structures RAM remplacées</span>
+    </div>
+  </header>
+
+  <section>
+    <span class="eyebrow">Principe directeur</span>
+    <h2>Trois tables au lieu d'une</h2>
+    <p>
+      La tentation est de traduire <code>Concept</code> en une seule table.
+      C'est le premier piège, et il coûte cher précisément dans ton cas : un
+      catalogue vivant. Trois raisons de découper.
+    </p>
+
+    <div class="callout">
+      <p>
+        <strong>Un vecteur de 768 dimensions pèse 3 Ko.</strong> Rangé dans
+        <code>concepts</code>, il fait passer la table de ~150 Mo à ~1,7 Go.
+        Chaque parcours séquentiel, chaque <code>VACUUM</code>, chaque mise à
+        jour de ligne traîne ce poids — alors que 95 % des requêtes ne lisent
+        jamais le vecteur.
+      </p>
+      <p>
+        <strong>Le stock et le prix changent toutes les heures.</strong> S'ils
+        vivent dans <code>concepts.properties</code>, qui est indexé en GIN,
+        chaque changement de stock réécrit la ligne <em>et</em> remue l'index
+        GIN <em>et</em> invalide l'entrée HNSW du vecteur. Pour 500 K articles
+        mis à jour quotidiennement, c'est le poste de coût numéro un.
+      </p>
+    </div>
+
+    <p>
+      D'où la séparation : <code>concepts</code> reste étroit et stable,
+      <code>concept_embeddings</code> porte le poids, <code>concept_metrics</code>
+      absorbe les écritures fréquentes. Bénéfice supplémentaire non négligeable :
+      tu peux ré-embarquer tout le catalogue avec un nouveau modèle dans une
+      seconde ligne par concept, puis basculer, sans interruption.
+    </p>
+  </section>
+
+  <section>
+    <span class="eyebrow">Schéma</span>
+    <h2>Les tables</h2>
+
+    <div class="sub">
+      <h3>Le schéma d'ontologie — petit, chaud, gardé en RAM</h3>
+      <p>
+        Ces trois tables font quelques kilo-octets et sont lues à
+        <em>chaque</em> écriture pour la validation. Elles restent en cache
+        applicatif, invalidé au changement de schéma. C'est la seule chose qui
+        doit rester en mémoire.
+      </p>
+      <pre><code><span class="c">-- Types de concepts, avec sous-typage et contraintes.</span>
+<span class="k">CREATE TABLE</span> concept_types (
+  name                text <span class="k">PRIMARY KEY</span>,
+  parent              text <span class="k">REFERENCES</span> concept_types(name),
+  description         text <span class="k">NOT NULL DEFAULT</span> '',
+  allowed_properties  text[],           <span class="c">-- NULL = monde ouvert</span>
+  required_properties text[] <span class="k">NOT NULL DEFAULT</span> '{}',
+  disjoint_with       text[] <span class="k">NOT NULL DEFAULT</span> '{}'
+);
+
+<span class="c">-- Clôture transitive du sous-typage, matérialisée.</span>
+<span class="c">-- Le nombre de types est petit (dizaines) : la recalculer à chaque</span>
+<span class="c">-- changement de schéma coûte moins qu'une CTE récursive par requête.</span>
+<span class="k">CREATE TABLE</span> concept_type_closure (
+  type      text <span class="k">NOT NULL REFERENCES</span> concept_types(name) <span class="k">ON DELETE CASCADE</span>,
+  ancestor  text <span class="k">NOT NULL REFERENCES</span> concept_types(name) <span class="k">ON DELETE CASCADE</span>,
+  depth     int  <span class="k">NOT NULL</span>,
+  <span class="k">PRIMARY KEY</span> (ancestor, type)     <span class="c">-- ordre voulu : filtre par ancêtre</span>
+);
+
+<span class="k">CREATE TABLE</span> relation_types (
+  name        text <span class="k">PRIMARY KEY</span>,
+  domain      text <span class="k">NOT NULL REFERENCES</span> concept_types(name),
+  range       text <span class="k">NOT NULL REFERENCES</span> concept_types(name),
+  cardinality text <span class="k">NOT NULL DEFAULT</span> 'many_to_many',
+  symmetric   boolean <span class="k">NOT NULL DEFAULT</span> false,
+  transitive  boolean <span class="k">NOT NULL DEFAULT</span> false,
+  functional  boolean <span class="k">NOT NULL DEFAULT</span> false,
+  inverse_of  text <span class="k">REFERENCES</span> relation_types(name),
+  description text <span class="k">NOT NULL DEFAULT</span> ''
+);</code></pre>
+    </div>
+
+    <div class="sub">
+      <h3>Les entités</h3>
+      <pre><code><span class="k">CREATE TABLE</span> concepts (
+  id           bigint <span class="k">GENERATED ALWAYS AS IDENTITY PRIMARY KEY</span>,
+  concept_type text <span class="k">NOT NULL REFERENCES</span> concept_types(name),
+  name         text <span class="k">NOT NULL</span>,
+  description  text <span class="k">NOT NULL DEFAULT</span> '',
+  properties   jsonb <span class="k">NOT NULL DEFAULT</span> '{}',
+
+  <span class="c">-- Index plein texte calculé par la base : jamais désynchronisé,</span>
+  <span class="c">-- contrairement à un index applicatif reconstruit au démarrage.</span>
+  search tsvector <span class="k">GENERATED ALWAYS AS</span> (
+    setweight(to_tsvector('french', name), 'A') ||
+    setweight(to_tsvector('french', description), 'B')
+  ) <span class="k">STORED</span>,
+
+  version    int <span class="k">NOT NULL DEFAULT</span> 1,   <span class="c">-- concurrence optimiste</span>
+  created_at timestamptz <span class="k">NOT NULL DEFAULT</span> now(),
+  updated_at timestamptz <span class="k">NOT NULL DEFAULT</span> now(),
+  updated_by text
+);
+
+<span class="c">-- Les vecteurs vivent à part : gros, froids, remplaçables en bloc.</span>
+<span class="k">CREATE TABLE</span> concept_embeddings (
+  concept_id bigint <span class="k">NOT NULL REFERENCES</span> concepts(id) <span class="k">ON DELETE CASCADE</span>,
+  model      text   <span class="k">NOT NULL</span>,        <span class="c">-- deux modèles peuvent coexister</span>
+  embedding  halfvec(768) <span class="k">NOT NULL</span>,  <span class="c">-- halfvec : 2 octets/dim au lieu de 4</span>
+  computed_at timestamptz <span class="k">NOT NULL DEFAULT</span> now(),
+  <span class="k">PRIMARY KEY</span> (model, concept_id)
+);
+
+<span class="c">-- Attributs volatils : écrits en continu, jamais indexés en GIN.</span>
+<span class="k">CREATE TABLE</span> concept_metrics (
+  concept_id bigint <span class="k">PRIMARY KEY REFERENCES</span> concepts(id) <span class="k">ON DELETE CASCADE</span>,
+  metrics    jsonb <span class="k">NOT NULL DEFAULT</span> '{}',   <span class="c">-- stock, prix, remise…</span>
+  updated_at timestamptz <span class="k">NOT NULL DEFAULT</span> now()
+) <span class="k">WITH</span> (fillfactor = 70);        <span class="c">-- laisse la place aux MAJ HOT</span>
+
+<span class="k">CREATE TABLE</span> relations (
+  id            bigint <span class="k">GENERATED ALWAYS AS IDENTITY PRIMARY KEY</span>,
+  relation_type text <span class="k">NOT NULL REFERENCES</span> relation_types(name),
+  source_id     bigint <span class="k">NOT NULL REFERENCES</span> concepts(id) <span class="k">ON DELETE CASCADE</span>,
+  target_id     bigint <span class="k">NOT NULL REFERENCES</span> concepts(id) <span class="k">ON DELETE CASCADE</span>,
+  weight        real <span class="k">NOT NULL DEFAULT</span> 1.0,
+  properties    jsonb <span class="k">NOT NULL DEFAULT</span> '{}'
+);
+
+<span class="c">-- Le journal d'audit remplace le WAL maison, avec ce qui lui manquait :</span>
+<span class="c">-- un auteur et un horodatage.</span>
+<span class="k">CREATE TABLE</span> audit_log (
+  seq     bigint <span class="k">GENERATED ALWAYS AS IDENTITY PRIMARY KEY</span>,
+  at      timestamptz <span class="k">NOT NULL DEFAULT</span> now(),
+  actor   text <span class="k">NOT NULL</span>,
+  kind    text <span class="k">NOT NULL</span>,
+  payload jsonb <span class="k">NOT NULL</span>
+);</code></pre>
+    </div>
+  </section>
+
+  <section>
+    <span class="eyebrow">Index</span>
+    <h2>Neuf index, et ce que chacun remplace</h2>
+    <p>
+      C'est le cœur de la migration : chaque structure en mémoire du code
+      actuel a un équivalent natif, souvent meilleur, et qui n'a pas besoin
+      d'être reconstruit au démarrage.
+    </p>
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr><th>Index</th><th>Sert à</th><th>Remplace</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>UNIQUE (concept_type, lower(name))</td>
+            <td class="txt">Résolution nom → id, et unicité d'identité</td>
+            <td class="txt"><code>name_index: DashMap&lt;(String,String), ConceptId&gt;</code> — et l'unicité devient garantie par la base au lieu d'être maintenue à la main</td>
+          </tr>
+          <tr>
+            <td>GIN (search)</td>
+            <td class="txt">Recherche plein texte pondérée</td>
+            <td class="txt">L'index inversé TF-IDF de <code>lexical.rs</code></td>
+          </tr>
+          <tr>
+            <td>GIN (name gin_trgm_ops)</td>
+            <td class="txt">Recherche par sous-chaîne et tolérance aux fautes</td>
+            <td class="txt">L'index trigrammes <code>[char; 3]</code> de <code>graph.rs</code></td>
+          </tr>
+          <tr>
+            <td>HNSW (embedding halfvec_cosine_ops)</td>
+            <td class="txt">Plus proches voisins approximatifs</td>
+            <td class="txt">Le balayage cosinus plat de <code>vector.rs</code></td>
+          </tr>
+          <tr>
+            <td>GIN (properties jsonb_path_ops)</td>
+            <td class="txt">Filtres sur propriétés</td>
+            <td class="txt">Rien — aujourd'hui c'est un parcours complet</td>
+          </tr>
+          <tr>
+            <td>(concept_type, id)</td>
+            <td class="txt">Listage et pagination par type</td>
+            <td class="txt"><code>concepts_sorted: RwLock&lt;BTreeSet&gt;</code> + l'index par label</td>
+          </tr>
+          <tr>
+            <td>(source_id, relation_type, target_id) INCLUDE (weight)</td>
+            <td class="txt">Expansion sortante d'un saut</td>
+            <td class="txt"><code>out_edges</code> et <code>out_edges_typed</code></td>
+          </tr>
+          <tr>
+            <td>(target_id, relation_type, source_id) INCLUDE (weight)</td>
+            <td class="txt">Expansion entrante d'un saut</td>
+            <td class="txt"><code>in_edges</code> et <code>in_edges_typed</code></td>
+          </tr>
+          <tr>
+            <td>UNIQUE (source_id, relation_type) partiel</td>
+            <td class="txt">Contrainte <code>functional</code> (≤ 1 sortante)</td>
+            <td class="txt">Une vérification Rust qui peut être contournée par un autre écrivain</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <pre><code><span class="k">CREATE EXTENSION IF NOT EXISTS</span> pg_trgm;
+<span class="k">CREATE EXTENSION IF NOT EXISTS</span> vector;
+
+<span class="k">CREATE UNIQUE INDEX</span> concepts_identity
+  <span class="k">ON</span> concepts (concept_type, lower(name));
+
+<span class="k">CREATE INDEX</span> concepts_search <span class="k">ON</span> concepts <span class="k">USING</span> gin (search);
+<span class="k">CREATE INDEX</span> concepts_name_trgm <span class="k">ON</span> concepts <span class="k">USING</span> gin (name gin_trgm_ops);
+<span class="k">CREATE INDEX</span> concepts_props <span class="k">ON</span> concepts <span class="k">USING</span> gin (properties jsonb_path_ops);
+<span class="k">CREATE INDEX</span> concepts_by_type <span class="k">ON</span> concepts (concept_type, id);
+
+<span class="c">-- Les deux index d'adjacence. Le INCLUDE rend l'expansion d'un saut</span>
+<span class="c">-- « index only » : aucun accès au tas, ce qui est LE facteur décisif.</span>
+<span class="k">CREATE INDEX</span> rel_out <span class="k">ON</span> relations (source_id, relation_type, target_id) <span class="k">INCLUDE</span> (weight);
+<span class="k">CREATE INDEX</span> rel_in  <span class="k">ON</span> relations (target_id, relation_type, source_id) <span class="k">INCLUDE</span> (weight);
+
+<span class="c">-- HNSW : m et ef_construction se paient à la construction, pas à la</span>
+<span class="c">-- lecture. À 500 K vecteurs, monter maintenance_work_mem d'abord.</span>
+<span class="k">SET</span> maintenance_work_mem = '2GB';
+<span class="k">CREATE INDEX</span> emb_hnsw <span class="k">ON</span> concept_embeddings
+  <span class="k">USING</span> hnsw (embedding halfvec_cosine_ops)
+  <span class="k">WITH</span> (m = 16, ef_construction = 64);
+
+<span class="c">-- Une contrainte functional par type concerné, émise quand l'utilisateur</span>
+<span class="c">-- coche la case dans l'éditeur de schéma.</span>
+<span class="k">CREATE UNIQUE INDEX</span> rel_functional_belongs_to
+  <span class="k">ON</span> relations (source_id, relation_type)
+  <span class="k">WHERE</span> relation_type = 'belongsTo';</code></pre>
+  </section>
+
+  <section>
+    <span class="eyebrow">Chemin d'une question</span>
+    <h2>Quel index sert à quelle étape</h2>
+    <figure>
+      <div class="scroll">
+        <svg viewBox="0 0 940 480" role="img" aria-label="Le chemin d'une question : l'embedding de la requête, puis deux sondes d'index indépendantes — GIN plein texte et HNSW vectoriel — chacune renvoyant top_k multiplié par 4 ou 16 candidats, fusionnées par normalisation min-max avec un plancher à 0,4 fois le meilleur score, puis une CTE récursive sur les deux index d'adjacence bornée en profondeur et en nombre de nœuds, avant l'envoi au modèle de langage.">
+          <defs>
+            <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 1 L 9 5 L 0 9 z" fill="currentColor"></path>
+            </marker>
+            <marker id="arA" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 1 L 9 5 L 0 9 z" fill="var(--accent)"></path>
+            </marker>
+          </defs>
+          <g font-family="IBM Plex Sans, sans-serif" font-size="12.5" fill="currentColor">
+
+            <rect x="0" y="24" width="200" height="44" rx="3" stroke="currentColor" stroke-opacity=".35" fill="var(--surface)"></rect>
+            <text x="14" y="51">Question de l'utilisateur</text>
+
+            <line x1="100" y1="68" x2="100" y2="100" stroke="currentColor" stroke-opacity=".5" marker-end="url(#ar)"></line>
+            <rect x="0" y="106" width="200" height="44" rx="3" stroke="currentColor" stroke-opacity=".35" fill="var(--surface-2)"></rect>
+            <text x="14" y="127" font-size="11.5">Embedding de la requête</text>
+            <text x="14" y="143" font-size="10.5" fill="var(--ink-2)">1 appel API, ~20 ms</text>
+
+            <text x="250" y="16" font-size="11" letter-spacing="1.3" fill="var(--accent)">DEUX SONDES INDÉPENDANTES</text>
+            <path d="M 200 128 L 232 128 L 232 56 L 268 56" stroke="var(--accent)" fill="none" marker-end="url(#arA)"></path>
+            <path d="M 232 128 L 232 200 L 268 200" stroke="var(--accent)" fill="none" marker-end="url(#arA)"></path>
+
+            <rect x="274" y="30" width="290" height="52" rx="3" stroke="var(--accent)" stroke-opacity=".6" fill="var(--accent-soft)"></rect>
+            <text x="288" y="51" fill="var(--accent)" font-weight="600" font-size="12">GIN (search)</text>
+            <text x="288" y="70" fill="var(--accent)" font-size="11">ts_rank sur tsvector pondéré A/B</text>
+
+            <rect x="274" y="174" width="290" height="52" rx="3" stroke="var(--accent)" stroke-opacity=".6" fill="var(--accent-soft)"></rect>
+            <text x="288" y="195" fill="var(--accent)" font-weight="600" font-size="12">HNSW (embedding)</text>
+            <text x="288" y="214" fill="var(--accent)" font-size="11">distance cosinus, ef_search réglable</text>
+
+            <text x="576" y="52" font-size="10.5" fill="var(--ink-2)">top_k × 4</text>
+            <text x="576" y="66" font-size="10.5" fill="var(--ink-2)">(× 16 si filtre)</text>
+            <text x="576" y="196" font-size="10.5" fill="var(--ink-2)">top_k × 4</text>
+            <text x="576" y="210" font-size="10.5" fill="var(--ink-2)">(× 16 si filtre)</text>
+
+            <path d="M 564 56 L 664 56 L 664 108" stroke="currentColor" stroke-opacity=".5" fill="none" marker-end="url(#ar)"></path>
+            <path d="M 564 200 L 664 200 L 664 158" stroke="currentColor" stroke-opacity=".5" fill="none" marker-end="url(#ar)"></path>
+
+            <rect x="560" y="114" width="380" height="44" rx="3" stroke="currentColor" fill="var(--surface)"></rect>
+            <text x="574" y="132" font-size="12">Fusion min-max + plancher 0,4 × meilleur score</text>
+            <text x="574" y="148" font-size="10.5" fill="var(--ink-2)">côté application, sur quelques dizaines de lignes — pas en SQL</text>
+
+            <line x1="750" y1="158" x2="750" y2="196" stroke="currentColor" stroke-opacity=".5" marker-end="url(#ar)"></line>
+            <rect x="620" y="202" width="260" height="40" rx="3" stroke="currentColor" stroke-opacity=".35" fill="var(--surface-2)"></rect>
+            <text x="634" y="227" font-size="12">Concepts d'amorçage</text>
+
+            <line x1="750" y1="242" x2="750" y2="280" stroke="currentColor" stroke-opacity=".5" marker-end="url(#ar)"></line>
+            <rect x="480" y="286" width="460" height="60" rx="3" stroke="var(--accent)" stroke-opacity=".6" fill="var(--accent-soft)"></rect>
+            <text x="494" y="308" fill="var(--accent)" font-weight="600" font-size="12">CTE récursive sur rel_out / rel_in</text>
+            <text x="494" y="326" fill="var(--accent)" font-size="11">UNION = protection des cycles · profondeur ≤ max_depth</text>
+            <text x="494" y="340" fill="var(--accent)" font-size="11">balayages index-only grâce au INCLUDE (weight)</text>
+
+            <line x1="710" y1="346" x2="710" y2="384" stroke="currentColor" stroke-opacity=".5" marker-end="url(#ar)"></line>
+            <rect x="560" y="390" width="300" height="44" rx="3" stroke="currentColor" stroke-opacity=".35" fill="var(--surface)"></rect>
+            <text x="574" y="411" font-size="12">Sous-graphe ≤ max_nodes</text>
+            <text x="574" y="427" font-size="10.5" fill="var(--ink-2)">un seul aller-retour : nœuds + arêtes ensemble</text>
+
+            <path d="M 560 412 L 240 412" stroke="currentColor" stroke-opacity=".5" fill="none" marker-end="url(#ar)"></path>
+            <rect x="0" y="390" width="230" height="44" rx="3" stroke="currentColor" stroke-opacity=".35" fill="var(--surface-2)"></rect>
+            <text x="14" y="411" font-size="12">Prompt → modèle</text>
+            <text x="14" y="427" font-size="10.5" fill="var(--ink-2)">réponse citée</text>
+
+            <text x="0" y="300" font-size="11" letter-spacing="1.3" fill="var(--ink-3)">CE QUI DISPARAÎT</text>
+            <rect x="0" y="312" width="440" height="40" rx="3" stroke="var(--ok)" stroke-opacity=".5" fill="var(--ok-soft)"></rect>
+            <text x="14" y="337" font-size="11.5" fill="var(--ok)">reindex_all() au démarrage · les 7 structures RAM · le WAL maison</text>
+          </g>
+        </svg>
+      </div>
+      <figcaption>
+        Le point qui décide de tout : les deux sondes sont
+        <strong>séparées</strong>. Chacune est menée par son index et ne
+        renvoie que quelques dizaines de lignes ; la fusion se fait ensuite sur
+        ce petit ensemble.
+      </figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <span class="eyebrow">Performance</span>
+    <h2>Les règles qui décident de tout</h2>
+
+    <div class="rules">
+
+      <div class="rule">
+        <div class="top"><h3>Jamais un seul <code>ORDER BY</code> fusionné</h3><span class="chip gap">le piège n°1</span></div>
+        <p>
+          La traduction naïve de la fusion actuelle est une seule requête qui
+          trie sur la somme pondérée. Elle est catastrophique : l'expression
+          doit être évaluée pour <em>chaque</em> ligne, donc ni le GIN ni le
+          HNSW ne sont utilisables — parcours complet de 500 000 lignes et
+          500 000 calculs de distance. C'est la différence entre 8 ms et
+          plusieurs secondes.
+        </p>
+        <pre><code><span class="c">-- FAUX : aucun index utilisable</span>
+<span class="k">SELECT</span> id <span class="k">FROM</span> concepts c <span class="k">JOIN</span> concept_embeddings e <span class="k">ON</span> …
+<span class="k">ORDER BY</span> 0.5 * ts_rank(c.search, q) + 0.5 * (1 - (e.embedding &lt;=&gt; $1))
+<span class="k">LIMIT</span> 8;
+
+<span class="c">-- JUSTE : deux top-K menés par index, fusion ensuite</span>
+<span class="k">WITH</span> lex <span class="k">AS</span> (
+  <span class="k">SELECT</span> id, ts_rank(search, websearch_to_tsquery('french', $2)) <span class="k">AS</span> s
+  <span class="k">FROM</span> concepts
+  <span class="k">WHERE</span> search @@ websearch_to_tsquery('french', $2)
+  <span class="k">ORDER BY</span> s <span class="k">DESC LIMIT</span> $3          <span class="c">-- top_k × 4</span>
+), vec <span class="k">AS</span> (
+  <span class="k">SELECT</span> concept_id <span class="k">AS</span> id, 1 - (embedding &lt;=&gt; $1) <span class="k">AS</span> s
+  <span class="k">FROM</span> concept_embeddings
+  <span class="k">WHERE</span> model = $4
+  <span class="k">ORDER BY</span> embedding &lt;=&gt; $1 <span class="k">LIMIT</span> $3
+)
+<span class="k">SELECT</span> id, s, 'lex' <span class="k">AS</span> src <span class="k">FROM</span> lex
+<span class="k">UNION ALL SELECT</span> id, s, 'vec' <span class="k">FROM</span> vec;</code></pre>
+        <p>
+          La normalisation min-max et le plancher de pertinence
+          (<code>0.4 × meilleur score</code>, exactement comme aujourd'hui)
+          restent côté Rust : quelques dizaines de lignes à traiter, autant le
+          faire là où le code existe déjà.
+        </p>
+      </div>
+
+      <div class="rule">
+        <div class="top"><h3>Le filtre par type se bat contre l'index HNSW</h3><span class="chip warn">arbitrage</span></div>
+        <p>
+          Un <code>WHERE concept_type = 'Article'</code> posé après une
+          recherche HNSW dégrade le rappel : l'index parcourt son graphe de
+          voisinage puis on jette des résultats, donc on peut finir avec trois
+          candidats au lieu de trente. Trois parades, dans l'ordre où je les
+          essaierais :
+        </p>
+        <p>
+          <strong>a.</strong> Sur-échantillonner — c'est déjà ce que fait le
+          code (<code>× 16</code> au lieu de <code>× 4</code> dès qu'un filtre
+          est présent). Gratuit, suffisant dans la plupart des cas.<br>
+          <strong>b.</strong> <code>hnsw.iterative_scan</code> (pgvector 0.8) :
+          la base continue de parcourir jusqu'à obtenir assez de lignes après
+          filtrage.<br>
+          <strong>c.</strong> Un index HNSW partiel par type majeur, si un type
+          domine le catalogue.
+        </p>
+      </div>
+
+      <div class="rule">
+        <div class="top"><h3>La traversée bornée devient une CTE récursive</h3><span class="chip acc">équivalence exacte</span></div>
+        <p>
+          <code>TraversalSpec</code> se traduit terme à terme :
+          <code>max_depth</code> par une colonne de profondeur,
+          <code>max_nodes</code> par un <code>LIMIT</code> externe,
+          <code>relation_types</code> et <code>direction</code> par le choix de
+          l'index sondé, <code>subsume_concept_types</code> par une jointure sur
+          la table de clôture. Et le <code>UNION</code> — pas
+          <code>UNION ALL</code> — rejoue exactement le rôle de l'ensemble des
+          nœuds visités du BFS actuel : il élimine les doublons, donc protège
+          des cycles.
+        </p>
+        <pre><code><span class="k">WITH RECURSIVE</span> reachable(id, depth) <span class="k">AS</span> (
+  <span class="k">SELECT</span> unnest($1::bigint[]), 0
+  <span class="k">UNION</span>                                <span class="c">-- dédoublonne = ensemble visité</span>
+  <span class="k">SELECT</span> r.target_id, x.depth + 1
+  <span class="k">FROM</span> reachable x
+  <span class="k">JOIN</span> relations r <span class="k">ON</span> r.source_id = x.id      <span class="c">-- utilise rel_out</span>
+  <span class="k">WHERE</span> x.depth &lt; $2
+    <span class="k">AND</span> (cardinality($3::text[]) = 0 <span class="k">OR</span> r.relation_type = <span class="k">ANY</span>($3))
+)
+<span class="k">SELECT</span> c.* <span class="k">FROM</span> reachable x
+<span class="k">JOIN</span> concepts c <span class="k">ON</span> c.id = x.id
+<span class="k">JOIN</span> concept_type_closure cl <span class="k">ON</span> cl.type = c.concept_type
+<span class="k">WHERE</span> cl.ancestor = <span class="k">ANY</span>($4)
+<span class="k">LIMIT</span> $5;                                <span class="c">-- max_nodes</span></code></pre>
+        <p>
+          Un <code>LIMIT</code> placé <em>dans</em> le terme récursif n'est pas
+          honoré comme on l'imagine : il ne borne pas le total. D'où le
+          plafond à l'extérieur, ce qui rend <code>max_nodes</code> approximatif
+          en cours de parcours mais exact en sortie — même comportement
+          observable qu'aujourd'hui.
+        </p>
+      </div>
+
+      <div class="rule">
+        <div class="top"><h3>Les embeddings se calculent une fois, à l'ingestion</h3><span class="chip gap">bloquant à 500 K</span></div>
+        <p>
+          C'est la raison technique qui condamne l'architecture actuelle bien
+          avant la RAM : <code>reindex_all()</code> recalcule tous les vecteurs
+          au démarrage. Avec un vrai modèle, c'est 500 000 appels d'API à
+          chaque redémarrage. Persistés en base, ils ne sont jamais recalculés
+          — et un changement de modèle devient une seconde ligne par concept,
+          puis une bascule.
+        </p>
+        <p>
+          À l'import massif, grouper les appels (~100 textes par requête) et
+          construire le HNSW <em>après</em> le chargement, pas pendant.
+        </p>
+      </div>
+
+      <div class="rule">
+        <div class="top"><h3>Import massif : <code>COPY</code>, pas <code>INSERT</code></h3><span class="chip ok">minutes vs heures</span></div>
+        <pre><code><span class="k">CREATE UNLOGGED TABLE</span> staging_concepts (<span class="k">LIKE</span> concepts <span class="k">INCLUDING DEFAULTS</span>);
+<span class="k">COPY</span> staging_concepts (concept_type, name, description, properties) <span class="k">FROM STDIN</span>;
+<span class="c">-- validation Rust ici, sur la table de transit</span>
+<span class="k">INSERT INTO</span> concepts (…) <span class="k">SELECT</span> … <span class="k">FROM</span> staging_concepts
+  <span class="k">ON CONFLICT</span> (concept_type, lower(name)) <span class="k">DO UPDATE SET</span> …;</code></pre>
+        <p>
+          <code>UNLOGGED</code> sur la table de transit évite d'écrire deux fois
+          dans le WAL Postgres. Pour un catalogue de 500 000 lignes, l'écart
+          avec des <code>INSERT</code> ligne à ligne est de deux ordres de
+          grandeur.
+        </p>
+      </div>
+
+      <div class="rule">
+        <div class="top"><h3>Un réplica de lecture sert tes deux contraintes d'un coup</h3><span class="chip ok">2 pour 1</span></div>
+        <p>
+          « D'autres gens doivent interroger le graphe » et « je veux de la
+          haute disponibilité » se règlent avec le même mécanisme : une
+          réplication en flux. Le réplica encaisse les requêtes analytiques et
+          les outils décisionnels — ils ne peuvent donc plus ralentir le chemin
+          d'écriture — et il est déjà le serveur de secours en cas de bascule.
+          Ajoute la restauration à un instant précis (PITR) et la sauvegarde
+          gérée est faite.
+        </p>
+      </div>
+
+      <div class="rule">
+        <div class="top"><h3>Le dimensionnement des vecteurs est ton plus gros levier mémoire</h3><span class="chip warn">choix précoce</span></div>
+        <p>
+          Pour 500 000 concepts : <code>vector(1536)</code> en
+          <code>float4</code> pèse 3 Go de données plus l'index ;
+          <code>halfvec(768)</code> tombe à 0,75 Go. Le rappel d'un modèle à
+          768 dimensions est très proche pour de la recherche de catalogue.
+          C'est une décision à prendre <em>avant</em> le premier import massif,
+          parce que la reprendre signifie tout ré-embarquer.
+        </p>
+      </div>
+
+      <div class="rule">
+        <div class="top"><h3>Ne fais pas de N+1 sur le sous-graphe</h3><span class="chip warn">piège classique</span></div>
+        <p>
+          Le code actuel parcourt des <code>DashMap</code> : un accès par nœud
+          coûte des nanosecondes. En base, le même schéma d'accès devient une
+          requête par nœud — 50 allers-retours pour un sous-graphe de 50 nœuds.
+          Il faut ramener nœuds et arêtes en une seule requête, ce qui change la
+          forme du code de traversée, pas seulement son implémentation.
+        </p>
+      </div>
+
+    </div>
+  </section>
+
+  <section>
+    <span class="eyebrow">Frontières</span>
+    <h2>Ce qui ne descend pas dans la base</h2>
+    <div class="grid2">
+      <div class="card">
+        <h3>Les types disjoints</h3>
+        <p>Aucune contrainte SQL n'exprime « une instance de A ne peut pas partager son identité avec une instance de B ». Reste dans le chemin d'écriture Rust.</p>
+      </div>
+      <div class="card">
+        <h3>Les cardinalités</h3>
+        <p><code>functional</code> devient un index unique partiel. Le reste (un-à-plusieurs, plusieurs-à-plusieurs) demanderait des déclencheurs coûteux : garde la validation applicative.</p>
+      </div>
+      <div class="card">
+        <h3>Le cache de schéma</h3>
+        <p>Types de concepts et de relations sont lus à chaque écriture. Quelques kilo-octets, très chauds : ils restent en RAM, invalidés au changement de schéma.</p>
+      </div>
+      <div class="card">
+        <h3>La fusion et le plancher</h3>
+        <p>Normalisation min-max et seuil à 0,4 × le meilleur score : quelques dizaines de lignes. Rien à gagner à le faire en SQL, et c'est plus testable en Rust.</p>
+      </div>
+    </div>
+
+    <div class="callout">
+      <p>
+        <strong>Un écart de comportement à surveiller.</strong> Le classement
+        lexical change. Le code actuel calcule
+        <code>sqrt(tf / longueur) × ln((n − df + 0.5)/(df + 0.5) + 1)</code> ;
+        <code>ts_rank</code> n'utilise pas cette formule. Les résultats
+        resteront pertinents mais leur ordre bougera. Avant de basculer,
+        constitue un jeu de requêtes de référence avec leurs résultats
+        attendus — c'est le seul moyen de distinguer « l'ordre a changé » de
+        « la recherche est cassée ».
+      </p>
+    </div>
+  </section>
+
+  <section>
+    <span class="eyebrow">Multi-locataire</span>
+    <h2>Où mettre la frontière entre clients</h2>
+    <p>
+      Trois options, par coût croissant de mise en œuvre et décroissant de coût
+      d'exploitation.
+    </p>
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr><th>Approche</th><th>Isolation</th><th>Quand</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Une base par client</td>
+            <td class="txt">Totale. Sauvegarde et restauration par client, aucune fuite possible.</td>
+            <td class="txt">Jusqu'à quelques dizaines de clients. Le plus simple à raisonner, et la migration d'un client ne touche pas les autres.</td>
+          </tr>
+          <tr>
+            <td>Un schéma par client</td>
+            <td class="txt">Forte. Un seul serveur, des <code>search_path</code> distincts.</td>
+            <td class="txt">Compromis raisonnable : une instance à exploiter, des sauvegardes encore séparables.</td>
+          </tr>
+          <tr>
+            <td>Colonne tenant_id + RLS</td>
+            <td class="txt">Logique, dépend de politiques correctes. Une erreur de politique est une fuite.</td>
+            <td class="txt">Centaines de clients, ou inscription libre-service. Exige de faire figurer <code>tenant_id</code> en tête de chaque index composite.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p>
+      Pour ton cas — quelques clients, dont un très gros — je commencerais par
+      <strong>une base par client</strong>. Ça garde la porte ouverte : un gros
+      client peut recevoir sa propre instance dimensionnée pour lui, sans que
+      cela change la moindre ligne de code.
+    </p>
+  </section>
+
+  <p class="footnote">
+    Les correspondances d'index et les constantes (plancher 0,4 ; pools × 4
+    et × 16 ; formule TF-IDF ; champs de <code>TraversalSpec</code>) sont
+    relevées dans le code aux commits <code>ec71462</code> / <code>f313b93</code>.
+    Les chiffres de dimensionnement sont des estimations d'ordre de grandeur
+    à confirmer par un banc d'essai sur 500 000 concepts synthétiques avant
+    de figer le schéma.
+  </p>
+
+</div>
+
+</body>
+</html>

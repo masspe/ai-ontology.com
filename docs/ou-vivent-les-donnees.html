@@ -1,0 +1,825 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  /* Enveloppe pour la lecture hors ligne : reproduit ce que l'hôte
+     d'artefacts injecte, plus color-scheme pour que le thème sombre du
+     système soit respecté par les contrôles natifs. */
+  :root { color-scheme: light dark; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin: 0; }
+  img { max-width: 100%; }
+  [hidden] { display: none !important; }
+</style>
+<title>Où vivent les données</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+</head>
+<body>
+<style>
+  :root {
+    --ground: #f6f9f8;
+    --surface: #ffffff;
+    --surface-2: #eef3f2;
+    --ink: #131f1e;
+    --ink-2: #566866;
+    --ink-3: #7d8f8d;
+    --rule: #dae3e2;
+    --rule-strong: #bcc9c7;
+    --accent: #0f766e;
+    --accent-soft: #d6ece9;
+    --ok: #15803d;
+    --ok-soft: #ddf0e3;
+    --warn: #a55a06;
+    --warn-soft: #fbeddb;
+    --gap: #b3261e;
+    --gap-soft: #fbe4e2;
+    --shadow: 0 1px 2px rgba(19, 31, 30, .06), 0 8px 24px -16px rgba(19, 31, 30, .18);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #0d1413;
+      --surface: #141d1c;
+      --surface-2: #1b2625;
+      --ink: #e7eeed;
+      --ink-2: #9bacaa;
+      --ink-3: #7b8b89;
+      --rule: #263231;
+      --rule-strong: #374644;
+      --accent: #5eead4;
+      --accent-soft: #12312d;
+      --ok: #6ee7a0;
+      --ok-soft: #102a1b;
+      --warn: #f0b464;
+      --warn-soft: #2e2113;
+      --gap: #f2857d;
+      --gap-soft: #2f1614;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 8px 24px -16px rgba(0, 0, 0, .7);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground: #0d1413;
+    --surface: #141d1c;
+    --surface-2: #1b2625;
+    --ink: #e7eeed;
+    --ink-2: #9bacaa;
+    --ink-3: #7b8b89;
+    --rule: #263231;
+    --rule-strong: #374644;
+    --accent: #5eead4;
+    --accent-soft: #12312d;
+    --ok: #6ee7a0;
+    --ok-soft: #102a1b;
+    --warn: #f0b464;
+    --warn-soft: #2e2113;
+    --gap: #f2857d;
+    --gap-soft: #2f1614;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 8px 24px -16px rgba(0, 0, 0, .7);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+    font-size: 15.5px;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap { max-width: 1020px; margin: 0 auto; padding: 40px 28px 96px; display: flex; flex-direction: column; gap: 46px; }
+
+  h1, h2, h3, h4 {
+    font-family: "IBM Plex Sans Condensed", "IBM Plex Sans", sans-serif;
+    text-wrap: balance; margin: 0; letter-spacing: -.01em;
+  }
+  h1 { font-size: 40px; font-weight: 700; line-height: 1.08; }
+  h2 { font-size: 26px; font-weight: 600; line-height: 1.2; }
+  h3 { font-size: 19px; font-weight: 600; }
+  h4 { font-size: 16px; font-weight: 600; }
+
+  p { margin: 0; max-width: 70ch; }
+
+  code, .mono { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: .88em; }
+  code { background: var(--surface-2); padding: .1em .34em; border-radius: 3px; }
+
+  a { color: var(--accent); }
+  a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  .eyebrow {
+    font-family: "IBM Plex Sans Condensed", sans-serif;
+    text-transform: uppercase; letter-spacing: .13em;
+    font-size: 11.5px; font-weight: 600; color: var(--ink-3);
+  }
+
+  header { display: flex; flex-direction: column; gap: 14px; }
+  .lede { font-size: 17.5px; color: var(--ink-2); max-width: 66ch; }
+
+  section { display: flex; flex-direction: column; gap: 20px; }
+  .sub { display: flex; flex-direction: column; gap: 12px; }
+
+  /* bandeau de partie */
+  .part {
+    display: flex; align-items: baseline; gap: 14px;
+    border-top: 2px solid var(--ink); padding-top: 12px;
+  }
+  .part span {
+    font-family: "IBM Plex Mono", monospace; font-size: 13px;
+    color: var(--ink-3); flex-shrink: 0;
+  }
+
+  /* encadré définition */
+  .def {
+    background: var(--surface-2);
+    border-left: 3px solid var(--rule-strong);
+    border-radius: 0 4px 4px 0;
+    padding: 14px 18px;
+    font-size: 14.5px;
+    max-width: 74ch;
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .def b { font-family: "IBM Plex Sans Condensed", sans-serif; letter-spacing: .02em; }
+  .def p { font-size: 14.5px; max-width: none; }
+
+  /* alerte */
+  .flag {
+    background: var(--gap-soft); border-left: 3px solid var(--gap);
+    border-radius: 0 4px 4px 0; padding: 14px 18px;
+    display: flex; flex-direction: column; gap: 6px; max-width: 78ch;
+  }
+  .flag b { color: var(--gap); font-family: "IBM Plex Sans Condensed", sans-serif; }
+  .flag p { font-size: 14.5px; max-width: none; }
+  .flag.mild { background: var(--warn-soft); border-left-color: var(--warn); }
+  .flag.mild b { color: var(--warn); }
+
+  figure { margin: 0; display: flex; flex-direction: column; gap: 10px; }
+  .scroll { overflow-x: auto; padding-bottom: 4px; }
+  figure svg { max-width: 100%; height: auto; min-width: 780px; display: block; }
+  figcaption { font-size: 13px; color: var(--ink-2); max-width: 72ch; }
+
+  table { border-collapse: collapse; width: 100%; font-size: 14.5px; }
+  thead th {
+    text-align: left; font-family: "IBM Plex Sans Condensed", sans-serif;
+    text-transform: uppercase; letter-spacing: .09em; font-size: 11px; font-weight: 600;
+    color: var(--ink-3); padding: 0 14px 8px 0;
+    border-bottom: 1px solid var(--rule-strong); white-space: nowrap;
+  }
+  tbody td { padding: 10px 14px 10px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody td:first-child { font-weight: 500; }
+  td.q { color: var(--ink-2); font-size: 13.8px; }
+
+  /* étapes numérotées */
+  ol.steps { margin: 0; padding-left: 0; list-style: none; counter-reset: st; display: flex; flex-direction: column; gap: 12px; }
+  ol.steps li {
+    counter-increment: st; display: grid; grid-template-columns: 26px 1fr; gap: 14px;
+    font-size: 14.8px;
+  }
+  ol.steps li::before {
+    content: counter(st); font-family: "IBM Plex Mono", monospace; font-size: 13px;
+    color: var(--accent); font-weight: 500; padding-top: 2px;
+  }
+  ol.steps strong { font-weight: 600; }
+
+  ul.plain { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 7px; font-size: 14.8px; }
+  ul.plain li::marker { color: var(--ink-3); }
+
+  /* options de scaling */
+  .opt {
+    background: var(--surface); border: 1px solid var(--rule); border-radius: 5px;
+    padding: 20px 22px; display: flex; flex-direction: column; gap: 12px;
+    box-shadow: var(--shadow);
+  }
+  .opt.pick { border-left: 3px solid var(--accent); }
+  .opt .top { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: baseline; justify-content: space-between; }
+  .opt dl { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; font-size: 14.2px; }
+  .opt dt {
+    font-family: "IBM Plex Sans Condensed", sans-serif; text-transform: uppercase;
+    letter-spacing: .07em; font-size: 10.5px; color: var(--ink-3); padding-top: 4px;
+  }
+  .opt dd { margin: 0; color: var(--ink-2); }
+  .opt dd.warn { color: var(--warn); }
+
+  .chip {
+    display: inline-block; font-family: "IBM Plex Sans Condensed", sans-serif;
+    font-size: 11px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase;
+    padding: 2px 7px; border-radius: 3px; white-space: nowrap;
+  }
+  .chip.a { background: var(--accent-soft); color: var(--accent); }
+  .chip.s { background: var(--ok-soft); color: var(--ok); }
+  .chip.m { background: var(--warn-soft); color: var(--warn); }
+  .chip.l { background: var(--gap-soft); color: var(--gap); }
+
+  /* glossaire */
+  .gloss { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1px; background: var(--rule); border: 1px solid var(--rule); border-radius: 5px; overflow: hidden; }
+  .gloss div { background: var(--surface); padding: 15px 18px; display: flex; flex-direction: column; gap: 4px; }
+  .gloss dt { font-family: "IBM Plex Sans Condensed", sans-serif; font-weight: 600; font-size: 15px; }
+  .gloss dd { margin: 0; font-size: 13.8px; color: var(--ink-2); }
+
+  .footnote { font-size: 13px; color: var(--ink-3); max-width: 72ch; border-top: 1px solid var(--rule); padding-top: 14px; }
+
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+
+<div class="wrap">
+
+  <header>
+    <span class="eyebrow">Référence technique · 2 septembre 2026</span>
+    <h1>Où vivent les données, et ce qui arrive quand la machine s'éteint</h1>
+    <p class="lede">
+      Il n'y a pas de base de données dans ce projet parce que le projet
+      <em>est</em> une base de données. Voici précisément comment elle
+      fonctionne — chaque fichier, chaque écriture, chaque redémarrage — puis
+      les options réelles pour la faire monter en charge.
+    </p>
+  </header>
+
+  <div class="def">
+    <b>Le modèle en une phrase</b>
+    <p>
+      Tout le graphe vit en mémoire vive ; le disque ne contient qu'un
+      <em>journal de tout ce qui s'est passé</em>, rejoué du début à chaque
+      démarrage pour reconstruire cette mémoire. C'est le patron
+      <b>event sourcing</b>, le même que celui de Redis en mode AOF ou d'un
+      journal de transactions : l'état n'est pas stocké, il est
+      <em>recalculé</em> depuis la liste des changements.
+    </p>
+  </div>
+
+  <div class="part">
+    <span>PARTIE 1</span>
+    <h2>Comment ça marche aujourd'hui</h2>
+  </div>
+
+  <section>
+    <h3>Les quatre fichiers, et rien d'autre</h3>
+    <p>
+      Tout l'état durable du produit tient dans quatre fichiers. Lancé avec
+      <code>--data ./data</code>, le serveur crée et gère les trois premiers ;
+      le quatrième appartient au service d'authentification.
+    </p>
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr><th>Fichier</th><th>Contenu</th><th>Format</th><th>Écrit quand</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>data/graph.log</code></td>
+            <td>Chaque mutation jamais appliquée, dans l'ordre d'arrivée</td>
+            <td class="q">Suite de <code>[longueur u32 gros-boutiste][JSON]</code></td>
+            <td class="q">À chaque écriture</td>
+          </tr>
+          <tr>
+            <td><code>data/graph.snap</code></td>
+            <td>L'état complet à un instant donné, plus le numéro de séquence atteint</td>
+            <td class="q">JSON</td>
+            <td class="q"><strong>Jamais automatiquement</strong> — seulement sur <code>ontology snapshot</code>, <code>compact</code> ou <code>POST /compact</code></td>
+          </tr>
+          <tr>
+            <td><code>data/settings.json</code></td>
+            <td>Fournisseur LLM actif, clés API, modèle, réglages OCR et récupération</td>
+            <td class="q">JSON, mode 0600 sous Unix</td>
+            <td class="q">À chaque <code>PATCH /settings</code></td>
+          </tr>
+          <tr>
+            <td><code>auth-server/users.json</code></td>
+            <td>Comptes, empreintes de mots de passe, identités OAuth</td>
+            <td class="q">JSON</td>
+            <td class="q">À chaque inscription ou modification de compte</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p>
+      Sans <code>--data</code>, le serveur utilise un <code>MemoryStore</code> :
+      tout est perdu à l'arrêt. C'est le mode des tests.
+    </p>
+  </section>
+
+  <section>
+    <h3>Ce qui vit en mémoire — et seulement là</h3>
+    <p>
+      Le graphe est un ensemble de tables de hachage concurrentes
+      (<code>DashMap</code>) plus une douzaine d'index dérivés, tous
+      reconstruits au démarrage :
+    </p>
+    <ul class="plain">
+      <li><strong>Les entités</strong> : <code>concepts</code>, <code>relations</code>, <code>rules</code>, <code>actions</code>.</li>
+      <li><strong>Les index de navigation</strong> : arêtes entrantes et sortantes, plus une adjacence <em>typée</em> (un seau par type de relation et par nœud) pour ne parcourir que les arêtes du bon type.</li>
+      <li><strong>Les index de recherche par nom</strong> : index (type, nom) exact, ensembles ordonnés par type, et un index inversé de trigrammes pour la recherche par sous-chaîne.</li>
+      <li><strong>Des caches de pagination</strong> avec compteurs de génération : toute mutation incrémente un compteur, ce qui invalide les pages mémorisées sans avoir à les parcourir.</li>
+      <li><strong>L'index de récupération</strong> (<code>HybridIndex</code>) : index inversé lexical + vecteurs.</li>
+    </ul>
+    <div class="flag mild">
+      <b>Aucun index n'est persisté</b>
+      <p>
+        Ni les index du graphe, ni l'index de recherche. Ils sont tous
+        reconstruits à chaque démarrage par <code>reindex_all()</code>. C'est
+        un choix défendable — un index est un cache — mais cela veut dire que
+        le temps de démarrage croît avec le volume de données, et que
+        remplacer l'embedder par un vrai modèle rendra cette reconstruction
+        coûteuse (il faudra recalculer ou stocker les vecteurs).
+      </p>
+    </div>
+  </section>
+
+  <section>
+    <h3>Les trois zones, et ce que chaque panne emporte</h3>
+    <figure>
+      <div class="scroll">
+        <svg viewBox="0 0 900 540" role="img" aria-label="Trois zones superposées : la mémoire vive contient le graphe et les index ainsi que quatre magasins sans chemin vers le disque ; le cache de pages du système sépare la mémoire du disque ; le disque contient le journal, l'instantané et les réglages. Un processus tué ne perd que la mémoire, reconstructible depuis le disque ; une coupure de courant emporte aussi le cache, donc les dernières écritures.">
+          <defs>
+            <marker id="d" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 1 L 9 5 L 0 9 z" fill="currentColor"></path>
+            </marker>
+            <marker id="dr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 1 L 9 5 L 0 9 z" fill="var(--gap)"></path>
+            </marker>
+            <marker id="dt" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M 0 1 L 9 5 L 0 9 z" fill="var(--accent)"></path>
+            </marker>
+          </defs>
+          <g font-family="IBM Plex Sans, sans-serif" font-size="12.5" fill="currentColor">
+
+            <!-- ZONE 1 : RAM -->
+            <rect x="20" y="34" width="620" height="176" rx="4" stroke="currentColor" stroke-opacity=".3" fill="var(--surface)"></rect>
+            <text x="34" y="26" font-size="11" letter-spacing="1.4" fill="var(--ink-3)">MÉMOIRE VIVE DU PROCESSUS</text>
+            <g stroke="currentColor" stroke-opacity=".28" fill="var(--surface-2)">
+              <rect x="36" y="50" width="286" height="44" rx="3"></rect>
+              <rect x="338" y="50" width="286" height="44" rx="3"></rect>
+              <rect x="36" y="104" width="286" height="44" rx="3"></rect>
+            </g>
+            <text x="50" y="70">Graphe</text>
+            <text x="50" y="86" font-size="11" fill="var(--ink-2)">concepts · relations · règles · actions</text>
+            <text x="352" y="70">Index dérivés</text>
+            <text x="352" y="86" font-size="11" fill="var(--ink-2)">adjacence typée · trigrammes · caches</text>
+            <text x="50" y="124">Index de recherche</text>
+            <text x="50" y="140" font-size="11" fill="var(--ink-2)">lexical + vecteurs</text>
+            <!-- magasins volatils : aucun chemin vers le bas -->
+            <rect x="338" y="104" width="286" height="44" rx="3" stroke="var(--gap)" fill="var(--gap-soft)"></rect>
+            <text x="352" y="124" fill="var(--gap)">Fichiers · requêtes · historique · retours</text>
+            <text x="352" y="140" fill="var(--gap)" font-size="11">aucun chemin vers le disque</text>
+            <text x="36" y="176" font-size="11.5" fill="var(--ink-2)">Reconstruit intégralement au démarrage à partir du disque —</text>
+            <text x="36" y="192" font-size="11.5" fill="var(--ink-2)">sauf le bloc rouge, qui repart vide.</text>
+
+            <!-- ZONE 2 : cache OS -->
+            <rect x="20" y="252" width="620" height="52" rx="4" stroke="currentColor" stroke-opacity=".3" fill="var(--surface-2)" stroke-dasharray="4 3"></rect>
+            <text x="34" y="244" font-size="11" letter-spacing="1.4" fill="var(--ink-3)">CACHE DE PAGES DU SYSTÈME D'EXPLOITATION</text>
+            <text x="36" y="274">Octets écrits mais pas encore forcés sur le support</text>
+            <text x="36" y="291" font-size="11" fill="var(--warn)">le code n'appelle jamais fsync : c'est le noyau qui décide du moment</text>
+
+            <!-- ZONE 3 : disque -->
+            <rect x="20" y="346" width="620" height="160" rx="4" stroke="currentColor" stroke-opacity=".3" fill="var(--surface)"></rect>
+            <text x="34" y="338" font-size="11" letter-spacing="1.4" fill="var(--ink-3)">DISQUE</text>
+            <g stroke="currentColor" stroke-opacity=".28" fill="var(--surface-2)">
+              <rect x="36" y="362" width="286" height="44" rx="3"></rect>
+              <rect x="338" y="362" width="286" height="44" rx="3"></rect>
+              <rect x="36" y="416" width="286" height="44" rx="3"></rect>
+            </g>
+            <text x="50" y="382" font-family="IBM Plex Mono, monospace" font-size="11.5">graph.log</text>
+            <text x="50" y="398" font-size="11" fill="var(--ink-2)">journal, ne cesse de grossir</text>
+            <text x="352" y="382" font-family="IBM Plex Mono, monospace" font-size="11.5">graph.snap</text>
+            <text x="352" y="398" font-size="11" fill="var(--warn)">absent tant qu'on ne compacte pas</text>
+            <text x="50" y="436" font-family="IBM Plex Mono, monospace" font-size="11.5">settings.json</text>
+            <text x="50" y="452" font-size="11" fill="var(--ink-2)">clés des fournisseurs</text>
+            <text x="36" y="484" font-size="11.5" fill="var(--ok)">Seul état durable. Sauvegarde = copier le dossier.</text>
+
+            <!-- chemin d'ecriture (descendant, a gauche) -->
+            <path d="M 180 210 L 180 246" stroke="currentColor" stroke-opacity=".55" fill="none" marker-end="url(#d)"></path>
+            <text x="190" y="232" font-family="IBM Plex Mono, monospace" font-size="10.5">flush()</text>
+            <path d="M 180 304 L 180 340" stroke="currentColor" stroke-opacity=".55" fill="none" marker-end="url(#d)"></path>
+            <text x="190" y="326" font-size="10.5" fill="var(--ink-3)">plus tard, sans garantie</text>
+
+            <!-- chemin de demarrage (montant, a droite) -->
+            <path d="M 500 340 L 500 216" stroke="var(--accent)" stroke-opacity=".8" fill="none" marker-end="url(#dt)"></path>
+            <text x="510" y="300" font-size="10.5" fill="var(--accent)">instantané, puis rejeu</text>
+            <text x="510" y="316" font-size="10.5" fill="var(--accent)">du journal, puis réindexation</text>
+
+            <!-- accolades de survie, a droite -->
+            <path d="M 664 40 L 676 40 L 676 204 L 664 204" stroke="currentColor" stroke-opacity=".45" fill="none"></path>
+            <text x="686" y="112" font-size="11.5">Processus tué</text>
+            <text x="686" y="128" font-size="11" fill="var(--ok)">rien de perdu : tout est</text>
+            <text x="686" y="143" font-size="11" fill="var(--ok)">reconstruit depuis le disque</text>
+
+            <path d="M 664 258 L 676 258 L 676 298 L 664 298" stroke="var(--gap)" stroke-opacity=".7" fill="none"></path>
+            <text x="686" y="274" font-size="11.5" fill="var(--gap)">Coupure de courant</text>
+            <text x="686" y="290" font-size="11" fill="var(--gap)">les dernières écritures</text>
+            <text x="686" y="305" font-size="11" fill="var(--gap)">disparaissent</text>
+
+            <path d="M 664 352 L 676 352 L 676 500 L 664 500" stroke="currentColor" stroke-opacity=".45" fill="none"></path>
+            <text x="686" y="420" font-size="11.5">Disque perdu</text>
+            <text x="686" y="436" font-size="11" fill="var(--gap)">tout est perdu :</text>
+            <text x="686" y="451" font-size="11" fill="var(--gap)">aucune copie ailleurs</text>
+          </g>
+        </svg>
+      </div>
+      <figcaption>
+        La distinction qui compte : <code>flush()</code> remet les octets au
+        système, <code>fsync()</code> force le support à les écrire. Le code
+        n'appelle que le premier — d'où la ligne rouge du milieu.
+      </figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <h3>Le chemin d'écriture, pas à pas</h3>
+    <p>
+      Prenons <code>POST /concepts</code>. Chaque route d'écriture suit le même
+      ordre, vérifiable dans le code :
+    </p>
+    <ol class="steps">
+      <li><strong>La mémoire est modifiée d'abord.</strong> <code>graph.upsert_concept()</code> valide le schéma (propriétés obligatoires, types disjoints, cardinalités) et met à jour les tables et tous les index dérivés. Une violation renvoie une erreur 4xx et <em>rien</em> n'est écrit.</li>
+      <li><strong>Un enregistrement est ajouté au journal.</strong> Le store incrémente un compteur de séquence, sérialise <code>{seq, kind}</code> en JSON, écrit la longueur sur 4 octets puis la charge utile, et appelle <code>flush()</code>.</li>
+      <li><strong>L'index de recherche est mis à jour.</strong></li>
+      <li><strong>Réponse 200 au client.</strong></li>
+    </ol>
+    <div class="flag">
+      <b>Ce n'est pas un journal « write-ahead », malgré son nom</b>
+      <p>
+        Un vrai WAL écrit sur disque <em>avant</em> de modifier l'état, afin
+        que le disque soit toujours en avance sur la mémoire. Ici c'est
+        l'inverse : la mémoire d'abord, le journal ensuite. Conséquence
+        concrète : si l'écriture du journal échoue (disque plein, permissions),
+        le client reçoit une erreur 500 <strong>mais la modification est bien
+        vivante en mémoire</strong> et sera servie à tous les lecteurs — jusqu'au
+        redémarrage, où elle disparaîtra. Le serveur en marche et son disque
+        peuvent donc être en désaccord silencieux.
+      </p>
+    </div>
+    <div class="flag">
+      <b>Les numéros de séquence peuvent atterrir dans le désordre</b>
+      <p>
+        L'incrémentation du compteur et l'écriture dans le fichier prennent
+        <em>deux verrous différents, l'un après l'autre</em>. Deux écritures
+        concurrentes peuvent donc recevoir les numéros 1 et 2, puis s'écrire
+        dans l'ordre 2 puis 1. Le rejeu applique les enregistrements dans
+        l'ordre du <em>fichier</em>, pas des numéros : deux modifications
+        simultanées du même concept peuvent être rejouées à l'envers, et
+        l'état après redémarrage diffère de l'état d'avant. Il faut de la
+        concurrence pour le déclencher — c'est-à-dire que le problème
+        commence exactement quand on ajoute des utilisateurs.
+      </p>
+    </div>
+  </section>
+
+  <section>
+    <h3>Le chemin de démarrage, pas à pas</h3>
+    <ol class="steps">
+      <li><strong>Ouverture du store.</strong> Création du dossier si besoin, ouverture de <code>graph.log</code> en mode ajout.</li>
+      <li><strong>Restauration de l'instantané, s'il existe.</strong> On lit <code>graph.snap</code>, on réinsère l'ontologie, les concepts, les relations, les règles et les actions, et on retient son <code>high_water_seq</code> : le numéro de séquence atteint quand il a été pris.</li>
+      <li><strong>Rejeu du journal.</strong> On lit enregistrement par enregistrement et <strong>on saute tout ce dont le numéro est ≤ au <code>high_water_seq</code></strong>, puisque l'instantané le contient déjà. Le reste est appliqué dans l'ordre du fichier.</li>
+      <li><strong>Recalage du compteur</strong> sur le plus grand numéro vu, pour que les prochaines écritures continuent la numérotation.</li>
+      <li><strong>Reconstruction complète de l'index de recherche.</strong></li>
+    </ol>
+    <div class="sub">
+      <h4>Trois propriétés que ce mécanisme garantit</h4>
+      <ul class="plain">
+        <li><strong>Le rejeu est idempotent.</strong> Les suppressions ignorent l'absence de leur cible, et le filtre par numéro de séquence empêche de réappliquer ce que l'instantané contient. Rejouer deux fois donne le même résultat.</li>
+        <li><strong>Les identifiants ne se télescopent pas.</strong> Chaque entité restaurée appelle <code>observe(id)</code>, qui relève le compteur d'allocation au-dessus de cet identifiant. Un concept créé après redémarrage ne peut donc pas réutiliser un identifiant existant.</li>
+        <li><strong>Les relations symétriques ne se dédoublent pas.</strong> Le graphe matérialise une arête inverse pour toute relation symétrique ; l'instantané ne garde que la direction canonique, sinon chaque aller-retour doublerait le nombre d'arêtes.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section>
+    <h3>La compaction : pourquoi l'ordre des opérations est sûr</h3>
+    <p>
+      Le journal ne fait que grossir. <code>POST /compact</code> (ou
+      <code>ontology compact</code>) le remet à zéro sans perdre d'état :
+    </p>
+    <ol class="steps">
+      <li>Prise du verrou d'écriture pour toute la durée, afin qu'aucun ajout ne se glisse au milieu.</li>
+      <li>Écriture de l'instantané dans un fichier temporaire, puis <strong>renommage atomique</strong> par-dessus <code>graph.snap</code>. Un renommage ne peut pas laisser un fichier à moitié écrit.</li>
+      <li>Vidage du journal en réouvrant le fichier en mode troncature, puis remise en place d'un descripteur en mode ajout.</li>
+    </ol>
+    <p>
+      Cet ordre — instantané <em>puis</em> troncature — est ce qui rend
+      l'opération résistante aux pannes. Une coupure entre les deux laisse un
+      instantané neuf <em>et</em> le journal complet : au démarrage suivant, le
+      filtre par numéro de séquence ignore simplement les enregistrements déjà
+      couverts. Aucune perte, aucun doublon. L'ordre inverse perdrait tout.
+    </p>
+    <div class="flag">
+      <b>Mais rien ne déclenche jamais de compaction</b>
+      <p>
+        La fonction <code>spawn_snapshotter</code>, qui prend un instantané
+        périodiquement, est écrite, exportée… et <strong>jamais appelée</strong>
+        dans tout le projet. Aujourd'hui <code>data/</code> contient un journal
+        de 53 Ko et <em>aucun</em> <code>graph.snap</code> : chaque démarrage
+        rejoue l'intégralité de l'histoire depuis l'origine. À petite échelle
+        c'est invisible ; sur un serveur qui tourne des mois avec plusieurs
+        utilisateurs, le démarrage devient lent et le disque non borné.
+      </p>
+    </div>
+  </section>
+
+  <section>
+    <h3>Les réglages, et les magasins qui n'existent pas sur disque</h3>
+    <p>
+      <code>settings.json</code> suit une logique différente du graphe :
+      pas de journal, on réécrit la structure entière à chaque
+      <code>PATCH /settings</code>. Au chargement, les champs absents prennent
+      leur valeur par défaut — donc un fichier écrit par une version
+      antérieure se lit toujours — et une migration efface l'ancienne URL
+      Infomaniak devenue inutilisable.
+    </p>
+    <div class="flag mild">
+      <b>Faiblesse à corriger, et c'est moi qui l'ai introduite</b>
+      <p>
+        Contrairement à l'instantané, <code>settings.json</code> est écrasé
+        <em>directement</em>, sans passer par un fichier temporaire suivi d'un
+        renommage. Une coupure au mauvais moment peut donc laisser un fichier
+        tronqué et faire perdre la configuration du fournisseur. Le fichier est
+        minuscule, donc la fenêtre est étroite, mais le correctif fait trois
+        lignes : écrire dans <code>.tmp</code>, puis renommer.
+      </p>
+    </div>
+    <p>
+      Enfin, quatre choses que l'interface présente comme des données du
+      produit n'ont <strong>aucun support disque</strong> : la liste des
+      fichiers ingérés, les requêtes sauvegardées, l'historique de
+      statistiques qui alimente les courbes du tableau de bord, et les retours
+      utilisateurs. Elles vivent dans des structures en mémoire et repartent
+      vides à chaque redémarrage.
+    </p>
+  </section>
+
+  <section>
+    <h3>Tableau de survie</h3>
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr><th>Évènement</th><th>Graphe</th><th>Réglages</th><th>Fichiers, requêtes, historique</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Redémarrage normal</td>
+            <td class="q">Intact, reconstruit par rejeu</td>
+            <td class="q">Intact</td>
+            <td class="q">Perdus</td>
+          </tr>
+          <tr>
+            <td>Processus tué (kill, panique)</td>
+            <td class="q">Intact — le système a déjà les octets</td>
+            <td class="q">Intact</td>
+            <td class="q">Perdus</td>
+          </tr>
+          <tr>
+            <td>Coupure de courant</td>
+            <td class="q">Les dernières écritures peuvent manquer, et <strong>un enregistrement coupé en deux empêche le serveur de démarrer</strong></td>
+            <td class="q">Peut être tronqué</td>
+            <td class="q">Perdus</td>
+          </tr>
+          <tr>
+            <td>Disque plein</td>
+            <td class="q">L'ajout échoue, 500 au client, mais la mémoire garde la modification</td>
+            <td class="q">L'écriture échoue, l'erreur est journalisée</td>
+            <td class="q">Indifférents</td>
+          </tr>
+          <tr>
+            <td>Disque perdu, dossier supprimé</td>
+            <td class="q">Tout est perdu — aucune copie n'existe ailleurs</td>
+            <td class="q">Tout est perdu</td>
+            <td class="q">Perdus</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="flag">
+      <b>Le point le plus dangereux du dispositif actuel</b>
+      <p>
+        Si la longueur d'un enregistrement est écrite mais que sa charge utile
+        est tronquée — exactement ce qu'une coupure de courant produit — le
+        chargement renvoie une erreur « journal corrompu à l'offset N », la CLI
+        la propage, et <strong>le serveur refuse de démarrer</strong>. Il n'y a
+        aucune tolérance à la queue de fichier abîmée. La donnée est pourtant
+        presque entièrement là : il ne manque qu'une troncature au dernier
+        offset valide pour transformer « le serveur ne démarre plus » en « on a
+        perdu la dernière écriture ».
+      </p>
+    </div>
+  </section>
+
+  <div class="part">
+    <span>PARTIE 2</span>
+    <h2>Les alternatives, et laquelle choisir quand</h2>
+  </div>
+
+  <section>
+    <p>
+      Trois contraintes structurelles finissent par forcer un changement.
+      Savoir <em>laquelle</em> te gêne détermine l'option : les autres sont du
+      travail inutile.
+    </p>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Contrainte</th><th>D'où elle vient</th><th>Quand elle mord</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>Plafond de mémoire</td>
+            <td class="q">Tout le graphe et tous les index doivent tenir en RAM du processus</td>
+            <td class="q">Aujourd'hui : 53 Ko, sans objet. Avec de vrais vecteurs : un vecteur de 1536 flottants pèse ~6 Ko, donc 100 000 concepts = 600 Mo de vecteurs seuls</td>
+          </tr>
+          <tr>
+            <td>Un seul écrivain, un seul processus</td>
+            <td class="q">Le journal est un fichier ouvert en ajout par un processus ; l'état vit dans <em>sa</em> mémoire</td>
+            <td class="q">Dès qu'on veut deux instances, du déploiement sans coupure, ou de la haute disponibilité</td>
+          </tr>
+          <tr>
+            <td>Aucun cloisonnement</td>
+            <td class="q">Un processus = un graphe = un dossier <code>--data</code></td>
+            <td class="q">Dès le deuxième jeu de données distinct à héberger</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <div class="opt pick">
+      <div class="top"><h3>Option A — Garder le moteur, en réparer les arêtes vives</h3><div><span class="chip a">à faire d'abord</span> <span class="chip s">jours</span></div></div>
+      <p>
+        Aucune montée en charge ici : de la sûreté. Mais rien de ce qui suit ne
+        mérite d'être construit sur une base qui perd des données.
+      </p>
+      <ul class="plain">
+        <li><strong>Appeler <code>sync_data()</code></strong> après l'ajout, ou mieux, grouper les validations (« fsync toutes les N millisecondes ») pour ne pas payer un aller-retour disque par écriture. C'est ce qui protège d'une coupure de courant.</li>
+        <li><strong>Tolérer une queue de journal abîmée</strong> : au dernier enregistrement illisible, journaliser un avertissement, tronquer le fichier à l'offset valide précédent, et continuer. Transforme un serveur qui ne démarre plus en une écriture perdue.</li>
+        <li><strong>Brancher <code>spawn_snapshotter</code></strong> : journal borné, démarrage rapide.</li>
+        <li><strong>Attribuer le numéro de séquence sous le verrou d'écriture</strong>, pour que l'ordre du fichier soit l'ordre des numéros.</li>
+        <li><strong>Fichier temporaire + renommage</strong> pour <code>settings.json</code>.</li>
+        <li><strong>Persister les quatre magasins volatils</strong> — fichiers JSON comme les réglages, ou SQLite si on saute directement à l'option D1.</li>
+        <li><strong>Ajouter auteur et horodatage</strong> aux enregistrements du journal : à plusieurs sur un graphe, « qui a modifié ça » est la première question posée, et aujourd'hui elle est sans réponse.</li>
+      </ul>
+    </div>
+  </section>
+
+  <section>
+    <div class="opt pick">
+      <div class="top"><h3>Option B — Un processus par locataire</h3><div><span class="chip a">recommandée</span> <span class="chip s">quasi nulle</span></div></div>
+      <p>
+        Chaque jeu de données a son dossier <code>--data</code>, son port, son
+        <code>settings.json</code> — donc sa clé API et sa facture. Un reverse
+        proxy route par sous-domaine ou par préfixe d'URL.
+      </p>
+      <dl>
+        <dt>Coût</dt><dd>Zéro ligne de code. Un script de provisionnement et une configuration de proxy.</dd>
+        <dt>Gains</dt><dd>Isolation totale : données, mémoire, identifiants, rayon de panne. Sauvegarde et redémarrage indépendants — copier un dossier suffit.</dd>
+        <dt>Plafond</dt><dd class="warn">N × (graphe + index) en RAM. Une dizaine à une vingtaine de locataires sur une machine ordinaire, et pas d'inscription libre-service.</dd>
+      </dl>
+      <p>
+        C'est la meilleure réponse pour « quelques utilisateurs, données
+        séparées » : elle marche <em>aujourd'hui</em>, elle donne l'isolation la
+        plus forte, et elle t'apprend ce que le multi-locataire exige vraiment
+        avant d'avoir à le concevoir.
+      </p>
+    </div>
+  </section>
+
+  <section>
+    <div class="opt">
+      <div class="top"><h3>Option C — Multi-locataire dans un seul processus</h3><div><span class="chip l">semaines</span></div></div>
+      <p>
+        <code>AppState</code> détient une table locataire → (graphe, index,
+        store), résolue depuis le jeton d'authentification.
+      </p>
+      <dl>
+        <dt>Coût</dt><dd>Touche <code>AppState</code>, tous les handlers, le magasin de réglages, l'organisation sur disque, plus un cycle de vie des locataires (création, suppression, quotas).</dd>
+        <dt>Gains</dt><dd>Un seul processus à superviser, inscription libre-service possible, caches partagés.</dd>
+        <dt>Plafond</dt><dd class="warn">Toujours la RAM d'une machine et un seul écrivain. On a payé cher sans lever les deux autres contraintes.</dd>
+      </dl>
+      <p>
+        À ne faire que passé une vingtaine de locataires, ou si l'inscription
+        doit être libre-service.
+      </p>
+    </div>
+  </section>
+
+  <section>
+    <div class="opt">
+      <div class="top"><h3>Option D — Remplacer le moteur de stockage</h3><div><span class="chip m">selon la variante</span></div></div>
+      <div class="sub">
+        <h4>D1 · SQLite <span class="chip a">le meilleur rapport si le journal devient un problème</span></h4>
+        <p>
+          Un fichier, transactionnel, résistant aux pannes par conception — il
+          a son propre journal <em>avec</em> de vrais appels de synchronisation,
+          ce qui règle d'un coup les points fsync et queue abîmée de l'option A.
+          Lecteurs concurrents, et surtout la possibilité d'interroger l'état
+          sans charger tout le graphe. Reste embarqué : aucun serveur à
+          administrer. C'est aussi le foyer naturel des quatre magasins
+          volatils et du cloisonnement par utilisateur.
+        </p>
+      </div>
+      <div class="sub">
+        <h4>D2 · PostgreSQL</h4>
+        <p>
+          Lève la contrainte « un seul processus » : plusieurs instances de
+          l'application, vrai contrôle de concurrence (donc verrouillage
+          optimiste propre, conflits détectés par ligne), sauvegardes et
+          restauration à un instant donné. Le coût réel n'est pas
+          l'installation : c'est que les traversées de graphe, écrites
+          aujourd'hui en Rust sur des structures en mémoire, doivent soit être
+          réécrites en SQL récursif, soit conserver le graphe en mémoire comme
+          cache et n'utiliser Postgres que comme journal partagé. Cette
+          seconde forme hybride est souvent la réponse pragmatique.
+        </p>
+      </div>
+      <div class="sub">
+        <h4>D3 · Une base de graphe (Neo4j, Memgraph) <span class="chip l">déconseillée ici</span></h4>
+        <p>
+          Traversées natives et langage de requête dédié, mais les traversées
+          bornées, la validation de schéma et l'adjacence typée de ce projet
+          sont précisément la partie la mieux construite. Migrer vers Neo4j
+          revient à jeter ce qui fait la valeur du code pour racheter une
+          fonctionnalité qu'on possède déjà.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="opt">
+      <div class="top"><h3>Option E — Sortir l'index de recherche du processus</h3><div><span class="chip m">quand les vecteurs deviennent réels</span></div></div>
+      <p>
+        Le jour où l'embedder haché est remplacé par un vrai modèle, les
+        vecteurs dominent la mémoire et la reconstruction au démarrage devient
+        coûteuse. Un magasin vectoriel dédié — ou SQLite avec une extension
+        vectorielle — enlève cette pression <em>et</em> rend l'index durable :
+        plus de réindexation complète à chaque boot.
+      </p>
+    </div>
+  </section>
+
+  <section>
+    <h3>Quel symptôme appelle quelle option</h3>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Ce que tu observes</th><th>Ce qu'il faut faire</th></tr></thead>
+        <tbody>
+          <tr><td>Une coupure a fait perdre des données, ou le serveur ne redémarre plus</td><td class="q">Option A</td></tr>
+          <tr><td>Plusieurs utilisateurs, bases de connaissance séparées</td><td class="q">Option B</td></tr>
+          <tr><td>Plus d'une vingtaine de locataires, ou inscription libre-service</td><td class="q">Option C</td></tr>
+          <tr><td>Le démarrage prend des minutes, le journal fait des gigaoctets</td><td class="q">A (le snapshotter), puis D1</td></tr>
+          <tr><td>Les données ne tiennent plus en mémoire</td><td class="q">D1 ou D2, et E pour les vecteurs</td></tr>
+          <tr><td>Il faut de la haute disponibilité ou du déploiement sans coupure</td><td class="q">D2</td></tr>
+          <tr><td>Des modifications concurrentes se corrompent mutuellement</td><td class="q">A pour l'ordre des numéros, puis verrouillage optimiste — propre seulement avec D1 ou D2</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h3>Ma recommandation, dans l'ordre</h3>
+    <ol class="steps">
+      <li><strong>Option A</strong>, quelques jours. Non négociable avant que les données de quelqu'un d'autre n'y soient.</li>
+      <li><strong>Option B</strong>, le jour où une deuxième base de connaissance apparaît. Rien à coder.</li>
+      <li><strong>D1, SQLite</strong>, quand le journal ou les magasins volatils commencent à faire mal. C'est le plus petit pas qui supprime une classe entière de problèmes — et il rend l'option A en grande partie gratuite.</li>
+      <li><strong>C ou D2</strong> seulement quand une contrainte réelle l'impose : nombre de locataires, ou haute disponibilité. Pas avant.</li>
+    </ol>
+  </section>
+
+  <section>
+    <span class="eyebrow">Pour lever les ambiguïtés</span>
+    <h2>Glossaire</h2>
+    <dl class="gloss">
+      <div><dt>Journal append-only</dt><dd>Fichier où l'on n'ajoute qu'à la fin, sans jamais modifier ce qui précède. Écriture séquentielle, donc rapide, et un enregistrement déjà écrit ne peut pas être abîmé par le suivant.</dd></div>
+      <div><dt>Event sourcing</dt><dd>Ne pas stocker l'état, mais la suite des changements qui y ont mené. L'état est recalculé en rejouant cette suite. Donne un historique complet gratuitement.</dd></div>
+      <div><dt>WAL (write-ahead log)</dt><dd>Journal écrit <em>avant</em> que l'état ne change, pour que le disque soit toujours en avance sur la mémoire. Ici le nom est employé mais l'ordre est inverse — voir la partie 1.</dd></div>
+      <div><dt>Rejeu (replay)</dt><dd>Relire le journal du début et réappliquer chaque enregistrement pour reconstruire l'état en mémoire.</dd></div>
+      <div><dt>Instantané (snapshot)</dt><dd>Copie de l'état complet à un moment donné, pour ne pas avoir à rejouer tout l'historique au démarrage.</dd></div>
+      <div><dt>Compaction</dt><dd>Prendre un instantané puis vider le journal. Borne la taille sur disque et le temps de démarrage.</dd></div>
+      <div><dt>High-water mark</dt><dd>Le numéro de séquence atteint quand l'instantané a été pris. Tout enregistrement de numéro inférieur ou égal est déjà dedans, donc ignoré au rejeu.</dd></div>
+      <div><dt>Idempotence</dt><dd>Appliquer deux fois la même opération donne le même résultat qu'une seule. Indispensable au rejeu, qui peut repasser sur des enregistrements déjà pris en compte.</dd></div>
+      <div><dt>flush contre fsync</dt><dd><code>flush()</code> remet les octets du programme au système d'exploitation. <code>fsync()</code> ordonne au support de les graver. Entre les deux, les données sont dans le cache de pages : perdues en cas de coupure de courant, préservées si seul le processus meurt.</dd></div>
+      <div><dt>Cache de pages</dt><dd>Zone de mémoire où le noyau garde les écritures en attente pour les regrouper. C'est ce qui rend les écritures rapides — et ce qui les rend perdables.</dd></div>
+      <div><dt>Group commit</dt><dd>Regrouper plusieurs écritures en un seul <code>fsync</code>. On garde l'essentiel de la sûreté sans payer un aller-retour disque par requête.</dd></div>
+      <div><dt>Renommage atomique</dt><dd>Écrire dans un fichier temporaire puis le renommer sur la cible. Le système garantit que le renommage réussit entièrement ou pas du tout : jamais de fichier à moitié écrit.</dd></div>
+      <div><dt>Dernier écrivain gagne</dt><dd>Deux modifications concurrentes du même objet : la seconde écrase la première, sans avertissement. C'est le comportement actuel, faute de numéro de version sur les entités.</dd></div>
+      <div><dt>Verrouillage optimiste</dt><dd>Chaque entité porte une version ; une modification indique la version qu'elle croit à jour, et le serveur la rejette si elle a changé entre-temps. C'est ce qui empêche deux utilisateurs de s'écraser silencieusement.</dd></div>
+      <div><dt>Multi-locataire</dt><dd>Faire cohabiter dans une même application des jeux de données appartenant à des clients différents, sans qu'aucun ne puisse voir celui des autres.</dd></div>
+      <div><dt>DashMap et sharding</dt><dd>Table de hachage découpée en segments avec un verrou chacun. Deux écritures sur des segments différents ne s'attendent pas, et les lectures ne bloquent pas.</dd></div>
+      <div><dt>Restauration à un instant donné</dt><dd>Revenir à l'état exact d'un moment passé, en rejouant les journaux jusqu'à cette date. Postgres le fait ; ici il faudrait ne jamais compacter pour en approcher.</dd></div>
+      <div><dt>Ontologie, dans ce projet</dt><dd>Le schéma : les types de concepts, les types de relations avec leur domaine et leur portée, les propriétés obligatoires, les cardinalités et les types mutuellement exclusifs. C'est ce que valide chaque écriture.</dd></div>
+    </dl>
+  </section>
+
+  <p class="footnote">
+    Établi par lecture intégrale de <code>crates/storage</code> (695 lignes) et
+    des chemins d'écriture de <code>crates/server</code>, au commit
+    <span class="mono">f313b93</span>. Chaque affirmation de mécanisme est
+    vérifiable dans ces fichiers ; en particulier, l'absence de tout appel de
+    synchronisation disque a été vérifiée par recherche de
+    <code>sync_data</code>, <code>sync_all</code> et <code>fsync</code> sur
+    l'ensemble du dépôt, qui ne renvoie aucun résultat.
+  </p>
+
+</div>
+
+</body>
+</html>
