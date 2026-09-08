@@ -20,17 +20,25 @@
 
 pub mod file;
 pub mod log;
+pub mod manifest;
 pub mod memory;
+pub mod migrate;
 pub mod periodic;
 pub mod segment;
+pub mod segment_store;
 pub mod snapshot;
 pub mod store;
+pub mod stream;
 pub mod testing;
 
 pub use file::FileStore;
 pub use log::{LogRecord, RecordKind};
+pub use manifest::Manifest;
 pub use memory::MemoryStore;
+pub use migrate::{legacy_present, migrate_legacy, store_dir_for, MigrationReport};
 pub use periodic::{spawn_snapshotter, SnapshotHandle};
+pub use segment_store::{OpenReport, SegmentStore, SegmentStoreConfig};
 pub use snapshot::Snapshot;
 pub use store::{Store, StoreError, StoreResult};
+pub use stream::RollPolicy;
 pub use testing::FlakyStore;
