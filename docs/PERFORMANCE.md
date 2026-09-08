@@ -6,6 +6,17 @@ et les **hypothèses** sous-jacentes. Il sert de référence pour comprendre
 pourquoi les choses sont structurées ainsi et pour éviter de casser les
 invariants en ajoutant du code.
 
+Document compagnon : [`STORAGE.md`](./STORAGE.md) couvre la couche
+**stockage** (format binaire, partitionnement par domaine `ns`, hydratation,
+recovery, mémoire contrainte) et continue la numérotation ici — H11+ et R7+.
+Le plan d'implémentation correspondant est dans
+[`STORAGE-PLAN.md`](./STORAGE-PLAN.md).
+
+> **Mise à jour du 2026-09-08.** `STORAGE.md` lève le non-objectif
+> « persistance » (§1) et assouplit H1 (§2). Tout le reste de ce document
+> reste valide ; les points touchés sont signalés en ligne par un renvoi
+> « → STORAGE.md ».
+
 ---
 
 ## 1. Objectifs et non-objectifs
@@ -23,7 +34,9 @@ invariants en ajoutant du code.
 
 ### Non-objectifs
 
-- Persistance optimisée (snapshot/WAL plus rapide, mmap) — hors scope.
+- ~~Persistance optimisée (snapshot/WAL plus rapide, mmap) — hors scope.~~
+  **Levé** : la persistance est désormais couverte par `STORAGE.md`. Ce
+  document ne traite toujours que des index mémoire et de la couche HTTP.
 - Recherche full-text avancée (BM25 multi-champ, stemming, fuzziness
   paramétrable) — un trigram index suffit pour la sous-chaîne sur les noms.
 - Concurrence multi-writer haute fréquence — l'app est lecture-dominante,
@@ -38,11 +51,11 @@ Si l'un change, il faut réévaluer.
 
 | # | Hypothèse | Conséquence |
 |---|---|---|
-| H1 | Le graphe tient entièrement en RAM | Pas de pagination disque ; on peut maintenir des index secondaires sans souci de coût mémoire |
+| H1 | Le graphe tient entièrement en RAM — **hypothèse de développement, pas propriété du système** (→ STORAGE.md H18, H21, §8) | Pas de pagination disque ; on peut maintenir des index secondaires sans souci de coût mémoire. Reformulée : « les *index mémoire* tiennent en RAM ». Tout ce document décrit le palier **P0** de STORAGE.md §8.2 ; si le budget ne couvre pas le graphe, les paliers P1-P5 s'appliquent par domaine et certaines complexités de §5 changent (§8.8 de STORAGE.md) |
 | H2 | Les lectures dominent largement les écritures | On accepte de payer un peu plus à l'écriture (maintenance des index, bump de génération) pour gagner beaucoup en lecture |
 | H3 | Le nombre de `concept_type` et `relation_type` est petit (≤ quelques centaines) | Les index par type (label index, typed adjacency) ont une cardinalité de clé bornée |
 | H4 | Les noms de concepts sont courts (≤ quelques dizaines de chars) | Le trigram index a un nombre raisonnable de trigrammes par concept |
-| H5 | Le `concept_type` d'un concept est immutable après création | Les index par type n'ont pas à gérer la mutation du type d'un concept |
+| H5 | Le `concept_type` d'un concept est immutable après création | Les index par type n'ont pas à gérer la mutation du type d'un concept. Avec le partitionnement par `ns`, c'est aussi ce qui garantit qu'une entité ne change jamais de domaine (→ STORAGE.md R13 : à honorer si H5 tombe) |
 | H6 | Les champs `source`, `target`, `relation_type` d'une relation sont immutables | L'index d'adjacence (typée ou non) n'a jamais à être déplacé après création |
 | H7 | Toute écriture passe par les méthodes publiques de `OntologyGraph` (champs privés) | Pas de chemin d'écriture qui contourne la mise à jour des index |
 | H8 | Le client HTTP respecte `Cache-Control` / `If-None-Match` (ou peut être configuré pour) | L'ETag a une utilité réelle ; sinon il n'y a que le cache server-side |
@@ -65,6 +78,12 @@ Toutes les mutations passent par les méthodes publiques (`upsert_concept`,
 précisément pour rendre cette règle structurellement vraie.
 
 ### R2 — Une mutation = mise à jour de tous les index concernés + bump de génération
+
+Cette règle se compose avec R8 de `STORAGE.md` (« disque avant mémoire ») :
+la séquence complète d'une mutation est *append disque → DashMap primaire →
+index dérivés → bump de génération*. **État actuel du code** : les handlers
+HTTP et `ingest_records` mutent la mémoire *avant* l'append et ne défont rien
+si l'append échoue — c'est l'écart corrigé en phase 1 de `STORAGE-PLAN.md`.
 
 Chaque méthode mutante a pour responsabilité de :
 
@@ -89,6 +108,15 @@ Les index secondaires (sorted, by_type, trigrams, typed adjacency) ne sont
 **jamais persistés**. Ils se reconstruisent automatiquement lors du
 `Store::load_into` qui rejoue le WAL/snapshot via les méthodes publiques.
 **Ne jamais essayer de les sérialiser.**
+
+Précision apportée par `STORAGE.md` R9 : cette interdiction vise les index
+**sémantiques** (ceux du tableau §4.1). Les index de **stockage** (`.idx`,
+`.ent`, `.xref`, et en mémoire contrainte `.adj`, `.srt`) sont eux persistés,
+mais ce sont des tables d'offsets dérivées d'un fichier immuable, elles ne
+connaissent ni noms, ni types, ni ordre d'affichage. R4 n'est pas affaiblie :
+un `.srt` qui reproduit l'ordre de `concepts_sorted` sur disque n'est licite
+que parce qu'il est reconstructible par scan du `.data` (R7) et n'est jamais
+la source de vérité.
 
 ### R5 — Le cache est invalidé par génération, pas par TTL
 
@@ -148,6 +176,16 @@ Localisés dans [`crates/graph/src/graph.rs`](../crates/graph/src/graph.rs).
   `sort()` post-fetch.
 - `total` est calculé en pleine fidélité quand `track_total=true`, en
   lower-bound quand `track_total=false`.
+
+**Pagination par `offset` → curseur** (→ STORAGE.md §8.8). L'`offset` est
+O(1) sur un `BTreeSet` résident mais devient O(offset) dès que le listing
+passe par une fusion k-way de `.srt` (palier P3). Comme c'est le seul point
+d'API irréversible du passage en mémoire contrainte, `GET /concepts` et
+`GET /relations` doivent exposer `cursor=` / `next_cursor` **avant** toute
+implémentation des paliers, `offset` restant accepté mais déprécié. La clé
+de curseur est exactement la clé de `concepts_sorted`, `(concept_type, name,
+id)` — c'est R6 qui rend le curseur possible sans nouvel index. Chantier T1
+de `STORAGE-PLAN.md`.
 
 ### 4.3 `track_total` (à la Elasticsearch)
 
@@ -311,6 +349,13 @@ Chaque insertion/suppression de relation paie en plus :
 **Ordre de grandeur** : un insert de concept passe de ~5 µs à ~30 µs
 (estimation, non mesurée). Acceptable selon H2.
 
+Ce coût est celui de la **mémoire seule**. Le coût disque (sérialisation,
+`write` bufferisé, `fsync` amorti par group commit) s'y ajoute et est chiffré
+dans `STORAGE.md` §7.7 ; sans group commit, le `fsync` domine tout ce qui
+précède d'un facteur 5. Aujourd'hui le code ne fait **aucun** `fsync`
+(`flush()` seulement), donc le chiffre ci-dessus est aussi le coût total
+observé — et la durabilité annoncée n'est pas réelle.
+
 ---
 
 ## 7. Limites connues et points de vigilance
@@ -359,18 +404,46 @@ Sur un write, on prend brièvement le `Mutex` du cache pour le vider. Si
 le cache est en train d'être lu, le write attend. C'est court (un `clear`
 sur ≤ 256 entrées) mais non nul. Sous H2, OK.
 
+### 7.8 L'hydratation rejoue mutation par mutation
+
+`Store::load_into` applique chaque enregistrement via les méthodes publiques
+(R1, R4). Chaque appel prend les write-locks de `concepts_sorted` et
+`name_trigrams`, vide les caches et bumpe la génération : O(N log N) avec une
+contention inutile puisque personne ne lit pendant le démarrage. Correct,
+mais c'est le poste qui dominera le démarrage une fois le format binaire en
+place (`STORAGE.md` §7.1 : le parsing domine, puis viennent les index). Un
+`OntologyGraph::bulk_load` construisant les index en une passe est prévu en
+phase 4 de `STORAGE-PLAN.md`, **seulement si la mesure le justifie**. Il
+devra rester une méthode publique de `OntologyGraph` (R1) et bumper une fois
+la génération (R2).
+
+### 7.9 Tout ce document décrit P0
+
+Complexités (§5), coûts (§6) et fast paths (§4.4, §4.5) supposent les index
+résidents. `STORAGE.md` §8.8 donne, section par section, ce qui change quand
+un domaine descend de palier : trigrammes relâchés en P2 (`?q=` → scan
+`.srt`), `concepts_sorted`/`by_type` relâchés en P3 (fusion k-way), adjacence
+heap relâchée en P4 (`.adj`). Le query cache §4.7, borné, est conservé à tous
+les paliers et sa valeur augmente quand ils descendent.
+
 ---
 
 ## 8. Comment ajouter une nouvelle optimisation sans casser ce qui existe
 
 Checklist :
 
-1. **Lire R1-R6.** Toute violation = bug latent.
+1. **Lire R1-R6**, et R7-R17 de `STORAGE.md` si la feature touche au
+   stockage ou ajoute une structure dont la taille croît avec N. Toute
+   violation = bug latent.
 2. **Identifier la mutation** que la nouvelle feature implique. Quels
-   `bump_*_gen` doivent être appelés ?
-3. **Identifier les index** impactés. Faut-il en ajouter un nouveau ?
-4. **Vérifier les hypothèses H1-H10** : la feature en suppose-t-elle de
-   nouvelles ?
+   `bump_*_gen` doivent être appelés ? L'append disque précède-t-il bien la
+   mutation mémoire (R8) ?
+3. **Identifier les index** impactés. Faut-il en ajouter un nouveau ? Si
+   oui et qu'il est O(N) en heap, R15 exige sa forme disque, son chemin de
+   lecture dégradé et le palier où il est relâché.
+4. **Vérifier les hypothèses H1-H10** (et H11-H25) : la feature en
+   suppose-t-elle de nouvelles ? H1 n'est plus qu'une hypothèse de
+   développement.
 5. **Tests d'invariance** : ajouter un test qui fait une mutation puis
    vérifie que la lecture suivante reflète bien le changement. Le cache
    doit servir de la donnée fraîche.
@@ -390,6 +463,8 @@ Checklist :
 | Handlers HTTP avec ETag | [`crates/server/src/lib.rs`](../crates/server/src/lib.rs) — `list_concepts`, `list_relations` |
 | `subgraph_handler` seeds fixés | idem |
 | Bugfix UTF-8 truncate | [`crates/rag/src/prompt.rs`](../crates/rag/src/prompt.rs) |
+| Couche stockage (`Store`, `FileStore`, `LogRecord`, `apply`) | [`crates/storage/src/`](../crates/storage/src/) — format cible dans [`STORAGE.md`](./STORAGE.md), plan dans [`STORAGE-PLAN.md`](./STORAGE-PLAN.md) |
+| Attribution des ids (`IdAllocator`, compteur unique partagé) | [`crates/graph/src/id.rs`](../crates/graph/src/id.rs) |
 
 ---
 
