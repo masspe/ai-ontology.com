@@ -81,9 +81,15 @@ précisément pour rendre cette règle structurellement vraie.
 
 Cette règle se compose avec R8 de `STORAGE.md` (« disque avant mémoire ») :
 la séquence complète d'une mutation est *append disque → DashMap primaire →
-index dérivés → bump de génération*. **État actuel du code** : les handlers
-HTTP et `ingest_records` mutent la mémoire *avant* l'append et ne défont rien
-si l'append échoue — c'est l'écart corrigé en phase 1 de `STORAGE-PLAN.md`.
+index dérivés → bump de génération*. Depuis la phase 1 de `STORAGE-PLAN.md`,
+chaque méthode mutante existe en deux moitiés — `prepare_*` / `preview_*`
+(validation et allocation d'id, sans effet) puis `apply_prepared_*` /
+`apply_*_update` (insertion et maintenance des index) — et les handlers HTTP,
+`ingest_records` et le CLI appellent l'append du store **entre** les deux. Les
+formes en une pièce (`upsert_concept`, `add_relation`, `update_*`) restent la
+composition des deux et servent au rejeu. Un `prepare_*` qui réussit garantit
+que l'`apply` correspondant ne peut plus échouer pour une raison sémantique ;
+c'est ce qui rend l'ordre disque-puis-mémoire sûr.
 
 Chaque méthode mutante a pour responsabilité de :
 
@@ -352,9 +358,11 @@ Chaque insertion/suppression de relation paie en plus :
 Ce coût est celui de la **mémoire seule**. Le coût disque (sérialisation,
 `write` bufferisé, `fsync` amorti par group commit) s'y ajoute et est chiffré
 dans `STORAGE.md` §7.7 ; sans group commit, le `fsync` domine tout ce qui
-précède d'un facteur 5. Aujourd'hui le code ne fait **aucun** `fsync`
-(`flush()` seulement), donc le chiffre ci-dessus est aussi le coût total
-observé — et la durabilité annoncée n'est pas réelle.
+précède d'un facteur 5. Depuis la phase 1 de `STORAGE-PLAN.md`, `FileStore`
+fait un `fdatasync` par `append` et **un seul** par `append_batch` ; le chemin
+HTTP unitaire paie donc un `fsync` par requête, la cascade d'un
+`DELETE /concepts/{id}` en paie un pour tout le lot, et `ingest_records`
+regroupe les concepts consécutifs par 256.
 
 ---
 

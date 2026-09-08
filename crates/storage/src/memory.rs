@@ -30,6 +30,10 @@ impl MemoryStore {
     pub fn is_empty(&self) -> bool {
         self.inner.lock().is_empty()
     }
+    /// Snapshot of every record appended so far, in order.
+    pub fn records(&self) -> Vec<LogRecord> {
+        self.inner.lock().clone()
+    }
 }
 
 #[async_trait]

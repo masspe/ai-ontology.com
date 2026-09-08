@@ -7,8 +7,9 @@
 // from Winven AI Sarl. See LICENSE and LICENSE-COMMERCIAL.md.
 
 use async_trait::async_trait;
-use ontology_graph::{OntologyGraph, Relation};
+use ontology_graph::{Concept, ConceptId, GraphError, OntologyGraph, Relation};
 use ontology_storage::{LogRecord, Store};
+use std::collections::HashMap;
 use std::sync::Arc;
 use thiserror::Error;
 
@@ -113,29 +114,61 @@ pub trait Sink: Send + Sync {
     }
 }
 
+/// Maximum number of consecutive concepts journaled under a single
+/// durability barrier (`Store::append_batch`). A 10 000-row CSV costs ~40
+/// syncs instead of 10 000 (`STORAGE.md` §7.2).
+pub const INGEST_BATCH_SIZE: usize = 256;
+
 /// Drains `source` into the graph, optionally journaling every applied
 /// record to `store`. Maintains a name -> id mapping so `NamedRelation`
 /// records can be resolved without imposing an ordering requirement on
 /// the source — concepts can come before or after the relations that
 /// reference them, as long as both arrive within the same call.
+///
+/// # Write-ahead ordering (`STORAGE.md` R8)
+///
+/// Every instance record is validated (`prepare_*`), **then** journaled,
+/// **then** applied to the in-memory graph. If the store rejects a write the
+/// graph is left exactly as it was, so memory never runs ahead of disk.
+///
+/// # Batching
+///
+/// Runs of consecutive `Concept` records are journaled in batches of
+/// [`INGEST_BATCH_SIZE`] under one durability barrier. A concept is only
+/// admitted to a batch if it is valid against the graph *and* against the
+/// concepts already waiting in the batch (duplicate or disjoint names), so
+/// replaying a durable prefix of a batch can never fail. Any other record
+/// kind flushes the batch first, because it may depend on those concepts.
+///
+/// # Schema records
+///
+/// Type declarations (`ConceptTypeDecl`, …) are applied to the in-memory
+/// ontology as they arrive but journaled as **one** `Ontology` record, just
+/// before the first instance that could depend on them (and at the end).
+/// This replaces the previous one-snapshot-per-declaration behaviour that
+/// made the ontology ~95 % of a typical log. The trade-off is explicit: a
+/// store failure at that flush leaves schema *types* (never instances) in
+/// memory that are not on disk; the ingest is aborted with the error.
 pub async fn ingest_records<S: Source + ?Sized>(
     source: &mut S,
     graph: &Arc<OntologyGraph>,
     store: Option<&dyn Store>,
 ) -> Result<IngestStats, IngestError> {
-    let mut stats = IngestStats::default();
-    // Buffer NamedRelations whose endpoints haven't shown up yet.
+    let mut ing = Ingester::new(graph, store);
+    // Buffer NamedRelations (and other dependent records) whose
+    // prerequisites haven't shown up yet.
     let mut deferred: Vec<Record> = Vec::new();
 
     while let Some(rec) = source.next().await? {
-        if !apply_record(&rec, graph, store, &mut stats).await? {
+        if !ing.apply(&rec).await? {
             deferred.push(rec);
         }
     }
+    ing.flush().await?;
 
     // Retry deferred records once both endpoints should now exist.
     for rec in deferred {
-        if !apply_record(&rec, graph, store, &mut stats).await? {
+        if !ing.apply(&rec).await? {
             if let Record::NamedRelation {
                 source_type,
                 source_name,
@@ -149,8 +182,323 @@ pub async fn ingest_records<S: Source + ?Sized>(
             }
         }
     }
+    ing.flush().await?;
 
-    Ok(stats)
+    Ok(ing.stats)
+}
+
+/// Streaming state of one `ingest_records` call: the concept batch waiting
+/// for its durability barrier, and whether schema changes await journaling.
+struct Ingester<'a> {
+    graph: &'a Arc<OntologyGraph>,
+    store: Option<&'a dyn Store>,
+    stats: IngestStats,
+    /// Concepts already validated and id-allocated (`prepare_concept`), not
+    /// yet journaled nor applied.
+    pending: Vec<Concept>,
+    /// `(concept_type, lowercase name)` → id for every pending concept, so
+    /// intra-batch duplicates are caught before anything hits the disk.
+    pending_names: HashMap<(String, String), ConceptId>,
+    /// The in-memory ontology has type declarations not yet journaled.
+    schema_dirty: bool,
+}
+
+impl<'a> Ingester<'a> {
+    fn new(graph: &'a Arc<OntologyGraph>, store: Option<&'a dyn Store>) -> Self {
+        Self {
+            graph,
+            store,
+            stats: IngestStats::default(),
+            pending: Vec::new(),
+            pending_names: HashMap::new(),
+            schema_dirty: false,
+        }
+    }
+
+    /// Journal the ontology if type declarations are waiting. Must precede
+    /// any instance record that may reference the new types.
+    async fn flush_schema(&mut self) -> Result<(), IngestError> {
+        if !self.schema_dirty {
+            return Ok(());
+        }
+        if let Some(s) = self.store {
+            s.append(&LogRecord::ontology(self.graph.ontology()))
+                .await?;
+        }
+        self.schema_dirty = false;
+        Ok(())
+    }
+
+    /// Settle the concept batch if there is one (schema first, as always).
+    /// A no-op when nothing is pending, so a run of type declarations does
+    /// not journal the ontology once per declaration.
+    async fn settle_pending(&mut self) -> Result<(), IngestError> {
+        if self.pending.is_empty() {
+            return Ok(());
+        }
+        self.flush().await
+    }
+
+    /// Durability barrier: journal pending schema and concepts, then apply
+    /// the concepts to the graph. On store failure nothing is applied and
+    /// the batch is dropped (its ids stay burnt — harmless).
+    async fn flush(&mut self) -> Result<(), IngestError> {
+        self.flush_schema().await?;
+        if self.pending.is_empty() {
+            return Ok(());
+        }
+        let batch = std::mem::take(&mut self.pending);
+        self.pending_names.clear();
+        if let Some(s) = self.store {
+            let records: Vec<LogRecord> = batch.iter().cloned().map(LogRecord::concept).collect();
+            s.append_batch(&records).await?;
+        }
+        for c in batch {
+            // Cannot fail semantically: prepare_concept + the pending checks
+            // already rejected everything apply would.
+            self.graph.apply_prepared_concept(c)?;
+            self.stats.concepts += 1;
+        }
+        Ok(())
+    }
+
+    /// Journal one non-concept instance record, after the barrier.
+    async fn journal(&mut self, record: LogRecord) -> Result<(), IngestError> {
+        self.flush().await?;
+        if let Some(s) = self.store {
+            s.append(&record).await?;
+        }
+        Ok(())
+    }
+
+    /// Reject a concept that collides with one already waiting in the batch
+    /// — the graph cannot see those yet, so `prepare_concept` alone would
+    /// let the second one through and the *apply* would fail after the
+    /// records are durable.
+    fn check_pending_conflicts(&self, c: &Concept) -> Result<(), IngestError> {
+        if self.pending.is_empty() {
+            return Ok(());
+        }
+        let lname = c.name.to_lowercase();
+        if let Some(existing) = self
+            .pending_names
+            .get(&(c.concept_type.clone(), lname.clone()))
+        {
+            if c.id.0 == 0 || *existing != c.id {
+                return Err(
+                    GraphError::DuplicateConcept(c.name.clone(), c.concept_type.clone()).into(),
+                );
+            }
+        }
+        let disjoint: Vec<String> = self.graph.with_ontology(|o| {
+            o.concept_types
+                .get(&c.concept_type)
+                .map(|ct| ct.disjoint_with.clone())
+                .unwrap_or_default()
+        });
+        for other in disjoint {
+            if self
+                .pending_names
+                .contains_key(&(other.clone(), lname.clone()))
+            {
+                return Err(GraphError::DisjointTypeViolation {
+                    type_a: c.concept_type.clone(),
+                    type_b: other,
+                }
+                .into());
+            }
+        }
+        Ok(())
+    }
+
+    async fn stage_concept(&mut self, mut c: Concept) -> Result<(), IngestError> {
+        // An explicit id that is already pending (same entity twice in one
+        // batch, e.g. a rename mid-export) is an upsert over an unapplied
+        // record: settle the batch first rather than reason about it.
+        if c.id.0 != 0 && self.pending.iter().any(|p| p.id == c.id) {
+            self.flush().await?;
+        }
+        self.check_pending_conflicts(&c)?;
+        self.graph.prepare_concept(&mut c)?;
+        self.pending_names
+            .insert((c.concept_type.clone(), c.name.to_lowercase()), c.id);
+        self.pending.push(c);
+        if self.pending.len() >= INGEST_BATCH_SIZE {
+            self.flush().await?;
+        }
+        Ok(())
+    }
+
+    async fn add_relation(&mut self, mut rel: Relation) -> Result<(), IngestError> {
+        // Endpoints must be applied, so settle the batch before validating.
+        self.flush().await?;
+        self.graph.prepare_relation(&mut rel)?;
+        self.journal(LogRecord::relation(rel.clone())).await?;
+        self.graph.apply_prepared_relation(rel)?;
+        self.stats.relations += 1;
+        Ok(())
+    }
+
+    /// Returns `Ok(false)` when the record must be retried later.
+    async fn apply(&mut self, rec: &Record) -> Result<bool, IngestError> {
+        match rec {
+            Record::Ontology(o) => {
+                // Full schema replacement: durable first, then live.
+                self.flush().await?;
+                if let Some(s) = self.store {
+                    s.append(&LogRecord::ontology(o.clone())).await?;
+                }
+                self.graph.extend_ontology(|target| {
+                    *target = o.clone();
+                    Ok(())
+                })?;
+                self.schema_dirty = false;
+                self.stats.ontology_updates += 1;
+                Ok(true)
+            }
+            Record::Concept(c) => {
+                self.stage_concept(c.clone()).await?;
+                Ok(true)
+            }
+            Record::Relation(r) => {
+                self.add_relation(r.clone()).await?;
+                Ok(true)
+            }
+            Record::NamedRelation {
+                relation_type,
+                source_type,
+                source_name,
+                target_type,
+                target_name,
+                weight,
+            } => {
+                let mut src = self.graph.find_by_name(source_type, source_name);
+                let mut tgt = self.graph.find_by_name(target_type, target_name);
+                if (src.is_none() || tgt.is_none()) && !self.pending.is_empty() {
+                    // The endpoints may be sitting in the batch.
+                    self.flush().await?;
+                    src = self.graph.find_by_name(source_type, source_name);
+                    tgt = self.graph.find_by_name(target_type, target_name);
+                }
+                match (src, tgt) {
+                    (Some(s), Some(t)) => {
+                        let mut rel =
+                            Relation::new(Default::default(), relation_type.clone(), s, t);
+                        rel.weight = *weight;
+                        self.add_relation(rel).await?;
+                        Ok(true)
+                    }
+                    _ => Ok(false),
+                }
+            }
+            Record::ConceptTypeDecl(ct) => {
+                // Pending concepts were validated against the current schema;
+                // settle them before it changes. The schema itself is only
+                // journaled once, before the first instance that needs it.
+                self.settle_pending().await?;
+                self.graph.extend_ontology(|o| {
+                    o.add_concept_type(ct.clone());
+                    Ok(())
+                })?;
+                self.schema_dirty = true;
+                self.stats.ontology_updates += 1;
+                Ok(true)
+            }
+            Record::RelationTypeDecl(rt) => {
+                // Deferred if domain/range aren't known yet — let the retry pass
+                // see the concept types first.
+                let known = self.graph.with_ontology(|o| {
+                    o.concept_types.contains_key(&rt.domain)
+                        && o.concept_types.contains_key(&rt.range)
+                });
+                if !known {
+                    return Ok(false);
+                }
+                self.settle_pending().await?;
+                self.graph
+                    .extend_ontology(|o| o.add_relation_type(rt.clone()))?;
+                self.schema_dirty = true;
+                self.stats.ontology_updates += 1;
+                Ok(true)
+            }
+            Record::RuleTypeDecl(rule) => {
+                let known = self.graph.with_ontology(|o| {
+                    rule.applies_to
+                        .iter()
+                        .all(|t| o.concept_types.contains_key(t))
+                });
+                if !known {
+                    return Ok(false);
+                }
+                self.settle_pending().await?;
+                self.graph
+                    .extend_ontology(|o| o.add_rule_type(rule.clone()))?;
+                self.schema_dirty = true;
+                self.stats.ontology_updates += 1;
+                Ok(true)
+            }
+            Record::ActionTypeDecl(action) => {
+                let known = self.graph.with_ontology(|o| {
+                    o.concept_types.contains_key(&action.subject)
+                        && action
+                            .object
+                            .as_ref()
+                            .map(|t| o.concept_types.contains_key(t))
+                            .unwrap_or(true)
+                });
+                if !known {
+                    return Ok(false);
+                }
+                self.settle_pending().await?;
+                self.graph
+                    .extend_ontology(|o| o.add_action_type(action.clone()))?;
+                self.schema_dirty = true;
+                self.stats.ontology_updates += 1;
+                Ok(true)
+            }
+            Record::Rule(rule) => {
+                // Need the rule_type and all referenced concepts to exist —
+                // including any still in the batch.
+                self.flush().await?;
+                let ready = self
+                    .graph
+                    .with_ontology(|o| o.rule_type(&rule.rule_type).is_some())
+                    && rule
+                        .applies_to
+                        .iter()
+                        .all(|cid| self.graph.get_concept(*cid).is_ok());
+                if !ready {
+                    return Ok(false);
+                }
+                let mut r = rule.clone();
+                self.graph.prepare_rule(&mut r)?;
+                self.journal(LogRecord::rule(r.clone())).await?;
+                self.graph.apply_prepared_rule(r)?;
+                self.stats.rules += 1;
+                Ok(true)
+            }
+            Record::Action(action) => {
+                self.flush().await?;
+                let ready = self
+                    .graph
+                    .with_ontology(|o| o.action_type(&action.action_type).is_some())
+                    && self.graph.get_concept(action.subject).is_ok()
+                    && action
+                        .object
+                        .map(|cid| self.graph.get_concept(cid).is_ok())
+                        .unwrap_or(true);
+                if !ready {
+                    return Ok(false);
+                }
+                let mut a = action.clone();
+                self.graph.prepare_action(&mut a)?;
+                self.journal(LogRecord::action(a.clone())).await?;
+                self.graph.apply_prepared_action(a)?;
+                self.stats.actions += 1;
+                Ok(true)
+            }
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone)]
@@ -160,176 +508,4 @@ pub struct IngestStats {
     pub ontology_updates: u64,
     pub rules: u64,
     pub actions: u64,
-}
-
-async fn apply_record(
-    rec: &Record,
-    graph: &Arc<OntologyGraph>,
-    store: Option<&dyn Store>,
-    stats: &mut IngestStats,
-) -> Result<bool, IngestError> {
-    match rec {
-        Record::Ontology(o) => {
-            graph.extend_ontology(|target| {
-                *target = o.clone();
-                Ok(())
-            })?;
-            if let Some(s) = store {
-                s.append(&LogRecord::ontology(o.clone())).await?;
-            }
-            stats.ontology_updates += 1;
-            Ok(true)
-        }
-        Record::Concept(c) => {
-            let mut c = c.clone();
-            let id = graph.upsert_concept(c.clone())?;
-            c.id = id;
-            if let Some(s) = store {
-                s.append(&LogRecord::concept(c)).await?;
-            }
-            stats.concepts += 1;
-            Ok(true)
-        }
-        Record::Relation(r) => {
-            let id = graph.add_relation(r.clone())?;
-            let mut r = r.clone();
-            r.id = id;
-            if let Some(s) = store {
-                s.append(&LogRecord::relation(r)).await?;
-            }
-            stats.relations += 1;
-            Ok(true)
-        }
-        Record::NamedRelation {
-            relation_type,
-            source_type,
-            source_name,
-            target_type,
-            target_name,
-            weight,
-        } => {
-            let src = graph.find_by_name(source_type, source_name);
-            let tgt = graph.find_by_name(target_type, target_name);
-            match (src, tgt) {
-                (Some(s), Some(t)) => {
-                    let mut rel = Relation::new(Default::default(), relation_type.clone(), s, t);
-                    rel.weight = *weight;
-                    let id = graph.add_relation(rel.clone())?;
-                    rel.id = id;
-                    if let Some(store) = store {
-                        store.append(&LogRecord::relation(rel)).await?;
-                    }
-                    stats.relations += 1;
-                    Ok(true)
-                }
-                _ => Ok(false),
-            }
-        }
-        Record::ConceptTypeDecl(ct) => {
-            graph.extend_ontology(|o| {
-                o.add_concept_type(ct.clone());
-                Ok(())
-            })?;
-            if let Some(s) = store {
-                s.append(&LogRecord::ontology(graph.ontology())).await?;
-            }
-            stats.ontology_updates += 1;
-            Ok(true)
-        }
-        Record::RelationTypeDecl(rt) => {
-            // Deferred if domain/range aren't known yet — let the retry pass
-            // see the concept types first.
-            let known = {
-                let o = graph.ontology();
-                o.concept_types.contains_key(&rt.domain)
-                    && o.concept_types.contains_key(&rt.range)
-            };
-            if !known {
-                return Ok(false);
-            }
-            graph.extend_ontology(|o| o.add_relation_type(rt.clone()))?;
-            if let Some(s) = store {
-                s.append(&LogRecord::ontology(graph.ontology())).await?;
-            }
-            stats.ontology_updates += 1;
-            Ok(true)
-        }
-        Record::RuleTypeDecl(rule) => {
-            let known = {
-                let o = graph.ontology();
-                rule.applies_to.iter().all(|t| o.concept_types.contains_key(t))
-            };
-            if !known {
-                return Ok(false);
-            }
-            graph.extend_ontology(|o| o.add_rule_type(rule.clone()))?;
-            if let Some(s) = store {
-                s.append(&LogRecord::ontology(graph.ontology())).await?;
-            }
-            stats.ontology_updates += 1;
-            Ok(true)
-        }
-        Record::ActionTypeDecl(action) => {
-            let known = {
-                let o = graph.ontology();
-                o.concept_types.contains_key(&action.subject)
-                    && action
-                        .object
-                        .as_ref()
-                        .map(|t| o.concept_types.contains_key(t))
-                        .unwrap_or(true)
-            };
-            if !known {
-                return Ok(false);
-            }
-            graph.extend_ontology(|o| o.add_action_type(action.clone()))?;
-            if let Some(s) = store {
-                s.append(&LogRecord::ontology(graph.ontology())).await?;
-            }
-            stats.ontology_updates += 1;
-            Ok(true)
-        }
-        Record::Rule(rule) => {
-            // Need the rule_type and all referenced concepts to exist.
-            let ready = {
-                let o = graph.ontology();
-                o.rule_type(&rule.rule_type).is_some()
-            } && rule
-                .applies_to
-                .iter()
-                .all(|cid| graph.get_concept(*cid).is_ok());
-            if !ready {
-                return Ok(false);
-            }
-            let mut r = rule.clone();
-            let id = graph.upsert_rule(r.clone())?;
-            r.id = id;
-            if let Some(s) = store {
-                s.append(&LogRecord::rule(r)).await?;
-            }
-            stats.rules += 1;
-            Ok(true)
-        }
-        Record::Action(action) => {
-            let ready = {
-                let o = graph.ontology();
-                o.action_type(&action.action_type).is_some()
-            } && graph.get_concept(action.subject).is_ok()
-                && action
-                    .object
-                    .map(|cid| graph.get_concept(cid).is_ok())
-                    .unwrap_or(true);
-            if !ready {
-                return Ok(false);
-            }
-            let mut a = action.clone();
-            let id = graph.upsert_action(a.clone())?;
-            a.id = id;
-            if let Some(s) = store {
-                s.append(&LogRecord::action(a)).await?;
-            }
-            stats.actions += 1;
-            Ok(true)
-        }
-    }
 }

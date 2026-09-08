@@ -16,7 +16,9 @@ use std::sync::Arc;
 
 use crate::error::{GraphError, GraphResult};
 use crate::id::{ActionId, ConceptId, IdAllocator, RelationId, RuleId};
-use crate::model::{Action, ActionPatch, Concept, ConceptPatch, Relation, RelationPatch, Rule, RulePatch};
+use crate::model::{
+    Action, ActionPatch, Concept, ConceptPatch, Relation, RelationPatch, Rule, RulePatch,
+};
 use crate::schema::Ontology;
 
 type AdjList = SmallVec<[RelationId; 4]>;
@@ -140,7 +142,7 @@ impl OntologyGraph {
         Self {
             ontology: RwLock::new(ontology),
             concepts: DashMap::new(),
-            rules: DashMap::new(),           
+            rules: DashMap::new(),
             actions: DashMap::new(),
             relations: DashMap::new(),
             name_index: DashMap::new(),
@@ -222,6 +224,15 @@ impl OntologyGraph {
         self.ontology.read().clone()
     }
 
+    /// Run `f` against the live ontology under a short read lock, without
+    /// cloning it. Prefer this over [`ontology`](Self::ontology) on hot paths
+    /// that only need to look something up. `f` must not call back into
+    /// methods that take the ontology write lock.
+    pub fn with_ontology<R>(&self, f: impl FnOnce(&Ontology) -> R) -> R {
+        let g = self.ontology.read();
+        f(&g)
+    }
+
     pub fn extend_ontology<F>(&self, f: F) -> GraphResult<()>
     where
         F: FnOnce(&mut Ontology) -> GraphResult<()>,
@@ -256,49 +267,92 @@ impl OntologyGraph {
 
     // ---------- concepts ----------
 
-    /// Insert a concept. Allocates an id if `concept.id == ConceptId(0)`.
-    pub fn upsert_concept(&self, mut concept: Concept) -> GraphResult<ConceptId> {
-        {
-            let onto = self.ontology.read();
-            let ct = onto.concept_type(&concept.concept_type)?;
-            if let Some(allowed) = &ct.properties {
-                for k in concept.properties.keys() {
-                    if !allowed.iter().any(|a| a == k) {
-                        return Err(GraphError::InvalidProperty {
-                            property: k.clone(),
-                            concept_type: ct.name.clone(),
-                        });
-                    }
-                }
-            }
-            for req in &ct.required_properties {
-                if !concept.properties.contains_key(req) {
-                    return Err(GraphError::MissingRequiredProperty {
-                        property: req.clone(),
+    /// Validate a concept's *contents* against the schema: known type,
+    /// allowed and required properties, disjoint-type name clashes. Pure —
+    /// touches no index and allocates nothing.
+    fn validate_concept_schema(&self, concept: &Concept) -> GraphResult<()> {
+        let onto = self.ontology.read();
+        let ct = onto.concept_type(&concept.concept_type)?;
+        if let Some(allowed) = &ct.properties {
+            for k in concept.properties.keys() {
+                if !allowed.iter().any(|a| a == k) {
+                    return Err(GraphError::InvalidProperty {
+                        property: k.clone(),
                         concept_type: ct.name.clone(),
                     });
                 }
             }
-            // Disjoint-with: same lowercase name already used under a sibling
-            // type → reject.
-            let lname = concept.name.to_lowercase();
-            for other in &ct.disjoint_with {
-                if self
-                    .name_index
-                    .get(&(other.clone(), lname.clone()))
-                    .is_some()
-                {
-                    return Err(GraphError::DisjointTypeViolation {
-                        type_a: ct.name.clone(),
-                        type_b: other.clone(),
-                    });
-                }
+        }
+        for req in &ct.required_properties {
+            if !concept.properties.contains_key(req) {
+                return Err(GraphError::MissingRequiredProperty {
+                    property: req.clone(),
+                    concept_type: ct.name.clone(),
+                });
+            }
+        }
+        // Disjoint-with: same lowercase name already used under a sibling
+        // type → reject.
+        let lname = concept.name.to_lowercase();
+        for other in &ct.disjoint_with {
+            if self
+                .name_index
+                .get(&(other.clone(), lname.clone()))
+                .is_some()
+            {
+                return Err(GraphError::DisjointTypeViolation {
+                    type_a: ct.name.clone(),
+                    type_b: other.clone(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Validate `concept` against the schema and the live graph, and
+    /// allocate its id when `concept.id == ConceptId(0)` — **without
+    /// inserting anything**.
+    ///
+    /// This is the first half of the write-ahead sequence mandated by
+    /// `STORAGE.md` R8: `prepare_concept` → durable append →
+    /// [`apply_prepared_concept`](Self::apply_prepared_concept). Everything
+    /// that can reject the concept is checked here, so that once the record
+    /// is on disk the apply step cannot fail for a semantic reason.
+    ///
+    /// The allocated id is consumed even if the caller never applies the
+    /// concept (e.g. the append fails). Ids are only required to be unique,
+    /// so a gap is harmless.
+    pub fn prepare_concept(&self, concept: &mut Concept) -> GraphResult<()> {
+        self.validate_concept_schema(concept)?;
+        let key = (concept.concept_type.clone(), concept.name.to_lowercase());
+        if let Some(existing) = self.name_index.get(&key) {
+            // A fresh concept (id 0) can never legitimately share a name; an
+            // explicit id may only if it *is* the existing concept (upsert).
+            if concept.id.0 == 0 || *existing != concept.id {
+                return Err(GraphError::DuplicateConcept(
+                    concept.name.clone(),
+                    concept.concept_type.clone(),
+                ));
             }
         }
         if concept.id.0 == 0 {
             concept.id = self.ids.next_concept();
         } else {
             self.ids.observe(concept.id.0);
+        }
+        Ok(())
+    }
+
+    /// Insert a concept previously validated by
+    /// [`prepare_concept`](Self::prepare_concept). Second half of the R8
+    /// sequence; call it only after the matching log record is durable.
+    ///
+    /// The duplicate-name check is re-run defensively (it is O(1)) so a
+    /// caller that skips `prepare_concept` still cannot corrupt the name
+    /// index. `concept.id` must be non-zero.
+    pub fn apply_prepared_concept(&self, concept: Concept) -> GraphResult<ConceptId> {
+        if concept.id.0 == 0 {
+            return Err(GraphError::NotPrepared("concept"));
         }
         let key = (concept.concept_type.clone(), concept.name.to_lowercase());
         if let Some(existing) = self.name_index.get(&key) {
@@ -309,6 +363,7 @@ impl OntologyGraph {
                 ));
             }
         }
+        self.ids.observe(concept.id.0);
         self.name_index.insert(key, concept.id);
         let id = concept.id;
         let sort_key = (concept.concept_type.clone(), concept.name.clone(), id);
@@ -331,6 +386,16 @@ impl OntologyGraph {
         self.index_name_trigrams(&new_name, id);
         self.bump_concepts_gen();
         Ok(id)
+    }
+
+    /// Insert a concept. Allocates an id if `concept.id == ConceptId(0)`.
+    ///
+    /// Equivalent to [`prepare_concept`](Self::prepare_concept) immediately
+    /// followed by [`apply_prepared_concept`](Self::apply_prepared_concept).
+    /// Use the two-step form when a durable append must sit in between.
+    pub fn upsert_concept(&self, mut concept: Concept) -> GraphResult<ConceptId> {
+        self.prepare_concept(&mut concept)?;
+        self.apply_prepared_concept(concept)
     }
 
     pub fn get_concept(&self, id: ConceptId) -> GraphResult<Concept> {
@@ -359,7 +424,16 @@ impl OntologyGraph {
 
     // ---------- relations ----------
 
-    pub fn add_relation(&self, mut rel: Relation) -> GraphResult<RelationId> {
+    /// Validate `rel` against the schema and the live graph (endpoints exist,
+    /// domain/range, cardinality, functional) and allocate its id when
+    /// `rel.id == RelationId(0)` — **without inserting anything**.
+    ///
+    /// First half of the R8 write-ahead sequence; see
+    /// [`prepare_concept`](Self::prepare_concept). A caller-supplied id that
+    /// collides with an existing relation is reassigned (this happens when
+    /// re-ingesting an export whose explicit ids collide with materialized
+    /// symmetric inverses).
+    pub fn prepare_relation(&self, rel: &mut Relation) -> GraphResult<()> {
         let src = self
             .concepts
             .get(&rel.source)
@@ -372,21 +446,27 @@ impl OntologyGraph {
             let onto = self.ontology.read();
             onto.validate_edge(&rel.relation_type, &src.concept_type, &tgt.concept_type)?;
         }
+        drop(src);
+        drop(tgt);
         let rt = self
             .ontology
             .read()
             .relation_type(&rel.relation_type)
             .cloned()?;
-        let symmetric = rt.symmetric;
 
         // Cardinality + functional enforcement. Counted before id assignment
         // so the rejection path costs nothing extra. The materialized inverse
         // for symmetric relations is pushed directly to the adjacency map
         // without going through add_relation, so it doesn't trip these checks.
         use crate::schema::Cardinality;
-        let limits_out = matches!(rt.cardinality, Cardinality::OneToOne | Cardinality::ManyToOne)
-            || rt.functional;
-        let limits_in = matches!(rt.cardinality, Cardinality::OneToOne | Cardinality::OneToMany);
+        let limits_out = matches!(
+            rt.cardinality,
+            Cardinality::OneToOne | Cardinality::ManyToOne
+        ) || rt.functional;
+        let limits_in = matches!(
+            rt.cardinality,
+            Cardinality::OneToOne | Cardinality::OneToMany
+        );
         if limits_out {
             if let Some(by_type) = self.out_edges_typed.get(&rel.source) {
                 if let Some(adj) = by_type.get(&rel.relation_type) {
@@ -423,8 +503,30 @@ impl OntologyGraph {
         } else {
             self.ids.observe(rel.id.0);
         }
-        drop(src);
-        drop(tgt);
+        Ok(())
+    }
+
+    /// Insert a relation previously validated by
+    /// [`prepare_relation`](Self::prepare_relation). Second half of the R8
+    /// sequence; call it only after the matching log record is durable.
+    /// Symmetric relation types materialize their inverse edge here.
+    /// `rel.id` must be non-zero and must not already be present.
+    pub fn apply_prepared_relation(&self, rel: Relation) -> GraphResult<RelationId> {
+        if rel.id.0 == 0 {
+            return Err(GraphError::NotPrepared("relation"));
+        }
+        debug_assert!(
+            !self.relations.contains_key(&rel.id),
+            "apply_prepared_relation: id {} already present — prepare_relation reassigns \
+             colliding ids, so a caller bypassed it",
+            rel.id
+        );
+        let symmetric = self
+            .ontology
+            .read()
+            .relation_type(&rel.relation_type)?
+            .symmetric;
+        self.ids.observe(rel.id.0);
 
         let id = rel.id;
         let (s, t) = (rel.source, rel.target);
@@ -479,6 +581,15 @@ impl OntologyGraph {
         Ok(id)
     }
 
+    /// Insert a relation. Allocates an id if `rel.id == RelationId(0)`.
+    ///
+    /// Equivalent to [`prepare_relation`](Self::prepare_relation) immediately
+    /// followed by [`apply_prepared_relation`](Self::apply_prepared_relation).
+    pub fn add_relation(&self, mut rel: Relation) -> GraphResult<RelationId> {
+        self.prepare_relation(&mut rel)?;
+        self.apply_prepared_relation(rel)
+    }
+
     pub fn get_relation(&self, id: RelationId) -> GraphResult<Relation> {
         self.relations
             .get(&id)
@@ -490,45 +601,99 @@ impl OntologyGraph {
         self.relations.iter().map(|e| e.value().clone()).collect()
     }
 
-    /// Apply a partial update to an existing relation. Only `weight` and
-    /// `properties` are mutable; the adjacency index is unaffected.
-    pub fn update_relation(
+    /// Compute the relation that `patch` would produce, without applying it.
+    /// Pure: the graph is unchanged. Pairs with
+    /// [`apply_relation_update`](Self::apply_relation_update) for the R8
+    /// write-ahead sequence.
+    pub fn preview_relation_update(
         &self,
         id: RelationId,
-        patch: RelationPatch,
+        patch: &RelationPatch,
     ) -> GraphResult<Relation> {
+        let mut rel = self.get_relation(id)?;
+        if let Some(w) = patch.weight {
+            rel.weight = w;
+        }
+        if let Some(p) = &patch.properties {
+            rel.properties = p.clone();
+        }
+        Ok(rel)
+    }
+
+    /// Replace the mutable fields (`weight`, `properties`) of the relation
+    /// `updated.id` with those of `updated`. `source`, `target` and
+    /// `relation_type` are immutable (H6) and are ignored.
+    pub fn apply_relation_update(&self, updated: Relation) -> GraphResult<Relation> {
         let mut entry = self
             .relations
-            .get_mut(&id)
-            .ok_or(GraphError::UnknownRelation(id))?;
-        if let Some(w) = patch.weight {
-            entry.weight = w;
-        }
-        if let Some(p) = patch.properties {
-            entry.properties = p;
-        }
+            .get_mut(&updated.id)
+            .ok_or(GraphError::UnknownRelation(updated.id))?;
+        entry.weight = updated.weight;
+        entry.properties = updated.properties;
         Ok(entry.clone())
     }
 
-    /// Apply a partial update to an existing concept. Renaming updates the
-    /// name index; clearing description / replacing properties is in-place.
-    /// Returns the new concept. The concept's `concept_type` is immutable —
-    /// changing types would require revalidating every incident edge.
-    pub fn update_concept(&self, id: ConceptId, patch: ConceptPatch) -> GraphResult<Concept> {
+    /// Apply a partial update to an existing relation. Only `weight` and
+    /// `properties` are mutable; the adjacency index is unaffected.
+    pub fn update_relation(&self, id: RelationId, patch: RelationPatch) -> GraphResult<Relation> {
+        let updated = self.preview_relation_update(id, &patch)?;
+        self.apply_relation_update(updated)
+    }
+
+    /// Compute the concept that `patch` would produce, fully validated
+    /// (schema, duplicate name, disjoint types), without applying it. Pure.
+    pub fn preview_concept_update(
+        &self,
+        id: ConceptId,
+        patch: &ConceptPatch,
+    ) -> GraphResult<Concept> {
+        let mut c = self.get_concept(id)?;
+        if let Some(new_name) = &patch.name {
+            let new_key = (c.concept_type.clone(), new_name.to_lowercase());
+            if let Some(existing) = self.name_index.get(&new_key) {
+                if *existing != id {
+                    return Err(GraphError::DuplicateConcept(
+                        new_name.clone(),
+                        c.concept_type.clone(),
+                    ));
+                }
+            }
+            c.name = new_name.clone();
+        }
+        if let Some(d) = &patch.description {
+            c.description = d.clone();
+        }
+        if let Some(props) = &patch.properties {
+            c.properties = props.clone();
+        }
+        self.validate_concept_schema(&c)?;
+        Ok(c)
+    }
+
+    /// Replace the concept `updated.id` with `updated`, maintaining the
+    /// name, sorted, per-type and trigram indexes. The `concept_type` must
+    /// be unchanged (H5). Second half of the R8 sequence for updates.
+    pub fn apply_concept_update(&self, updated: Concept) -> GraphResult<Concept> {
+        let id = updated.id;
         let mut entry = self
             .concepts
             .get_mut(&id)
             .ok_or(GraphError::UnknownConcept(id))?;
-
-        if let Some(new_name) = patch.name {
+        if entry.concept_type != updated.concept_type {
+            return Err(GraphError::ImmutableConceptType(
+                entry.concept_type.clone(),
+                updated.concept_type,
+            ));
+        }
+        if entry.name != updated.name {
             // Maintain (concept_type, lowercase name) → id index.
             let old_key = (entry.concept_type.clone(), entry.name.to_lowercase());
-            let new_key = (entry.concept_type.clone(), new_name.to_lowercase());
+            let new_key = (entry.concept_type.clone(), updated.name.to_lowercase());
             if old_key != new_key {
                 if let Some(existing) = self.name_index.get(&new_key) {
                     if *existing != id {
                         return Err(GraphError::DuplicateConcept(
-                            new_name,
+                            updated.name,
                             entry.concept_type.clone(),
                         ));
                     }
@@ -537,50 +702,60 @@ impl OntologyGraph {
                 self.name_index.insert(new_key, id);
             }
             let old_sort = (entry.concept_type.clone(), entry.name.clone(), id);
-            let new_sort = (entry.concept_type.clone(), new_name.clone(), id);
-            if old_sort != new_sort {
+            let new_sort = (entry.concept_type.clone(), updated.name.clone(), id);
+            {
                 let mut idx = self.concepts_sorted.write();
                 idx.remove(&old_sort);
                 idx.insert(new_sort);
-                if let Some(mut bucket) = self.concepts_by_type.get_mut(&entry.concept_type) {
-                    bucket.remove(&(entry.name.clone(), id));
-                    bucket.insert((new_name.clone(), id));
-                }
-                self.deindex_name_trigrams(&entry.name, id);
-                self.index_name_trigrams(&new_name, id);
             }
-            entry.name = new_name;
-        }
-        if let Some(d) = patch.description {
-            entry.description = d;
-        }
-        if let Some(props) = patch.properties {
-            let onto = self.ontology.read();
-            let ct = onto.concept_type(&entry.concept_type)?;
-            if let Some(allowed) = &ct.properties {
-                for k in props.keys() {
-                    if !allowed.iter().any(|a| a == k) {
-                        return Err(GraphError::InvalidProperty {
-                            property: k.clone(),
-                            concept_type: ct.name.clone(),
-                        });
-                    }
-                }
+            if let Some(mut bucket) = self.concepts_by_type.get_mut(&entry.concept_type) {
+                bucket.remove(&(entry.name.clone(), id));
+                bucket.insert((updated.name.clone(), id));
             }
-            for req in &ct.required_properties {
-                if !props.contains_key(req) {
-                    return Err(GraphError::MissingRequiredProperty {
-                        property: req.clone(),
-                        concept_type: ct.name.clone(),
-                    });
-                }
-            }
-            entry.properties = props;
+            self.deindex_name_trigrams(&entry.name, id);
+            self.index_name_trigrams(&updated.name, id);
         }
+        entry.name = updated.name;
+        entry.description = updated.description;
+        entry.properties = updated.properties;
         let snapshot = entry.clone();
         drop(entry);
         self.bump_concepts_gen();
         Ok(snapshot)
+    }
+
+    /// Apply a partial update to an existing concept. Renaming updates the
+    /// name index; clearing description / replacing properties is in-place.
+    /// Returns the new concept. The concept's `concept_type` is immutable —
+    /// changing types would require revalidating every incident edge.
+    ///
+    /// Equivalent to [`preview_concept_update`](Self::preview_concept_update)
+    /// followed by [`apply_concept_update`](Self::apply_concept_update).
+    pub fn update_concept(&self, id: ConceptId, patch: ConceptPatch) -> GraphResult<Concept> {
+        let updated = self.preview_concept_update(id, &patch)?;
+        self.apply_concept_update(updated)
+    }
+
+    /// Ids of every relation incident to `id` (outgoing and incoming,
+    /// sorted, deduplicated), or an error when the concept does not exist.
+    ///
+    /// Read-only companion of [`remove_concept`](Self::remove_concept): it
+    /// returns exactly the cascade that `remove_concept` would perform, so a
+    /// caller can journal the deletion **before** mutating anything (R8).
+    pub fn incident_relation_ids(&self, id: ConceptId) -> GraphResult<Vec<RelationId>> {
+        if !self.concepts.contains_key(&id) {
+            return Err(GraphError::UnknownConcept(id));
+        }
+        let mut ids: Vec<RelationId> = Vec::new();
+        if let Some(adj) = self.out_edges.get(&id) {
+            ids.extend(adj.iter().copied());
+        }
+        if let Some(adj) = self.in_edges.get(&id) {
+            ids.extend(adj.iter().copied());
+        }
+        ids.sort();
+        ids.dedup();
+        Ok(ids)
     }
 
     /// Remove a concept and every relation incident to it. Returns the
@@ -594,9 +769,11 @@ impl OntologyGraph {
             .1;
         let key = (concept.concept_type.clone(), concept.name.to_lowercase());
         self.name_index.remove(&key);
-        self.concepts_sorted
-            .write()
-            .remove(&(concept.concept_type.clone(), concept.name.clone(), id));
+        self.concepts_sorted.write().remove(&(
+            concept.concept_type.clone(),
+            concept.name.clone(),
+            id,
+        ));
         if let Some(mut bucket) = self.concepts_by_type.get_mut(&concept.concept_type) {
             bucket.remove(&(concept.name.clone(), id));
         }
@@ -777,8 +954,12 @@ impl OntologyGraph {
     /// cloning the underlying `Relation`. Used by traversal hot paths that
     /// only need ids during the walk and look up entities at the end.
     /// `f` returns `false` to stop early.
-    pub fn for_each_neighbor<F>(&self, node: ConceptId, direction: crate::traversal::Direction, mut f: F)
-    where
+    pub fn for_each_neighbor<F>(
+        &self,
+        node: ConceptId,
+        direction: crate::traversal::Direction,
+        mut f: F,
+    ) where
         F: FnMut(ConceptId, RelationId) -> bool,
     {
         use crate::traversal::Direction;
@@ -809,10 +990,10 @@ impl OntologyGraph {
 
     // ---------- rules ----------
 
-    /// Insert (or replace) a rule. Allocates an id when `rule.id == RuleId(0)`.
-    /// The named `rule_type` and every concept id referenced in `applies_to`
-    /// must already exist; otherwise the call fails.
-    pub fn upsert_rule(&self, mut rule: Rule) -> GraphResult<RuleId> {
+    /// Validate a rule and allocate its id when `rule.id == RuleId(0)`,
+    /// without inserting. The named `rule_type` and every concept id in
+    /// `applies_to` must exist. First half of the R8 sequence.
+    pub fn prepare_rule(&self, rule: &mut Rule) -> GraphResult<()> {
         {
             let onto = self.ontology.read();
             if onto.rule_type(&rule.rule_type).is_none() {
@@ -829,6 +1010,16 @@ impl OntologyGraph {
         } else {
             self.ids.observe(rule.id.0);
         }
+        Ok(())
+    }
+
+    /// Insert (or replace) a rule previously validated by
+    /// [`prepare_rule`](Self::prepare_rule). `rule.id` must be non-zero.
+    pub fn apply_prepared_rule(&self, rule: Rule) -> GraphResult<RuleId> {
+        if rule.id.0 == 0 {
+            return Err(GraphError::NotPrepared("rule"));
+        }
+        self.ids.observe(rule.id.0);
         let id = rule.id;
         let sort_key = (rule.rule_type.clone(), rule.name.clone(), id);
         if let Some(prev) = self.rules.insert(id, rule) {
@@ -839,6 +1030,14 @@ impl OntologyGraph {
         }
         self.rules_sorted.write().insert(sort_key);
         Ok(id)
+    }
+
+    /// Insert (or replace) a rule. Allocates an id when `rule.id == RuleId(0)`.
+    /// The named `rule_type` and every concept id referenced in `applies_to`
+    /// must already exist; otherwise the call fails.
+    pub fn upsert_rule(&self, mut rule: Rule) -> GraphResult<RuleId> {
+        self.prepare_rule(&mut rule)?;
+        self.apply_prepared_rule(rule)
     }
 
     pub fn get_rule(&self, id: RuleId) -> GraphResult<Rule> {
@@ -868,10 +1067,9 @@ impl OntologyGraph {
         Ok(())
     }
 
-    /// Apply a partial update to an existing rule. `rule_type` cannot be
-    /// changed; every concept id referenced in a replacement `applies_to`
-    /// must already exist.
-    pub fn update_rule(&self, id: RuleId, patch: RulePatch) -> GraphResult<Rule> {
+    /// Compute the rule that `patch` would produce, validated, without
+    /// applying it. Pure.
+    pub fn preview_rule_update(&self, id: RuleId, patch: &RulePatch) -> GraphResult<Rule> {
         if let Some(applies) = &patch.applies_to {
             for cid in applies {
                 if !self.concepts.contains_key(cid) {
@@ -879,47 +1077,71 @@ impl OntologyGraph {
                 }
             }
         }
+        let mut rule = self.get_rule(id)?;
+        if let Some(n) = &patch.name {
+            rule.name = n.clone();
+        }
+        if let Some(w) = &patch.when {
+            rule.when = w.clone();
+        }
+        if let Some(t) = &patch.then {
+            rule.then = t.clone();
+        }
+        if let Some(a) = &patch.applies_to {
+            rule.applies_to = a.clone();
+        }
+        if let Some(s) = patch.strict {
+            rule.strict = s;
+        }
+        if let Some(d) = &patch.description {
+            rule.description = d.clone();
+        }
+        if let Some(p) = &patch.properties {
+            rule.properties = p.clone();
+        }
+        Ok(rule)
+    }
+
+    /// Replace the rule `updated.id` with `updated`, maintaining the sorted
+    /// index. `rule_type` is immutable and taken from the stored rule.
+    pub fn apply_rule_update(&self, updated: Rule) -> GraphResult<Rule> {
+        let id = updated.id;
         let mut entry = self
             .rules
             .get_mut(&id)
             .ok_or(GraphError::UnknownRelationType(format!("rule {id}")))?;
-        if let Some(n) = patch.name {
+        if entry.name != updated.name {
             let old_sort = (entry.rule_type.clone(), entry.name.clone(), id);
-            let new_sort = (entry.rule_type.clone(), n.clone(), id);
-            if old_sort != new_sort {
-                let mut idx = self.rules_sorted.write();
-                idx.remove(&old_sort);
-                idx.insert(new_sort);
-            }
-            entry.name = n;
+            let new_sort = (entry.rule_type.clone(), updated.name.clone(), id);
+            let mut idx = self.rules_sorted.write();
+            idx.remove(&old_sort);
+            idx.insert(new_sort);
         }
-        if let Some(w) = patch.when {
-            entry.when = w;
-        }
-        if let Some(t) = patch.then {
-            entry.then = t;
-        }
-        if let Some(a) = patch.applies_to {
-            entry.applies_to = a;
-        }
-        if let Some(s) = patch.strict {
-            entry.strict = s;
-        }
-        if let Some(d) = patch.description {
-            entry.description = d;
-        }
-        if let Some(p) = patch.properties {
-            entry.properties = p;
-        }
+        entry.name = updated.name;
+        entry.when = updated.when;
+        entry.then = updated.then;
+        entry.applies_to = updated.applies_to;
+        entry.strict = updated.strict;
+        entry.description = updated.description;
+        entry.properties = updated.properties;
         Ok(entry.clone())
+    }
+
+    /// Apply a partial update to an existing rule. `rule_type` cannot be
+    /// changed; every concept id referenced in a replacement `applies_to`
+    /// must already exist.
+    pub fn update_rule(&self, id: RuleId, patch: RulePatch) -> GraphResult<Rule> {
+        let updated = self.preview_rule_update(id, &patch)?;
+        self.apply_rule_update(updated)
     }
 
     // ---------- actions ----------
 
-    /// Insert (or replace) an action. The `action_type` must be declared
-    /// in the ontology and both endpoints (`subject`, optional `object`)
-    /// must exist as concepts.
-    pub fn upsert_action(&self, mut action: Action) -> GraphResult<ActionId> {
+    /// Validate an action and allocate its id when `action.id ==
+    /// ActionId(0)`, without inserting. The `action_type` must be declared
+    /// and both endpoints (`subject`, optional `object`) must exist. First
+    /// half of the R8 sequence.
+    pub fn prepare_action(&self, action: &mut Action) -> GraphResult<()> {
         {
             let onto = self.ontology.read();
             if onto.action_type(&action.action_type).is_none() {
@@ -939,6 +1161,16 @@ impl OntologyGraph {
         } else {
             self.ids.observe(action.id.0);
         }
+        Ok(())
+    }
+
+    /// Insert (or replace) an action previously validated by
+    /// [`prepare_action`](Self::prepare_action). `action.id` must be non-zero.
+    pub fn apply_prepared_action(&self, action: Action) -> GraphResult<ActionId> {
+        if action.id.0 == 0 {
+            return Err(GraphError::NotPrepared("action"));
+        }
+        self.ids.observe(action.id.0);
         let id = action.id;
         let sort_key = (action.action_type.clone(), action.name.clone(), id);
         if let Some(prev) = self.actions.insert(id, action) {
@@ -949,6 +1181,14 @@ impl OntologyGraph {
         }
         self.actions_sorted.write().insert(sort_key);
         Ok(id)
+    }
+
+    /// Insert (or replace) an action. The `action_type` must be declared
+    /// in the ontology and both endpoints (`subject`, optional `object`)
+    /// must exist as concepts.
+    pub fn upsert_action(&self, mut action: Action) -> GraphResult<ActionId> {
+        self.prepare_action(&mut action)?;
+        self.apply_prepared_action(action)
     }
 
     pub fn get_action(&self, id: ActionId) -> GraphResult<Action> {
@@ -1111,8 +1351,8 @@ impl OntologyGraph {
                 // K-way merge across descendant buckets to keep stable
                 // (name, id) order without globally re-sorting.
                 let descs = self.ontology.read().descendants(t);
-                use std::collections::BinaryHeap;
                 use std::cmp::Reverse;
+                use std::collections::BinaryHeap;
                 let buckets: Vec<_> = descs
                     .iter()
                     .filter_map(|d| self.concepts_by_type.get(d).map(|b| b.clone()))
@@ -1257,16 +1497,16 @@ impl OntologyGraph {
 
             let mut candidates: Vec<RelationId> = match (source, target, typed_src, typed_tgt) {
                 (_, _, Some(a), Some(b)) => {
-                    if a.len() <= b.len() { a } else { b }
+                    if a.len() <= b.len() {
+                        a
+                    } else {
+                        b
+                    }
                 }
                 (_, _, Some(a), None) => a,
                 (_, _, None, Some(b)) => b,
                 (Some(s), Some(t), None, None) => {
-                    let from_src = self
-                        .out_edges
-                        .get(&s)
-                        .map(|adj| adj.len())
-                        .unwrap_or(0);
+                    let from_src = self.out_edges.get(&s).map(|adj| adj.len()).unwrap_or(0);
                     let from_tgt = self.in_edges.get(&t).map(|adj| adj.len()).unwrap_or(0);
                     if from_src <= from_tgt {
                         self.out_edges
@@ -1402,55 +1642,71 @@ impl OntologyGraph {
         Ok(())
     }
 
-    /// Apply a partial update to an existing action. `action_type` cannot
-    /// be changed; replacement `subject` / `object` concept ids must exist.
-    pub fn update_action(
-        &self,
-        id: ActionId,
-        patch: ActionPatch,
-    ) -> GraphResult<Action> {
+    /// Compute the action that `patch` would produce, validated, without
+    /// applying it. Pure.
+    pub fn preview_action_update(&self, id: ActionId, patch: &ActionPatch) -> GraphResult<Action> {
         if let Some(subj) = patch.subject {
             if !self.concepts.contains_key(&subj) {
                 return Err(GraphError::UnknownConcept(subj));
             }
         }
-        if let Some(obj_opt) = &patch.object {
-            if let Some(obj) = obj_opt {
-                if !self.concepts.contains_key(obj) {
-                    return Err(GraphError::UnknownConcept(*obj));
-                }
+        if let Some(Some(obj)) = &patch.object {
+            if !self.concepts.contains_key(obj) {
+                return Err(GraphError::UnknownConcept(*obj));
             }
         }
+        let mut action = self.get_action(id)?;
+        if let Some(n) = &patch.name {
+            action.name = n.clone();
+        }
+        if let Some(s) = patch.subject {
+            action.subject = s;
+        }
+        if let Some(o) = patch.object {
+            action.object = o;
+        }
+        if let Some(p) = &patch.parameters {
+            action.parameters = p.clone();
+        }
+        if let Some(e) = &patch.effect {
+            action.effect = e.clone();
+        }
+        if let Some(d) = &patch.description {
+            action.description = d.clone();
+        }
+        Ok(action)
+    }
+
+    /// Replace the action `updated.id` with `updated`, maintaining the
+    /// sorted index. `action_type` is immutable and taken from the stored
+    /// action.
+    pub fn apply_action_update(&self, updated: Action) -> GraphResult<Action> {
+        let id = updated.id;
         let mut entry = self
             .actions
             .get_mut(&id)
             .ok_or(GraphError::UnknownRelationType(format!("action {id}")))?;
-        if let Some(n) = patch.name {
+        if entry.name != updated.name {
             let old_sort = (entry.action_type.clone(), entry.name.clone(), id);
-            let new_sort = (entry.action_type.clone(), n.clone(), id);
-            if old_sort != new_sort {
-                let mut idx = self.actions_sorted.write();
-                idx.remove(&old_sort);
-                idx.insert(new_sort);
-            }
-            entry.name = n;
+            let new_sort = (entry.action_type.clone(), updated.name.clone(), id);
+            let mut idx = self.actions_sorted.write();
+            idx.remove(&old_sort);
+            idx.insert(new_sort);
         }
-        if let Some(s) = patch.subject {
-            entry.subject = s;
-        }
-        if let Some(o) = patch.object {
-            entry.object = o;
-        }
-        if let Some(p) = patch.parameters {
-            entry.parameters = p;
-        }
-        if let Some(e) = patch.effect {
-            entry.effect = e;
-        }
-        if let Some(d) = patch.description {
-            entry.description = d;
-        }
+        entry.name = updated.name;
+        entry.subject = updated.subject;
+        entry.object = updated.object;
+        entry.parameters = updated.parameters;
+        entry.effect = updated.effect;
+        entry.description = updated.description;
         Ok(entry.clone())
+    }
+
+    /// Apply a partial update to an existing action. `action_type` cannot
+    /// be changed; replacement `subject` / `object` concept ids must exist.
+    pub fn update_action(&self, id: ActionId, patch: ActionPatch) -> GraphResult<Action> {
+        let updated = self.preview_action_update(id, &patch)?;
+        self.apply_action_update(updated)
     }
 }
 
@@ -1618,8 +1874,10 @@ mod tests {
             ..Default::default()
         });
         let g = OntologyGraph::new(o);
-        g.upsert_concept(Concept::new(Default::default(), "Person", "Alice")).unwrap();
-        g.upsert_concept(Concept::new(Default::default(), "Researcher", "Bob")).unwrap();
+        g.upsert_concept(Concept::new(Default::default(), "Person", "Alice"))
+            .unwrap();
+        g.upsert_concept(Concept::new(Default::default(), "Researcher", "Bob"))
+            .unwrap();
         let (total, _) = g.list_concepts_page(Some("Person"), None, 0, 10, true, false);
         assert_eq!(total, 1);
         let (total2, page2) = g.list_concepts_page(Some("Person"), None, 0, 10, true, true);
@@ -1630,9 +1888,20 @@ mod tests {
     #[test]
     fn ontology_descendants_includes_self_and_children() {
         let mut o = Ontology::new();
-        o.add_concept_type(ConceptType { name: "Animal".into(), ..Default::default() });
-        o.add_concept_type(ConceptType { name: "Mammal".into(), parent: Some("Animal".into()), ..Default::default() });
-        o.add_concept_type(ConceptType { name: "Dog".into(), parent: Some("Mammal".into()), ..Default::default() });
+        o.add_concept_type(ConceptType {
+            name: "Animal".into(),
+            ..Default::default()
+        });
+        o.add_concept_type(ConceptType {
+            name: "Mammal".into(),
+            parent: Some("Animal".into()),
+            ..Default::default()
+        });
+        o.add_concept_type(ConceptType {
+            name: "Dog".into(),
+            parent: Some("Mammal".into()),
+            ..Default::default()
+        });
         let mut d = o.descendants("Animal");
         d.sort();
         assert_eq!(d, vec!["Animal".to_string(), "Dog".into(), "Mammal".into()]);
@@ -1642,7 +1911,10 @@ mod tests {
     #[test]
     fn closure_walks_transitive_chain() {
         let mut o = Ontology::new();
-        o.add_concept_type(ConceptType { name: "Component".into(), ..Default::default() });
+        o.add_concept_type(ConceptType {
+            name: "Component".into(),
+            ..Default::default()
+        });
         o.add_relation_type(RelationType {
             name: "partOf".into(),
             domain: "Component".into(),
@@ -1652,11 +1924,19 @@ mod tests {
         })
         .unwrap();
         let g = OntologyGraph::new(o);
-        let wheel = g.upsert_concept(Concept::new(Default::default(), "Component", "Wheel")).unwrap();
-        let car = g.upsert_concept(Concept::new(Default::default(), "Component", "Car")).unwrap();
-        let fleet = g.upsert_concept(Concept::new(Default::default(), "Component", "Fleet")).unwrap();
-        g.add_relation(Relation::new(Default::default(), "partOf", wheel, car)).unwrap();
-        g.add_relation(Relation::new(Default::default(), "partOf", car, fleet)).unwrap();
+        let wheel = g
+            .upsert_concept(Concept::new(Default::default(), "Component", "Wheel"))
+            .unwrap();
+        let car = g
+            .upsert_concept(Concept::new(Default::default(), "Component", "Car"))
+            .unwrap();
+        let fleet = g
+            .upsert_concept(Concept::new(Default::default(), "Component", "Fleet"))
+            .unwrap();
+        g.add_relation(Relation::new(Default::default(), "partOf", wheel, car))
+            .unwrap();
+        g.add_relation(Relation::new(Default::default(), "partOf", car, fleet))
+            .unwrap();
         let reached = g.closure(wheel, "partOf", 3).unwrap();
         assert!(reached.contains(&car));
         assert!(reached.contains(&fleet));
@@ -1665,8 +1945,14 @@ mod tests {
     #[test]
     fn inverse_of_surfaces_virtual_edges() {
         let mut o = Ontology::new();
-        o.add_concept_type(ConceptType { name: "Person".into(), ..Default::default() });
-        o.add_concept_type(ConceptType { name: "Paper".into(), ..Default::default() });
+        o.add_concept_type(ConceptType {
+            name: "Person".into(),
+            ..Default::default()
+        });
+        o.add_concept_type(ConceptType {
+            name: "Paper".into(),
+            ..Default::default()
+        });
         o.add_relation_type(RelationType {
             name: "authored".into(),
             domain: "Person".into(),
@@ -1684,9 +1970,14 @@ mod tests {
         .unwrap();
         o.validate_inverses().unwrap();
         let g = OntologyGraph::new(o);
-        let alice = g.upsert_concept(Concept::new(Default::default(), "Person", "Alice")).unwrap();
-        let p1 = g.upsert_concept(Concept::new(Default::default(), "Paper", "P1")).unwrap();
-        g.add_relation(Relation::new(Default::default(), "authored", alice, p1)).unwrap();
+        let alice = g
+            .upsert_concept(Concept::new(Default::default(), "Person", "Alice"))
+            .unwrap();
+        let p1 = g
+            .upsert_concept(Concept::new(Default::default(), "Paper", "P1"))
+            .unwrap();
+        g.add_relation(Relation::new(Default::default(), "authored", alice, p1))
+            .unwrap();
         let virt = g.outgoing_typed(p1, &["authoredBy".to_string()]);
         assert_eq!(virt.len(), 1);
         assert_eq!(virt[0].source, p1);
@@ -1706,22 +1997,40 @@ mod tests {
         });
         let g = OntologyGraph::new(o);
         let err = g.upsert_concept(Concept::new(Default::default(), "Person", "Alice"));
-        assert!(matches!(err, Err(GraphError::MissingRequiredProperty { .. })));
+        assert!(matches!(
+            err,
+            Err(GraphError::MissingRequiredProperty { .. })
+        ));
         let mut props = AHashMap::new();
         props.insert("email".into(), PropertyValue::Text("a@b".into()));
         let mut c = Concept::new(Default::default(), "Person", "Alice");
         c.properties = props.clone();
         let id = g.upsert_concept(c).unwrap();
         // update_concept replacing properties without email must also fail.
-        let err = g.update_concept(id, ConceptPatch { properties: Some(AHashMap::new()), ..Default::default() });
-        assert!(matches!(err, Err(GraphError::MissingRequiredProperty { .. })));
+        let err = g.update_concept(
+            id,
+            ConceptPatch {
+                properties: Some(AHashMap::new()),
+                ..Default::default()
+            },
+        );
+        assert!(matches!(
+            err,
+            Err(GraphError::MissingRequiredProperty { .. })
+        ));
     }
 
     #[test]
     fn one_to_many_rejects_second_inbound() {
         let mut o = Ontology::new();
-        o.add_concept_type(ConceptType { name: "Person".into(), ..Default::default() });
-        o.add_concept_type(ConceptType { name: "Paper".into(), ..Default::default() });
+        o.add_concept_type(ConceptType {
+            name: "Person".into(),
+            ..Default::default()
+        });
+        o.add_concept_type(ConceptType {
+            name: "Paper".into(),
+            ..Default::default()
+        });
         o.add_relation_type(RelationType {
             name: "authored".into(),
             domain: "Person".into(),
@@ -1731,10 +2040,17 @@ mod tests {
         })
         .unwrap();
         let g = OntologyGraph::new(o);
-        let alice = g.upsert_concept(Concept::new(Default::default(), "Person", "Alice")).unwrap();
-        let bob = g.upsert_concept(Concept::new(Default::default(), "Person", "Bob")).unwrap();
-        let p = g.upsert_concept(Concept::new(Default::default(), "Paper", "P")).unwrap();
-        g.add_relation(Relation::new(Default::default(), "authored", alice, p)).unwrap();
+        let alice = g
+            .upsert_concept(Concept::new(Default::default(), "Person", "Alice"))
+            .unwrap();
+        let bob = g
+            .upsert_concept(Concept::new(Default::default(), "Person", "Bob"))
+            .unwrap();
+        let p = g
+            .upsert_concept(Concept::new(Default::default(), "Paper", "P"))
+            .unwrap();
+        g.add_relation(Relation::new(Default::default(), "authored", alice, p))
+            .unwrap();
         let err = g.add_relation(Relation::new(Default::default(), "authored", bob, p));
         assert!(matches!(err, Err(GraphError::CardinalityViolation { .. })));
     }
@@ -1742,7 +2058,10 @@ mod tests {
     #[test]
     fn functional_relation_rejects_second_outbound() {
         let mut o = Ontology::new();
-        o.add_concept_type(ConceptType { name: "Person".into(), ..Default::default() });
+        o.add_concept_type(ConceptType {
+            name: "Person".into(),
+            ..Default::default()
+        });
         o.add_relation_type(RelationType {
             name: "spouse".into(),
             domain: "Person".into(),
@@ -1752,10 +2071,17 @@ mod tests {
         })
         .unwrap();
         let g = OntologyGraph::new(o);
-        let a = g.upsert_concept(Concept::new(Default::default(), "Person", "A")).unwrap();
-        let b = g.upsert_concept(Concept::new(Default::default(), "Person", "B")).unwrap();
-        let c = g.upsert_concept(Concept::new(Default::default(), "Person", "C")).unwrap();
-        g.add_relation(Relation::new(Default::default(), "spouse", a, b)).unwrap();
+        let a = g
+            .upsert_concept(Concept::new(Default::default(), "Person", "A"))
+            .unwrap();
+        let b = g
+            .upsert_concept(Concept::new(Default::default(), "Person", "B"))
+            .unwrap();
+        let c = g
+            .upsert_concept(Concept::new(Default::default(), "Person", "C"))
+            .unwrap();
+        g.add_relation(Relation::new(Default::default(), "spouse", a, b))
+            .unwrap();
         let err = g.add_relation(Relation::new(Default::default(), "spouse", a, c));
         assert!(matches!(err, Err(GraphError::CardinalityViolation { .. })));
     }
@@ -1768,9 +2094,13 @@ mod tests {
             disjoint_with: vec!["Robot".into()],
             ..Default::default()
         });
-        o.add_concept_type(ConceptType { name: "Robot".into(), ..Default::default() });
+        o.add_concept_type(ConceptType {
+            name: "Robot".into(),
+            ..Default::default()
+        });
         let g = OntologyGraph::new(o);
-        g.upsert_concept(Concept::new(Default::default(), "Person", "Alice")).unwrap();
+        g.upsert_concept(Concept::new(Default::default(), "Person", "Alice"))
+            .unwrap();
         let err = g.upsert_concept(Concept::new(Default::default(), "Robot", "Alice"));
         assert!(matches!(err, Err(GraphError::DisjointTypeViolation { .. })));
     }
@@ -1786,5 +2116,251 @@ mod tests {
             .unwrap();
         let res = g.add_relation(Relation::new(Default::default(), "authored", a, b));
         assert!(res.is_err());
+    }
+
+    // ---- write-ahead (R8) API: prepare / apply, preview / apply ----
+
+    #[test]
+    fn prepare_concept_allocates_id_without_inserting() {
+        let g = OntologyGraph::new(toy_ontology());
+        let gen_before = g.concepts_generation();
+        let mut c = Concept::new(Default::default(), "Person", "Alice");
+        g.prepare_concept(&mut c).unwrap();
+        assert_ne!(c.id.0, 0, "prepare must allocate an id");
+        assert_eq!(g.concept_count(), 0, "prepare must not insert");
+        assert!(g.find_by_name("Person", "Alice").is_none());
+        assert_eq!(
+            g.concepts_generation(),
+            gen_before,
+            "prepare must not bump gen"
+        );
+
+        let id = g.apply_prepared_concept(c).unwrap();
+        assert_eq!(g.concept_count(), 1);
+        assert_eq!(g.find_by_name("Person", "Alice"), Some(id));
+        assert!(g.concepts_generation() > gen_before);
+    }
+
+    #[test]
+    fn prepare_concept_rejects_everything_apply_would() {
+        let g = OntologyGraph::new(toy_ontology());
+        g.upsert_concept(Concept::new(Default::default(), "Person", "Alice"))
+            .unwrap();
+        // Duplicate name for a fresh concept.
+        let mut dup = Concept::new(Default::default(), "Person", "alice");
+        assert!(matches!(
+            g.prepare_concept(&mut dup),
+            Err(GraphError::DuplicateConcept(_, _))
+        ));
+        assert_eq!(dup.id.0, 0, "a rejected prepare must not allocate");
+        // Unknown type.
+        let mut bad = Concept::new(Default::default(), "Alien", "Zed");
+        assert!(matches!(
+            g.prepare_concept(&mut bad),
+            Err(GraphError::UnknownConceptType(_))
+        ));
+        assert_eq!(g.concept_count(), 1);
+    }
+
+    #[test]
+    fn prepare_concept_with_explicit_id_is_an_upsert() {
+        let g = OntologyGraph::new(toy_ontology());
+        let id = g
+            .upsert_concept(Concept::new(Default::default(), "Person", "Alice"))
+            .unwrap();
+        let mut same = Concept::new(id, "Person", "Alice").with_description("v2");
+        g.prepare_concept(&mut same).unwrap();
+        assert_eq!(same.id, id);
+        g.apply_prepared_concept(same).unwrap();
+        assert_eq!(g.concept_count(), 1);
+        assert_eq!(g.get_concept(id).unwrap().description, "v2");
+    }
+
+    #[test]
+    fn apply_prepared_rejects_unprepared_entities() {
+        let g = OntologyGraph::new(toy_ontology());
+        let c = Concept::new(Default::default(), "Person", "Alice");
+        assert!(matches!(
+            g.apply_prepared_concept(c),
+            Err(GraphError::NotPrepared("concept"))
+        ));
+        let a = g
+            .upsert_concept(Concept::new(Default::default(), "Person", "A"))
+            .unwrap();
+        let p = g
+            .upsert_concept(Concept::new(Default::default(), "Paper", "P"))
+            .unwrap();
+        let r = Relation::new(Default::default(), "authored", a, p);
+        assert!(matches!(
+            g.apply_prepared_relation(r),
+            Err(GraphError::NotPrepared("relation"))
+        ));
+        assert_eq!(g.relation_count(), 0);
+    }
+
+    #[test]
+    fn prepare_relation_validates_and_allocates_without_inserting() {
+        let g = OntologyGraph::new(toy_ontology());
+        let a = g
+            .upsert_concept(Concept::new(Default::default(), "Person", "A"))
+            .unwrap();
+        let p = g
+            .upsert_concept(Concept::new(Default::default(), "Paper", "P"))
+            .unwrap();
+        // Wrong direction → schema violation, nothing allocated.
+        let mut wrong = Relation::new(Default::default(), "authored", p, a);
+        assert!(matches!(
+            g.prepare_relation(&mut wrong),
+            Err(GraphError::SchemaViolation { .. })
+        ));
+        assert_eq!(wrong.id.0, 0);
+        // Unknown endpoint.
+        let mut dangling = Relation::new(Default::default(), "authored", a, ConceptId(999));
+        assert!(matches!(
+            g.prepare_relation(&mut dangling),
+            Err(GraphError::UnknownConcept(_))
+        ));
+        // Happy path.
+        let mut ok = Relation::new(Default::default(), "authored", a, p);
+        let gen_before = g.relations_generation();
+        g.prepare_relation(&mut ok).unwrap();
+        assert_ne!(ok.id.0, 0);
+        assert_eq!(g.relation_count(), 0);
+        assert_eq!(g.relations_generation(), gen_before);
+        let id = g.apply_prepared_relation(ok).unwrap();
+        assert_eq!(g.relation_count(), 1);
+        assert_eq!(g.get_relation(id).unwrap().source, a);
+    }
+
+    #[test]
+    fn prepare_relation_materializes_symmetric_inverse_on_apply() {
+        let mut o = toy_ontology();
+        o.add_relation_type(RelationType {
+            name: "knows".into(),
+            domain: "Person".into(),
+            range: "Person".into(),
+            symmetric: true,
+            ..Default::default()
+        })
+        .unwrap();
+        let g = OntologyGraph::new(o);
+        let a = g
+            .upsert_concept(Concept::new(Default::default(), "Person", "A"))
+            .unwrap();
+        let b = g
+            .upsert_concept(Concept::new(Default::default(), "Person", "B"))
+            .unwrap();
+        let mut r = Relation::new(Default::default(), "knows", a, b);
+        g.prepare_relation(&mut r).unwrap();
+        g.apply_prepared_relation(r).unwrap();
+        assert_eq!(g.relation_count(), 2, "inverse materialized on apply");
+        assert_eq!(g.outgoing(b).len(), 1);
+    }
+
+    #[test]
+    fn preview_concept_update_is_pure_and_validated() {
+        let g = OntologyGraph::new(toy_ontology());
+        let a = g
+            .upsert_concept(Concept::new(Default::default(), "Person", "Alice"))
+            .unwrap();
+        g.upsert_concept(Concept::new(Default::default(), "Person", "Bob"))
+            .unwrap();
+        let gen_before = g.concepts_generation();
+        // Renaming onto an existing name is rejected at preview time.
+        let clash = ConceptPatch {
+            name: Some("bob".into()),
+            ..Default::default()
+        };
+        assert!(matches!(
+            g.preview_concept_update(a, &clash),
+            Err(GraphError::DuplicateConcept(_, _))
+        ));
+        // A valid preview changes nothing.
+        let patch = ConceptPatch {
+            name: Some("Alicia".into()),
+            description: Some("renamed".into()),
+            ..Default::default()
+        };
+        let previewed = g.preview_concept_update(a, &patch).unwrap();
+        assert_eq!(previewed.name, "Alicia");
+        assert_eq!(g.get_concept(a).unwrap().name, "Alice");
+        assert_eq!(g.concepts_generation(), gen_before);
+        // Applying the previewed concept updates every index.
+        g.apply_concept_update(previewed).unwrap();
+        assert_eq!(g.find_by_name("Person", "alicia"), Some(a));
+        assert!(g.find_by_name("Person", "alice").is_none());
+        let (_, page) = g.list_concepts_page(Some("Person"), Some("lici"), 0, 10, true, true);
+        assert_eq!(page.len(), 1, "trigram index follows the rename");
+        assert!(g.concepts_generation() > gen_before);
+    }
+
+    #[test]
+    fn apply_concept_update_refuses_type_change() {
+        let g = OntologyGraph::new(toy_ontology());
+        let a = g
+            .upsert_concept(Concept::new(Default::default(), "Person", "Alice"))
+            .unwrap();
+        let mut retyped = g.get_concept(a).unwrap();
+        retyped.concept_type = "Paper".into();
+        assert!(matches!(
+            g.apply_concept_update(retyped),
+            Err(GraphError::ImmutableConceptType(_, _))
+        ));
+        assert_eq!(g.get_concept(a).unwrap().concept_type, "Person");
+    }
+
+    #[test]
+    fn incident_relation_ids_matches_remove_concept_cascade() {
+        let g = OntologyGraph::new(toy_ontology());
+        let alice = g
+            .upsert_concept(Concept::new(Default::default(), "Person", "Alice"))
+            .unwrap();
+        let p1 = g
+            .upsert_concept(Concept::new(Default::default(), "Paper", "P1"))
+            .unwrap();
+        let p2 = g
+            .upsert_concept(Concept::new(Default::default(), "Paper", "P2"))
+            .unwrap();
+        g.add_relation(Relation::new(Default::default(), "authored", alice, p1))
+            .unwrap();
+        g.add_relation(Relation::new(Default::default(), "authored", alice, p2))
+            .unwrap();
+        assert!(matches!(
+            g.incident_relation_ids(ConceptId(4242)),
+            Err(GraphError::UnknownConcept(_))
+        ));
+        let planned = g.incident_relation_ids(alice).unwrap();
+        assert_eq!(planned.len(), 2);
+        assert_eq!(g.relation_count(), 2, "incident_relation_ids is read-only");
+        let removed = g.remove_concept(alice).unwrap();
+        assert_eq!(planned, removed);
+        assert_eq!(g.relation_count(), 0);
+    }
+
+    #[test]
+    fn preview_relation_update_then_apply() {
+        let g = OntologyGraph::new(toy_ontology());
+        let a = g
+            .upsert_concept(Concept::new(Default::default(), "Person", "A"))
+            .unwrap();
+        let p = g
+            .upsert_concept(Concept::new(Default::default(), "Paper", "P"))
+            .unwrap();
+        let rid = g
+            .add_relation(Relation::new(Default::default(), "authored", a, p))
+            .unwrap();
+        let patch = RelationPatch {
+            weight: Some(0.25),
+            properties: None,
+        };
+        let previewed = g.preview_relation_update(rid, &patch).unwrap();
+        assert_eq!(previewed.weight, 0.25);
+        assert_eq!(g.get_relation(rid).unwrap().weight, 1.0, "preview is pure");
+        g.apply_relation_update(previewed).unwrap();
+        assert_eq!(g.get_relation(rid).unwrap().weight, 0.25);
+        assert!(matches!(
+            g.preview_relation_update(RelationId(999), &patch),
+            Err(GraphError::UnknownRelation(_))
+        ));
     }
 }

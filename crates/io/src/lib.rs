@@ -35,7 +35,10 @@ pub use charset::{decode_to_utf8, looks_binary, DecodedText};
 pub use csv::CsvSource;
 pub use docx::{extract_docx_text, is_zip};
 pub use extract::extract_from_text;
-pub use ingest::{export_graph, ingest_records, ExportStats, IngestStats, Sink, Source};
+pub use ingest::{
+    export_graph, ingest_records, ExportStats, IngestError, IngestStats, Sink, Source,
+    INGEST_BATCH_SIZE,
+};
 pub use jsonl::{JsonlSink, JsonlSource};
 pub use lang::{detect_language, LangTag};
 pub use proposal::{
