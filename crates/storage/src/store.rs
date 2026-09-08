@@ -38,10 +38,34 @@ pub enum StoreError {
 /// Implementations need not be transactional across multiple records — the
 /// graph is the single source of truth in memory; the store only needs to
 /// guarantee that successfully-acked writes can be replayed in order.
+///
+/// **Write-ahead contract (`STORAGE.md` R8).** Callers append the record
+/// *before* mutating the in-memory graph: `prepare_*` → `append` →
+/// `apply_prepared_*`. A successful return from `append` / `append_batch`
+/// means the record survives a process crash (for [`crate::FileStore`], the
+/// data has been `fsync`ed).
 #[async_trait]
 pub trait Store: Send + Sync + 'static {
     /// Append a single log record durably.
     async fn append(&self, record: &LogRecord) -> StoreResult<()>;
+
+    /// Append several records durably, in order, with **one** durability
+    /// barrier for the whole batch (group commit — `STORAGE.md` §7.2).
+    ///
+    /// Atomicity is per record, not per batch: a crash mid-batch may leave a
+    /// durable prefix. Callers must therefore only batch records that are
+    /// individually valid on replay regardless of whether the rest of the
+    /// batch made it — e.g. a concept and the cascade of relation deletions
+    /// that go with it, or a run of already-validated concepts.
+    ///
+    /// The default implementation appends one by one; backends with a real
+    /// durability barrier override it.
+    async fn append_batch(&self, records: &[LogRecord]) -> StoreResult<()> {
+        for r in records {
+            self.append(r).await?;
+        }
+        Ok(())
+    }
 
     /// Replay every persisted record into the supplied graph.
     async fn load_into(&self, graph: &Arc<OntologyGraph>) -> StoreResult<()>;

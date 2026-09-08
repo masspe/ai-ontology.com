@@ -234,6 +234,25 @@ enregistrements et vérifier qu'on redémarre avec un préfixe cohérent.
 - Tests : append échoué, troncature à tout offset, lot de 1 000 concepts
   ingérés en < N `fsync` (N = nombre de lots).
 
+### 3.6 État — livré le 2026-09-08 (branche `feat/storage-phase1`)
+
+Ce qui a été fait, et où le plan a été précisé en cours de route :
+
+| Point | Réalisation |
+|---|---|
+| R8 | `OntologyGraph` expose `prepare_concept` / `apply_prepared_concept`, idem `relation`, `rule`, `action` ; `preview_*_update` / `apply_*_update` pour les patchs ; `incident_relation_ids` pour journaliser une cascade avant de supprimer. Les formes historiques (`upsert_*`, `add_relation`, `update_*`) sont la composition des deux et servent au rejeu. Tous les handlers HTTP, `ingest_review::apply`, `ingest_records` et le CLI suivent `prepare → append → apply`. |
+| Sérialisation des écrivains | `AppState.writer` (`tokio::sync::Mutex<()>`) : un seul écrivain à la fois dans le processus, ce qui rend `prepare → apply` atomique vis-à-vis des autres requêtes. Cohérent avec H17. |
+| `fsync` | `FileStore::append_batch` écrit le lot puis un seul `sync_data` ; `append` = lot de 1 ; `sync_count()` exposé. Snapshot et compaction : `sync_all` du fichier temporaire avant le `rename`, `fsync` du répertoire sous Unix. |
+| Group commit | `Store::append_batch` ajouté au trait (défaut : boucle). Utilisé pour la cascade de `DELETE /concepts/{id}` et par `ingest_records`. **Restriction volontaire** : seuls les *concepts consécutifs* sont regroupés (par 256), avec une vérification des doublons et des types disjoints *à l'intérieur du lot* ; tout autre enregistrement vide le lot d'abord. Regrouper des relations exigerait de modéliser la cardinalité des relations en attente — reporté au group commit inter-requêtes de la phase 3. |
+| Recovery | Queue tronquée à n'importe quel octet (préfixe de longueur coupé, payload trop court, JSON invalide en dernière position) → `warn`, troncature au dernier enregistrement complet, reprise. Corruption *avant* la queue → erreur explicite, fichier intact. |
+| Amplification ontologie | `ingest_records` et `ingest_review::apply` journalisent **un** `Ontology` par flux, placé avant la première instance qui pourrait en dépendre. Compromis documenté dans le code : un échec du store à cet instant laisse des *types* (jamais des instances) en mémoire sans équivalent disque, et l'ingest s'arrête sur l'erreur. |
+| CI | Matrice `ubuntu-latest` × `windows-latest` (T2 avancé). |
+| Tests | `graph` : 10 tests unitaires sur prepare/apply/preview. `storage/tests/recovery.rs` : lots, seqs, troncature à tout offset, garbage final, corruption médiane, snapshot + queue tronquée. `io/tests/write_ahead.rs` : lots, un seul `Ontology`, doublons et disjoints intra-lot, store en échec, rejeu, ids explicites. `server/tests/write_ahead.rs` : les 13 endpoints mutants sur un store en échec laissent le graphe et ses générations intacts ; 404 sans toucher au store ; cascade = un lot ; redémarrage sur `FileStore` après écritures HTTP. `FlakyStore` (`ontology_storage::testing`) partagé par ces tests. |
+
+Non fait, volontairement : le `seq` à 0 entre `open()` et `load_into()`
+(§1.1) disparaît avec la phase 2 ; `spawn_snapshotter` reste non câblé
+puisque le snapshot disparaît avec le format binaire.
+
 ---
 
 ## 4. Phase 2 — Conteneur binaire, flux unique

@@ -59,11 +59,18 @@ pub enum GraphError {
     },
 
     #[error("disjoint type violation: `{type_a}` is disjoint with `{type_b}`")]
-    DisjointTypeViolation {
-        type_a: String,
-        type_b: String,
-    },
+    DisjointTypeViolation { type_a: String, type_b: String },
 
     #[error("serialization error: {0}")]
     Serde(String),
+
+    /// An `apply_prepared_*` method received an entity whose id was never
+    /// allocated by the matching `prepare_*` call (id == 0). Callers must
+    /// prepare, persist, then apply — see `STORAGE.md` R8.
+    #[error("{0} was not prepared: id is unset")]
+    NotPrepared(&'static str),
+
+    /// A concept update tried to change `concept_type` (immutable, H5).
+    #[error("concept type is immutable (was `{0}`, got `{1}`)")]
+    ImmutableConceptType(String, String),
 }
