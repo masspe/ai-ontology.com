@@ -67,8 +67,10 @@ pub async fn extract_proposal(
         .map(|l| format!("Document language (ISO 639-1): {}.", l.code))
         .unwrap_or_default();
 
-    let mut accumulator = OntologyProposal::default();
-    accumulator.language = language.cloned();
+    let mut accumulator = OntologyProposal {
+        language: language.cloned(),
+        ..Default::default()
+    };
 
     for (idx, chunk) in chunks.iter().enumerate() {
         let raw = call_llm(model, &schema_block, &lang_hint, chunk, idx, chunks.len()).await?;
@@ -256,7 +258,10 @@ fn render_schema(s: &Ontology) -> String {
     out.push_str("\nKnown relation types:\n");
     for n in &relation_types {
         if let Some(rt) = s.relation_types.get(*n) {
-            out.push_str(&format!("  - {} ({} -> {})\n", rt.name, rt.domain, rt.range));
+            out.push_str(&format!(
+                "  - {} ({} -> {})\n",
+                rt.name, rt.domain, rt.range
+            ));
         }
     }
     out
@@ -712,7 +717,9 @@ mod tests {
     async fn attach_conflicts_flags_dangling_refs() {
         let model = CannedModel(CANNED);
         let schema = Ontology::default();
-        let mut p = extract_proposal(&model, "doc", None, &schema).await.unwrap();
+        let mut p = extract_proposal(&model, "doc", None, &schema)
+            .await
+            .unwrap();
         let graph = OntologyGraph::new(Ontology::default());
         attach_conflicts(&mut p, &graph);
         // Both proposal-internal refs should resolve.

@@ -111,9 +111,21 @@ impl<'a> PromptBuilder<'a> {
                     r.applies_to.join(",")
                 };
                 let kind = if r.strict { "MUST" } else { "SHOULD" };
-                let when = if r.when.is_empty() { "-" } else { r.when.as_str() };
-                let then = if r.then.is_empty() { "-" } else { r.then.as_str() };
-                let _ = writeln!(out, "- [{}] {} ({}): when {} then {}", kind, r.name, scope, when, then);
+                let when = if r.when.is_empty() {
+                    "-"
+                } else {
+                    r.when.as_str()
+                };
+                let then = if r.then.is_empty() {
+                    "-"
+                } else {
+                    r.then.as_str()
+                };
+                let _ = writeln!(
+                    out,
+                    "- [{}] {} ({}): when {} then {}",
+                    kind, r.name, scope, when, then
+                );
             }
         }
         if !self.ontology.action_types.is_empty() {
@@ -132,7 +144,11 @@ impl<'a> PromptBuilder<'a> {
                 } else {
                     format!(" => {}", a.effect)
                 };
-                let _ = writeln!(out, "- {}: ({}) -> ({}){}{}", a.name, a.subject, obj, params, effect);
+                let _ = writeln!(
+                    out,
+                    "- {}: ({}) -> ({}){}{}",
+                    a.name, a.subject, obj, params, effect
+                );
             }
         }
         out
@@ -157,8 +173,10 @@ impl<'a> PromptBuilder<'a> {
             }
         }
         out.push_str("\n# Subgraph\n");
-        out.push_str("# Each line: `#<id> [depth] (Type) Name — description`. \
-                      Cite the `#<id>` tokens verbatim in your answer.\n");
+        out.push_str(
+            "# Each line: `#<id> [depth] (Type) Name — description`. \
+                      Cite the `#<id>` tokens verbatim in your answer.\n",
+        );
         for c in &subgraph.concepts {
             let depth = subgraph.depth_of.get(&c.id).copied().unwrap_or(0);
             let desc = if c.description.is_empty() {

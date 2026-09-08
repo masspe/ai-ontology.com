@@ -121,7 +121,7 @@ impl Relation {
         target: ConceptId,
     ) -> Self {
         Self {
-            id: id,
+            id,
             relation_type: relation_type.into(),
             source,
             target,
@@ -158,11 +158,7 @@ pub struct Rule {
 }
 
 impl Rule {
-    pub fn new(
-        id: RuleId,
-        rule_type: impl Into<String>,
-        name: impl Into<String>,
-    ) -> Self {
+    pub fn new(id: RuleId, rule_type: impl Into<String>, name: impl Into<String>) -> Self {
         Self {
             id,
             rule_type: rule_type.into(),

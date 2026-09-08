@@ -227,9 +227,8 @@ impl OntologyGraph {
         } else {
             Some(spec.concept_types.iter().cloned().collect())
         };
-        let want_concept = |name: &str| -> bool {
-            concept_filter.as_ref().map_or(true, |f| f.contains(name))
-        };
+        let want_concept =
+            |name: &str| -> bool { concept_filter.as_ref().is_none_or(|f| f.contains(name)) };
 
         while let Some((node, depth)) = queue.pop_front() {
             if depth >= spec.max_depth {
