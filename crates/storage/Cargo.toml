@@ -14,3 +14,8 @@ ahash = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 async-trait = { workspace = true }
+memmap2 = { workspace = true }
+crc32c = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }

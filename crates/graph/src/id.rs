@@ -26,6 +26,18 @@ pub struct RuleId(pub u64);
 #[serde(transparent)]
 pub struct ActionId(pub u64);
 
+/// Largest `ConceptId` the storage format can represent: relation endpoints
+/// are packed as `(source << 32) | target` in the on-disk index
+/// (`STORAGE.md` §4.3, decision D6). Checked, never assumed.
+pub const MAX_CONCEPT_ID: u64 = u32::MAX as u64;
+
+impl ConceptId {
+    /// `true` when the id fits the storage format's 32-bit endpoint packing.
+    pub fn fits_storage(self) -> bool {
+        self.0 <= MAX_CONCEPT_ID
+    }
+}
+
 impl fmt::Debug for ConceptId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "C#{}", self.0)
@@ -67,43 +79,88 @@ impl fmt::Display for ActionId {
     }
 }
 
-/// Monotonically-increasing id allocator. Thread-safe and lock-free.
+/// Snapshot of the four allocators' next values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IdWatermarks {
+    pub concepts: u64,
+    pub relations: u64,
+    pub rules: u64,
+    pub actions: u64,
+}
+
+/// Monotonically-increasing id allocators, one **per family**. Thread-safe
+/// and lock-free.
+///
+/// The four id types are distinct (`ConceptId`, `RelationId`, `RuleId`,
+/// `ActionId`), so nothing requires uniqueness *across* families. Separate
+/// counters keep concept ids dense — which is what makes the storage
+/// zone maps selective (`STORAGE.md` H15) — and quadruple the headroom under
+/// the format's 2³² concept limit (D6). Stores written before this split
+/// simply carry gaps; `observe_*` on replay keeps every counter above what
+/// is on disk.
 #[derive(Debug, Default)]
 pub struct IdAllocator {
-    next: AtomicU64,
+    concepts: AtomicU64,
+    relations: AtomicU64,
+    rules: AtomicU64,
+    actions: AtomicU64,
 }
 
 impl IdAllocator {
+    /// Every family starts at `start` (1 in practice; 0 means "unset").
     pub fn new(start: u64) -> Self {
         Self {
-            next: AtomicU64::new(start),
+            concepts: AtomicU64::new(start),
+            relations: AtomicU64::new(start),
+            rules: AtomicU64::new(start),
+            actions: AtomicU64::new(start),
         }
     }
     pub fn next_concept(&self) -> ConceptId {
-        ConceptId(self.next.fetch_add(1, Ordering::Relaxed))
+        ConceptId(self.concepts.fetch_add(1, Ordering::Relaxed))
     }
     pub fn next_relation(&self) -> RelationId {
-        RelationId(self.next.fetch_add(1, Ordering::Relaxed))
+        RelationId(self.relations.fetch_add(1, Ordering::Relaxed))
     }
     pub fn next_rule(&self) -> RuleId {
-        RuleId(self.next.fetch_add(1, Ordering::Relaxed))
+        RuleId(self.rules.fetch_add(1, Ordering::Relaxed))
     }
     pub fn next_action(&self) -> ActionId {
-        ActionId(self.next.fetch_add(1, Ordering::Relaxed))
+        ActionId(self.actions.fetch_add(1, Ordering::Relaxed))
     }
-    pub fn high_water(&self) -> u64 {
-        self.next.load(Ordering::Relaxed)
+    /// Next value of each family — the id the next allocation would return.
+    pub fn watermarks(&self) -> IdWatermarks {
+        IdWatermarks {
+            concepts: self.concepts.load(Ordering::Relaxed),
+            relations: self.relations.load(Ordering::Relaxed),
+            rules: self.rules.load(Ordering::Relaxed),
+            actions: self.actions.load(Ordering::Relaxed),
+        }
     }
-    /// Reset the allocator so the next allocated id is `start`.
+    /// Reset every family so the next allocated id is `start`.
     pub fn reset(&self, start: u64) {
-        self.next.store(start, Ordering::Release);
+        for c in [&self.concepts, &self.relations, &self.rules, &self.actions] {
+            c.store(start, Ordering::Release);
+        }
     }
-    pub fn observe(&self, value: u64) {
-        // Bump the watermark so future allocations don't collide with
-        // ids restored from disk.
-        let mut current = self.next.load(Ordering::Relaxed);
+    pub fn observe_concept(&self, id: ConceptId) {
+        Self::observe(&self.concepts, id.0);
+    }
+    pub fn observe_relation(&self, id: RelationId) {
+        Self::observe(&self.relations, id.0);
+    }
+    pub fn observe_rule(&self, id: RuleId) {
+        Self::observe(&self.rules, id.0);
+    }
+    pub fn observe_action(&self, id: ActionId) {
+        Self::observe(&self.actions, id.0);
+    }
+    /// Bump `counter` so future allocations don't collide with an id
+    /// restored from disk.
+    fn observe(counter: &AtomicU64, value: u64) {
+        let mut current = counter.load(Ordering::Relaxed);
         while value >= current {
-            match self.next.compare_exchange_weak(
+            match counter.compare_exchange_weak(
                 current,
                 value + 1,
                 Ordering::AcqRel,
@@ -113,5 +170,56 @@ impl IdAllocator {
                 Err(observed) => current = observed,
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn families_allocate_independently() {
+        let ids = IdAllocator::new(1);
+        assert_eq!(ids.next_concept(), ConceptId(1));
+        assert_eq!(ids.next_relation(), RelationId(1));
+        assert_eq!(ids.next_concept(), ConceptId(2));
+        assert_eq!(ids.next_rule(), RuleId(1));
+        assert_eq!(ids.next_action(), ActionId(1));
+        assert_eq!(
+            ids.watermarks(),
+            IdWatermarks {
+                concepts: 3,
+                relations: 2,
+                rules: 2,
+                actions: 2
+            }
+        );
+    }
+
+    #[test]
+    fn observe_only_raises_its_own_family() {
+        let ids = IdAllocator::new(1);
+        ids.observe_relation(RelationId(500));
+        assert_eq!(ids.next_relation(), RelationId(501));
+        assert_eq!(ids.next_concept(), ConceptId(1), "concepts untouched");
+        ids.observe_concept(ConceptId(3));
+        ids.observe_concept(ConceptId(2)); // lower than current: no-op
+        assert_eq!(ids.next_concept(), ConceptId(4));
+    }
+
+    #[test]
+    fn reset_restarts_every_family() {
+        let ids = IdAllocator::new(1);
+        ids.next_concept();
+        ids.next_action();
+        ids.reset(1);
+        assert_eq!(ids.next_concept(), ConceptId(1));
+        assert_eq!(ids.next_action(), ActionId(1));
+    }
+
+    #[test]
+    fn concept_id_storage_limit() {
+        assert!(ConceptId(MAX_CONCEPT_ID).fits_storage());
+        assert!(!ConceptId(MAX_CONCEPT_ID + 1).fits_storage());
     }
 }

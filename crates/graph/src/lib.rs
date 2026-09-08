@@ -23,7 +23,7 @@ pub mod traversal;
 
 pub use error::{GraphError, GraphResult};
 pub use graph::OntologyGraph;
-pub use id::{ActionId, ConceptId, RelationId, RuleId};
+pub use id::{ActionId, ConceptId, IdWatermarks, RelationId, RuleId, MAX_CONCEPT_ID};
 pub use model::{
     Action, ActionPatch, Concept, ConceptPatch, Property, PropertyValue, Relation, RelationPatch,
     Rule, RulePatch,

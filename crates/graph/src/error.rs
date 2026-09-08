@@ -73,4 +73,10 @@ pub enum GraphError {
     /// A concept update tried to change `concept_type` (immutable, H5).
     #[error("concept type is immutable (was `{0}`, got `{1}`)")]
     ImmutableConceptType(String, String),
+
+    /// The storage format packs relation endpoints as `(source << 32) |
+    /// target`; a concept id above 2³² cannot be persisted (`STORAGE.md`
+    /// D6). Rejected where the id is born, never assumed downstream.
+    #[error("concept id {0} exceeds the storage format limit of 2^32 - 1")]
+    ConceptIdOutOfRange(ConceptId),
 }

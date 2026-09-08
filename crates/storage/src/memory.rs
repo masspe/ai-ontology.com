@@ -118,9 +118,6 @@ pub(crate) fn apply(graph: &Arc<OntologyGraph>, r: LogRecord) -> StoreResult<()>
         RecordKind::DeleteAction(id) => {
             let _ = graph.remove_action(id);
         }
-        RecordKind::Clear => {
-            graph.clear_instances();
-        }
     }
     Ok(())
 }
