@@ -4,7 +4,8 @@
 # 2. builder that compiles the workspace.
 # 3. distroless runtime that ships only the `ontology` binary.
 
-FROM rust:1.82-slim AS chef
+# std::fs::File::try_lock (store LOCK) needs Rust >= 1.89; CI runs current stable.
+FROM rust:1.98-slim AS chef
 RUN cargo install --locked cargo-chef
 WORKDIR /workspace
 

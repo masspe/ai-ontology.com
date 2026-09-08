@@ -65,7 +65,7 @@ fn write_segment(dir: &Path, n: u64, batches: usize) -> ActiveSegment {
         let p = payload(i);
         seg.append(i + 1, 1_000 + i, Kind::Concept, &p, fields_for(&p))
             .unwrap();
-        if (i as usize + 1) % per == 0 {
+        if (i as usize + 1).is_multiple_of(per) {
             seg.commit().unwrap();
         }
     }

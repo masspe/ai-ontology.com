@@ -9,7 +9,7 @@ answers in retrieved subgraphs.
 | Crate              | Role |
 | ------------------ | ---- |
 | `ontology-graph`   | Concepts, typed relations, schema validation, traversals. |
-| `ontology-storage` | Append-only WAL (fsync per batch, torn-tail recovery) + JSON snapshots; pluggable `Store` trait. See [docs/STORAGE.md](docs/STORAGE.md) for the binary, partitioned format under development. |
+| `ontology-storage` | Binary segmented store (`<data>/store/`): framed records with CRC, positional index, per-batch fsync, torn-tail recovery, memory-mapped sealed segments; automatic migration from the legacy `graph.log`. Pluggable `Store` trait. Format in [docs/STORAGE.md](docs/STORAGE.md), plan in [docs/STORAGE-PLAN.md](docs/STORAGE-PLAN.md). |
 | `ontology-index`   | Lexical (TF-IDF) + vector (cosine) + graph-expansion retrieval. |
 | `ontology-io`      | `Source` / `Sink` traits with JSONL and triples adapters. |
 | `ontology-rag`     | Prompt builder + `LanguageModel` trait (echo, Anthropic, OpenAI, DeepSeek; with prompt caching). |
@@ -140,11 +140,13 @@ retrieval is a function of `top_k` and `TraversalSpec`, not of total graph size.
   ontology schema on the way in, so the graph stays consistent and the index
   never sees malformed nodes.
 * **Durable + crash-safe storage.** Every write is journaled *before* the
-  in-memory graph changes and `fsync`ed (one sync per batch), a torn tail is
-  truncated on restart, and JSON snapshots (with `compact` to truncate the
-  WAL) keep restarts fast — all behind a pluggable `Store` trait. The
-  binary, per-domain format is specified in [docs/STORAGE.md](docs/STORAGE.md)
-  and planned in [docs/STORAGE-PLAN.md](docs/STORAGE-PLAN.md).
+  in-memory graph changes and `fsync`ed (one sync per batch), into a
+  binary segmented store under `<data>/store/`: CRC-checked records, a
+  positional index rebuilt from the data if lost, a torn tail truncated on
+  restart, sealed segments memory-mapped. A legacy `graph.log` is migrated
+  automatically (and verifiably) on first start. All behind a pluggable
+  `Store` trait; format in [docs/STORAGE.md](docs/STORAGE.md), plan in
+  [docs/STORAGE-PLAN.md](docs/STORAGE-PLAN.md).
 * **Provider-agnostic LLM layer with caching.** Anthropic, OpenAI, DeepSeek, or
   an offline echo model behind one `LanguageModel` trait — with prompt/prefix
   caching that drops repeat-query input cost to ≈10% on a stable knowledge base.
@@ -170,8 +172,7 @@ DATA=./data
 ./target/release/ontology --data $DATA ask "Who wrote about RAG?"
 # One-off model override, not written back to the config:
 ./target/release/ontology --data $DATA ask --model gpt-4o-mini "Who wrote about RAG?"
-./target/release/ontology --data $DATA snapshot
-./target/release/ontology --data $DATA compact          # snapshot + truncate WAL
+./target/release/ontology --data $DATA migrate           # legacy graph.log -> store/ (also automatic on start)
 ./target/release/ontology --data $DATA path \
     --from-type Person --from-name Alice \
     --to-type   Person --to-name   Bob
@@ -198,8 +199,7 @@ $env:DATA = ".\data"
 .\target\release\ontology.exe --data $env:DATA ask "Who wrote about RAG?"
 # One-off model override, not written back to the config:
 .\target\release\ontology.exe --data $env:DATA ask --model gpt-4o-mini "Who wrote about RAG?"
-.\target\release\ontology.exe --data $env:DATA snapshotin
-.\target\release\ontology.exe --data $env:DATA compact          # snapshot + truncate WAL
+.\target\release\ontology.exe --data $env:DATA migrate           # legacy graph.log -> store/ (also automatic on start)
 .\target\release\ontology.exe --data $env:DATA path `
     --from-type Person --from-name Alice `
     --to-type   Person --to-name   Bob
@@ -231,7 +231,7 @@ Stop-Process -Id $server.Id
 | POST   | `/ask/stream`       | same, streamed as Server-Sent Events                     |
 | POST   | `/path`             | shortest path between two named concepts                 |
 | POST   | `/upload`           | multipart ingest (`kind`, `file`, optional `concept_type`) |
-| POST   | `/compact`          | snapshot + truncate WAL                                  |
+| POST   | `/compact`          | compaction (no-op until per-domain compaction lands)     |
 
 ## Web UI
 
