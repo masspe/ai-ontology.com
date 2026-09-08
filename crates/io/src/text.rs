@@ -117,9 +117,9 @@ impl Source for TextDocumentSource {
                 .map(|s| s.to_ascii_lowercase());
             let is_docx = ext.as_deref() == Some("docx")
                 || (crate::docx::is_zip(&raw)
-                    && ext.as_deref().map_or(false, |e| {
-                        matches!(e, "docx" | "docm" | "dotx" | "dotm")
-                    }));
+                    && ext
+                        .as_deref()
+                        .is_some_and(|e| matches!(e, "docx" | "docm" | "dotx" | "dotm")));
             let body = if is_docx {
                 crate::docx::extract_docx_text(&raw).map_err(|e| {
                     IngestError::Source(format!("{}: docx extract: {e}", path.display()))

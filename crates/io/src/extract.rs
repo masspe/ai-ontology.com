@@ -26,9 +26,7 @@
 //! are skipped silently — so a document can opt-in to whatever subset of
 //! the syntax suits it without breaking ingest.
 
-use ontology_graph::{
-    ActionType, Concept, ConceptId, ConceptType, RelationType, RuleType,
-};
+use ontology_graph::{ActionType, Concept, ConceptId, ConceptType, RelationType, RuleType};
 
 use crate::record::Record;
 
@@ -67,7 +65,7 @@ pub fn extract_from_text(doc_type: &str, doc_name: &str, body: &str) -> Vec<Reco
             continue;
         }
         // Strip a single trailing comma/period that's purely punctuation.
-        let line = line.trim_end_matches(|c: char| c == ',' || c == ';');
+        let line = line.trim_end_matches([',', ';']);
 
         if let Some(rest) = strip_tag(line, "@concept_type") {
             if let Some(ct) = parse_concept_type(rest) {
@@ -285,12 +283,7 @@ fn parse_relation(s: &str) -> Option<(String, String, String, String, String)> {
     let (st, sn) = left.trim().split_once(':')?;
     let (tt, tn) = right.trim().split_once(':')?;
     let predicate = predicate.trim();
-    if predicate.is_empty()
-        || st.is_empty()
-        || sn.is_empty()
-        || tt.is_empty()
-        || tn.is_empty()
-    {
+    if predicate.is_empty() || st.is_empty() || sn.is_empty() || tt.is_empty() || tn.is_empty() {
         return None;
     }
     Some((

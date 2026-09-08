@@ -176,54 +176,52 @@ impl RagPipeline {
         // If the model invented ids, retry ONCE with a stricter reminder
         // listing the allowed id set. Replace the answer only if the retry
         // produces zero invalid ids OR more valid ids than the first try.
-        let (final_content, final_model, final_stop, final_usage, cited, body) =
-            if !invalid_cited.is_empty() {
-                let allowed: Vec<String> = valid_ids
-                    .iter()
-                    .map(|id| format!("#{}", id.0))
-                    .collect();
-                let reminder = format!(
-                    "Your previous answer cited ids not in the Subgraph: {}. \
+        let (final_content, final_model, final_stop, final_usage, cited, body) = if !invalid_cited
+            .is_empty()
+        {
+            let allowed: Vec<String> = valid_ids.iter().map(|id| format!("#{}", id.0)).collect();
+            let reminder = format!(
+                "Your previous answer cited ids not in the Subgraph: {}. \
                      Valid ids for this question are exactly: [{}]. \
                      Re-answer using the same two-line format and cite ONLY ids \
                      from that set. If none of them support an answer, reply \
                      `I don't know based on the supplied context.`",
-                    invalid_cited
+                invalid_cited
+                    .iter()
+                    .map(|id| format!("#{}", id.0))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                allowed.join(", "),
+            );
+            let mut retry_req = llm_req.clone();
+            retry_req.messages.push(Message::assistant(content.clone()));
+            retry_req.messages.push(Message::user(reminder));
+            match self.llm.generate(&retry_req).await {
+                Ok(retry) => {
+                    let retry_parsed = parse_cited_answer(&retry.content);
+                    let (retry_valid, retry_invalid): (Vec<_>, Vec<_>) = retry_parsed
+                        .cited
                         .iter()
-                        .map(|id| format!("#{}", id.0))
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                    allowed.join(", "),
-                );
-                let mut retry_req = llm_req.clone();
-                retry_req.messages.push(Message::assistant(content.clone()));
-                retry_req.messages.push(Message::user(reminder));
-                match self.llm.generate(&retry_req).await {
-                    Ok(retry) => {
-                        let retry_parsed = parse_cited_answer(&retry.content);
-                        let (retry_valid, retry_invalid): (Vec<_>, Vec<_>) = retry_parsed
-                            .cited
-                            .iter()
-                            .copied()
-                            .partition(|id| valid_ids.contains(id));
-                        if retry_invalid.is_empty() || retry_valid.len() > cited_valid.len() {
-                            (
-                                retry.content.clone(),
-                                retry.model,
-                                retry.stop_reason,
-                                retry.usage,
-                                retry_valid,
-                                retry_parsed.body,
-                            )
-                        } else {
-                            (content, model, stop_reason, usage, cited_valid, parsed.body)
-                        }
+                        .copied()
+                        .partition(|id| valid_ids.contains(id));
+                    if retry_invalid.is_empty() || retry_valid.len() > cited_valid.len() {
+                        (
+                            retry.content.clone(),
+                            retry.model,
+                            retry.stop_reason,
+                            retry.usage,
+                            retry_valid,
+                            retry_parsed.body,
+                        )
+                    } else {
+                        (content, model, stop_reason, usage, cited_valid, parsed.body)
                     }
-                    Err(_) => (content, model, stop_reason, usage, cited_valid, parsed.body),
                 }
-            } else {
-                (content, model, stop_reason, usage, cited_valid, parsed.body)
-            };
+                Err(_) => (content, model, stop_reason, usage, cited_valid, parsed.body),
+            }
+        } else {
+            (content, model, stop_reason, usage, cited_valid, parsed.body)
+        };
 
         Ok(RagAnswer {
             query: req.query,
@@ -314,18 +312,21 @@ impl RagPipeline {
         let llm_req = LlmRequest {
             system: Some(PromptBuilder::ontology_generation_system_message().to_string()),
             cached_context: None,
-            messages: vec![Message::user(PromptBuilder::ontology_generation_user_message(
-                description,
-            ))],
+            messages: vec![Message::user(
+                PromptBuilder::ontology_generation_user_message(description),
+            )],
             max_tokens: self.max_tokens.max(2048),
             temperature: 0.0,
         };
-        let resp = self.llm.generate(&llm_req).await.map_err(OntologyGenError::Llm)?;
-        let json = extract_json_block(&resp.content)
-            .ok_or_else(|| OntologyGenError::Parse {
-                raw: resp.content.clone(),
-                error: "no JSON object found in response".into(),
-            })?;
+        let resp = self
+            .llm
+            .generate(&llm_req)
+            .await
+            .map_err(OntologyGenError::Llm)?;
+        let json = extract_json_block(&resp.content).ok_or_else(|| OntologyGenError::Parse {
+            raw: resp.content.clone(),
+            error: "no JSON object found in response".into(),
+        })?;
         serde_json::from_str::<ontology_graph::Ontology>(&json).map_err(|e| {
             OntologyGenError::Parse {
                 raw: resp.content,
@@ -357,12 +358,15 @@ impl RagPipeline {
             max_tokens: self.max_tokens.max(1024),
             temperature: 0.0,
         };
-        let resp = self.llm.generate(&llm_req).await.map_err(OntologyGenError::Llm)?;
-        let json = extract_json_block(&resp.content)
-            .ok_or_else(|| OntologyGenError::Parse {
-                raw: resp.content.clone(),
-                error: "no JSON object found in response".into(),
-            })?;
+        let resp = self
+            .llm
+            .generate(&llm_req)
+            .await
+            .map_err(OntologyGenError::Llm)?;
+        let json = extract_json_block(&resp.content).ok_or_else(|| OntologyGenError::Parse {
+            raw: resp.content.clone(),
+            error: "no JSON object found in response".into(),
+        })?;
         serde_json::from_str::<GeneratedRule>(&json).map_err(|e| OntologyGenError::Parse {
             raw: resp.content,
             error: e.to_string(),
