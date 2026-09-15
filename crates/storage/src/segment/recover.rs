@@ -33,8 +33,8 @@ use tracing::warn;
 
 use super::active::{data_path, idx_path, IndexFields};
 use super::format::{
-    decode_record, DataHeader, FormatError, IdxEntry, IdxHeader, Kind, RecordView, FILE_HEADER_LEN,
-    IDX_ENTRY_LEN,
+    decode_record, record_span, DataHeader, FormatError, IdxEntry, IdxHeader, Kind, RecordHeader,
+    RecordView, FILE_HEADER_LEN, IDX_ENTRY_LEN,
 };
 
 /// What recovery established about a segment.
@@ -70,27 +70,68 @@ pub fn recover_segment(
         .read_to_end(&mut data)?;
     let header = DataHeader::decode(&data).map_err(|e| invalid(partition_id, e.to_string()))?;
 
+    // The existing index, if any, is read first: it tells the span of a
+    // record whose header no longer decodes, which is what separates a torn
+    // tail from corruption in the middle of the file.
+    let mut idx_bytes = Vec::new();
+    let idx_exists = ipath.exists();
+    if idx_exists {
+        OpenOptions::new()
+            .read(true)
+            .open(&ipath)?
+            .read_to_end(&mut idx_bytes)?;
+    }
+
     // 1-2. Scan.
     let mut entries: Vec<IdxEntry> = Vec::new();
     let mut at = FILE_HEADER_LEN;
     let mut last_seq = None;
     let mut cut_reason: Option<String> = None;
     while at < data.len() {
+        // A record that fails for any reason other than running past EOF is
+        // only discarded when it is the *last* one: a torn write can only be
+        // at the tail. A bad record with valid data after it is corruption or
+        // a newer format, and truncating would destroy acknowledged records.
+        let refuse_unless_last = |at: usize, what: String| -> io::Result<String> {
+            let span = match RecordHeader::decode(&data, at) {
+                Ok(h) if Kind::from_u8(h.kind as u8).is_ok() => {
+                    Some(record_span(h.payload_len as usize))
+                }
+                _ => IdxEntry::decode(&idx_bytes, IdxEntry::file_offset(entries.len()))
+                    .ok()
+                    .filter(|e| e.offset as usize == at)
+                    .map(|e| record_span(e.payload_len as usize)),
+            };
+            match span {
+                Some(span) if at + span >= data.len() => Ok(what),
+                Some(_) => Err(invalid(
+                    partition_id,
+                    format!("{what}; valid records follow it, refusing to truncate"),
+                )),
+                None => Err(invalid(
+                    partition_id,
+                    format!("{what}; its extent is unknown, refusing to truncate"),
+                )),
+            }
+        };
         match decode_record(&data, at, true) {
             Ok(v) => {
                 let fields = match resolve(v.header.kind, v.payload) {
                     Ok(f) => f,
                     Err(e) => {
-                        cut_reason = Some(format!("record at {at} does not decode: {e}"));
+                        cut_reason = Some(refuse_unless_last(
+                            at,
+                            format!("record at {at} does not decode: {e}"),
+                        )?);
                         break;
                     }
                 };
                 if let Some(prev) = last_seq {
                     if v.header.seq <= prev {
-                        cut_reason = Some(format!(
-                            "record at {at} has seq {} <= previous {prev}",
-                            v.header.seq
-                        ));
+                        cut_reason = Some(refuse_unless_last(
+                            at,
+                            format!("record at {at} has seq {} <= previous {prev}", v.header.seq),
+                        )?);
                         break;
                     }
                 }
@@ -103,7 +144,10 @@ pub fn recover_segment(
                 break;
             }
             Err(e) => {
-                cut_reason = Some(format!("corrupt record at {at}: {e}"));
+                cut_reason = Some(refuse_unless_last(
+                    at,
+                    format!("corrupt record at {at}: {e}"),
+                )?);
                 break;
             }
         }
@@ -124,14 +168,6 @@ pub fn recover_segment(
     }
 
     // 3. Reconcile the index with what the data actually holds.
-    let mut idx_bytes = Vec::new();
-    let idx_exists = ipath.exists();
-    if idx_exists {
-        OpenOptions::new()
-            .read(true)
-            .open(&ipath)?
-            .read_to_end(&mut idx_bytes)?;
-    }
     let header_ok = IdxHeader::decode(&idx_bytes)
         .map(|h| h.partition_id == partition_id && h.base_seq == header.base_seq)
         .unwrap_or(false);

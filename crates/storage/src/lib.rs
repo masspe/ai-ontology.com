@@ -35,7 +35,9 @@ pub use file::FileStore;
 pub use log::{LogRecord, RecordKind};
 pub use manifest::Manifest;
 pub use memory::MemoryStore;
-pub use migrate::{legacy_present, migrate_legacy, store_dir_for, MigrationReport};
+pub use migrate::{
+    legacy_present, migrate_legacy, staging_dir_for, store_dir_for, MigrationReport,
+};
 pub use periodic::{spawn_snapshotter, SnapshotHandle};
 pub use segment_store::{OpenReport, SegmentStore, SegmentStoreConfig};
 pub use snapshot::Snapshot;

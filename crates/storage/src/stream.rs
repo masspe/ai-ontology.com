@@ -126,6 +126,39 @@ impl Stream {
                 }
             }
         }
+        // A crash between `create_new` and the header sync leaves an empty
+        // (or header-short) `.data`: nothing was ever appended to it, so it is
+        // simply recreated under the same id.
+        let data_len = std::fs::metadata(crate::segment::data_path(dir, last))
+            .map(|m| m.len())
+            .unwrap_or(0);
+        if data_len < crate::segment::FILE_HEADER_LEN as u64 {
+            warn!(
+                partition = last,
+                bytes = data_len,
+                "active segment has no header; recreating it"
+            );
+            let _ = std::fs::remove_file(crate::segment::data_path(dir, last));
+            let _ = std::fs::remove_file(crate::segment::idx_path(dir, last));
+            let active = ActiveSegment::create(dir, last, next_seq, codec)?;
+            if *next_partition <= last {
+                *next_partition = last + 1;
+            }
+            report.sealed = sealed.len();
+            report.active_partition = last;
+            report.last_seq = sealed.iter().rev().find_map(|s| s.last_seq());
+            return Ok((
+                Self {
+                    dir: dir.to_path_buf(),
+                    ns_id,
+                    codec,
+                    roll,
+                    sealed,
+                    active,
+                },
+                report,
+            ));
+        }
         let r = recover_segment(dir, last, &mut *resolve)?;
         if r.truncated_bytes > 0 || r.idx_rewritten > 0 {
             info!(
