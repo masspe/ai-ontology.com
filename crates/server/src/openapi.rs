@@ -535,9 +535,27 @@ const SPEC_JSON: &str = r##"{
             },
             "/compact": {
                 "post": {
-                    "summary": "Snapshot the graph and truncate the WAL",
+                    "summary": "Rewrite the store from the live graph (whole-store compaction)",
                     "tags": ["admin"],
-                    "responses": { "200": { "description": "Compacted" } }
+                    "responses": { "204": { "description": "Compacted" } }
+                }
+            },
+            "/reset": {
+                "post": {
+                    "summary": "Start over: empty the store, the graph, the schema and the index. Irreversible.",
+                    "tags": ["admin"],
+                    "responses": { "204": { "description": "Everything removed" } }
+                }
+            },
+            "/concepts/delete": {
+                "post": {
+                    "summary": "Delete many concepts (and their relations) under one durability barrier",
+                    "tags": ["concepts"],
+                    "requestBody": {
+                        "required": true,
+                        "content": { "application/json": { "schema": { "type": "object", "properties": { "ids": { "type": "array", "items": { "type": "integer" } } }, "required": ["ids"] } } }
+                    },
+                    "responses": { "200": { "description": "{deleted, relations, missing}" } }
                 }
             },
             "/upload": {

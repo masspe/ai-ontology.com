@@ -72,6 +72,10 @@ pub(crate) async fn analyze(
         .bytes
         .ok_or_else(|| ApiError::BadRequest("missing `file`".into()))?;
 
+    // 1a. Office formats are flattened to text server-side, so a spreadsheet
+    //     or a .docx dropped on the analyzer works like a .txt would.
+    let bytes = flatten_office_formats(form.file_name.as_deref(), bytes).await?;
+
     // 1. Decode + normalize (BOM strip, NFC).
     let decoded = decode_to_utf8(&bytes);
 
@@ -126,6 +130,58 @@ pub(crate) async fn analyze(
     attach_conflicts(&mut proposal, &s.graph);
 
     Ok(Json(proposal))
+}
+
+/// Spreadsheets (`.xlsx`, `.xlsm`, `.xls`, `.ods`) become one text line per
+/// row (`header: value; …`), `.docx` becomes its paragraph text; anything
+/// else passes through untouched. A zip container without a telling
+/// extension is tried as docx, then as a spreadsheet.
+async fn flatten_office_formats(
+    file_name: Option<&str>,
+    bytes: Vec<u8>,
+) -> Result<Vec<u8>, ApiError> {
+    let ext = file_name
+        .map(std::path::Path::new)
+        .and_then(|p| p.extension().and_then(|e| e.to_str()))
+        .map(|s| s.to_ascii_lowercase());
+    match ext.as_deref() {
+        Some(e @ ("xlsx" | "xlsm" | "xls" | "ods")) => {
+            spreadsheet_text(&bytes, e).await.map(String::into_bytes)
+        }
+        Some("docx") => ontology_io::extract_docx_text(&bytes)
+            .map(String::into_bytes)
+            .map_err(ApiError::Unprocessable),
+        _ if ontology_io::is_zip(&bytes) => {
+            if let Ok(t) = ontology_io::extract_docx_text(&bytes) {
+                if !t.trim().is_empty() {
+                    return Ok(t.into_bytes());
+                }
+            }
+            spreadsheet_text(&bytes, "xlsx")
+                .await
+                .map(String::into_bytes)
+        }
+        _ => Ok(bytes),
+    }
+}
+
+async fn spreadsheet_text(bytes: &[u8], ext: &str) -> Result<String, ApiError> {
+    // calamine reads from a path; keep the tempfile alive until it is done.
+    let tmp = crate::persist_temp(bytes, ext).await?;
+    let path = tmp.path().to_path_buf();
+    let text = tokio::task::spawn_blocking(move || {
+        ontology_io::spreadsheet_to_text(&path).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| ApiError::Store(e.to_string()))?
+    .map_err(|e| ApiError::Unprocessable(format!("spreadsheet: {e}")))?;
+    drop(tmp);
+    if text.trim().is_empty() {
+        return Err(ApiError::Unprocessable(
+            "spreadsheet has no data rows".into(),
+        ));
+    }
+    Ok(text)
 }
 
 /// `POST /ingest/apply` body.

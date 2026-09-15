@@ -57,4 +57,4 @@ pub use template::{
 };
 pub use text::TextDocumentSource;
 pub use triples::TripleSource;
-pub use xlsx::XlsxSource;
+pub use xlsx::{spreadsheet_to_text, XlsxSource};
