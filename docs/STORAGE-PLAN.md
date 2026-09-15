@@ -263,9 +263,30 @@ Ce qui a été fait, et où le plan a été précisé en cours de route :
 | CI | Matrice `ubuntu-latest` × `windows-latest` (T2 avancé). |
 | Tests | `graph` : 10 tests unitaires sur prepare/apply/preview. `storage/tests/recovery.rs` : lots, seqs, troncature à tout offset, garbage final, corruption médiane, snapshot + queue tronquée. `io/tests/write_ahead.rs` : lots, un seul `Ontology`, doublons et disjoints intra-lot, store en échec, rejeu, ids explicites. `server/tests/write_ahead.rs` : les 13 endpoints mutants sur un store en échec laissent le graphe et ses générations intacts ; 404 sans toucher au store ; cascade = un lot ; redémarrage sur `FileStore` après écritures HTTP. `FlakyStore` (`ontology_storage::testing`) partagé par ces tests. |
 
+Revue avant fusion (2026-09-15), corrections apportées sur la branche :
+- **Schéma et R8** : les déclarations de types sont appliquées en mémoire
+  avant d'être journalisées (un seul `Ontology` par flux). Tout chemin
+  d'erreur de l'ingest (doublon, store en échec, `UnknownNamed`) et les
+  sorties `strict` de `/ingest/apply` **restaurent l'ontologie d'avant**
+  tant que le schéma n'a pas été flushé ; aucune instance d'un type non
+  journalisé ne peut exister à ce moment, le retour arrière est donc sûr.
+- **`FileStore` empoisonné** après un `write`/`fsync` en échec : tout
+  append suivant est refusé (`StoreError::Poisoned`) jusqu'au redémarrage,
+  où la recovery tronque la queue déchirée. Sans cela, un client qui
+  réessaie après une 500 pouvait produire deux enregistrements durables
+  pour la même entité et rendre le rejeu impossible.
+- **Upsert par id explicite** : l'ancien nom est retiré de l'index de noms
+  lors d'un renommage, et un changement de `concept_type` est refusé dès
+  `prepare_concept` (H5).
+- Une erreur de store pendant `/upload` répond désormais 500, pas 400.
+
 Non fait, volontairement : le `seq` à 0 entre `open()` et `load_into()`
 (§1.1) disparaît avec la phase 2 ; `spawn_snapshotter` reste non câblé
-puisque le snapshot disparaît avec le format binaire.
+puisque le snapshot disparaît avec le format binaire. Relevé mais laissé
+tel quel (préexistant, sémantique du graphe à trancher) : une mise à jour
+de règle ou d'action dont un concept `applies_to` / `subject` a été supprimé
+entre-temps est acceptée en direct mais refusée au rejeu, car
+`remove_concept` ne nettoie pas ces références.
 
 ---
 
