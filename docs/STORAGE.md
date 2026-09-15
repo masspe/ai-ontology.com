@@ -315,6 +315,15 @@ parsing des payloads domine (§7.1) — il apporte la durabilité, l'isolation
 par domaine et la préparation de P1. Le gain de démarrage en P0 vient du
 codec binaire (phase 4) ; en P1 le problème disparaît.
 
+**L'ordre de rejeu est l'ordre global des `seq`, pas flux par flux.** Les
+flux sont des fichiers indépendants, mais une règle écrite dans `meta`
+référence des concepts écrits dans `graph/<ns>` juste avant elle, et un
+changement d'ontologie dans `meta` doit précéder les concepts qui en
+dépendent. L'hydratation fusionne donc les flux par `seq` (H12). Comme
+`meta` est petit (H3), il est chargé en mémoire et fusionné au fil du scan
+séquentiel des flux `graph`. Trouvé par test en phase 2 : le rejeu flux par
+flux échouait sur `UnknownConcept` à la première règle.
+
 Ordres de grandeur à 10⁶ enregistrements de ~1,3 Ko : index ~48 Mo
 séquentiels ; payloads ~1,3 Go, parsés en ~30 s en JSON, ~2-3 s en codec
 binaire. À 10⁷ : ~5 min en JSON en P0 — c'est là que P1 ou le codec cessent

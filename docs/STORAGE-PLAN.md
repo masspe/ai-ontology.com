@@ -15,7 +15,7 @@ Convention : `H*` / `R*` renvoient aux hypothèses et règles de
 | Phase | Contenu | Dépend de | Taille (j·h, indicative) | Livrable |
 |---|---|---|---|---|
 | 1 | Chemin d'écriture : R8, `fsync`, group commit, recovery tolérante | — | 4-6 | **Livré** (§3.6) |
-| 2 | Conteneur binaire mono-flux : `.data`/`.idx` 48 o, MANIFEST, CRC, recovery, migration, compteurs d'ids par famille | 1, D1-D6 | 10-14 | `SegmentStore` remplace `FileStore` |
+| 2 | Conteneur binaire mono-flux : `.data`/`.idx` 48 o, MANIFEST, CRC, recovery, migration, compteurs d'ids par famille | 1, D1-D6 | 10-14 | **Livré** (§4.6) — `SegmentStore` remplace `FileStore` |
 | G | Décision gros documents : fragments ou texte hors graphe | — | 1 | Décision consignée dans STORAGE.md §10.7, avant la phase 3 |
 | 3 | Partitionnement par `ns` : routage, `.xref`, roulement, scellement `mmap`, compaction, group commit inter-requêtes | 2, G | 10-14 | Store conforme à STORAGE.md §4-§7, §9 |
 | T1 | Pagination par curseur | — | 2 | API prête pour P3 ; à livrer avant 5a |
@@ -370,6 +370,67 @@ Dépendances à ajouter : `memmap2`, `crc32c` (repli logiciel inclus),
 - Aucune écriture en place hors MANIFEST (write+rename) et troncature de
   recovery.
 
+### 4.6 État — livré le 2026-09-08 (branche `feat/storage-phase2`)
+
+| Point | Réalisation |
+|---|---|
+| Format (§4.1-4.3 de STORAGE.md) | `segment/format.rs` : en-têtes `GRFD`/`GRFI` 32 o, en-tête d'enregistrement 32 o avec `crc32c`, payload aligné 8, entrée d'index **48 o positionnelle** (D1, D2) portant `entity_id`, `endpoints`, `rtype_sym`. Octets de `kind` gelés et testés. Little-endian. |
+| Segment actif / scellé | `segment/active.rs` : écriture bufferisée, **un `fdatasync` par commit**, entrées d'index écrites après le sync et jamais synchronisées (R7), jamais `mmap` (R11). `segment/sealed.rs` : `memmap2` sur les deux fichiers, accès positionnel, recherche binaire par `seq`, scan séquentiel avec CRC optionnel. Le scellement estampille le compteur et synchronise une fois. |
+| Recovery (§9) | `segment/recover.rs` : scan CRC de la queue, troncature au premier enregistrement tronqué/corrompu/indécodable, index complété ou réécrit depuis le premier désaccord, index perdu régénéré à l'identique. Testé à tout offset. |
+| MANIFEST (§4.5) | `manifest.rs` : `ns_id` et `rtype_sym` gelés (R10, D2), allocateur de partitions, zone maps par partition scellée (`entity_min/max`, `kinds`, `edges`, `payload_bytes`). Réécrit par write + fsync + rename. **Jamais source de vérité des données** : les partitions sont redécouvertes depuis le répertoire à l'ouverture. Un symbole neuf est persisté **avant** le premier enregistrement qui l'utilise. |
+| Flux (§4) | `stream.rs` : partitions scellées + une active ; roulement par taille ou nombre d'enregistrements (64 Mo / 100 000, configurable) ; un scellement interrompu avant l'écriture du MANIFEST est terminé à l'ouverture. |
+| `SegmentStore` | `segment_store.rs` : deux flux (`meta` = ontologie, règles, actions — D3 ; `graph/default` = concepts, relations), `seq` global monotone, **un sync par flux touché par lot** (§7.2), verrou `LOCK` exclusif (H17, `File::try_lock`), hydratation P0 lisant index puis données avec CRC (D4), E/S bloquantes en `spawn_blocking`. `snapshot`/`compact` : no-op jusqu'à la phase 3. |
+| Migration (§4.3) | `migrate.rs` : `graph.snap` déroulé puis `graph.log` au-delà du watermark, écriture par lots de 1 000, **vérification entité par entité** (ontologie, concepts, relations par id, règles, actions) entre le rejeu legacy et le rejeu du nouveau store, puis renommage en `*.migrated`. Automatique au démarrage du CLI si `graph.log` existe sans `store/` ; commande `ontology migrate` explicite. Refuse un store non vide. |
+| Compteurs d'ids (D6) | `IdAllocator` par famille ; `ConceptId::fits_storage` vérifié dans `prepare_concept` et `prepare_relation`. |
+| Toolchain | `Dockerfile` passe à `rust:1.98-slim` (`File::try_lock` exige ≥ 1.89). |
+| Tests | `format_props.rs` (6 propriétés proptest), `segment_io.rs` (10), `segment_store.rs` (9 : routage et syncs, roulement + redémarrage, queue tronchée sur les deux flux + MANIFEST perdu, scellement interrompu, verrou, CRC nommant la partition, migration vérifiée, migration refusée, store vide), `manifest` (3 unitaires), `format` (8 unitaires), variante `SegmentStore` du test de redémarrage HTTP côté serveur. |
+
+Écarts par rapport au plan initial, assumés : pas d'`ArcSwap` (il n'y a
+pas encore de lecteurs concurrents du store — les lectures passent par la
+mémoire en P0 ; il arrive en phase 3 avec la compaction) ; l'hydratation
+rejoue toujours mutation par mutation via `apply()` (le chargement en masse
+reste un chantier de phase 4, sur mesure). Le `.idx` de `DeleteRelation` ne
+porte pas les extrémités (l'enregistrement ne les contient pas) : sans
+conséquence en P0, à traiter avant P1 si l'hydratation « index seul » doit
+rejouer les suppressions sans ouvrir le `.data`.
+
+Revue avant fusion (2026-09-15), corrections apportées sur la branche :
+- **Lot en échec** : le lot est entièrement encodé et routé avant la
+  première écriture ; toute erreur ensuite **empoisonne** le store
+  (`StoreError::Poisoned`) jusqu'au redémarrage. Sans cela, des
+  enregistrements refusés au client restaient dans le tampon et devenaient
+  durables au lot suivant, jusqu'à rendre l'hydratation impossible
+  (`DuplicateConcept` au rejeu après un retry).
+- **Ordre des syncs** : un lot qui touche plusieurs flux les synchronise
+  dans l'ordre du premier `seq` touché, de sorte qu'un crash entre deux
+  syncs laisse un préfixe du lot, jamais un trou.
+- **Recovery** : un enregistrement invalide (CRC, `kind` inconnu, payload
+  indécodable, `seq` non croissant) n'est tronqué que s'il est le
+  **dernier** ; s'il est suivi d'octets valides, l'ouverture échoue en
+  nommant la partition et l'offset et le fichier reste intact. Un
+  `.data` sans en-tête (crash entre création et sync) est recréé.
+- **Scellement** : un `.idx` dont les entrées ne couvrent pas exactement le
+  `.data` (compteur à 0 après perte du page cache) n'est pas accepté comme
+  scellé ; la partition est récupérée et rescellée.
+- **Migration** : construite et vérifiée dans `store.migrating/` puis
+  renommée ; un `store/` existant est refusé, un staging orphelin est
+  jeté et refait ; les fichiers legacy ne sont plus ouverts en écriture
+  (plus de troncature ni de `graph.log` créé) ; règles et actions sont
+  comparées par contenu. Le CLI refuse de démarrer si `graph.log` et
+  `store/` coexistent.
+- `fsync` du répertoire après création d'une partition (Unix).
+
+Limites connues laissées telles quelles : `sync_count` compte les commits
+(pas les `fsync` de scellement ni du MANIFEST) ; après perte du MANIFEST,
+les `rtype_sym` sont réattribués dans l'ordre de scan — égal à l'ordre
+d'écriture tant qu'il n'y a qu'un flux graphe (voir phase 3) ; un
+`graph.log` contenant un `Clear` (jamais écrit par le code) n'est pas
+migrable.
+
+Mesure sur le jeu de test de `segment_store.rs` (8 requêtes HTTP mutantes) :
+8 syncs, 8 enregistrements, aucun overhead de format visible à cette taille
+— conforme à STORAGE.md §10.1, la mesure utile attend la phase 4.
+
 ---
 
 ## 5. Phase 3 — Partitionnement par `ns`
@@ -597,7 +658,7 @@ Jalons vérifiables :
 | Jalon | Preuve |
 |---|---|
 | J1 (fin phase 1) | **Atteint** : test « append échoué → mémoire inchangée » vert sur les 13 endpoints ; `sync_data` présent ; 136 tests, CI 2 OS |
-| J2 (fin phase 2) | `data/graph.log` migré, `serve` démarre dessus, tests HTTP identiques sur les deux stores, CI verte sur 2 OS |
+| J2 (fin phase 2) | **Atteint** sur la branche : migration automatique de `graph.log` au démarrage, redémarrage HTTP sur `SegmentStore` testé, CI 2 OS à confirmer par la PR |
 | J3 (fin phase 3) | Deux domaines réels dans `examples/finance` (ex. `modele` / `source`), hydratation sélective démontrée, 2 `fsync` pour 100 écritures sur 2 domaines |
 | J4 (fin phase 4) | Tableau §7.7 de STORAGE.md rempli de chiffres mesurés sur 10⁷ concepts / 5×10⁷ relations |
 | J5 (P1) | Le store cible tient sur un nœud de 16 Go : RSS divisée par ≥ 5 par rapport à P0, P95 `GET /concepts/{id}` < 2× P0 |

@@ -18,7 +18,7 @@ use ontology_graph::{ActionType, ConceptType, Ontology, OntologyGraph, RelationT
 use ontology_index::HybridIndex;
 use ontology_rag::{EchoModel, RagPipeline};
 use ontology_server::{build_router, AppState};
-use ontology_storage::{FileStore, FlakyStore, Store};
+use ontology_storage::{FileStore, FlakyStore, SegmentStore, Store};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tower::ServiceExt;
@@ -453,6 +453,115 @@ async fn file_store_survives_a_restart_after_http_writes() {
         0.7
     );
     assert_eq!(graph.ontology().concept_types.len(), 1);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[tokio::test]
+async fn segment_store_survives_a_restart_after_http_writes() {
+    let dir = std::env::temp_dir().join(format!(
+        "ontology-http-segstore-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let (a, b, rel);
+    {
+        let store = Arc::new(SegmentStore::open(&dir).await.unwrap());
+        let graph = OntologyGraph::with_arc(Ontology::new());
+        store.load_into(&graph).await.unwrap();
+        let app = build_router(state_with(store.clone(), graph.clone()));
+
+        let (st, _) = call(
+            &app,
+            "PUT",
+            "/ontology",
+            Some(serde_json::to_value(ontology()).unwrap()),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        let (_, v) = call(&app, "POST", "/concepts", Some(topic("A"))).await;
+        a = v["id"].as_u64().unwrap();
+        let (_, v) = call(&app, "POST", "/concepts", Some(topic("B"))).await;
+        b = v["id"].as_u64().unwrap();
+        let (_, v) = call(&app, "POST", "/concepts", Some(topic("C"))).await;
+        let c = v["id"].as_u64().unwrap();
+        let (st, v) = call(
+            &app,
+            "POST",
+            "/relations",
+            Some(
+                json!({ "id": 0, "relation_type": "related_to", "source": a, "target": b,
+                         "weight": 0.7, "properties": {} }),
+            ),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        rel = v["id"].as_u64().unwrap();
+        let (st, _) = call(
+            &app,
+            "PATCH",
+            &format!("/concepts/{b}"),
+            Some(json!({ "name": "B2" })),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        let (st, _) = call(
+            &app,
+            "POST",
+            "/rules",
+            Some(
+                json!({ "id": 0, "rule_type": "must_review", "name": "r1", "when": "", "then": "",
+                         "applies_to": [a], "strict": false, "description": "", "properties": {} }),
+            ),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK);
+        let (st, _) = call(&app, "DELETE", &format!("/concepts/{c}"), None).await;
+        assert_eq!(st, StatusCode::NO_CONTENT);
+        // ontology(meta) + 3 concepts + relation + update + rule(meta) + delete:
+        // 8 batches, each touching exactly one stream -> 8 syncs.
+        assert_eq!(store.sync_count(), 8);
+        assert_eq!(store.record_count(), 8);
+    }
+
+    // "Restart": reopen the directory and replay.
+    let store = SegmentStore::open(&dir).await.unwrap();
+    let graph = OntologyGraph::with_arc(Ontology::new());
+    store.load_into(&graph).await.unwrap();
+    assert_eq!(graph.concept_count(), 2);
+    assert_eq!(
+        graph.relation_count(),
+        2,
+        "symmetric inverse re-materialized"
+    );
+    assert_eq!(graph.rule_count(), 1);
+    assert_eq!(
+        graph
+            .get_concept(ontology_graph::ConceptId(a))
+            .unwrap()
+            .name,
+        "A"
+    );
+    assert_eq!(
+        graph
+            .get_concept(ontology_graph::ConceptId(b))
+            .unwrap()
+            .name,
+        "B2"
+    );
+    assert_eq!(
+        graph
+            .get_relation(ontology_graph::RelationId(rel))
+            .unwrap()
+            .weight,
+        0.7
+    );
+    assert_eq!(graph.ontology().concept_types.len(), 1);
+    assert_eq!(store.next_seq(), 9);
     std::fs::remove_dir_all(&dir).ok();
 }
 
