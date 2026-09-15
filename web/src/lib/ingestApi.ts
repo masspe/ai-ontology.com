@@ -8,7 +8,7 @@
 // (possibly edited) proposal plus user decisions to `/ingest/apply` and
 // returns the per-item outcome report.
 
-import { apiBase, apiToken, ApiError } from "../api";
+import { apiBase, apiToken, ApiError, fetchOrExplain } from "../api";
 import type {
   ApplyDecision,
   ApplyReport,
@@ -41,7 +41,7 @@ export async function analyzeIngest(opts: AnalyzeOptions): Promise<OntologyPropo
   const tok = apiToken();
   if (tok) headers["authorization"] = `Bearer ${tok}`;
 
-  const res = await fetch(`${apiBase()}/ingest/analyze`, {
+  const res = await fetchOrExplain(`${apiBase()}/ingest/analyze`, {
     method: "POST",
     body: form,
     headers,
@@ -84,7 +84,7 @@ export async function applyIngest(opts: ApplyOptions): Promise<ApplyReport> {
   const tok = apiToken();
   if (tok) headers["authorization"] = `Bearer ${tok}`;
 
-  const res = await fetch(`${apiBase()}/ingest/apply`, {
+  const res = await fetchOrExplain(`${apiBase()}/ingest/apply`, {
     method: "POST",
     headers,
     body: JSON.stringify(body),
