@@ -7,7 +7,7 @@
 // from Winven AI Sarl. See LICENSE and LICENSE-COMMERCIAL.md.
 
 use async_trait::async_trait;
-use ontology_graph::{Concept, ConceptId, GraphError, OntologyGraph, Relation};
+use ontology_graph::{Concept, ConceptId, GraphError, Ontology, OntologyGraph, Relation};
 use ontology_storage::{LogRecord, Store};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -155,36 +155,15 @@ pub async fn ingest_records<S: Source + ?Sized>(
     store: Option<&dyn Store>,
 ) -> Result<IngestStats, IngestError> {
     let mut ing = Ingester::new(graph, store);
-    // Buffer NamedRelations (and other dependent records) whose
-    // prerequisites haven't shown up yet.
-    let mut deferred: Vec<Record> = Vec::new();
-
-    while let Some(rec) = source.next().await? {
-        if !ing.apply(&rec).await? {
-            deferred.push(rec);
-        }
+    let outcome = ing.run(source).await;
+    if outcome.is_err() {
+        // Whatever failed, the live ontology must not keep type declarations
+        // the store never saw (R8 for the schema): a later record of such a
+        // type would be accepted by the graph, journaled, and refused on
+        // replay because its type is not on disk.
+        ing.rollback_schema();
     }
-    ing.flush().await?;
-
-    // Retry deferred records once both endpoints should now exist.
-    for rec in deferred {
-        if !ing.apply(&rec).await? {
-            if let Record::NamedRelation {
-                source_type,
-                source_name,
-                ..
-            } = &rec
-            {
-                return Err(IngestError::UnknownNamed {
-                    concept_type: source_type.clone(),
-                    name: source_name.clone(),
-                });
-            }
-        }
-    }
-    ing.flush().await?;
-
-    Ok(ing.stats)
+    outcome.map(|()| ing.stats)
 }
 
 /// Streaming state of one `ingest_records` call: the concept batch waiting
@@ -201,6 +180,9 @@ struct Ingester<'a> {
     pending_names: HashMap<(String, String), ConceptId>,
     /// The in-memory ontology has type declarations not yet journaled.
     schema_dirty: bool,
+    /// The ontology as it was before the first un-journaled declaration;
+    /// restored if the ingest fails before the schema is flushed.
+    schema_baseline: Option<Ontology>,
 }
 
 impl<'a> Ingester<'a> {
@@ -212,7 +194,63 @@ impl<'a> Ingester<'a> {
             pending: Vec::new(),
             pending_names: HashMap::new(),
             schema_dirty: false,
+            schema_baseline: None,
         }
+    }
+
+    /// Drain the source, then the deferred records, flushing at the end.
+    async fn run<S: Source + ?Sized>(&mut self, source: &mut S) -> Result<(), IngestError> {
+        // Buffer NamedRelations (and other dependent records) whose
+        // prerequisites haven't shown up yet.
+        let mut deferred: Vec<Record> = Vec::new();
+        while let Some(rec) = source.next().await? {
+            if !self.apply(&rec).await? {
+                deferred.push(rec);
+            }
+        }
+        self.flush().await?;
+        // Retry deferred records once both endpoints should now exist.
+        for rec in deferred {
+            if !self.apply(&rec).await? {
+                if let Record::NamedRelation {
+                    source_type,
+                    source_name,
+                    ..
+                } = &rec
+                {
+                    return Err(IngestError::UnknownNamed {
+                        concept_type: source_type.clone(),
+                        name: source_name.clone(),
+                    });
+                }
+            }
+        }
+        self.flush().await
+    }
+
+    /// Remember the schema before the first un-journaled declaration.
+    fn begin_schema_change(&mut self) {
+        if self.schema_baseline.is_none() {
+            self.schema_baseline = Some(self.graph.ontology());
+        }
+    }
+
+    /// Put the live ontology back to what it was before the declarations
+    /// that were never journaled. No instance of those types can exist:
+    /// instances are only applied after the schema is flushed.
+    fn rollback_schema(&mut self) {
+        if !self.schema_dirty {
+            return;
+        }
+        if let Some(baseline) = self.schema_baseline.take() {
+            // Restoring a previously valid schema cannot be refused: no
+            // instance of the withdrawn types exists yet.
+            let _ = self.graph.extend_ontology(|o| {
+                *o = baseline;
+                Ok(())
+            });
+        }
+        self.schema_dirty = false;
     }
 
     /// Journal the ontology if type declarations are waiting. Must precede
@@ -226,6 +264,7 @@ impl<'a> Ingester<'a> {
                 .await?;
         }
         self.schema_dirty = false;
+        self.schema_baseline = None;
         Ok(())
     }
 
@@ -353,6 +392,7 @@ impl<'a> Ingester<'a> {
                     Ok(())
                 })?;
                 self.schema_dirty = false;
+                self.schema_baseline = None;
                 self.stats.ontology_updates += 1;
                 Ok(true)
             }
@@ -396,6 +436,7 @@ impl<'a> Ingester<'a> {
                 // settle them before it changes. The schema itself is only
                 // journaled once, before the first instance that needs it.
                 self.settle_pending().await?;
+                self.begin_schema_change();
                 self.graph.extend_ontology(|o| {
                     o.add_concept_type(ct.clone());
                     Ok(())
@@ -415,6 +456,7 @@ impl<'a> Ingester<'a> {
                     return Ok(false);
                 }
                 self.settle_pending().await?;
+                self.begin_schema_change();
                 self.graph
                     .extend_ontology(|o| o.add_relation_type(rt.clone()))?;
                 self.schema_dirty = true;
@@ -431,6 +473,7 @@ impl<'a> Ingester<'a> {
                     return Ok(false);
                 }
                 self.settle_pending().await?;
+                self.begin_schema_change();
                 self.graph
                     .extend_ontology(|o| o.add_rule_type(rule.clone()))?;
                 self.schema_dirty = true;
@@ -450,6 +493,7 @@ impl<'a> Ingester<'a> {
                     return Ok(false);
                 }
                 self.settle_pending().await?;
+                self.begin_schema_change();
                 self.graph
                     .extend_ontology(|o| o.add_action_type(action.clone()))?;
                 self.schema_dirty = true;

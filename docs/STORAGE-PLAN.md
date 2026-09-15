@@ -263,9 +263,30 @@ Ce qui a été fait, et où le plan a été précisé en cours de route :
 | CI | Matrice `ubuntu-latest` × `windows-latest` (T2 avancé). |
 | Tests | `graph` : 10 tests unitaires sur prepare/apply/preview. `storage/tests/recovery.rs` : lots, seqs, troncature à tout offset, garbage final, corruption médiane, snapshot + queue tronquée. `io/tests/write_ahead.rs` : lots, un seul `Ontology`, doublons et disjoints intra-lot, store en échec, rejeu, ids explicites. `server/tests/write_ahead.rs` : les 13 endpoints mutants sur un store en échec laissent le graphe et ses générations intacts ; 404 sans toucher au store ; cascade = un lot ; redémarrage sur `FileStore` après écritures HTTP. `FlakyStore` (`ontology_storage::testing`) partagé par ces tests. |
 
+Revue avant fusion (2026-09-15), corrections apportées sur la branche :
+- **Schéma et R8** : les déclarations de types sont appliquées en mémoire
+  avant d'être journalisées (un seul `Ontology` par flux). Tout chemin
+  d'erreur de l'ingest (doublon, store en échec, `UnknownNamed`) et les
+  sorties `strict` de `/ingest/apply` **restaurent l'ontologie d'avant**
+  tant que le schéma n'a pas été flushé ; aucune instance d'un type non
+  journalisé ne peut exister à ce moment, le retour arrière est donc sûr.
+- **`FileStore` empoisonné** après un `write`/`fsync` en échec : tout
+  append suivant est refusé (`StoreError::Poisoned`) jusqu'au redémarrage,
+  où la recovery tronque la queue déchirée. Sans cela, un client qui
+  réessaie après une 500 pouvait produire deux enregistrements durables
+  pour la même entité et rendre le rejeu impossible.
+- **Upsert par id explicite** : l'ancien nom est retiré de l'index de noms
+  lors d'un renommage, et un changement de `concept_type` est refusé dès
+  `prepare_concept` (H5).
+- Une erreur de store pendant `/upload` répond désormais 500, pas 400.
+
 Non fait, volontairement : le `seq` à 0 entre `open()` et `load_into()`
 (§1.1) disparaît avec la phase 2 ; `spawn_snapshotter` reste non câblé
-puisque le snapshot disparaît avec le format binaire.
+puisque le snapshot disparaît avec le format binaire. Relevé mais laissé
+tel quel (préexistant, sémantique du graphe à trancher) : une mise à jour
+de règle ou d'action dont un concept `applies_to` / `subject` a été supprimé
+entre-temps est acceptée en direct mais refusée au rejeu, car
+`remove_concept` ne nettoie pas ces références.
 
 ---
 
@@ -372,6 +393,39 @@ reste un chantier de phase 4, sur mesure). Le `.idx` de `DeleteRelation` ne
 porte pas les extrémités (l'enregistrement ne les contient pas) : sans
 conséquence en P0, à traiter avant P1 si l'hydratation « index seul » doit
 rejouer les suppressions sans ouvrir le `.data`.
+
+Revue avant fusion (2026-09-15), corrections apportées sur la branche :
+- **Lot en échec** : le lot est entièrement encodé et routé avant la
+  première écriture ; toute erreur ensuite **empoisonne** le store
+  (`StoreError::Poisoned`) jusqu'au redémarrage. Sans cela, des
+  enregistrements refusés au client restaient dans le tampon et devenaient
+  durables au lot suivant, jusqu'à rendre l'hydratation impossible
+  (`DuplicateConcept` au rejeu après un retry).
+- **Ordre des syncs** : un lot qui touche plusieurs flux les synchronise
+  dans l'ordre du premier `seq` touché, de sorte qu'un crash entre deux
+  syncs laisse un préfixe du lot, jamais un trou.
+- **Recovery** : un enregistrement invalide (CRC, `kind` inconnu, payload
+  indécodable, `seq` non croissant) n'est tronqué que s'il est le
+  **dernier** ; s'il est suivi d'octets valides, l'ouverture échoue en
+  nommant la partition et l'offset et le fichier reste intact. Un
+  `.data` sans en-tête (crash entre création et sync) est recréé.
+- **Scellement** : un `.idx` dont les entrées ne couvrent pas exactement le
+  `.data` (compteur à 0 après perte du page cache) n'est pas accepté comme
+  scellé ; la partition est récupérée et rescellée.
+- **Migration** : construite et vérifiée dans `store.migrating/` puis
+  renommée ; un `store/` existant est refusé, un staging orphelin est
+  jeté et refait ; les fichiers legacy ne sont plus ouverts en écriture
+  (plus de troncature ni de `graph.log` créé) ; règles et actions sont
+  comparées par contenu. Le CLI refuse de démarrer si `graph.log` et
+  `store/` coexistent.
+- `fsync` du répertoire après création d'une partition (Unix).
+
+Limites connues laissées telles quelles : `sync_count` compte les commits
+(pas les `fsync` de scellement ni du MANIFEST) ; après perte du MANIFEST,
+les `rtype_sym` sont réattribués dans l'ordre de scan — égal à l'ordre
+d'écriture tant qu'il n'y a qu'un flux graphe (voir phase 3) ; un
+`graph.log` contenant un `Clear` (jamais écrit par le code) n'est pas
+migrable.
 
 Mesure sur le jeu de test de `segment_store.rs` (8 requêtes HTTP mutantes) :
 8 syncs, 8 enregistrements, aucun overhead de format visible à cette taille

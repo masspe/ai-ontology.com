@@ -17,7 +17,8 @@ use memmap2::Mmap;
 
 use super::active::{data_path, idx_path};
 use super::format::{
-    decode_record, DataHeader, FormatError, IdxEntry, IdxHeader, RecordView, FILE_HEADER_LEN,
+    decode_record, record_span, DataHeader, FormatError, IdxEntry, IdxHeader, RecordView,
+    FILE_HEADER_LEN,
 };
 
 pub struct SealedSegment {
@@ -49,6 +50,25 @@ impl SealedSegment {
                 format!(
                     "partition {partition_id}: idx header says {} entries, file holds {by_len}",
                     idx_header.count
+                ),
+            ));
+        }
+        // The index must account for every byte of data: a segment whose
+        // seal did not complete (count stamped 0, or entries lost with the
+        // page cache) is not sealed, whatever its header says.
+        let covered = if by_len == 0 {
+            FILE_HEADER_LEN
+        } else {
+            let last =
+                IdxEntry::decode(&idx, IdxEntry::file_offset(by_len - 1)).map_err(fmt_err)?;
+            last.offset as usize + record_span(last.payload_len as usize)
+        };
+        if covered != data.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "partition {partition_id}: idx covers {covered} bytes of data, file holds {}",
+                    data.len()
                 ),
             ));
         }

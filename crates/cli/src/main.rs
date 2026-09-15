@@ -186,7 +186,18 @@ async fn main() -> Result<()> {
     let store: Arc<dyn Store> = match &cli.data {
         Some(dir) => {
             let store_dir = store_dir_for(dir);
-            if legacy_present(dir) && !store_dir.join("MANIFEST.json").exists() {
+            if legacy_present(dir) && store_dir.exists() {
+                // Both a legacy log and a store: a migration that did not
+                // complete, or two histories. Never guess which one is right.
+                anyhow::bail!(
+                    "{} holds both a legacy graph.log/graph.snap and a store/ directory. \
+                     A previous migration did not complete. Remove {} to redo the migration \
+                     from the legacy files, or rename them to *.migrated if store/ is authoritative.",
+                    dir.display(),
+                    store_dir.display()
+                );
+            }
+            if legacy_present(dir) {
                 tracing::info!(
                     data = %dir.display(),
                     store = %store_dir.display(),

@@ -492,27 +492,129 @@ async fn a_legacy_log_and_snapshot_migrate_verifiably() {
 }
 
 #[tokio::test]
-async fn migration_refuses_a_store_that_already_has_records() {
+async fn migration_refuses_an_existing_store_and_redoes_an_interrupted_one() {
     let data = tempdir("migrate-nonempty");
+    let legacy_bytes;
     {
         let legacy = FileStore::open(&data).await.unwrap();
         legacy
             .append(&LogRecord::ontology(ontology()))
             .await
             .unwrap();
-    }
-    let store_dir = data.join("store");
-    {
-        let store = SegmentStore::open(&store_dir).await.unwrap();
-        store
-            .append(&LogRecord::ontology(ontology()))
+        legacy
+            .append(&LogRecord::concept(Concept::new(
+                ConceptId(1),
+                "Person",
+                "a",
+            )))
             .await
             .unwrap();
+        legacy_bytes = std::fs::read(data.join("graph.log")).unwrap();
+    }
+    let store_dir = data.join("store");
+    // An existing store, whatever it holds: refused, nothing touched.
+    {
+        SegmentStore::open(&store_dir).await.unwrap();
     }
     let err = migrate_legacy(&data, &store_dir).await.unwrap_err();
-    assert!(err.to_string().contains("already holds"), "{err}");
+    assert!(err.to_string().contains("already exists"), "{err}");
     assert!(legacy_present(&data), "legacy files untouched");
+    assert_eq!(std::fs::read(data.join("graph.log")).unwrap(), legacy_bytes);
+    std::fs::remove_dir_all(&store_dir).unwrap();
+
+    // A leftover staging directory from an interrupted run is discarded
+    // and the migration redone from the legacy files.
+    let staging = ontology_storage::staging_dir_for(&store_dir);
+    std::fs::create_dir_all(staging.join("meta")).unwrap();
+    std::fs::write(staging.join("MANIFEST.json"), b"{ garbage").unwrap();
+    let report = migrate_legacy(&data, &store_dir).await.unwrap();
+    assert_eq!(report.concepts, 1);
+    assert!(!staging.exists(), "staging renamed away");
+    assert!(store_dir.join("MANIFEST.json").exists());
+    assert!(!legacy_present(&data));
+    // The legacy log was read, never rewritten.
+    assert_eq!(
+        std::fs::read(data.join("graph.log.migrated")).unwrap(),
+        legacy_bytes
+    );
+    let store = SegmentStore::open(&store_dir).await.unwrap();
+    let g = OntologyGraph::with_arc(Ontology::new());
+    store.load_into(&g).await.unwrap();
+    assert_eq!(g.concept_count(), 1);
     std::fs::remove_dir_all(&data).ok();
+}
+
+#[tokio::test]
+async fn a_poisoned_segment_store_refuses_appends_until_reopened() {
+    let root = tempdir("poison");
+    let store = SegmentStore::open(&root).await.unwrap();
+    store
+        .append(&LogRecord::ontology(ontology()))
+        .await
+        .unwrap();
+    store.poison_for_test();
+    assert!(store.is_poisoned());
+    let err = store
+        .append(&LogRecord::concept(Concept::new(
+            ConceptId(1),
+            "Person",
+            "a",
+        )))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, StoreError::Poisoned(_)), "{err}");
+    assert_eq!(store.record_count(), 1, "nothing written while poisoned");
+    drop(store);
+    let store = SegmentStore::open(&root).await.unwrap();
+    assert!(!store.is_poisoned());
+    store
+        .append(&LogRecord::concept(Concept::new(
+            ConceptId(1),
+            "Person",
+            "a",
+        )))
+        .await
+        .unwrap();
+    assert_eq!(store.record_count(), 2);
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[tokio::test]
+async fn an_active_segment_whose_header_never_landed_is_recreated() {
+    let root = tempdir("empty-active");
+    {
+        let store = SegmentStore::open_with(&root, small_roll()).await.unwrap();
+        for i in 0..10 {
+            store
+                .append(&LogRecord::concept(Concept::new(
+                    ConceptId(i + 1),
+                    "Person",
+                    format!("p{i}"),
+                )))
+                .await
+                .unwrap();
+        }
+        // Partition 2 sealed, partition 3 freshly created and empty.
+    }
+    let gdir = root.join("graph/default");
+    assert_eq!(partitions(&gdir), vec![2, 3]);
+    // Crash between create_new and the header sync: a zero-length file.
+    std::fs::write(data_path(&gdir, 3), b"").unwrap();
+    let store = SegmentStore::open_with(&root, small_roll()).await.unwrap();
+    assert_eq!(partitions(&gdir), vec![2, 3]);
+    let fresh = OntologyGraph::with_arc(ontology());
+    store.load_into(&fresh).await.unwrap();
+    assert_eq!(fresh.concept_count(), 10);
+    store
+        .append(&LogRecord::concept(Concept::new(
+            ConceptId(11),
+            "Person",
+            "p10",
+        )))
+        .await
+        .unwrap();
+    assert_eq!(store.record_count(), 11);
+    std::fs::remove_dir_all(&root).ok();
 }
 
 #[tokio::test]

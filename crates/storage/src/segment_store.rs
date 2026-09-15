@@ -63,6 +63,9 @@ use crate::stream::{RollPolicy, SnapshotCursor, Stream, StreamOpenReport, Stream
 
 pub const LOCK_FILE: &str = "LOCK";
 
+/// One record ready to append: `(ns_id, kind, payload, index fields)`.
+type Planned = (u16, Kind, Vec<u8>, IndexFields);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SegmentStoreConfig {
     pub roll: RollPolicy,
@@ -122,6 +125,10 @@ struct Inner {
     /// Latest schema seen on the `meta` stream — the router (H13, H14).
     ontology: Ontology,
     next_seq: u64,
+    /// Set after a batch failed part-way: the buffered tail is in an unknown
+    /// state, so every further append is refused until restart, where
+    /// recovery truncates whatever is torn (see `StoreError::Poisoned`).
+    poisoned: bool,
     /// Held for the life of the store (H17: single writer per store).
     _lock: File,
 }
@@ -309,6 +316,7 @@ impl SegmentStore {
             graph,
             ontology,
             next_seq,
+            poisoned: false,
             _lock: lock,
         };
         let xref_entries = rebuild_xrefs(&mut inner)?;
@@ -352,6 +360,16 @@ impl SegmentStore {
     pub fn open_report(&self) -> &OpenReport {
         &self.report
     }
+    /// `true` once a batch failed part-way; every append is refused since.
+    pub fn is_poisoned(&self) -> bool {
+        self.inner.lock().poisoned
+    }
+    /// Test hook: simulate a failed batch.
+    #[doc(hidden)]
+    pub fn poison_for_test(&self) {
+        self.inner.lock().poisoned = true;
+    }
+
     pub fn manifest(&self) -> Manifest {
         self.inner.lock().manifest.clone()
     }
@@ -492,14 +510,44 @@ impl SegmentStore {
         Ok((src_id, dst_id))
     }
 
-    /// Encode, route, append, then one sync per touched stream and a roll
-    /// check. Returns the number of syncs issued.
+    /// Encode and route the whole batch first (creating domain streams and
+    /// interning symbols as needed, but appending nothing), then append,
+    /// then one sync per touched stream **in the order the streams were
+    /// first touched** — so a crash between two syncs leaves a durable
+    /// *prefix* of the batch in seq order — then a roll check. A routing
+    /// failure leaves the store as it was; any failure after the first
+    /// append poisons it. Returns the number of syncs issued.
     fn commit_batch(inner: &mut Inner, records: &[LogRecord]) -> StoreResult<u64> {
         if records.is_empty() {
             return Ok(0);
         }
-        let ts = Self::now_micros();
-        let mut touched: Vec<u16> = Vec::new();
+        if inner.poisoned {
+            return Err(StoreError::Poisoned(inner.root.display().to_string()));
+        }
+        // 1. Plan: encode + route. The router (latest ontology) advances as
+        //    Ontology records are met so the records after them route by the
+        //    new schema; it is restored if planning fails part-way.
+        let router_before = inner.ontology.clone();
+        let planned = match Self::plan_batch(inner, records) {
+            Ok(p) => p,
+            Err(e) => {
+                inner.ontology = router_before;
+                return Err(e);
+            }
+        };
+        // 2. Append + sync; from here on a failure poisons the store.
+        match Self::write_planned(inner, planned) {
+            Ok(n) => Ok(n),
+            Err(e) => {
+                inner.poisoned = true;
+                warn!(error = %e, root = %inner.root.display(), "batch failed part-way; store poisoned until restart");
+                Err(e)
+            }
+        }
+    }
+
+    fn plan_batch(inner: &mut Inner, records: &[LogRecord]) -> StoreResult<Vec<Planned>> {
+        let mut planned = Vec::with_capacity(records.len());
         for r in records {
             let payload =
                 serde_json::to_vec(&r.kind).map_err(|e| StoreError::Encode(e.to_string()))?;
@@ -517,27 +565,39 @@ impl SegmentStore {
                 None => 0,
             };
             let (ns_id, target_ns_id) = Self::route(inner, r, &meta)?;
-            let fields = IndexFields {
+            planned.push((
                 ns_id,
-                entity_id: meta.entity_id,
-                endpoints: meta.endpoints,
-                rtype_sym,
-                target_ns_id,
-            };
-            let seq = inner.next_seq;
-            inner
-                .stream_mut(ns_id)
-                .append(seq, ts, meta.kind, &payload, fields)?;
-            inner.next_seq += 1;
-            if !touched.contains(&ns_id) {
-                touched.push(ns_id);
-            }
+                meta.kind,
+                payload,
+                IndexFields {
+                    ns_id,
+                    entity_id: meta.entity_id,
+                    endpoints: meta.endpoints,
+                    rtype_sym,
+                    target_ns_id,
+                },
+            ));
             // A schema record changes the router for the records after it.
             if let RecordKind::Ontology(o) = &r.kind {
                 inner.ontology = o.clone();
             }
         }
+        Ok(planned)
+    }
 
+    fn write_planned(inner: &mut Inner, planned: Vec<Planned>) -> StoreResult<u64> {
+        let ts = Self::now_micros();
+        let mut touched: Vec<u16> = Vec::new();
+        for (ns_id, kind, payload, fields) in &planned {
+            let seq = inner.next_seq;
+            inner
+                .stream_mut(*ns_id)
+                .append(seq, ts, *kind, payload, *fields)?;
+            inner.next_seq += 1;
+            if !touched.contains(ns_id) {
+                touched.push(*ns_id);
+            }
+        }
         let mut syncs = 0;
         let mut manifest_dirty = false;
         let next_seq = inner.next_seq;

@@ -340,10 +340,55 @@ fn a_corrupt_payload_in_a_sealed_segment_is_caught_by_the_crc() {
     assert!(sealed.record(&e, false).is_ok());
     drop(sealed);
 
-    // Recovery treats it as a corrupt tail: keeps 2 records.
+    // Recovery refuses to truncate: valid records follow the bad one, so
+    // this is corruption (or a newer format), not a torn tail.
+    let err = recover_segment(&dir, 1, resolve).unwrap_err();
+    assert!(err.to_string().contains("refusing to truncate"), "{err}");
+    assert_eq!(
+        std::fs::read(&dpath).unwrap(),
+        bytes,
+        "the file is left exactly as it was"
+    );
+
+    // The same corruption on the *last* record is a torn tail: discarded.
+    std::fs::remove_dir_all(&dir).ok();
+    let dir = tempdir("crc-last");
+    let seg = write_segment(&dir, 5, 1);
+    drop(seg);
+    let dpath = data_path(&dir, 1);
+    let mut bytes = std::fs::read(&dpath).unwrap();
+    let last = entries_of(&dir, 1)[4];
+    bytes[last.offset as usize + RECORD_HEADER_LEN + 3] ^= 0x01;
+    std::fs::write(&dpath, &bytes).unwrap();
     let r = recover_segment(&dir, 1, resolve).unwrap();
-    assert_eq!(r.count, 2);
+    assert_eq!(r.count, 4);
     assert!(r.truncated_bytes > 0);
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn a_sealed_index_that_does_not_cover_the_data_is_refused() {
+    let dir = tempdir("uncovered");
+    let seg = write_segment(&dir, 6, 1);
+    let sealed = seg.seal().unwrap();
+    drop(sealed);
+    // Pretend the seal never happened: header count 0, no entries — as if
+    // the page cache holding the index was lost before the seal's sync.
+    let ipath = idx_path(&dir, 1);
+    let mut ib = std::fs::read(&ipath).unwrap();
+    ib.truncate(FILE_HEADER_LEN);
+    ib[20..24].copy_from_slice(&0u32.to_le_bytes());
+    std::fs::write(&ipath, &ib).unwrap();
+    let err = SealedSegment::open(&dir, 1).unwrap_err();
+    assert!(err.to_string().contains("covers"), "{err}");
+    // Recovery rebuilds the index and the segment seals again.
+    let r = recover_segment(&dir, 1, resolve).unwrap();
+    assert_eq!(r.count, 6);
+    assert_eq!(r.idx_rewritten, 6);
+    let seg = ActiveSegment::reopen(&dir, 1, r.header, r.data_len, r.count, 6).unwrap();
+    let sealed = seg.seal().unwrap();
+    assert_eq!(sealed.record_count(), 6);
+    assert_eq!(sealed.last_seq(), Some(6));
     std::fs::remove_dir_all(&dir).ok();
 }
 
