@@ -245,7 +245,7 @@ export function ReviewPanel(props: ReviewPanelProps) {
 
       {proposal.concepts.length > 0 && (
         <Section title={`Concepts (${proposal.concepts.length})`}>
-          <Table headers={["Type", "Name", "Description", "Conflict", "Confidence", "Decision"]}>
+          <Table headers={["Type", "Name", "Description", "Properties", "Conflict", "Confidence", "Decision"]}>
             {proposal.concepts.map((c) => (
               <tr key={c.client_ref}>
                 <td style={{ color: "#475569" }}>{c.concept_type}</td>
@@ -265,6 +265,19 @@ export function ReviewPanel(props: ReviewPanelProps) {
                     style={{ width: "100%", border: 0, background: "transparent", color: "#475569" }}
                     placeholder="—"
                   />
+                </td>
+                <td>
+                  {c.properties && c.properties.length > 0 ? (
+                    <div className="prop-chips">
+                      {c.properties.map(([k, v], i) => (
+                        <span key={`${k}-${i}`} className="prop-chip" title={`${k}: ${v}`}>
+                          <b>{k}</b> {v}
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <span style={{ color: "#94a3b8" }}>—</span>
+                  )}
                 </td>
                 <td><ConflictBadge conflict={c.conflict} /></td>
                 <td><ConfidenceBar value={c.confidence} /></td>

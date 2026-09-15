@@ -388,7 +388,10 @@ pub(crate) async fn apply(
                         } else {
                             let mut m = ahash::AHashMap::new();
                             for (k, v) in &c.properties {
-                                m.insert(k.clone(), ontology_graph::PropertyValue::Text(v.clone()));
+                                m.insert(
+                                    k.clone(),
+                                    ontology_graph::PropertyValue::from_loose_text(v),
+                                );
                             }
                             Some(m)
                         },
@@ -409,10 +412,12 @@ pub(crate) async fn apply(
                             ontology_graph::PropertyValue::Text(lang.code.clone()),
                         );
                     }
+                    // Amounts and flags arrive as text from the model; type them
+                    // so they sort and filter like the CSV/XLSX import does.
                     for (k, v) in &c.properties {
                         concept
                             .properties
-                            .insert(k.clone(), ontology_graph::PropertyValue::Text(v.clone()));
+                            .insert(k.clone(), ontology_graph::PropertyValue::from_loose_text(v));
                     }
                     s.graph
                         .prepare_concept(&mut concept)
