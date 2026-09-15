@@ -878,6 +878,14 @@ Rules:
   `subject_ref` / `object_ref` strings of the form
   "<concept_type>:<name>" referring to a concept declared in this
   response OR already present in the graph.
+- TABULAR INPUT: when the document is a table flattened as lines of
+  `header: value; header: value` (a `# Sheet:` heading, CSV or JSON
+  records), every line is one concept. Use the identifier column
+  (`name`, `id`, code…) as `name` and carry EVERY other column as a
+  property pair [header, value] — amounts, dates, quantities, references
+  included, values verbatim. Never drop a column because it is numeric.
+  Columns that reference other rows or entities (issued_by, contract,
+  invoice…) also become relations when a matching relation type exists.
 
 Required JSON shape:
 {

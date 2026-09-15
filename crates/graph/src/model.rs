@@ -27,6 +27,44 @@ impl PropertyValue {
             _ => None,
         }
     }
+
+    /// Type a value that arrived as text (an LLM proposal, a CSV cell):
+    /// `true`/`false` become `Bool`, a plain decimal number becomes
+    /// `Number`, everything else stays `Text`. Deliberately conservative —
+    /// identifiers such as `007`, `1e3`, `+41 22…` or `2025-03-31` are kept
+    /// verbatim, since turning them into numbers would lose information.
+    pub fn from_loose_text(s: &str) -> PropertyValue {
+        let t = s.trim();
+        match t {
+            "true" | "false" => return PropertyValue::Bool(t == "true"),
+            _ => {}
+        }
+        if looks_like_plain_number(t) {
+            if let Ok(n) = t.parse::<f64>() {
+                if n.is_finite() {
+                    return PropertyValue::Number(n);
+                }
+            }
+        }
+        PropertyValue::Text(s.to_string())
+    }
+}
+
+/// `-?digits(.digits)?` with no leading zero (other than `0` itself).
+fn looks_like_plain_number(t: &str) -> bool {
+    let body = t.strip_prefix('-').unwrap_or(t);
+    let (int, frac) = match body.split_once('.') {
+        Some((i, f)) => (i, Some(f)),
+        None => (body, None),
+    };
+    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    if !digits(int) || (int.len() > 1 && int.starts_with('0')) {
+        return false;
+    }
+    match frac {
+        Some(f) => digits(f),
+        None => true,
+    }
 }
 
 pub type Property = (String, PropertyValue);
@@ -265,4 +303,50 @@ pub struct RelationPatch {
     pub weight: Option<f32>,
     #[serde(default)]
     pub properties: Option<AHashMap<String, PropertyValue>>,
+}
+
+#[cfg(test)]
+mod loose_text_tests {
+    use super::PropertyValue;
+
+    #[test]
+    fn numbers_and_booleans_are_typed_identifiers_are_kept() {
+        assert!(
+            matches!(PropertyValue::from_loose_text("18000"), PropertyValue::Number(n) if n == 18000.0)
+        );
+        assert!(
+            matches!(PropertyValue::from_loose_text(" 1200.5 "), PropertyValue::Number(n) if n == 1200.5)
+        );
+        assert!(
+            matches!(PropertyValue::from_loose_text("-3"), PropertyValue::Number(n) if n == -3.0)
+        );
+        assert!(
+            matches!(PropertyValue::from_loose_text("0"), PropertyValue::Number(n) if n == 0.0)
+        );
+        assert!(matches!(
+            PropertyValue::from_loose_text("true"),
+            PropertyValue::Bool(true)
+        ));
+        assert!(matches!(
+            PropertyValue::from_loose_text("false"),
+            PropertyValue::Bool(false)
+        ));
+        for kept in [
+            "007",
+            "1e3",
+            "+41 22 000 00 00",
+            "2025-03-31",
+            "INV-1001",
+            "12,5",
+            "",
+            "1.",
+            ".5",
+            "NaN",
+        ] {
+            assert!(
+                matches!(PropertyValue::from_loose_text(kept), PropertyValue::Text(ref t) if t == kept),
+                "{kept:?} must stay text"
+            );
+        }
+    }
 }
