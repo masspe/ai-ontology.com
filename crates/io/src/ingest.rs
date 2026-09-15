@@ -146,7 +146,11 @@ pub const INGEST_BATCH_SIZE: usize = 256;
 /// ontology as they arrive but journaled as **one** `Ontology` record, just
 /// before the first instance that could depend on them (and at the end).
 /// This replaces the previous one-snapshot-per-declaration behaviour that
-/// made the ontology ~95 % of a typical log. The trade-off is explicit: a
+/// made the ontology ~95 % of a typical log. A declaration that changes
+/// nothing (every text document re-declares its own type; a re-ingested
+/// file repeats its `@concept_type` lines) is a no-op: it neither settles
+/// the pending batch nor marks the schema dirty, so N documents of one type
+/// cost one schema record and keep batching. The trade-off is explicit: a
 /// store failure at that flush leaves schema *types* (never instances) in
 /// memory that are not on disk; the ingest is aborted with the error.
 pub async fn ingest_records<S: Source + ?Sized>(
@@ -432,6 +436,14 @@ impl<'a> Ingester<'a> {
                 }
             }
             Record::ConceptTypeDecl(ct) => {
+                // A declaration identical to the registered type (after the
+                // merge below) changes nothing: no barrier, no schema record.
+                let unchanged = self.graph.with_ontology(|o| {
+                    o.concept_types.get(&ct.name) == Some(&o.merged_concept_type(ct.clone()))
+                });
+                if unchanged {
+                    return Ok(true);
+                }
                 // Pending concepts were validated against the current schema;
                 // settle them before it changes. The schema itself is only
                 // journaled once, before the first instance that needs it.
@@ -456,10 +468,18 @@ impl<'a> Ingester<'a> {
                 {
                     return Ok(false);
                 }
-                self.settle_pending().await?;
-                self.begin_schema_change();
                 let ftype = crate::extract::fragment_type_name(document_type);
                 let rel = crate::extract::fragment_relation_name(document_type);
+                // Already declared (every chunked document of this type
+                // repeats the declaration): nothing to journal.
+                let present = self.graph.with_ontology(|o| {
+                    o.concept_types.contains_key(&ftype) && o.relation_types.contains_key(&rel)
+                });
+                if present {
+                    return Ok(true);
+                }
+                self.settle_pending().await?;
+                self.begin_schema_change();
                 let doc = document_type.clone();
                 self.graph.extend_ontology(|o| {
                     let ns = o.ns_of_type(&doc).to_string();
@@ -498,6 +518,12 @@ impl<'a> Ingester<'a> {
                 if !known {
                     return Ok(false);
                 }
+                if self
+                    .graph
+                    .with_ontology(|o| o.relation_types.get(&rt.name) == Some(rt))
+                {
+                    return Ok(true);
+                }
                 self.settle_pending().await?;
                 self.begin_schema_change();
                 self.graph
@@ -514,6 +540,12 @@ impl<'a> Ingester<'a> {
                 });
                 if !known {
                     return Ok(false);
+                }
+                if self
+                    .graph
+                    .with_ontology(|o| o.rule_type(&rule.name) == Some(rule))
+                {
+                    return Ok(true);
                 }
                 self.settle_pending().await?;
                 self.begin_schema_change();
@@ -534,6 +566,12 @@ impl<'a> Ingester<'a> {
                 });
                 if !known {
                     return Ok(false);
+                }
+                if self
+                    .graph
+                    .with_ontology(|o| o.action_type(&action.name) == Some(action))
+                {
+                    return Ok(true);
                 }
                 self.settle_pending().await?;
                 self.begin_schema_change();
