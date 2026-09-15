@@ -302,14 +302,97 @@ Do not wrap it in markdown fences. Do not include commentary.",
     Ok(resp.content)
 }
 
-/// Strict-ish JSON parser: strips Markdown code fences if the model
-/// stubbornly added them, then attempts a `serde_json::from_str` into the
-/// internal shape and converts it to public proposal types.
+/// Lenient JSON parser: strips Markdown code fences if the model stubbornly
+/// added them, normalizes the shapes models get wrong (see
+/// [`normalize_llm_json`]), then deserializes into the internal shape and
+/// converts it to public proposal types.
 fn parse_response(raw: &str, chunk_idx: usize) -> Result<OntologyProposal, ExtractError> {
     let cleaned = strip_code_fences(raw.trim());
-    let parsed: RawProposal = serde_json::from_str(cleaned)
+    let mut value: serde_json::Value = serde_json::from_str(cleaned)
+        .map_err(|e| ExtractError::Parse(format!("chunk {chunk_idx}: {e}")))?;
+    normalize_llm_json(&mut value);
+    let parsed: RawProposal = serde_json::from_value(value)
         .map_err(|e| ExtractError::Parse(format!("chunk {chunk_idx}: {e}")))?;
     Ok(parsed.into_proposal(chunk_idx))
+}
+
+/// Make a model's JSON fit `RawProposal` where the intent is unambiguous:
+///
+/// * `null` on an optional field means "absent" — the key is removed so the
+///   `#[serde(default)]` applies (serde rejects `null` for a `String`);
+/// * `properties` / `parameters` written as an object `{"k": v}` become the
+///   expected `[["k", "v"], …]` pairs;
+/// * pair values that are numbers or booleans (a spreadsheet's amounts,
+///   dates as numbers) are stringified; pairs with a `null` value are dropped.
+///
+/// Required fields (`name`, `client_ref`s…) are left alone: a `null` there is
+/// a real error and still fails deserialization.
+fn normalize_llm_json(v: &mut serde_json::Value) {
+    use serde_json::Value;
+    match v {
+        Value::Object(map) => {
+            map.retain(|_, val| !val.is_null());
+            for (key, val) in map.iter_mut() {
+                if key == "properties" || key == "parameters" {
+                    normalize_pairs(val);
+                } else {
+                    normalize_llm_json(val);
+                }
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(normalize_llm_json),
+        _ => {}
+    }
+}
+
+fn scalar_to_string(v: &serde_json::Value) -> Option<String> {
+    use serde_json::Value;
+    match v {
+        Value::String(s) => Some(s.clone()),
+        Value::Number(n) => Some(n.to_string()),
+        Value::Bool(b) => Some(b.to_string()),
+        Value::Null => None,
+        other => Some(other.to_string()),
+    }
+}
+
+/// `properties` on a concept type is a list of names; on a concept it is a
+/// list of `[name, value]` pairs. Both are handled: an object becomes pairs,
+/// a list keeps its strings and stringifies pair values.
+fn normalize_pairs(v: &mut serde_json::Value) {
+    use serde_json::Value;
+    let pairs: Vec<Value> = match v {
+        Value::Object(map) => map
+            .iter()
+            .filter_map(|(k, val)| {
+                scalar_to_string(val)
+                    .map(|s| Value::Array(vec![Value::String(k.clone()), Value::String(s)]))
+            })
+            .collect(),
+        Value::Array(items) => items
+            .iter()
+            .filter_map(|item| match item {
+                Value::Array(pair) if pair.len() == 2 => {
+                    let k = scalar_to_string(&pair[0])?;
+                    let val = scalar_to_string(&pair[1])?;
+                    Some(Value::Array(vec![Value::String(k), Value::String(val)]))
+                }
+                Value::Object(map) if map.len() == 1 => {
+                    let (k, val) = map.iter().next()?;
+                    let val = scalar_to_string(val)?;
+                    Some(Value::Array(vec![
+                        Value::String(k.clone()),
+                        Value::String(val),
+                    ]))
+                }
+                Value::String(s) => Some(Value::String(s.clone())),
+                Value::Null => None,
+                other => scalar_to_string(other).map(Value::String),
+            })
+            .collect(),
+        _ => return,
+    };
+    *v = Value::Array(pairs);
 }
 
 fn strip_code_fences(s: &str) -> &str {
@@ -724,6 +807,60 @@ mod tests {
         attach_conflicts(&mut p, &graph);
         // Both proposal-internal refs should resolve.
         assert!(p.relations[0].conflict.is_none());
+    }
+
+    /// What models actually return for a spreadsheet: `null` for empty
+    /// cells and optional fields, numbers for amounts, properties as an
+    /// object. None of that is a reason to reject the whole proposal.
+    #[test]
+    fn parse_tolerates_nulls_numbers_and_object_properties() {
+        let raw = r#"{
+            "concept_types": [
+                {"name": "Invoice", "description": null, "properties": ["amount_eur", null], "parent": null}
+            ],
+            "relation_types": [],
+            "concepts": [
+                {"concept_type": "Invoice", "name": "INV-2025-001", "description": null,
+                 "properties": {"amount_eur": 1200.5, "paid": false, "note": null, "issued_to": "Globex"},
+                 "evidence": null, "confidence": 0.9},
+                {"concept_type": "Invoice", "name": "INV-2025-002",
+                 "properties": [["amount_eur", 80], ["currency", "EUR"], ["due", null]]}
+            ],
+            "relations": [
+                {"relation_type": "issued_to", "source_ref": "c0", "target_ref": "c1", "weight": null, "evidence": null}
+            ],
+            "rules": null,
+            "actions": []
+        }"#;
+        let p = parse_response(raw, 0).expect("lenient parse");
+        assert_eq!(p.concept_types.len(), 1);
+        assert_eq!(
+            p.concept_types[0].properties,
+            vec!["amount_eur".to_string()]
+        );
+        assert_eq!(p.concepts.len(), 2);
+        let first = &p.concepts[0];
+        assert_eq!(first.description, "");
+        let props: std::collections::BTreeMap<_, _> = first.properties.iter().cloned().collect();
+        assert_eq!(props.get("amount_eur").map(String::as_str), Some("1200.5"));
+        assert_eq!(props.get("paid").map(String::as_str), Some("false"));
+        assert_eq!(props.get("issued_to").map(String::as_str), Some("Globex"));
+        assert!(!props.contains_key("note"), "null-valued pair dropped");
+        let second: std::collections::BTreeMap<_, _> =
+            p.concepts[1].properties.iter().cloned().collect();
+        assert_eq!(second.get("amount_eur").map(String::as_str), Some("80"));
+        assert!(!second.contains_key("due"));
+        assert_eq!(p.relations.len(), 1);
+        assert!(p.relations[0].weight.is_none());
+        assert!(p.rules.is_empty());
+    }
+
+    /// A `null` where the model must speak (a concept's name) is still an error.
+    #[test]
+    fn parse_still_rejects_null_required_fields() {
+        let raw = r#"{"concepts": [{"concept_type": "Invoice", "name": null}]}"#;
+        let err = parse_response(raw, 0).unwrap_err();
+        assert!(matches!(err, ExtractError::Parse(_)));
     }
 
     #[test]
