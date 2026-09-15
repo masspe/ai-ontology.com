@@ -330,3 +330,67 @@ async fn ingest_without_a_store_still_applies_everything() {
     assert_eq!(graph.concept_count(), INGEST_BATCH_SIZE + 3);
     drop(Arc::clone(&graph));
 }
+
+#[tokio::test]
+async fn a_failed_ingest_rolls_back_type_declarations_it_could_not_journal() {
+    // A declaration is applied to the live ontology before the schema is
+    // journaled (one Ontology record per flush). If the ingest fails first,
+    // the live schema must not keep a type the store never saw: a later
+    // concept of that type would be accepted and journaled, and rejected on
+    // replay.
+    let graph = OntologyGraph::with_arc(ontology());
+    let store = FlakyStore::new();
+    let types_before = graph.ontology().concept_types.len();
+    let records = vec![
+        Record::ConceptTypeDecl(ConceptType {
+            name: "City".into(),
+            ..Default::default()
+        }),
+        person("Alice"),
+        person("alice"), // duplicate → the ingest fails before any flush
+    ];
+    let err = ingest_records(&mut VecSource::new(records), &graph, Some(&store))
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("duplicate"), "{err}");
+    assert_eq!(store.records_written(), 0);
+    assert_eq!(graph.ontology().concept_types.len(), types_before);
+    assert!(
+        !graph.ontology().concept_types.contains_key("City"),
+        "un-journaled type must be rolled back"
+    );
+
+    // Same when the store itself fails at the schema flush.
+    store.set_failing(true);
+    let records = vec![
+        Record::ConceptTypeDecl(ConceptType {
+            name: "City".into(),
+            ..Default::default()
+        }),
+        Record::Concept(Concept::new(ConceptId(0), "City", "Geneva")),
+    ];
+    let err = ingest_records(&mut VecSource::new(records), &graph, Some(&store))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, IngestError::Store(_)), "{err}");
+    assert!(!graph.ontology().concept_types.contains_key("City"));
+    assert_eq!(graph.concept_count(), 0);
+
+    // And once the store works, the same stream succeeds and journals the
+    // schema before the instance.
+    store.set_failing(false);
+    let records = vec![
+        Record::ConceptTypeDecl(ConceptType {
+            name: "City".into(),
+            ..Default::default()
+        }),
+        Record::Concept(Concept::new(ConceptId(0), "City", "Geneva")),
+    ];
+    ingest_records(&mut VecSource::new(records), &graph, Some(&store))
+        .await
+        .unwrap();
+    assert_eq!(kinds(&store), vec!["ontology", "concept"]);
+    let fresh = OntologyGraph::with_arc(ontology());
+    store.load_into(&fresh).await.unwrap();
+    assert!(fresh.find_by_name("City", "Geneva").is_some());
+}
