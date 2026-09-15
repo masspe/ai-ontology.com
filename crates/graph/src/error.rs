@@ -106,4 +106,27 @@ pub enum GraphError {
         to: String,
         instances: usize,
     },
+
+    /// A type that still has instances was removed from the ontology.
+    #[error("{kind} type `{name}` still has {instances} instance(s); remove them before dropping the type")]
+    TypeInUse {
+        kind: &'static str,
+        name: String,
+        instances: usize,
+    },
+
+    /// A relation type's `domain` / `range` changed while relations of that
+    /// type exist: their validity and their storage domain would change
+    /// under them.
+    #[error(
+        "relation type `{relation_type}` cannot change domain/range: {instances} relation(s) exist"
+    )]
+    RelationTypeChangeWithInstances {
+        relation_type: String,
+        instances: usize,
+    },
+
+    /// `insert_relation_exact` was given an id that is already present.
+    #[error("relation {0} already exists")]
+    RelationExists(RelationId),
 }

@@ -77,6 +77,14 @@ fn ontology() -> Ontology {
         ..Default::default()
     })
     .unwrap();
+    o.add_relation_type(RelationType {
+        name: "partner_of".into(),
+        domain: "Company".into(),
+        range: "Company".into(),
+        symmetric: true,
+        ..Default::default()
+    })
+    .unwrap();
     o.add_rule_type(RuleType {
         name: "must_review".into(),
         when: String::new(),
@@ -574,5 +582,202 @@ async fn a_single_domain_store_keeps_the_phase_2_layout() {
     let m = store.manifest();
     assert_eq!(m.ns.len(), 2, "meta + default only");
     assert_eq!(store.record_counts_by_domain()["default"], 1);
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[tokio::test]
+async fn compaction_keeps_relation_ids_so_later_tombstones_still_apply() {
+    // Symmetric relations are two live relations with two ids; compaction
+    // writes both as RelationExact, so after a restart the ids on disk are
+    // the ids the live graph deletes with.
+    let root = tempdir("compact-ids");
+    let store = SegmentStore::open_with(&root, small_roll()).await.unwrap();
+    let fx = Fixture::new(&store).await;
+    let acme = fx.concept(&store, "Company", "Acme").await;
+    let globex = fx.concept(&store, "Company", "Globex").await;
+    let initech = fx.concept(&store, "Company", "Initech").await;
+    fx.relation(&store, "partner_of", acme, globex).await;
+    fx.relation(&store, "partner_of", globex, initech).await;
+    assert_eq!(fx.graph.relation_count(), 4, "two symmetric pairs");
+    let live_before: Vec<Relation> = fx.graph.all_relations();
+
+    store.compact_store(&fx.graph).await.unwrap();
+
+    // Replay of the compacted store yields the very same relations, ids included.
+    let fresh = OntologyGraph::with_arc(Ontology::new());
+    store.load_into(&fresh).await.unwrap();
+    assert_eq!(fresh.relation_count(), 4);
+    for r in &live_before {
+        let got = fresh.get_relation(r.id).unwrap();
+        assert_eq!(
+            (got.source, got.target),
+            (r.source, r.target),
+            "id {} moved",
+            r.id
+        );
+    }
+
+    // Delete one pair through the live graph (its ids), restart: gone.
+    let pair = fx.graph.incident_relation_ids(initech).unwrap();
+    assert_eq!(pair.len(), 2);
+    let recs: Vec<LogRecord> = pair
+        .iter()
+        .map(|rid| {
+            LogRecord::delete_relation(*rid, fx.graph.get_relation(*rid).unwrap().relation_type)
+        })
+        .collect();
+    store.append_batch(&recs).await.unwrap();
+    for rid in &pair {
+        fx.graph.remove_relation(*rid).unwrap();
+    }
+    drop(store);
+    let store = SegmentStore::open_with(&root, small_roll()).await.unwrap();
+    let fresh = OntologyGraph::with_arc(Ontology::new());
+    store.load_into(&fresh).await.unwrap();
+    assert_eq!(fresh.relation_count(), 2, "the deleted pair stays deleted");
+    assert!(fresh.get_relation(pair[0]).is_err());
+    assert_eq!(fresh.incident_relation_ids(initech).unwrap().len(), 0);
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[tokio::test]
+async fn an_interrupted_compaction_is_finished_or_discarded_at_open() {
+    use ontology_storage::manifest::CompactionMarker;
+    use ontology_storage::Manifest;
+
+    let root = tempdir("compact-crash");
+    let (acme, before_ids);
+    {
+        let store = SegmentStore::open_with(&root, small_roll()).await.unwrap();
+        let fx = Fixture::new(&store).await;
+        acme = fx.concept(&store, "Company", "Acme").await;
+        for i in 0..7 {
+            fx.concept(&store, "Company", &format!("c{i}")).await;
+        }
+        before_ids = fx
+            .graph
+            .all_concepts()
+            .iter()
+            .map(|c| c.id)
+            .collect::<Vec<_>>();
+    }
+    let pdir = root.join("graph/parties");
+    let old = partitions(&pdir);
+    assert_eq!(old.len(), 2, "one sealed + one active: {old:?}");
+
+    // (a) Aborted staging — files in compacting/, no marker: removed at open,
+    //     nothing else changes.
+    let staging = pdir.join("compacting");
+    std::fs::create_dir_all(&staging).unwrap();
+    std::fs::write(staging.join("000099.data"), b"junk").unwrap();
+    {
+        let store = SegmentStore::open_with(&root, small_roll()).await.unwrap();
+        assert!(!staging.exists(), "aborted staging discarded");
+        assert_eq!(partitions(&pdir), old);
+        let g = OntologyGraph::with_arc(Ontology::new());
+        store.load_into(&g).await.unwrap();
+        assert_eq!(g.concept_count(), 8);
+    }
+
+    // (b) Commit point passed — staged partition present, marker written,
+    //     process died before the swap: open finishes it.
+    //     Build the staged partition as a real compaction would: a copy of
+    //     the live state. Simplest faithful way: run a compaction, then
+    //     recreate the "just committed" state from what it produced.
+    let store = SegmentStore::open_with(&root, small_roll()).await.unwrap();
+    let g = OntologyGraph::with_arc(Ontology::new());
+    store.load_into(&g).await.unwrap();
+    store.compact_store(&g).await.unwrap();
+    let after = partitions(&pdir); // [sealed compacted, fresh active]
+    assert_eq!(after.len(), 2);
+    drop(store);
+    // Move the compacted sealed partition back into compacting/ and write a
+    // marker naming it as staged and the (now absent) old ids as to-remove,
+    // plus the current active as old. Exactly the on-disk picture after the
+    // commit point.
+    let ns_id = Manifest::load(&root)
+        .unwrap()
+        .unwrap()
+        .ns_id("parties")
+        .unwrap();
+    let staged_pid = after[0];
+    std::fs::create_dir_all(&staging).unwrap();
+    for ext in ["data", "idx", "xref"] {
+        let f = pdir.join(format!("{staged_pid:06}.{ext}"));
+        if f.exists() {
+            std::fs::rename(&f, staging.join(format!("{staged_pid:06}.{ext}"))).unwrap();
+        }
+    }
+    let mut m = Manifest::load(&root).unwrap().unwrap();
+    m.compaction = Some(CompactionMarker {
+        staged: vec![(ns_id, staged_pid)],
+        remove: vec![(ns_id, vec![after[1]])],
+    });
+    m.save(&root).unwrap();
+
+    let store = SegmentStore::open_with(&root, small_roll()).await.unwrap();
+    assert!(store.manifest().compaction.is_none(), "marker cleared");
+    assert!(!staging.exists());
+    let now = partitions(&pdir);
+    assert!(
+        now.contains(&staged_pid),
+        "staged partition moved in: {now:?}"
+    );
+    assert!(!now.contains(&after[1]), "old active removed: {now:?}");
+    let g = OntologyGraph::with_arc(Ontology::new());
+    store.load_into(&g).await.unwrap();
+    assert_eq!(g.concept_count(), 8);
+    assert!(g.get_concept(acme).is_ok());
+    let mut ids: Vec<_> = g.all_concepts().iter().map(|c| c.id).collect();
+    let mut expect = before_ids.clone();
+    ids.sort();
+    expect.sort();
+    assert_eq!(ids, expect);
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[tokio::test]
+async fn xref_entries_are_filed_in_the_partition_whose_seq_range_holds_them() {
+    let root = tempdir("xref-ranges");
+    {
+        let store = SegmentStore::open_with(&root, small_roll()).await.unwrap();
+        let fx = Fixture::new(&store).await;
+        let acme = fx.concept(&store, "Company", "Acme").await;
+        // Roll parties several times while contracts keep pointing at Acme.
+        for i in 0..12 {
+            fx.concept(&store, "Person", &format!("p{i}")).await;
+            let c = fx.concept(&store, "Contract", &format!("C-{i}")).await;
+            fx.relation(&store, "between", c, acme).await;
+        }
+    }
+    let store = SegmentStore::open_with(&root, small_roll()).await.unwrap();
+    let parties = store.xrefs("parties").unwrap();
+    assert!(parties.len() >= 3, "{}", parties.len());
+    let m = store.manifest();
+    let ns_id = m.ns_id("parties").unwrap();
+    let mut bases: Vec<(u32, u64)> = m
+        .stream(ns_id)
+        .unwrap()
+        .sealed
+        .iter()
+        .map(|p| (p.id, p.base_seq))
+        .collect();
+    bases.sort_by_key(|(id, _)| *id);
+    let mut total = 0;
+    for (i, (pid, entries)) in parties.iter().enumerate() {
+        total += entries.len();
+        if let Some((sealed_id, base)) = bases.get(i) {
+            assert_eq!(pid, sealed_id);
+            let upper = bases.get(i + 1).map(|(_, b)| *b).unwrap_or(u64::MAX);
+            for e in entries {
+                assert!(
+                    e.seq >= *base && e.seq < upper,
+                    "seq {} not in [{base}, {upper})",
+                    e.seq
+                );
+            }
+        }
+    }
+    assert_eq!(total, 12);
     std::fs::remove_dir_all(&root).ok();
 }

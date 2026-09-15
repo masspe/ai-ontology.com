@@ -227,7 +227,16 @@ async fn a_failing_store_leaves_the_graph_untouched_on_every_mutating_endpoint()
         (
             "PUT",
             "/ontology".into(),
-            Some(serde_json::to_value(Ontology::new()).unwrap()),
+            Some({
+                // A schema change the graph accepts (an extra type), so the
+                // failing store is what is exercised, not the schema guard.
+                let mut o = ontology();
+                o.add_concept_type(ConceptType {
+                    name: "Extra".into(),
+                    ..Default::default()
+                });
+                serde_json::to_value(o).unwrap()
+            }),
         ),
     ];
 
@@ -606,4 +615,59 @@ async fn ingest_apply_rolls_back_type_declarations_when_the_store_fails() {
     assert_eq!(st, StatusCode::OK, "{v}");
     assert!(graph.ontology().concept_types.contains_key("Widget"));
     assert_eq!(store.records_written(), 1, "one Ontology record");
+}
+
+#[tokio::test]
+async fn a_refused_schema_is_never_journaled() {
+    let store = Arc::new(FlakyStore::new());
+    let graph = OntologyGraph::with_arc(ontology());
+    let app = build_router(state_with(store.clone(), graph.clone()));
+    let (st, _) = call(&app, "POST", "/concepts", Some(topic("A"))).await;
+    assert_eq!(st, StatusCode::OK);
+    let written = store.records_written();
+
+    // Invalid domain identifier.
+    let mut bad = ontology();
+    bad.concept_type_mut("Topic").ns = Some("Not Valid".into());
+    let (st, v) = call(
+        &app,
+        "PUT",
+        "/ontology",
+        Some(serde_json::to_value(&bad).unwrap()),
+    )
+    .await;
+    assert!(st.is_client_error(), "{st} {v}");
+    // Dropping a type that has an instance.
+    let mut bad = ontology();
+    bad.concept_types.remove("Topic");
+    let (st, v) = call(
+        &app,
+        "PUT",
+        "/ontology",
+        Some(serde_json::to_value(&bad).unwrap()),
+    )
+    .await;
+    assert!(st.is_client_error(), "{st} {v}");
+    assert_eq!(
+        store.records_written(),
+        written,
+        "nothing reached the store"
+    );
+    assert_eq!(graph.ontology().concept_types.len(), 1);
+
+    // A valid change still goes through, journaled once.
+    let mut good = ontology();
+    good.add_concept_type(ConceptType {
+        name: "Tag".into(),
+        ..Default::default()
+    });
+    let (st, v) = call(
+        &app,
+        "PUT",
+        "/ontology",
+        Some(serde_json::to_value(&good).unwrap()),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert_eq!(store.records_written(), written + 1);
 }

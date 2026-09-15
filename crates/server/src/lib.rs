@@ -2072,6 +2072,7 @@ async fn upload(
         "ontology" => {
             let onto: Ontology = serde_json::from_slice(&bytes)
                 .map_err(|e| ApiError::BadRequest(format!("ontology: {e}")))?;
+            s.graph.check_ontology(&onto)?;
             s.store
                 .append(&LogRecord::ontology(onto.clone()))
                 .await
@@ -2337,6 +2338,9 @@ async fn put_ontology(
     Json(onto): Json<Ontology>,
 ) -> Result<Json<Ontology>, ApiError> {
     let _w = s.writer.lock().await;
+    // Validate before journaling: a refused schema must never reach the
+    // store, or the next replay fails on it.
+    s.graph.check_ontology(&onto)?;
     s.store
         .append(&LogRecord::ontology(onto.clone()))
         .await

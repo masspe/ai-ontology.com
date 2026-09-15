@@ -309,17 +309,38 @@ pub fn remove_segment_files(dir: &Path, partition_id: u32) -> io::Result<()> {
     Ok(())
 }
 
-/// Remove leftover `*.old` files from a previous compaction.
+/// Remove leftover `*.old` (undeletable mapped files) and `*.tmp`
+/// (interrupted atomic writes) from a previous run.
 pub fn sweep_old_files(dir: &Path) -> io::Result<usize> {
     let mut n = 0;
     for entry in std::fs::read_dir(dir)? {
         let p = entry?.path();
-        if p.extension().and_then(|e| e.to_str()) == Some("old") && std::fs::remove_file(&p).is_ok()
-        {
+        let ext = p.extension().and_then(|e| e.to_str());
+        if matches!(ext, Some("old") | Some("tmp")) && std::fs::remove_file(&p).is_ok() {
             n += 1;
         }
     }
     Ok(n)
+}
+
+/// Move the `.data` / `.idx` (and `.xref` if any) of a partition from one
+/// directory to another (same filesystem: a rename per file).
+pub fn move_segment_files(from: &Path, to: &Path, partition_id: u32) -> io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for (src, dst) in [
+        (data_path(from, partition_id), data_path(to, partition_id)),
+        (idx_path(from, partition_id), idx_path(to, partition_id)),
+        (
+            super::xref::xref_path(from, partition_id),
+            super::xref::xref_path(to, partition_id),
+        ),
+    ] {
+        if src.exists() {
+            std::fs::rename(&src, &dst)?;
+        }
+    }
+    fsync_dir(to);
+    Ok(())
 }
 
 /// Flush a directory's entries to disk where the platform allows (Unix);

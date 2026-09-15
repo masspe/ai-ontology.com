@@ -50,8 +50,16 @@ pub const EXCERPT_CHARS: usize = 600;
 pub fn fragment_type_name(doc_type: &str) -> String {
     format!("{doc_type}Fragment")
 }
-/// Relation from a fragment to its document.
-pub const FRAGMENT_OF: &str = "fragment_of";
+/// Relation from a fragment to its document, one per document type (like
+/// `mentions_<type>`), so two document types never redefine each other's
+/// domain/range.
+pub const FRAGMENT_OF_PREFIX: &str = "fragment_of_";
+pub fn fragment_relation_name(doc_type: &str) -> String {
+    format!("{FRAGMENT_OF_PREFIX}{}", doc_type.to_lowercase())
+}
+/// Upper bound on fragments per document; beyond it, chunks are merged so
+/// the count fits (a 50 MB text must not become 12 000 concepts).
+pub const MAX_FRAGMENTS_PER_DOCUMENT: usize = 2_000;
 
 /// `extract_from_text_chunked` with [`DEFAULT_CHUNK_CHARS`].
 pub fn extract_from_text(doc_type: &str, doc_name: &str, body: &str) -> Vec<Record> {
@@ -76,6 +84,7 @@ pub fn chunk_text(body: &str, chunk_chars: usize) -> Vec<String> {
         current.clear();
         *len = 0;
     };
+    let body = body.replace("\r\n", "\n");
     for para in body.split("\n\n") {
         let para = para.trim_matches(['\r', '\n']);
         if para.trim().is_empty() {
@@ -107,6 +116,15 @@ pub fn chunk_text(body: &str, chunk_chars: usize) -> Vec<String> {
         chunks.push(body.trim().to_string());
     }
     chunks
+}
+
+/// Merge consecutive chunks so at most [`MAX_FRAGMENTS_PER_DOCUMENT`] remain.
+fn cap_fragments(chunks: Vec<String>) -> Vec<String> {
+    if chunks.len() <= MAX_FRAGMENTS_PER_DOCUMENT {
+        return chunks;
+    }
+    let per = chunks.len().div_ceil(MAX_FRAGMENTS_PER_DOCUMENT);
+    chunks.chunks(per).map(|group| group.join("\n\n")).collect()
 }
 
 fn excerpt(body: &str) -> String {
@@ -145,7 +163,7 @@ pub fn extract_from_text_chunked(
         && !crate::charset::looks_binary(body)
         && body.chars().count() > chunk_chars
     {
-        chunk_text(body, chunk_chars)
+        cap_fragments(chunk_text(body, chunk_chars))
     } else {
         Vec::new()
     };
@@ -166,25 +184,18 @@ pub fn extract_from_text_chunked(
 
     if !fragments.is_empty() {
         let ftype = fragment_type_name(doc_type);
-        out.push(Record::ConceptTypeDecl(ConceptType {
-            name: ftype.clone(),
-            parent: None,
-            properties: None,
-            description: format!("fragment of a {doc_type} document"),
-            ..Default::default()
-        }));
-        out.push(Record::RelationTypeDecl(RelationType {
-            name: FRAGMENT_OF.to_string(),
-            domain: ftype.clone(),
-            range: doc_type.to_string(),
-            cardinality: ontology_graph::Cardinality::ManyToOne,
-            symmetric: false,
-            description: "a fragment belongs to exactly one document".into(),
-            ..Default::default()
-        }));
+        let rel = fragment_relation_name(doc_type);
+        // The ingester creates `<Type>Fragment` in the document type's
+        // domain and the per-type `fragment_of_<type>` relation.
+        out.push(Record::FragmentTypeDecl {
+            document_type: doc_type.to_string(),
+        });
+        // All fragment concepts first, then all links: the ingester batches
+        // consecutive concepts under one durability barrier, and a relation
+        // in between would flush the batch every time.
         for (i, chunk) in fragments.iter().enumerate() {
             let fname = format!("{doc_name}#{:03}", i + 1);
-            let mut f = Concept::new(ConceptId(0), ftype.clone(), fname.clone());
+            let mut f = Concept::new(ConceptId(0), ftype.clone(), fname);
             f.description = chunk.clone();
             f.properties.insert(
                 "index".into(),
@@ -195,10 +206,12 @@ pub fn extract_from_text_chunked(
                 ontology_graph::PropertyValue::Text(doc_name.to_string()),
             );
             out.push(Record::Concept(f));
+        }
+        for i in 0..fragments.len() {
             out.push(Record::NamedRelation {
-                relation_type: FRAGMENT_OF.to_string(),
+                relation_type: rel.clone(),
                 source_type: ftype.clone(),
-                source_name: fname,
+                source_name: format!("{doc_name}#{:03}", i + 1),
                 target_type: doc_type.to_string(),
                 target_name: doc_name.to_string(),
                 weight: 1.0,
@@ -669,13 +682,25 @@ Some preamble.
         );
         let links = recs
             .iter()
-            .filter(|r| matches!(r, Record::NamedRelation { relation_type, .. } if relation_type == FRAGMENT_OF))
+            .filter(|r| matches!(r, Record::NamedRelation { relation_type, .. } if *relation_type == fragment_relation_name("Contract")))
             .count();
         assert_eq!(links, 3);
         assert!(recs
             .iter()
-            .any(|r| matches!(r, Record::ConceptTypeDecl(ct) if ct.name == "ContractFragment")));
-        assert!(recs.iter().any(|r| matches!(r, Record::RelationTypeDecl(rt) if rt.name == FRAGMENT_OF && rt.range == "Contract")));
+            .any(|r| matches!(r, Record::FragmentTypeDecl { document_type } if document_type == "Contract")));
+        // Concepts first, links last.
+        let first_link = recs
+            .iter()
+            .position(|r| matches!(r, Record::NamedRelation { .. }))
+            .unwrap();
+        let last_fragment = recs
+            .iter()
+            .rposition(|r| matches!(r, Record::Concept(c) if c.concept_type == "ContractFragment"))
+            .unwrap();
+        assert!(
+            last_fragment < first_link,
+            "fragments must precede their links"
+        );
         match doc.properties.get("fragments") {
             Some(ontology_graph::PropertyValue::Number(n)) => assert_eq!(*n, 3.0),
             other => panic!("fragments property missing: {other:?}"),
@@ -688,7 +713,7 @@ Some preamble.
         let recs = extract_from_text("Doc", "s", body);
         assert!(!recs
             .iter()
-            .any(|r| matches!(r, Record::ConceptTypeDecl(ct) if ct.name == "DocFragment")));
+            .any(|r| matches!(r, Record::FragmentTypeDecl { .. })));
         let long = "x".repeat(10_000);
         let recs = extract_from_text_chunked("Doc", "l", &long, 0);
         let doc = recs
@@ -705,6 +730,17 @@ Some preamble.
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn fragment_count_is_capped_and_crlf_is_normalized() {
+        let many: Vec<String> = (0..5_000).map(|i| format!("p{i}")).collect();
+        let capped = cap_fragments(many);
+        assert!(capped.len() <= MAX_FRAGMENTS_PER_DOCUMENT);
+        assert!(capped.len() >= MAX_FRAGMENTS_PER_DOCUMENT / 2);
+        assert!(capped[0].starts_with("p0\n\np1"));
+        let crlf = "aaa\r\n\r\nbbb";
+        assert_eq!(chunk_text(crlf, 5), vec!["aaa", "bbb"]);
     }
 
     #[test]

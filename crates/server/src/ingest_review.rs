@@ -195,7 +195,9 @@ pub(crate) async fn apply(
             continue;
         }
         let res = s.graph.extend_ontology(|onto| {
-            onto.add_concept_type(ontology_graph::ConceptType {
+            // Refresh, never overwrite: an existing type keeps its domain
+            // and whatever the proposal does not set.
+            onto.merge_concept_type(ontology_graph::ConceptType {
                 name: ct.name.clone(),
                 properties: if ct.properties.is_empty() {
                     None
