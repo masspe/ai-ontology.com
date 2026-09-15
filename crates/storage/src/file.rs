@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use ontology_graph::OntologyGraph;
 use parking_lot::Mutex;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::fs::{File, OpenOptions};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
@@ -53,6 +53,8 @@ pub struct FileStore {
     writer: tokio::sync::Mutex<File>,
     seq: Mutex<u64>,
     syncs: AtomicU64,
+    /// Set after a failed write; see `StoreError::Poisoned`.
+    poisoned: AtomicBool,
 }
 
 /// Outcome of scanning the log tail during recovery.
@@ -82,7 +84,19 @@ impl FileStore {
             writer: tokio::sync::Mutex::new(writer),
             seq: Mutex::new(0),
             syncs: AtomicU64::new(0),
+            poisoned: AtomicBool::new(false),
         })
+    }
+
+    /// `true` once a write has failed; every append is refused from then on.
+    pub fn is_poisoned(&self) -> bool {
+        self.poisoned.load(Ordering::Acquire)
+    }
+
+    /// Test hook: simulate a failed write.
+    #[doc(hidden)]
+    pub fn poison_for_test(&self) {
+        self.poisoned.store(true, Ordering::Release);
     }
 
     /// Number of `fdatasync` calls issued on the log so far. One per
@@ -148,10 +162,25 @@ impl Store for FileStore {
         // and on-disk order agree, then pay a single sync (R7 says the index
         // is never synced — there is no index yet, only the data file).
         let mut w = self.writer.lock().await;
+        if self.poisoned.load(Ordering::Acquire) {
+            return Err(StoreError::Poisoned(self.log_path.display().to_string()));
+        }
         let bytes = self.encode_batch(records)?;
-        w.write_all(&bytes).await?;
-        w.flush().await?;
-        w.sync_data().await?;
+        let written: std::io::Result<()> = async {
+            w.write_all(&bytes).await?;
+            w.flush().await?;
+            w.sync_data().await
+        }
+        .await;
+        if let Err(e) = written {
+            // Part of the batch may be on disk with nothing to mark it as
+            // rejected. Refuse further writes so the caller cannot retry
+            // into a store whose tail we no longer trust; recovery at the
+            // next start truncates whatever is torn.
+            self.poisoned.store(true, Ordering::Release);
+            warn!(error = %e, path = %self.log_path.display(), "write failed; store poisoned until restart");
+            return Err(StoreError::Io(e));
+        }
         self.syncs.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }

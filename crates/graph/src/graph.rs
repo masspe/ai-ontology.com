@@ -376,6 +376,15 @@ impl OntologyGraph {
         if concept.id.0 == 0 {
             concept.id = self.ids.next_concept();
         } else {
+            // An explicit id is an upsert; the type is immutable (H5).
+            if let Some(prev) = self.concepts.get(&concept.id) {
+                if prev.concept_type != concept.concept_type {
+                    return Err(GraphError::ImmutableConceptType(
+                        prev.concept_type.clone(),
+                        concept.concept_type.clone(),
+                    ));
+                }
+            }
             self.ids.observe_concept(concept.id);
         }
         // Invariant of the storage format (STORAGE.md D6), checked where the
@@ -404,6 +413,20 @@ impl OntologyGraph {
                     concept.name.clone(),
                     concept.concept_type.clone(),
                 ));
+            }
+        }
+        if let Some(prev) = self.concepts.get(&concept.id) {
+            if prev.concept_type != concept.concept_type {
+                return Err(GraphError::ImmutableConceptType(
+                    prev.concept_type.clone(),
+                    concept.concept_type.clone(),
+                ));
+            }
+            // Upsert with a rename: the old (type, name) binding must go,
+            // or the old name keeps resolving to this id.
+            let prev_key = (prev.concept_type.clone(), prev.name.to_lowercase());
+            if prev_key != key {
+                self.name_index.remove(&prev_key);
             }
         }
         self.ids.observe_concept(concept.id);
@@ -2280,6 +2303,38 @@ mod tests {
         g.apply_prepared_concept(same).unwrap();
         assert_eq!(g.concept_count(), 1);
         assert_eq!(g.get_concept(id).unwrap().description, "v2");
+    }
+
+    #[test]
+    fn explicit_id_upsert_rename_drops_the_old_name_and_refuses_a_type_change() {
+        let g = OntologyGraph::new(toy_ontology());
+        let id = g
+            .upsert_concept(Concept::new(Default::default(), "Person", "Alice"))
+            .unwrap();
+        // Rename through an explicit-id upsert (export re-ingest path).
+        g.upsert_concept(Concept::new(id, "Person", "Alicia"))
+            .unwrap();
+        assert_eq!(g.find_by_name("Person", "Alicia"), Some(id));
+        assert!(
+            g.find_by_name("Person", "Alice").is_none(),
+            "stale name binding must be removed"
+        );
+        // The old name is free again.
+        let other = g
+            .upsert_concept(Concept::new(Default::default(), "Person", "Alice"))
+            .unwrap();
+        assert_ne!(other, id);
+        // Changing the type through an explicit id is refused at prepare.
+        let mut retyped = Concept::new(id, "Paper", "Alicia");
+        assert!(matches!(
+            g.prepare_concept(&mut retyped),
+            Err(GraphError::ImmutableConceptType(_, _))
+        ));
+        assert!(matches!(
+            g.apply_prepared_concept(Concept::new(id, "Paper", "Alicia")),
+            Err(GraphError::ImmutableConceptType(_, _))
+        ));
+        assert_eq!(g.get_concept(id).unwrap().concept_type, "Person");
     }
 
     #[test]

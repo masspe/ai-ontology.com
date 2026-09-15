@@ -1403,6 +1403,15 @@ async fn path(
     }))
 }
 
+/// Ingest failures: a store error is a server fault (500); anything else is
+/// the caller's input (400).
+fn ingest_api_error(e: ontology_io::IngestError) -> ApiError {
+    match e {
+        ontology_io::IngestError::Store(inner) => ApiError::Store(inner.to_string()),
+        other => ApiError::BadRequest(other.to_string()),
+    }
+}
+
 async fn compact(State(s): State<AppState>) -> Result<StatusCode, ApiError> {
     // No mutation may land between the snapshot and the truncation.
     let _w = s.writer.lock().await;
@@ -2083,7 +2092,7 @@ async fn upload(
                 .map_err(|e| ApiError::BadRequest(e.to_string()))?;
             ingest_records(&mut src, &s.graph, Some(s.store.as_ref()))
                 .await
-                .map_err(|e| ApiError::BadRequest(e.to_string()))?
+                .map_err(ingest_api_error)?
         }
         "triples" => {
             let tmp = persist_temp(&bytes, "triples").await?;
@@ -2092,7 +2101,7 @@ async fn upload(
                 .map_err(|e| ApiError::BadRequest(e.to_string()))?;
             ingest_records(&mut src, &s.graph, Some(s.store.as_ref()))
                 .await
-                .map_err(|e| ApiError::BadRequest(e.to_string()))?
+                .map_err(ingest_api_error)?
         }
         "csv" => {
             let ty = concept_type
@@ -2103,7 +2112,7 @@ async fn upload(
                 .map_err(|e| ApiError::BadRequest(e.to_string()))?;
             ingest_records(&mut src, &s.graph, Some(s.store.as_ref()))
                 .await
-                .map_err(|e| ApiError::BadRequest(e.to_string()))?
+                .map_err(ingest_api_error)?
         }
         "xlsx" => {
             let ty = concept_type
@@ -2113,7 +2122,7 @@ async fn upload(
                 .map_err(|e| ApiError::BadRequest(e.to_string()))?;
             ingest_records(&mut src, &s.graph, Some(s.store.as_ref()))
                 .await
-                .map_err(|e| ApiError::BadRequest(e.to_string()))?
+                .map_err(ingest_api_error)?
         }
         "text" => {
             let ty = concept_type
@@ -2145,7 +2154,7 @@ async fn upload(
             let mut src = TextDocumentSource::from_files(ty, [path]);
             ingest_records(&mut src, &s.graph, Some(s.store.as_ref()))
                 .await
-                .map_err(|e| ApiError::BadRequest(e.to_string()))?
+                .map_err(ingest_api_error)?
         }
         other => return Err(ApiError::BadRequest(format!("unknown kind: {other}"))),
     };
