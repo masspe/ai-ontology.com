@@ -1911,3 +1911,18 @@ label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px
 .gv-canvas .react-flow__minimap { border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: 0 2px 8px rgba(15, 23, 42, 0.12); }
 .gv-canvas .react-flow__edge.animated path { stroke-dasharray: 6; animation: gv-dash 0.6s linear infinite; }
 @keyframes gv-dash { to { stroke-dashoffset: -12; } }
+
+/* ---- Properties: review chips + details table -------------------------- */
+.prop-chips { display: flex; flex-wrap: wrap; gap: 4px; max-width: 320px; }
+.prop-chip {
+  display: inline-flex; gap: 4px; align-items: baseline;
+  font-size: 11px; line-height: 1.4; padding: 1px 7px;
+  border: 1px solid var(--border); border-radius: 999px;
+  background: var(--panel); color: var(--text); white-space: nowrap;
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis;
+}
+.prop-chip b { color: var(--muted, #64748b); font-weight: 600; }
+.cd-props { border-collapse: collapse; width: 100%; font-size: 13px; }
+.cd-props th { text-align: left; font-weight: 600; color: var(--muted, #64748b); padding: 3px 10px 3px 0; white-space: nowrap; vertical-align: top; }
+.cd-props td { padding: 3px 0; word-break: break-word; }
+.cd-props tr + tr th, .cd-props tr + tr td { border-top: 1px solid var(--border); }

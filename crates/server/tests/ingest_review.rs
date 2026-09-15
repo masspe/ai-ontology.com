@@ -33,7 +33,7 @@ const CANNED_JSON: &str = r#"{
   "concept_types": [],
   "relation_types": [],
   "concepts": [
-    {"client_ref":"c0","concept_type":"Party","name":"Acme","description":"buyer","confidence":0.9,"evidence":"Acme Corp purchased ..."},
+    {"client_ref":"c0","concept_type":"Party","name":"Acme","description":"buyer","confidence":0.9,"evidence":"Acme Corp purchased ...","properties":[["amount_eur","18000"],["currency","EUR"],["issue_date","2025-03-31"]]},
     {"client_ref":"c1","concept_type":"Party","name":"Globex","description":"seller","confidence":0.85}
   ],
   "relations": [
@@ -187,6 +187,27 @@ async fn analyze_then_apply_round_trip() {
     // 2 concepts + 1 relation accepted → 3 created, 0 failed.
     assert_eq!(report["created"].as_u64().unwrap(), 3);
     assert_eq!(report["failed"].as_u64().unwrap(), 0);
+
+    // Proposal properties land on the concept, typed: amounts as numbers,
+    // codes and dates as text.
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/concepts?type=Party&q=Acme")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let listed = read_body(resp.into_body()).await;
+    let acme = &listed["concepts"][0];
+    assert_eq!(acme["name"], "Acme");
+    assert_eq!(acme["properties"]["amount_eur"], json!(18000.0), "{acme}");
+    assert_eq!(acme["properties"]["currency"], "EUR");
+    assert_eq!(acme["properties"]["issue_date"], "2025-03-31");
 
     // 3. The concept now exists in the graph → next analyze flags it.
     let (ct, body) = multipart_body("contract2.txt", b"Acme again.");
