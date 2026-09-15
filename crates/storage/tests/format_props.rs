@@ -116,11 +116,12 @@ proptest! {
         entity_id in any::<u64>(),
         endpoints in any::<u64>(),
         rtype_sym in any::<u32>(),
+        target_ns_id in any::<u16>(),
         partition_id in any::<u32>(),
         base_seq in any::<u64>(),
         count in any::<u32>(),
     ) {
-        let e = IdxEntry { seq, offset, payload_len, kind, flags, ns_id, entity_id, endpoints, rtype_sym };
+        let e = IdxEntry { seq, offset, payload_len, kind, flags, ns_id, entity_id, endpoints, rtype_sym, target_ns_id };
         prop_assert_eq!(IdxEntry::decode(&e.encode(), 0).unwrap(), e);
         let d = DataHeader::new(partition_id, base_seq, CODEC_JSON);
         prop_assert_eq!(DataHeader::decode(&d.encode()).unwrap(), d);

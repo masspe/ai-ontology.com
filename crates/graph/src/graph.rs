@@ -233,12 +233,134 @@ impl OntologyGraph {
         f(&g)
     }
 
+    /// Mutate the ontology **atomically**: `f` runs on a copy, the result is
+    /// validated (domain rules, no domain change under existing instances),
+    /// and only then replaces the live schema. If `f` or a validation fails
+    /// the live ontology is untouched — R1's single write door for the
+    /// schema.
     pub fn extend_ontology<F>(&self, f: F) -> GraphResult<()>
     where
         F: FnOnce(&mut Ontology) -> GraphResult<()>,
     {
         let mut g = self.ontology.write();
-        f(&mut g)
+        let mut candidate = g.clone();
+        f(&mut candidate)?;
+        self.validate_candidate(&g, &candidate)?;
+        *g = candidate;
+        Ok(())
+    }
+
+    /// Would `candidate` be accepted as the new schema? Same checks as
+    /// [`extend_ontology`](Self::extend_ontology), nothing applied. Callers
+    /// that journal the schema before applying it (R8) must call this first,
+    /// or a refused schema ends up on disk and breaks the next replay.
+    pub fn check_ontology(&self, candidate: &Ontology) -> GraphResult<()> {
+        let g = self.ontology.read();
+        self.validate_candidate(&g, candidate)
+    }
+
+    /// Schema transition rules (STORAGE-PLAN.md §5.1, hardened after the
+    /// phase 3 review): domain identifiers valid, a child in its parent's
+    /// domain, and nothing that has instances may move, change shape or
+    /// disappear — the records on disk would otherwise be routed, validated
+    /// or replayed against a schema that no longer describes them.
+    fn validate_candidate(&self, old: &Ontology, candidate: &Ontology) -> GraphResult<()> {
+        candidate.validate_namespaces()?;
+        // Concept types: no domain move, no removal, while instances exist.
+        for name in old.concept_types.keys() {
+            let instances = self
+                .concepts_by_type
+                .get(name)
+                .map(|b| b.len())
+                .unwrap_or(0);
+            if instances == 0 {
+                continue;
+            }
+            if !candidate.concept_types.contains_key(name) {
+                return Err(GraphError::TypeInUse {
+                    kind: "concept",
+                    name: name.clone(),
+                    instances,
+                });
+            }
+            let (from, to) = (old.ns_of_type(name), candidate.ns_of_type(name));
+            if from != to {
+                return Err(GraphError::NamespaceChangeWithInstances {
+                    concept_type: name.clone(),
+                    from: from.to_string(),
+                    to: to.to_string(),
+                    instances,
+                });
+            }
+        }
+        // Relation types: no removal, no domain/range change, while
+        // relations of that type exist (counted lazily — schema edits are
+        // rare admin operations).
+        for (name, rt) in old.relation_types.iter() {
+            let changed = match candidate.relation_types.get(name) {
+                None => true,
+                Some(new) => new.domain != rt.domain || new.range != rt.range,
+            };
+            if !changed {
+                continue;
+            }
+            let instances = self
+                .relations
+                .iter()
+                .filter(|r| r.relation_type == *name)
+                .count();
+            if instances > 0 {
+                return Err(if candidate.relation_types.contains_key(name) {
+                    GraphError::RelationTypeChangeWithInstances {
+                        relation_type: name.clone(),
+                        instances,
+                    }
+                } else {
+                    GraphError::TypeInUse {
+                        kind: "relation",
+                        name: name.clone(),
+                        instances,
+                    }
+                });
+            }
+        }
+        // Rule and action types: no removal while instances exist.
+        for name in old.rule_types.keys() {
+            if candidate.rule_types.contains_key(name) {
+                continue;
+            }
+            let instances = self.rules.iter().filter(|r| r.rule_type == *name).count();
+            if instances > 0 {
+                return Err(GraphError::TypeInUse {
+                    kind: "rule",
+                    name: name.clone(),
+                    instances,
+                });
+            }
+        }
+        for name in old.action_types.keys() {
+            if candidate.action_types.contains_key(name) {
+                continue;
+            }
+            let instances = self
+                .actions
+                .iter()
+                .filter(|a| a.action_type == *name)
+                .count();
+            if instances > 0 {
+                return Err(GraphError::TypeInUse {
+                    kind: "action",
+                    name: name.clone(),
+                    instances,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Storage domain of a concept type (see `Ontology::ns_of_type`).
+    pub fn ns_of_type(&self, concept_type: &str) -> String {
+        self.ontology.read().ns_of_type(concept_type).to_string()
     }
 
     /// Remove every concept, relation, rule and action from the graph,
@@ -622,6 +744,49 @@ impl OntologyGraph {
     pub fn add_relation(&self, mut rel: Relation) -> GraphResult<RelationId> {
         self.prepare_relation(&mut rel)?;
         self.apply_prepared_relation(rel)
+    }
+
+    /// Insert a relation **exactly as given**: its id is kept, no symmetric
+    /// inverse is materialized, no cardinality check runs. This is the
+    /// replay path of `RelationExact` records, which compaction writes for
+    /// every live relation (both directions of a symmetric pair, each with
+    /// its live id) so that ids on disk and in memory stay equal
+    /// (`STORAGE.md` §5). Endpoints must exist and the id must be free.
+    pub fn insert_relation_exact(&self, rel: Relation) -> GraphResult<RelationId> {
+        if rel.id.0 == 0 {
+            return Err(GraphError::NotPrepared("relation"));
+        }
+        if !self.concepts.contains_key(&rel.source) {
+            return Err(GraphError::UnknownConcept(rel.source));
+        }
+        if !self.concepts.contains_key(&rel.target) {
+            return Err(GraphError::UnknownConcept(rel.target));
+        }
+        if self.relations.contains_key(&rel.id) {
+            return Err(GraphError::RelationExists(rel.id));
+        }
+        self.ids.observe_relation(rel.id);
+        let id = rel.id;
+        let (s, t) = (rel.source, rel.target);
+        let rt_name = rel.relation_type.clone();
+        self.out_edges.entry(s).or_default().push(id);
+        self.in_edges.entry(t).or_default().push(id);
+        self.out_edges_typed
+            .entry(s)
+            .or_default()
+            .entry(rt_name.clone())
+            .or_default()
+            .push(id);
+        self.in_edges_typed
+            .entry(t)
+            .or_default()
+            .entry(rt_name)
+            .or_default()
+            .push(id);
+        self.relations.insert(id, rel);
+        self.relations_sorted.write().insert(id);
+        self.bump_relations_gen();
+        Ok(id)
     }
 
     pub fn get_relation(&self, id: RelationId) -> GraphResult<Relation> {
@@ -2150,6 +2315,223 @@ mod tests {
             .unwrap();
         let res = g.add_relation(Relation::new(Default::default(), "authored", a, b));
         assert!(res.is_err());
+    }
+
+    // ---- domains (ns) ----
+
+    #[test]
+    fn extend_ontology_is_atomic_and_guards_domain_moves() {
+        let g = OntologyGraph::new(toy_ontology());
+        // A failing closure leaves the schema untouched.
+        let before = g.ontology().concept_types.len();
+        let err = g.extend_ontology(|o| {
+            o.add_concept_type(ConceptType {
+                name: "Ghost".into(),
+                ..Default::default()
+            });
+            Err(GraphError::Serde("boom".into()))
+        });
+        assert!(err.is_err());
+        assert_eq!(g.ontology().concept_types.len(), before);
+        // An invalid domain is rejected as a whole.
+        let err = g.extend_ontology(|o| {
+            o.add_concept_type(ConceptType {
+                name: "Bad".into(),
+                ns: Some("Not Valid".into()),
+                ..Default::default()
+            });
+            Ok(())
+        });
+        assert!(matches!(err, Err(GraphError::InvalidNamespace { .. })));
+        assert!(!g.ontology().concept_types.contains_key("Bad"));
+        // Moving Person to another domain is fine while it has no instances…
+        g.extend_ontology(|o| {
+            let mut ct = o.concept_type("Person").unwrap().clone();
+            ct.ns = Some("people".into());
+            o.add_concept_type(ct);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(g.ns_of_type("Person"), "people");
+        g.upsert_concept(Concept::new(Default::default(), "Person", "Alice"))
+            .unwrap();
+        // …and refused once instances exist.
+        let err = g.extend_ontology(|o| {
+            let mut ct = o.concept_type("Person").unwrap().clone();
+            ct.ns = Some("staff".into());
+            o.add_concept_type(ct);
+            Ok(())
+        });
+        assert!(
+            matches!(
+                err,
+                Err(GraphError::NamespaceChangeWithInstances { instances: 1, .. })
+            ),
+            "{err:?}"
+        );
+        assert_eq!(g.ns_of_type("Person"), "people");
+        // Unrelated types keep resolving to the default domain.
+        assert_eq!(g.ns_of_type("Paper"), "default");
+    }
+
+    #[test]
+    fn schema_changes_that_orphan_instances_are_refused() {
+        let mut o = toy_ontology();
+        o.add_relation_type(RelationType {
+            name: "knows".into(),
+            domain: "Person".into(),
+            range: "Person".into(),
+            symmetric: true,
+            ..Default::default()
+        })
+        .unwrap();
+        o.add_rule_type(crate::schema::RuleType {
+            name: "must_review".into(),
+            when: String::new(),
+            then: String::new(),
+            applies_to: vec!["Paper".into()],
+            strict: false,
+            description: String::new(),
+        })
+        .unwrap();
+        let g = OntologyGraph::new(o);
+        let a = g
+            .upsert_concept(Concept::new(Default::default(), "Person", "A"))
+            .unwrap();
+        let b = g
+            .upsert_concept(Concept::new(Default::default(), "Person", "B"))
+            .unwrap();
+        let p = g
+            .upsert_concept(Concept::new(Default::default(), "Paper", "P"))
+            .unwrap();
+        g.add_relation(Relation::new(Default::default(), "authored", a, p))
+            .unwrap();
+        let mut rule = crate::model::Rule::new(Default::default(), "must_review", "r");
+        rule.applies_to = vec![p];
+        g.upsert_rule(rule).unwrap();
+
+        // Dropping a concept type with instances.
+        let err = g.extend_ontology(|o| {
+            o.concept_types.remove("Person");
+            Ok(())
+        });
+        assert!(
+            matches!(
+                err,
+                Err(GraphError::TypeInUse {
+                    kind: "concept",
+                    ..
+                })
+            ),
+            "{err:?}"
+        );
+        // Re-pointing a relation type with relations.
+        let err = g.extend_ontology(|o| {
+            let mut rt = o.relation_type("authored").unwrap().clone();
+            rt.domain = "Paper".into();
+            o.relation_types.insert(rt.name.clone(), rt);
+            Ok(())
+        });
+        assert!(
+            matches!(
+                err,
+                Err(GraphError::RelationTypeChangeWithInstances { instances: 1, .. })
+            ),
+            "{err:?}"
+        );
+        // Dropping a relation type with relations, a rule type with rules.
+        let err = g.extend_ontology(|o| {
+            o.relation_types.remove("authored");
+            Ok(())
+        });
+        assert!(
+            matches!(
+                err,
+                Err(GraphError::TypeInUse {
+                    kind: "relation",
+                    ..
+                })
+            ),
+            "{err:?}"
+        );
+        let err = g.extend_ontology(|o| {
+            o.rule_types.remove("must_review");
+            Ok(())
+        });
+        assert!(
+            matches!(err, Err(GraphError::TypeInUse { kind: "rule", .. })),
+            "{err:?}"
+        );
+        // The same edits are fine once nothing depends on them: `knows` has
+        // no relations, so it can be re-pointed or dropped.
+        g.extend_ontology(|o| {
+            o.relation_types.remove("knows");
+            Ok(())
+        })
+        .unwrap();
+        // check_ontology is the pure form of the same judgement.
+        let mut bad = g.ontology();
+        bad.concept_types.remove("Person");
+        assert!(g.check_ontology(&bad).is_err());
+        assert!(g.check_ontology(&g.ontology()).is_ok());
+        assert_eq!(g.concept_count(), 3);
+        let _ = b;
+    }
+
+    #[test]
+    fn insert_relation_exact_keeps_ids_and_materializes_nothing() {
+        let mut o = toy_ontology();
+        o.add_relation_type(RelationType {
+            name: "knows".into(),
+            domain: "Person".into(),
+            range: "Person".into(),
+            symmetric: true,
+            ..Default::default()
+        })
+        .unwrap();
+        let g = OntologyGraph::new(o);
+        let a = g
+            .upsert_concept(Concept::new(Default::default(), "Person", "A"))
+            .unwrap();
+        let b = g
+            .upsert_concept(Concept::new(Default::default(), "Person", "B"))
+            .unwrap();
+        // Live: a symmetric add materializes the inverse → two relations.
+        let id = g
+            .add_relation(Relation::new(Default::default(), "knows", a, b))
+            .unwrap();
+        let live: Vec<Relation> = g.all_relations();
+        assert_eq!(live.len(), 2);
+        // Exact replay of both, into a fresh graph, keeps both ids.
+        let h = OntologyGraph::new(g.ontology());
+        h.upsert_concept(Concept::new(a, "Person", "A")).unwrap();
+        h.upsert_concept(Concept::new(b, "Person", "B")).unwrap();
+        for r in &live {
+            h.insert_relation_exact(r.clone()).unwrap();
+        }
+        assert_eq!(h.relation_count(), 2);
+        assert_eq!(h.get_relation(id).unwrap().source, a);
+        for r in &live {
+            assert_eq!(h.get_relation(r.id).unwrap().target, r.target);
+        }
+        // A duplicate id, an unprepared id, an unknown endpoint are refused.
+        assert!(matches!(
+            h.insert_relation_exact(live[0].clone()),
+            Err(GraphError::RelationExists(_))
+        ));
+        assert!(matches!(
+            h.insert_relation_exact(Relation::new(Default::default(), "knows", a, b)),
+            Err(GraphError::NotPrepared(_))
+        ));
+        assert!(matches!(
+            h.insert_relation_exact(Relation::new(RelationId(99), "knows", a, ConceptId(77))),
+            Err(GraphError::UnknownConcept(_))
+        ));
+        // Allocation continues past the observed ids.
+        let next = h
+            .add_relation(Relation::new(Default::default(), "knows", b, a))
+            .unwrap();
+        assert!(next.0 > live.iter().map(|r| r.id.0).max().unwrap());
     }
 
     // ---- write-ahead (R8) API: prepare / apply, preview / apply ----

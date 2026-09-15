@@ -38,6 +38,13 @@ pub enum Record {
     RuleTypeDecl(RuleType),
     /// Ontology extension — register (or refresh) a single action.
     ActionTypeDecl(ActionType),
+    /// Declare the fragment type of a document type (decision G): a
+    /// `<Type>Fragment` concept type in the **same storage domain** as the
+    /// document type, and a `fragment_of_<type>` relation from fragment to
+    /// document. Resolved by the ingester, which knows the live ontology.
+    FragmentTypeDecl {
+        document_type: String,
+    },
     /// Concrete rule instance.
     Rule(Rule),
     /// Concrete action instance.

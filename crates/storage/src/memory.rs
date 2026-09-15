@@ -69,6 +69,9 @@ pub(crate) fn apply(graph: &Arc<OntologyGraph>, r: LogRecord) -> StoreResult<()>
         RecordKind::Relation(rel) => {
             graph.add_relation(rel)?;
         }
+        RecordKind::RelationExact(rel) => {
+            graph.insert_relation_exact(rel)?;
+        }
         RecordKind::UpdateRelation(rel) => {
             if graph.get_relation(rel.id).is_ok() {
                 graph.update_relation(

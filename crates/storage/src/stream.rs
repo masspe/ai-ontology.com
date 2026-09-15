@@ -18,9 +18,11 @@ use std::sync::Arc;
 use tracing::{info, warn};
 
 use crate::manifest::PartitionEntry;
+use crate::segment::active::{remove_segment_files, sweep_old_files};
+use crate::segment::xref::{write_xref, XrefEntry};
 use crate::segment::{
-    decode_record, recover_segment, ActiveSegment, FormatError, IndexFields, Kind, RecordView,
-    SealedSegment, FILE_HEADER_LEN,
+    decode_record, recover_segment, ActiveSegment, FormatError, IdxEntry, IndexFields, Kind,
+    RecordView, SealedSegment,
 };
 
 /// When the active segment is sealed and a fresh one opened.
@@ -51,10 +53,12 @@ pub struct StreamOpenReport {
     pub truncated_bytes: u64,
     pub idx_rewritten: usize,
     pub last_seq: Option<u64>,
+    /// Leftover `*.old` files from an interrupted compaction that were swept.
+    pub swept_old: usize,
 }
 
 /// Resolver turning a decoded payload into its index fields; supplied by
-/// the store, which owns the symbol table.
+/// the store, which owns the symbol tables and the schema.
 pub type Resolver<'a> = dyn FnMut(Kind, &[u8]) -> Result<IndexFields, String> + 'a;
 
 pub struct Stream {
@@ -64,6 +68,81 @@ pub struct Stream {
     roll: RollPolicy,
     sealed: Vec<Arc<SealedSegment>>,
     active: ActiveSegment,
+}
+
+/// A consistent, read-only view of a stream's committed records: sealed
+/// partitions by reference (mapped), the active one by a copy of its
+/// committed bytes. Independent of the stream's borrow, so several
+/// snapshots can be merged.
+pub struct StreamSnapshot {
+    pub ns_id: u16,
+    pub sealed: Vec<Arc<SealedSegment>>,
+    pub active_partition: u32,
+    pub active_bytes: Vec<u8>,
+}
+
+impl StreamSnapshot {
+    pub fn cursor(&self, verify_crc: bool) -> SnapshotCursor<'_> {
+        SnapshotCursor {
+            snap: self,
+            segment: 0,
+            at: crate::segment::FILE_HEADER_LEN,
+            active_at: 0,
+            verify_crc,
+        }
+    }
+}
+
+/// Sequential reader over a [`StreamSnapshot`].
+pub struct SnapshotCursor<'a> {
+    snap: &'a StreamSnapshot,
+    segment: usize,
+    at: usize,
+    active_at: usize,
+    verify_crc: bool,
+}
+
+impl<'a> SnapshotCursor<'a> {
+    /// Next record `(partition_id, view)`, or `None` at the end.
+    #[allow(clippy::should_implement_trait)]
+    pub fn next(&mut self) -> Option<Result<(u32, RecordView<'a>), (u32, FormatError)>> {
+        while self.segment < self.snap.sealed.len() {
+            let seg = &self.snap.sealed[self.segment];
+            let bytes = seg.data_bytes();
+            if self.at >= bytes.len() {
+                self.segment += 1;
+                self.at = crate::segment::FILE_HEADER_LEN;
+                continue;
+            }
+            return match decode_record(bytes, self.at, self.verify_crc) {
+                Ok(v) => {
+                    self.at = v.next;
+                    Some(Ok((seg.partition_id(), v)))
+                }
+                Err(e) => {
+                    self.segment = self.snap.sealed.len() + 1; // stop
+                    Some(Err((seg.partition_id(), e)))
+                }
+            };
+        }
+        if self.segment > self.snap.sealed.len() {
+            return None;
+        }
+        let bytes = &self.snap.active_bytes;
+        if self.active_at >= bytes.len() {
+            return None;
+        }
+        match decode_record(bytes, self.active_at, self.verify_crc) {
+            Ok(v) => {
+                self.active_at = v.next;
+                Some(Ok((self.snap.active_partition, v)))
+            }
+            Err(e) => {
+                self.active_at = bytes.len();
+                Some(Err((self.snap.active_partition, e)))
+            }
+        }
+    }
 }
 
 impl Stream {
@@ -82,8 +161,11 @@ impl Stream {
         resolve: &mut Resolver<'_>,
     ) -> io::Result<(Self, StreamOpenReport)> {
         std::fs::create_dir_all(dir)?;
+        let mut report = StreamOpenReport {
+            swept_old: sweep_old_files(dir).unwrap_or(0),
+            ..Default::default()
+        };
         let mut ids = list_partitions(dir)?;
-        let mut report = StreamOpenReport::default();
         let mut sealed = Vec::new();
 
         if ids.is_empty() {
@@ -201,6 +283,9 @@ impl Stream {
     pub fn dir(&self) -> &Path {
         &self.dir
     }
+    pub fn codec(&self) -> u8 {
+        self.codec
+    }
     pub fn sealed(&self) -> &[Arc<SealedSegment>] {
         &self.sealed
     }
@@ -222,6 +307,27 @@ impl Stream {
             .map(|s| s.record_count() as u64)
             .sum::<u64>()
             + self.active.record_count() as u64
+    }
+    /// Bytes of `.data` across every segment.
+    pub fn data_bytes(&self) -> u64 {
+        self.sealed.iter().map(|s| s.data_len()).sum::<u64>() + self.active.data_len()
+    }
+    /// Partition ids in stream order (sealed then active).
+    pub fn partition_ids(&self) -> Vec<u32> {
+        let mut v: Vec<u32> = self.sealed.iter().map(|s| s.partition_id()).collect();
+        v.push(self.active.partition_id());
+        v
+    }
+    /// `(partition_id, base_seq)` in stream order; the seq range of partition
+    /// `i` is `[base_i, base_{i+1})`, the last one being open-ended.
+    pub fn partition_bases(&self) -> Vec<(u32, u64)> {
+        let mut v: Vec<(u32, u64)> = self
+            .sealed
+            .iter()
+            .map(|s| (s.partition_id(), s.base_seq()))
+            .collect();
+        v.push((self.active.partition_id(), self.active.base_seq()));
+        v
     }
 
     /// Buffer one record on the active segment.
@@ -281,53 +387,73 @@ impl Stream {
         self.sealed.iter().map(|s| PartitionEntry::of(s)).collect()
     }
 
-    /// Visit every committed record in stream order: sealed partitions from
-    /// their maps, then the active segment from a fresh read of its file.
-    /// This is the P0 hydration path (D4).
-    pub fn for_each_record<E>(
-        &mut self,
-        verify_crc: bool,
-        mut f: impl FnMut(u32, RecordView<'_>) -> Result<(), E>,
-    ) -> Result<(), StreamReadError<E>> {
-        for seg in &self.sealed {
-            for r in seg.records(verify_crc) {
-                let v = r.map_err(|e| StreamReadError::Format {
-                    partition: seg.partition_id(),
-                    error: e,
-                })?;
-                f(seg.partition_id(), v).map_err(StreamReadError::Visitor)?;
-            }
+    /// Every committed index entry of the stream, with its partition, in
+    /// stream order. Used to rebuild `.xref` files.
+    pub fn all_entries(&mut self) -> io::Result<Vec<(u32, IdxEntry)>> {
+        let mut out = Vec::new();
+        for s in &self.sealed {
+            out.extend(s.entries().map(|e| (s.partition_id(), e)));
         }
         let pid = self.active.partition_id();
-        let len = self.active.data_len() as usize;
-        if len > FILE_HEADER_LEN {
-            let bytes = self
-                .active
-                .read_span(FILE_HEADER_LEN as u64, len - FILE_HEADER_LEN)
-                .map_err(StreamReadError::Io)?;
-            let mut at = 0usize;
-            while at < bytes.len() {
-                let v =
-                    decode_record(&bytes, at, verify_crc).map_err(|e| StreamReadError::Format {
-                        partition: pid,
-                        error: e,
-                    })?;
-                // Offsets in the view are relative to `bytes`; callers only
-                // use header + payload, which is what we hand over.
-                let next = v.next;
-                f(pid, v).map_err(StreamReadError::Visitor)?;
-                at = next;
-            }
-        }
-        Ok(())
+        out.extend(
+            self.active
+                .committed_entries()?
+                .into_iter()
+                .map(|e| (pid, e)),
+        );
+        Ok(out)
     }
-}
 
-#[derive(Debug)]
-pub enum StreamReadError<E> {
-    Io(io::Error),
-    Format { partition: u32, error: FormatError },
-    Visitor(E),
+    /// Read-only view of the committed records (see [`StreamSnapshot`]).
+    pub fn snapshot(&mut self) -> io::Result<StreamSnapshot> {
+        Ok(StreamSnapshot {
+            ns_id: self.ns_id,
+            sealed: self.sealed.clone(),
+            active_partition: self.active.partition_id(),
+            active_bytes: self.active.committed_data()?,
+        })
+    }
+
+    /// Replace (rewrite) the `.xref` of every partition. `entries` are the
+    /// incoming cross-domain edges targeting this stream's domain; each is
+    /// filed under the partition whose seq range holds its `seq`.
+    pub fn write_xrefs(&self, mut entries: Vec<XrefEntry>) -> io::Result<usize> {
+        entries.sort();
+        let bases = self.partition_bases();
+        let mut written = 0;
+        for (i, (pid, base)) in bases.iter().enumerate() {
+            let upper = bases.get(i + 1).map(|(_, b)| *b).unwrap_or(u64::MAX);
+            let mut mine: Vec<XrefEntry> = entries
+                .iter()
+                .copied()
+                .filter(|e| e.seq >= *base && e.seq < upper)
+                .collect();
+            written += mine.len();
+            write_xref(&self.dir, *pid, *base, &mut mine)?;
+        }
+        Ok(written)
+    }
+
+    /// Swap the stream's segments for `sealed` + `active` (compaction) and
+    /// delete the files of the previous ones. Old mappings are dropped
+    /// first; a file that cannot be deleted because a mapping is still held
+    /// elsewhere is renamed `.old` and swept at the next open.
+    pub fn replace_segments(
+        &mut self,
+        sealed: Vec<Arc<SealedSegment>>,
+        active: ActiveSegment,
+    ) -> io::Result<Vec<u32>> {
+        let old_sealed = std::mem::replace(&mut self.sealed, sealed);
+        let old_active = std::mem::replace(&mut self.active, active);
+        let mut removed: Vec<u32> = old_sealed.iter().map(|s| s.partition_id()).collect();
+        removed.push(old_active.partition_id());
+        drop(old_sealed);
+        drop(old_active);
+        for id in &removed {
+            remove_segment_files(&self.dir, *id)?;
+        }
+        Ok(removed)
+    }
 }
 
 /// Partition ids present in `dir`, ascending, from the `NNNNNN.data` files.

@@ -1665,10 +1665,14 @@ async fn delete_concept(
     // Journal the whole cascade under one durability barrier: the concept
     // and every incident relation go together, and a replay of any prefix
     // is harmless (deletes are idempotent).
+    let concept_type = s.graph.get_concept(cid)?.concept_type;
     let cascade = s.graph.incident_relation_ids(cid)?;
     let mut records = Vec::with_capacity(1 + cascade.len());
-    records.push(LogRecord::delete_concept(cid));
-    records.extend(cascade.into_iter().map(LogRecord::delete_relation));
+    records.push(LogRecord::delete_concept(cid, concept_type));
+    for rid in cascade {
+        let relation_type = s.graph.get_relation(rid)?.relation_type;
+        records.push(LogRecord::delete_relation(rid, relation_type));
+    }
     s.store
         .append_batch(&records)
         .await
@@ -1780,10 +1784,10 @@ async fn delete_relation_handler(
 ) -> Result<StatusCode, ApiError> {
     let _w = s.writer.lock().await;
     let rid = RelationId(id);
-    // 404 before touching the log.
-    s.graph.get_relation(rid)?;
+    // 404 before touching the log; the type routes the tombstone.
+    let relation_type = s.graph.get_relation(rid)?.relation_type;
     s.store
-        .append(&LogRecord::delete_relation(rid))
+        .append(&LogRecord::delete_relation(rid, relation_type))
         .await
         .map_err(|e| ApiError::Store(e.to_string()))?;
     s.graph.remove_relation(rid)?;
@@ -2068,6 +2072,7 @@ async fn upload(
         "ontology" => {
             let onto: Ontology = serde_json::from_slice(&bytes)
                 .map_err(|e| ApiError::BadRequest(format!("ontology: {e}")))?;
+            s.graph.check_ontology(&onto)?;
             s.store
                 .append(&LogRecord::ontology(onto.clone()))
                 .await
@@ -2333,6 +2338,9 @@ async fn put_ontology(
     Json(onto): Json<Ontology>,
 ) -> Result<Json<Ontology>, ApiError> {
     let _w = s.writer.lock().await;
+    // Validate before journaling: a refused schema must never reach the
+    // store, or the next replay fails on it.
+    s.graph.check_ontology(&onto)?;
     s.store
         .append(&LogRecord::ontology(onto.clone()))
         .await

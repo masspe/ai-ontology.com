@@ -43,7 +43,34 @@ pub struct ConceptType {
     /// a (type, lowercase-name) identity with. Auto-symmetrised at insert.
     #[serde(default)]
     pub disjoint_with: Vec<String>,
+    /// Storage domain (`STORAGE.md` H13): the unit of retention, compaction,
+    /// backup and rights. `None` inherits the parent's domain, or
+    /// [`DEFAULT_NS`] for a root type. Identifier `[a-z0-9_-]{1,32}`. Named
+    /// `ns`, never `domain` — `domain` is the relation-type source
+    /// constraint (`STORAGE.md` §10.3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ns: Option<String>,
 }
+
+/// Domain of every concept type that declares none (and has no parent).
+pub const DEFAULT_NS: &str = "default";
+/// Longest accepted domain identifier.
+pub const MAX_NS_LEN: usize = 32;
+
+/// `true` when `ns` is a well-formed domain identifier: 1 to 32 chars from
+/// `[a-z0-9_-]`. Domain names become directory names on disk.
+pub fn is_valid_ns(ns: &str) -> bool {
+    !ns.is_empty()
+        && ns.len() <= MAX_NS_LEN
+        && !RESERVED_NS.contains(&ns)
+        && ns
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
+}
+
+/// Names a domain can never take: `meta` is the schema/rules/actions stream
+/// of the store (`STORAGE.md` D3).
+pub const RESERVED_NS: &[&str] = &["meta"];
 
 /// An edge type in the ontology, e.g. `authored`, `treats`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -164,6 +191,35 @@ impl Ontology {
         self.invalidate_caches();
     }
 
+    /// Register a type, or **refresh** an existing one without dropping what
+    /// the declaration does not mention: an ingest declaration that only
+    /// names a type (`@concept_type Contract`, a text document typed
+    /// `Contract`) must not reset its domain, parent, properties or
+    /// description. Fields the declaration does set win.
+    pub fn merge_concept_type(&mut self, mut decl: ConceptType) {
+        if let Some(existing) = self.concept_types.get(&decl.name) {
+            if decl.ns.is_none() {
+                decl.ns = existing.ns.clone();
+            }
+            if decl.parent.is_none() {
+                decl.parent = existing.parent.clone();
+            }
+            if decl.properties.is_none() {
+                decl.properties = existing.properties.clone();
+            }
+            if decl.description.is_empty() {
+                decl.description = existing.description.clone();
+            }
+            if decl.required_properties.is_empty() {
+                decl.required_properties = existing.required_properties.clone();
+            }
+            if decl.disjoint_with.is_empty() {
+                decl.disjoint_with = existing.disjoint_with.clone();
+            }
+        }
+        self.add_concept_type(decl);
+    }
+
     pub fn add_relation_type(&mut self, rt: RelationType) -> GraphResult<()> {
         if !self.concept_types.contains_key(&rt.domain) {
             return Err(GraphError::UnknownConceptType(rt.domain));
@@ -253,6 +309,87 @@ impl Ontology {
             .ok_or_else(|| GraphError::UnknownConceptType(name.to_string()))
     }
 
+    /// Effective storage domain of a concept type: its own `ns`, else the
+    /// nearest ancestor's, else [`DEFAULT_NS`]. Unknown types resolve to
+    /// [`DEFAULT_NS`] too, so a caller can route without a second lookup;
+    /// validate existence separately. Static per H13.
+    pub fn ns_of_type(&self, name: &str) -> &str {
+        let mut cursor = self.concept_types.get(name);
+        let mut hops = 0;
+        while let Some(ct) = cursor {
+            if let Some(ns) = &ct.ns {
+                return ns.as_str();
+            }
+            cursor = ct.parent.as_deref().and_then(|p| self.concept_types.get(p));
+            hops += 1;
+            if hops > self.concept_types.len() {
+                break; // defensive: a parent cycle must not loop forever
+            }
+        }
+        DEFAULT_NS
+    }
+
+    /// `(source_ns, target_ns)` of a relation type through its `domain` /
+    /// `range` concept types (H14): a relation is routable before its
+    /// endpoints are inspected.
+    pub fn ns_of_relation_type(&self, name: &str) -> GraphResult<(&str, &str)> {
+        let rt = self.relation_type(name)?;
+        Ok((self.ns_of_type(&rt.domain), self.ns_of_type(&rt.range)))
+    }
+
+    /// Every distinct domain declared or inherited by the concept types,
+    /// sorted. Always contains [`DEFAULT_NS`] if any type resolves to it.
+    pub fn namespaces(&self) -> Vec<String> {
+        let mut out: Vec<String> = self
+            .concept_types
+            .keys()
+            .map(|t| self.ns_of_type(t).to_string())
+            .collect();
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    /// Domain rules (STORAGE-PLAN.md §5.1): every declared `ns` is a valid
+    /// identifier, and a child type that declares a `ns` declares the same
+    /// one as its parent — otherwise `?type=Parent&include_subtypes` would
+    /// silently span domains.
+    pub fn validate_namespaces(&self) -> GraphResult<()> {
+        for ct in self.concept_types.values() {
+            if let Some(ns) = &ct.ns {
+                if !is_valid_ns(ns) {
+                    return Err(GraphError::InvalidNamespace {
+                        concept_type: ct.name.clone(),
+                        ns: ns.clone(),
+                    });
+                }
+                if let Some(parent) = &ct.parent {
+                    if self.concept_types.contains_key(parent) {
+                        let parent_ns = self.ns_of_type(parent);
+                        if parent_ns != ns {
+                            return Err(GraphError::NamespaceMismatch {
+                                concept_type: ct.name.clone(),
+                                ns: ns.clone(),
+                                parent: parent.clone(),
+                                parent_ns: parent_ns.to_string(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Mutable access to a concept type; caches are invalidated. Used to
+    /// build schema variants (tests, tooling).
+    pub fn concept_type_mut(&mut self, name: &str) -> &mut ConceptType {
+        self.invalidate_caches();
+        self.concept_types
+            .get_mut(name)
+            .unwrap_or_else(|| panic!("unknown concept type `{name}`"))
+    }
+
     pub fn relation_type(&self, name: &str) -> GraphResult<&RelationType> {
         self.relation_types
             .get(name)
@@ -336,6 +473,125 @@ impl Ontology {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ct(name: &str, parent: Option<&str>, ns: Option<&str>) -> ConceptType {
+        ConceptType {
+            name: name.into(),
+            parent: parent.map(str::to_string),
+            ns: ns.map(str::to_string),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn ns_identifiers_are_validated() {
+        assert!(is_valid_ns("default"));
+        assert!(is_valid_ns("facturation-2026_v2"));
+        assert!(!is_valid_ns(""));
+        assert!(!is_valid_ns("meta"), "reserved for the schema stream");
+        assert!(!is_valid_ns("Modele"));
+        assert!(!is_valid_ns("a b"));
+        assert!(!is_valid_ns("é"));
+        assert!(!is_valid_ns(&"x".repeat(MAX_NS_LEN + 1)));
+        assert!(is_valid_ns(&"x".repeat(MAX_NS_LEN)));
+    }
+
+    #[test]
+    fn merge_keeps_what_a_bare_declaration_does_not_mention() {
+        let mut o = Ontology::new();
+        let mut full = ct("Contract", None, Some("contrats"));
+        full.description = "a legal agreement".into();
+        full.properties = Some(vec!["amount".into()]);
+        o.add_concept_type(full);
+        // A bare re-declaration (name only) changes nothing.
+        o.merge_concept_type(ct("Contract", None, None));
+        let c = o.concept_type("Contract").unwrap();
+        assert_eq!(c.ns.as_deref(), Some("contrats"));
+        assert_eq!(c.description, "a legal agreement");
+        assert_eq!(c.properties.as_deref(), Some(&["amount".to_string()][..]));
+        // Fields the declaration sets win.
+        let mut renamed = ct("Contract", None, None);
+        renamed.description = "updated".into();
+        o.merge_concept_type(renamed);
+        let c = o.concept_type("Contract").unwrap();
+        assert_eq!(c.description, "updated");
+        assert_eq!(c.ns.as_deref(), Some("contrats"));
+        // An unknown type is simply added.
+        o.merge_concept_type(ct("Invoice", None, Some("facturation")));
+        assert_eq!(o.ns_of_type("Invoice"), "facturation");
+    }
+
+    #[test]
+    fn ns_is_inherited_along_the_parent_chain() {
+        let mut o = Ontology::new();
+        o.add_concept_type(ct("Company", None, Some("parties")));
+        o.add_concept_type(ct("Subsidiary", Some("Company"), None));
+        o.add_concept_type(ct("Branch", Some("Subsidiary"), None));
+        o.add_concept_type(ct("Invoice", None, None));
+        assert_eq!(o.ns_of_type("Company"), "parties");
+        assert_eq!(o.ns_of_type("Subsidiary"), "parties");
+        assert_eq!(o.ns_of_type("Branch"), "parties");
+        assert_eq!(o.ns_of_type("Invoice"), DEFAULT_NS);
+        assert_eq!(o.ns_of_type("Unknown"), DEFAULT_NS);
+        assert_eq!(
+            o.namespaces(),
+            vec!["default".to_string(), "parties".to_string()]
+        );
+        o.validate_namespaces().unwrap();
+    }
+
+    #[test]
+    fn ns_of_relation_type_follows_domain_and_range() {
+        let mut o = Ontology::new();
+        o.add_concept_type(ct("Contract", None, Some("contrats")));
+        o.add_concept_type(ct("Company", None, Some("parties")));
+        o.add_relation_type(RelationType {
+            name: "between".into(),
+            domain: "Contract".into(),
+            range: "Company".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(
+            o.ns_of_relation_type("between").unwrap(),
+            ("contrats", "parties")
+        );
+        assert!(o.ns_of_relation_type("nope").is_err());
+    }
+
+    #[test]
+    fn a_child_cannot_leave_its_parents_domain() {
+        let mut o = Ontology::new();
+        o.add_concept_type(ct("Company", None, Some("parties")));
+        o.add_concept_type(ct("Subsidiary", Some("Company"), Some("parties")));
+        o.validate_namespaces().unwrap();
+        o.add_concept_type(ct("Rogue", Some("Company"), Some("elsewhere")));
+        assert!(matches!(
+            o.validate_namespaces(),
+            Err(GraphError::NamespaceMismatch { .. })
+        ));
+        let mut o = Ontology::new();
+        o.add_concept_type(ct("Bad", None, Some("Not Valid")));
+        assert!(matches!(
+            o.validate_namespaces(),
+            Err(GraphError::InvalidNamespace { .. })
+        ));
+    }
+
+    #[test]
+    fn ns_round_trips_through_json_and_is_omitted_when_unset() {
+        let with = ct("A", None, Some("x"));
+        let js = serde_json::to_string(&with).unwrap();
+        assert!(js.contains("\"ns\":\"x\""));
+        let back: ConceptType = serde_json::from_str(&js).unwrap();
+        assert_eq!(back.ns.as_deref(), Some("x"));
+        let without = ct("B", None, None);
+        let js = serde_json::to_string(&without).unwrap();
+        assert!(!js.contains("\"ns\""), "{js}");
+        // Older ontology files without the field keep loading.
+        let legacy: ConceptType = serde_json::from_str(r#"{"name":"C"}"#).unwrap();
+        assert_eq!(legacy.ns, None);
+    }
 
     #[test]
     fn validate_inverses_happy_and_sad() {
