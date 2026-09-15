@@ -18,7 +18,9 @@ use ontology_rag::{EchoModel, LanguageModel, RagPipeline};
 use ontology_server::{
     configured_model, AppState, ConfiguredModel, LlmOverrides, Settings, SettingsRoutedModel,
 };
-use ontology_storage::{FileStore, MemoryStore, Store};
+use ontology_storage::{
+    legacy_present, migrate_legacy, store_dir_for, MemoryStore, SegmentStore, Store,
+};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing_subscriber::{fmt, EnvFilter};
@@ -99,10 +101,17 @@ enum Cmd {
         #[arg(long)]
         model: Option<String>,
     },
-    /// Take a durable snapshot of the current graph (only with --data).
+    /// Kept for compatibility: every acknowledged write is already durable
+    /// in the segment store, so this is a no-op.
     Snapshot,
-    /// Snapshot then truncate the WAL. Bounds disk usage on busy stores.
+    /// Compact the store. A no-op until per-domain compaction lands
+    /// (STORAGE-PLAN.md phase 3).
     Compact,
+    /// Migrate a legacy `graph.log` / `graph.snap` in `--data` into the
+    /// segment store under `<data>/store/`. Runs automatically on startup
+    /// when a legacy log is found and no store exists yet; this command
+    /// only makes the step explicit and prints the report.
+    Migrate,
     /// Export the entire graph as a JSONL stream of tagged records.
     Export { path: PathBuf },
     /// Find a shortest path between two named concepts.
@@ -165,7 +174,43 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     let store: Arc<dyn Store> = match &cli.data {
-        Some(dir) => Arc::new(FileStore::open(dir).await?),
+        Some(dir) => {
+            let store_dir = store_dir_for(dir);
+            if legacy_present(dir) && store_dir.exists() {
+                // Both a legacy log and a store: a migration that did not
+                // complete, or two histories. Never guess which one is right.
+                anyhow::bail!(
+                    "{} holds both a legacy graph.log/graph.snap and a store/ directory. \
+                     A previous migration did not complete. Remove {} to redo the migration \
+                     from the legacy files, or rename them to *.migrated if store/ is authoritative.",
+                    dir.display(),
+                    store_dir.display()
+                );
+            }
+            if legacy_present(dir) {
+                tracing::info!(
+                    data = %dir.display(),
+                    store = %store_dir.display(),
+                    "legacy graph.log found; migrating to the segment store"
+                );
+                let report = migrate_legacy(dir, &store_dir)
+                    .await
+                    .context("migrating legacy store")?;
+                tracing::info!(
+                    records = report.records,
+                    concepts = report.concepts,
+                    relations = report.relations,
+                    legacy_bytes = report.legacy_bytes,
+                    store_bytes = report.store_bytes,
+                    "migration complete; legacy files renamed to *.migrated"
+                );
+            }
+            Arc::new(
+                SegmentStore::open(&store_dir)
+                    .await
+                    .with_context(|| format!("opening store at {}", store_dir.display()))?,
+            )
+        }
         None => Arc::new(MemoryStore::new()),
     };
 
@@ -330,11 +375,42 @@ async fn main() -> Result<()> {
         }
         Cmd::Snapshot => {
             store.snapshot(&graph).await?;
-            println!("snapshot written");
+            println!("snapshot: no-op - every acknowledged write is already durable");
         }
         Cmd::Compact => {
             store.compact(&graph).await?;
-            println!("compacted: snapshot written and WAL truncated");
+            println!("compact: no-op until per-domain compaction (phase 3)");
+        }
+        Cmd::Migrate => {
+            let dir = cli
+                .data
+                .as_deref()
+                .ok_or_else(|| anyhow!("--data is required to migrate"))?;
+            if legacy_present(dir) {
+                let report = migrate_legacy(dir, &store_dir_for(dir)).await?;
+                println!(
+                    "migrated {} records ({} concepts, {} relations, {} rules, {} actions, {} updates/deletes); {} -> {} bytes; renamed: {}",
+                    report.records,
+                    report.concepts,
+                    report.relations,
+                    report.rules,
+                    report.actions,
+                    report.deletes_and_updates,
+                    report.legacy_bytes,
+                    report.store_bytes,
+                    report
+                        .renamed
+                        .iter()
+                        .map(|p| p.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            } else {
+                println!(
+                    "nothing to migrate: no graph.log or graph.snap in {} (already migrated at startup?)",
+                    dir.display()
+                );
+            }
         }
         Cmd::Export { path } => {
             let mut sink = JsonlSink::create(&path).await?;

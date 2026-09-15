@@ -29,8 +29,14 @@ pub enum StoreError {
     #[error("decode: {0}")]
     Decode(String),
 
-    #[error("corrupt log at offset {0}")]
-    Corrupt(u64),
+    #[error("corrupt store: {0}")]
+    Corrupt(String),
+
+    #[error("store is locked by another process: {0}")]
+    Locked(String),
+
+    #[error("store format: {0}")]
+    Format(String),
 
     /// A write failed part-way (disk full, I/O error). The on-disk tail is
     /// in an unknown state, so the store refuses every further append until
