@@ -118,10 +118,13 @@ pub enum Kind {
     Action = 9,
     DeleteRule = 10,
     DeleteAction = 11,
+    /// A relation written by compaction: inserted exactly as stored, id
+    /// kept, no symmetric inverse materialized (`STORAGE.md` §5).
+    RelationExact = 12,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 11] = [
+    pub const ALL: [Kind; 12] = [
         Kind::Ontology,
         Kind::Concept,
         Kind::Relation,
@@ -133,6 +136,7 @@ impl Kind {
         Kind::Action,
         Kind::DeleteRule,
         Kind::DeleteAction,
+        Kind::RelationExact,
     ];
 
     pub fn from_u8(v: u8) -> Result<Kind, FormatError> {
@@ -156,6 +160,7 @@ impl Kind {
             RecordKind::Action(_) => Kind::Action,
             RecordKind::DeleteRule(_) => Kind::DeleteRule,
             RecordKind::DeleteAction(_) => Kind::DeleteAction,
+            RecordKind::RelationExact(_) => Kind::RelationExact,
         }
     }
 
@@ -207,7 +212,9 @@ impl<'a> RecordMeta<'a> {
                 endpoints: 0,
                 relation_type: None,
             },
-            RecordKind::Relation(r) | RecordKind::UpdateRelation(r) => Self {
+            RecordKind::Relation(r)
+            | RecordKind::UpdateRelation(r)
+            | RecordKind::RelationExact(r) => Self {
                 kind: k,
                 entity_id: r.id.0,
                 endpoints: pack_endpoints(r.source.0, r.target.0),
@@ -607,6 +614,12 @@ mod tests {
             RecordKind::Action(Action::new(ActionId(4), "act", "a", ConceptId(1))),
             RecordKind::DeleteRule(RuleId(3)),
             RecordKind::DeleteAction(ActionId(4)),
+            RecordKind::RelationExact(Relation::new(
+                RelationId(9),
+                "rt",
+                ConceptId(1),
+                ConceptId(2),
+            )),
         ]
     }
 
@@ -629,6 +642,7 @@ mod tests {
         assert_eq!(Kind::Concept as u8, 2);
         assert_eq!(Kind::Relation as u8, 3);
         assert_eq!(Kind::DeleteAction as u8, 11);
+        assert_eq!(Kind::RelationExact as u8, 12);
         assert_eq!(Kind::from_u8(0), Err(FormatError::UnknownKind(0)));
         assert_eq!(Kind::from_u8(200), Err(FormatError::UnknownKind(200)));
     }

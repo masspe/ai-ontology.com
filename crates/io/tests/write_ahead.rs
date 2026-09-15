@@ -394,3 +394,96 @@ async fn a_failed_ingest_rolls_back_type_declarations_it_could_not_journal() {
     store.load_into(&fresh).await.unwrap();
     assert!(fresh.find_by_name("City", "Geneva").is_some());
 }
+
+#[tokio::test]
+async fn a_bare_type_declaration_keeps_the_domain_and_fragments_inherit_it() {
+    use ontology_io::{extract_from_text_chunked, fragment_relation_name, fragment_type_name};
+    // Ontology with a domain-scoped document type and one instance of it.
+    let mut o = Ontology::new();
+    o.add_concept_type(ConceptType {
+        name: "Contract".into(),
+        ns: Some("contrats".into()),
+        description: "a legal agreement".into(),
+        ..Default::default()
+    });
+    let graph = OntologyGraph::with_arc(o);
+    let store = FlakyStore::new();
+    ingest_records(
+        &mut VecSource::new(vec![Record::Concept(Concept::new(
+            ConceptId(0),
+            "Contract",
+            "C-0",
+        ))]),
+        &graph,
+        Some(&store),
+    )
+    .await
+    .unwrap();
+
+    // A long text document typed Contract: the bare re-declaration of the
+    // type must not move it out of `contrats` (which would also be refused
+    // now that an instance exists), and its fragments live in `contrats`.
+    let body = std::iter::repeat_n("lorem ipsum dolor sit amet ".repeat(60), 6)
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let records = extract_from_text_chunked("Contract", "C-1", &body, 1_500);
+    let stats = ingest_records(&mut VecSource::new(records), &graph, Some(&store))
+        .await
+        .unwrap();
+    assert!(stats.concepts >= 3, "{stats:?}");
+    let onto = graph.ontology();
+    let contract = onto.concept_type("Contract").unwrap();
+    assert_eq!(
+        contract.ns.as_deref(),
+        Some("contrats"),
+        "bare decl kept the domain"
+    );
+    assert_eq!(
+        contract.description, "a legal agreement",
+        "bare decl kept the description"
+    );
+    let ftype = fragment_type_name("Contract");
+    assert_eq!(
+        onto.ns_of_type(&ftype),
+        "contrats",
+        "fragments inherit the document domain"
+    );
+    let rel = fragment_relation_name("Contract");
+    let rt = onto.relation_type(&rel).unwrap();
+    assert_eq!(
+        (rt.domain.as_str(), rt.range.as_str()),
+        (ftype.as_str(), "Contract")
+    );
+    assert_eq!(
+        onto.ns_of_relation_type(&rel).unwrap(),
+        ("contrats", "contrats")
+    );
+    let doc = graph.find_by_name("Contract", "C-1").unwrap();
+    assert!(
+        graph.incoming(doc).len() >= 3,
+        "fragment_of edges into the document"
+    );
+    // A second document type gets its own relation: no redefinition.
+    let mut o2 = graph.ontology();
+    o2.add_concept_type(ConceptType {
+        name: "Memo".into(),
+        ..Default::default()
+    });
+    graph
+        .extend_ontology(|o| {
+            *o = o2;
+            Ok(())
+        })
+        .unwrap();
+    let records = extract_from_text_chunked("Memo", "M-1", &body, 1_500);
+    ingest_records(&mut VecSource::new(records), &graph, Some(&store))
+        .await
+        .unwrap();
+    let onto = graph.ontology();
+    assert!(onto.relation_type(&fragment_relation_name("Memo")).is_ok());
+    assert_eq!(
+        onto.relation_type(&rel).unwrap().range,
+        "Contract",
+        "untouched"
+    );
+}

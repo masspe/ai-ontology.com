@@ -50,9 +50,10 @@ use parking_lot::Mutex;
 use tracing::{info, warn};
 
 use crate::log::{LogRecord, RecordKind, RouteHint};
+use crate::manifest::{CompactionMarker, META_NS};
 use crate::manifest::{Manifest, META_NS_ID};
 use crate::memory::apply;
-use crate::segment::active::remove_segment_files;
+use crate::segment::active::{move_segment_files, remove_segment_files};
 use crate::segment::xref::{read_xref, XrefEntry};
 use crate::segment::{
     unpack_endpoints, ActiveSegment, IndexFields, Kind, RecordMeta, RecordView, SealedSegment,
@@ -141,6 +142,13 @@ impl Inner {
             self.graph.get_mut(&ns_id).expect("stream exists for ns")
         }
     }
+    fn stream_ref(&self, ns_id: u16) -> &Stream {
+        if ns_id == META_NS_ID {
+            &self.meta
+        } else {
+            &self.graph[&ns_id]
+        }
+    }
     fn stream_dir(&self, ns_id: u16) -> PathBuf {
         if ns_id == META_NS_ID {
             self.meta.dir().to_path_buf()
@@ -201,6 +209,9 @@ impl SegmentStore {
                 manifest.format_version
             )));
         }
+        // A compaction interrupted after its commit point is finished now,
+        // before any stream is opened; one aborted before it is discarded.
+        finish_compaction(root, &mut manifest)?;
         let before = manifest.clone();
         let mut next_partition = manifest.next_partition_id;
 
@@ -426,6 +437,11 @@ impl SegmentStore {
     /// the manifest first when the domain is new (R10: the id must be on
     /// disk before any record refers to it).
     fn ensure_domain(inner: &mut Inner, name: &str) -> StoreResult<u16> {
+        if name == META_NS {
+            return Err(StoreError::Format(format!(
+                "`{META_NS}` is the schema stream, not a graph domain"
+            )));
+        }
         let (id, fresh) = inner.manifest.intern_ns(name);
         if fresh {
             inner.manifest.save(&inner.root)?;
@@ -470,7 +486,9 @@ impl SegmentStore {
                 let ns = inner.ontology.ns_of_type(&c.concept_type).to_string();
                 Ok((Self::ensure_domain(inner, &ns)?, 0))
             }
-            RecordKind::Relation(rel) | RecordKind::UpdateRelation(rel) => {
+            RecordKind::Relation(rel)
+            | RecordKind::UpdateRelation(rel)
+            | RecordKind::RelationExact(rel) => {
                 Self::route_relation_type(inner, &rel.relation_type)
             }
             RecordKind::DeleteConcept(_) => match &r.route {
@@ -682,19 +700,21 @@ impl SegmentStore {
             }
             let Some(i) = best else { break };
             let rec = heads[i].take().unwrap();
-            // Records that reference concepts by id may point into a domain
-            // that was not loaded; in a partial load they are skipped.
-            let depends_on_concepts = matches!(
-                rec.kind,
-                RecordKind::Relation(_)
-                    | RecordKind::UpdateRelation(_)
-                    | RecordKind::Rule(_)
-                    | RecordKind::Action(_)
-            );
+            // In a partial load, a record may reference a concept of a domain
+            // that was not loaded: a relation's *target* (its source lives in
+            // the stream being read, so a missing source is real corruption),
+            // or any concept of a rule / action. Only those are skipped.
+            let (skippable, target) = match &rec.kind {
+                RecordKind::Relation(r)
+                | RecordKind::UpdateRelation(r)
+                | RecordKind::RelationExact(r) => (true, Some(r.target)),
+                RecordKind::Rule(_) | RecordKind::Action(_) => (true, None),
+                _ => (false, None),
+            };
             match apply(graph, rec) {
                 Ok(()) => applied += 1,
-                Err(StoreError::Graph(GraphError::UnknownConcept(_)))
-                    if partial && depends_on_concepts =>
+                Err(StoreError::Graph(GraphError::UnknownConcept(id)))
+                    if partial && skippable && target.is_none_or(|t| t == id) =>
                 {
                     skipped += 1;
                 }
@@ -751,27 +771,13 @@ impl SegmentStore {
         let mut concepts = graph.all_concepts();
         concepts.sort_by_key(|c| c.id);
         records.extend(concepts.into_iter().map(LogRecord::concept));
+        // Every live relation, both directions of a symmetric pair included,
+        // as `RelationExact` with its live id: replay keeps the ids, so the
+        // tombstones the live graph journals afterwards target records that
+        // exist on disk.
         let mut relations = graph.all_relations();
         relations.sort_by_key(|r| r.id);
-        let mut seen_symmetric: HashSet<(String, u64, u64)> = HashSet::new();
-        for r in relations {
-            let symmetric = ontology
-                .relation_types
-                .get(&r.relation_type)
-                .map(|rt| rt.symmetric)
-                .unwrap_or(false);
-            if symmetric {
-                let (a, b) = if r.source <= r.target {
-                    (r.source.0, r.target.0)
-                } else {
-                    (r.target.0, r.source.0)
-                };
-                if !seen_symmetric.insert((r.relation_type.clone(), a, b)) {
-                    continue; // the inverse is re-materialized on replay
-                }
-            }
-            records.push(LogRecord::relation(r));
-        }
+        records.extend(relations.into_iter().map(LogRecord::relation_exact));
         let mut rules = graph.all_rules();
         rules.sort_by_key(|r| r.id);
         records.extend(rules.into_iter().map(LogRecord::rule));
@@ -791,7 +797,10 @@ impl SegmentStore {
         let records = Self::live_records(graph);
         inner.ontology = graph.ontology();
 
-        // 2. Stage: one fresh partition per touched stream, fresh seqs.
+        // 2. Stage: one fresh partition per touched stream, fresh seqs, built
+        //    in `<stream>/compacting/` — a directory partition discovery
+        //    ignores, so a crash here leaves nothing a later open could take
+        //    for a live partition.
         let ts = Self::now_micros();
         let mut staged: BTreeMap<u16, ActiveSegment> = BTreeMap::new();
         for r in &records {
@@ -806,7 +815,7 @@ impl SegmentStore {
             let seg = match staged.entry(ns_id) {
                 std::collections::btree_map::Entry::Occupied(e) => e.into_mut(),
                 std::collections::btree_map::Entry::Vacant(v) => {
-                    let dir = inner.stream_dir(ns_id);
+                    let dir = staging_dir(&inner.stream_dir(ns_id));
                     let pid = inner.manifest.next_partition_id;
                     inner.manifest.next_partition_id += 1;
                     v.insert(ActiveSegment::create(
@@ -838,51 +847,78 @@ impl SegmentStore {
             sealed_new.insert(ns_id, Arc::new(seg.seal()?));
         }
 
-        // 3. Verify: the staged partitions alone replay to the live graph.
-        let candidate: Vec<StreamSnapshot> = sealed_new
+        // 3. Verify: the staged partitions alone replay to the live graph,
+        //    entity by entity, ids included.
+        let verified = {
+            let candidate: Vec<StreamSnapshot> = sealed_new
+                .iter()
+                .map(|(ns_id, s)| StreamSnapshot {
+                    ns_id: *ns_id,
+                    sealed: vec![s.clone()],
+                    active_partition: 0,
+                    active_bytes: Vec::new(),
+                })
+                .collect();
+            let scratch = OntologyGraph::with_arc(Ontology::new());
+            Self::replay(&candidate, &scratch, false)
+                .and_then(|_| crate::migrate::compare_graphs(graph, &scratch))
+            // `candidate` (and its mmaps) drop here.
+        };
+        let staged_ids: Vec<(u16, u32)> = sealed_new
             .iter()
-            .map(|(ns_id, s)| StreamSnapshot {
-                ns_id: *ns_id,
-                sealed: vec![s.clone()],
-                active_partition: 0,
-                active_bytes: Vec::new(),
-            })
+            .map(|(ns, s)| (*ns, s.partition_id()))
             .collect();
-        let scratch = OntologyGraph::with_arc(Ontology::new());
-        let verified = Self::replay(&candidate, &scratch, false)
-            .and_then(|_| compare_semantic(graph, &scratch));
+        // The mappings of the staged files are released before any rename or
+        // deletion (Windows cannot move or delete a mapped file).
+        drop(sealed_new);
         if let Err(e) = verified {
-            // Roll back: drop the staged files, keep everything as it was.
-            for (ns_id, s) in sealed_new {
-                let dir = inner.stream_dir(ns_id);
-                let pid = s.partition_id();
-                drop(s);
-                let _ = remove_segment_files(&dir, pid);
+            for (ns_id, pid) in &staged_ids {
+                let _ = remove_segment_files(&staging_dir(&inner.stream_dir(*ns_id)), *pid);
             }
+            inner.manifest.save(&inner.root)?;
             return Err(StoreError::Format(format!(
                 "compaction aborted, store left unchanged: {e}"
             )));
         }
 
-        // 4. Swap every stream: [staged sealed] + fresh active; delete old.
-        let mut removed = 0usize;
+        // 4. Commit point: the marker names what replaces what. From here a
+        //    crash is finished by `finish_compaction` at the next open.
         let all_ids: Vec<u16> = std::iter::once(META_NS_ID)
             .chain(inner.graph.keys().copied())
             .collect();
+        let marker = CompactionMarker {
+            staged: staged_ids.clone(),
+            remove: all_ids
+                .iter()
+                .map(|ns| (*ns, inner.stream_ref(*ns).partition_ids()))
+                .collect(),
+        };
+        inner.manifest.compaction = Some(marker);
+        inner.manifest.save(&inner.root)?;
+
+        // 5. Swap every stream: staged partition moved in, fresh active,
+        //    old files deleted.
+        let mut removed = 0usize;
         for ns_id in all_ids {
             let dir = inner.stream_dir(ns_id);
             let codec = inner.manifest.codec;
+            let mut sealed: Vec<Arc<SealedSegment>> = Vec::new();
+            if let Some((_, pid)) = staged_ids.iter().find(|(ns, _)| *ns == ns_id) {
+                move_segment_files(&staging_dir(&dir), &dir, *pid)?;
+                sealed.push(Arc::new(SealedSegment::open(&dir, *pid)?));
+            }
             let pid = inner.manifest.next_partition_id;
             inner.manifest.next_partition_id += 1;
             let fresh = ActiveSegment::create(&dir, pid, inner.next_seq, codec)?;
-            let sealed: Vec<Arc<SealedSegment>> = sealed_new.remove(&ns_id).into_iter().collect();
             let entries = {
                 let stream = inner.stream_mut(ns_id);
                 removed += stream.replace_segments(sealed, fresh)?.len();
                 stream.sealed_entries()
             };
             inner.manifest.stream_mut(ns_id).unwrap().sealed = entries;
+            let _ = std::fs::remove_dir(staging_dir(&dir));
         }
+        inner.manifest.compaction = None;
         inner.manifest.save(&inner.root)?;
         rebuild_xrefs(inner)?;
 
@@ -966,7 +1002,7 @@ fn rebuild_xrefs(inner: &mut Inner) -> StoreResult<usize> {
     let mut by_target: BTreeMap<u16, Vec<XrefEntry>> = BTreeMap::new();
     for stream in inner.graph.values_mut() {
         for (_pid, e) in stream.all_entries()? {
-            if e.kind == Kind::Relation && e.target_ns_id != 0 {
+            if matches!(e.kind, Kind::Relation | Kind::RelationExact) && e.target_ns_id != 0 {
                 let (source_id, target_id) = unpack_endpoints(e.endpoints);
                 by_target
                     .entry(e.target_ns_id)
@@ -987,63 +1023,51 @@ fn rebuild_xrefs(inner: &mut Inner) -> StoreResult<usize> {
     Ok(written)
 }
 
-fn to_value<T: serde::Serialize>(v: &T) -> StoreResult<serde_json::Value> {
-    serde_json::to_value(v).map_err(|e| StoreError::Encode(e.to_string()))
+/// Where a stream's compaction output is built before the swap.
+fn staging_dir(stream_dir: &Path) -> PathBuf {
+    stream_dir.join("compacting")
 }
 
-/// Compaction check: same schema, same concepts, same rules/actions by id,
-/// same multiset of edges `(type, source, target, weight)`. Relation ids of
-/// materialized symmetric inverses may differ after a replay, so edges are
-/// compared structurally.
-pub fn compare_semantic(a: &OntologyGraph, b: &OntologyGraph) -> StoreResult<()> {
-    let fail = |what: String| StoreError::Format(format!("verification failed: {what}"));
-    if to_value(&a.ontology())? != to_value(&b.ontology())? {
-        return Err(fail("ontology differs".into()));
-    }
-    if a.concept_count() != b.concept_count() {
-        return Err(fail(format!(
-            "concept count {} vs {}",
-            a.concept_count(),
-            b.concept_count()
-        )));
-    }
-    for c in a.all_concepts() {
-        let other = b
-            .get_concept(c.id)
-            .map_err(|_| fail(format!("concept {} missing", c.id)))?;
-        if to_value(&c)? != to_value(&other)? {
-            return Err(fail(format!("concept {} differs", c.id)));
-        }
-    }
-    let edges = |g: &OntologyGraph| -> Vec<(String, u64, u64, u32)> {
-        let mut v: Vec<_> = g
-            .all_relations()
-            .into_iter()
-            .map(|r| (r.relation_type, r.source.0, r.target.0, r.weight.to_bits()))
-            .collect();
-        v.sort();
-        v
+/// Complete or discard a compaction the previous process did not finish.
+/// With a marker (commit point passed): move the staged partitions in,
+/// delete the old ones, clear the marker — idempotent, so a crash *here*
+/// is finished by the next open again. Without a marker, any
+/// `compacting/` directory is an aborted staging and is removed.
+fn finish_compaction(root: &Path, manifest: &mut Manifest) -> StoreResult<()> {
+    let dir_of = |manifest: &Manifest, ns_id: u16| -> Option<PathBuf> {
+        manifest.stream(ns_id).map(|s| root.join(&s.dir))
     };
-    if edges(a) != edges(b) {
-        return Err(fail("edge multiset differs".into()));
-    }
-    if a.rule_count() != b.rule_count() || a.action_count() != b.action_count() {
-        return Err(fail("rule or action count differs".into()));
-    }
-    for r in a.all_rules() {
-        let other = b
-            .get_rule(r.id)
-            .map_err(|_| fail(format!("rule {} missing", r.id)))?;
-        if to_value(&r)? != to_value(&other)? {
-            return Err(fail(format!("rule {} differs", r.id)));
+    if let Some(marker) = manifest.compaction.clone() {
+        warn!(?marker, "finishing an interrupted compaction");
+        for (ns_id, pid) in &marker.staged {
+            let Some(dir) = dir_of(manifest, *ns_id) else {
+                continue;
+            };
+            let staging = staging_dir(&dir);
+            if crate::segment::data_path(&staging, *pid).exists() {
+                move_segment_files(&staging, &dir, *pid)?;
+            }
         }
-    }
-    for x in a.all_actions() {
-        let other = b
-            .get_action(x.id)
-            .map_err(|_| fail(format!("action {} missing", x.id)))?;
-        if to_value(&x)? != to_value(&other)? {
-            return Err(fail(format!("action {} differs", x.id)));
+        for (ns_id, olds) in &marker.remove {
+            let Some(dir) = dir_of(manifest, *ns_id) else {
+                continue;
+            };
+            for pid in olds {
+                remove_segment_files(&dir, *pid)?;
+            }
+        }
+        for entry in manifest.streams.iter() {
+            let _ = std::fs::remove_dir(staging_dir(&root.join(&entry.dir)));
+        }
+        manifest.compaction = None;
+        manifest.save(root)?;
+    } else {
+        for entry in manifest.streams.iter() {
+            let staging = staging_dir(&root.join(&entry.dir));
+            if staging.exists() {
+                warn!(path = %staging.display(), "discarding an aborted compaction staging");
+                std::fs::remove_dir_all(&staging)?;
+            }
         }
     }
     Ok(())

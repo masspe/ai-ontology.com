@@ -262,7 +262,8 @@ async fn main() -> Result<()> {
             if let Some(p) = ontology {
                 let raw = tokio::fs::read_to_string(&p).await?;
                 let onto: Ontology = serde_json::from_str(&raw)?;
-                // Durable first, then live (STORAGE.md R8).
+                // Validate, then durable, then live (STORAGE.md R8).
+                graph.check_ontology(&onto)?;
                 store
                     .append(&ontology_storage::LogRecord::ontology(onto.clone()))
                     .await?;
@@ -657,7 +658,8 @@ async fn seed_from_dir(
             .with_context(|| format!("reading {}", onto_path.display()))?;
         let onto: Ontology = serde_json::from_str(&raw)
             .with_context(|| format!("parsing {}", onto_path.display()))?;
-        // Durable first, then live (STORAGE.md R8).
+        // Validate, then durable, then live (STORAGE.md R8).
+        graph.check_ontology(&onto)?;
         store
             .append(&ontology_storage::LogRecord::ontology(onto.clone()))
             .await?;

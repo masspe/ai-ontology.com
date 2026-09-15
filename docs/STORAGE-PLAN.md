@@ -522,9 +522,41 @@ Mesure sur le jeu de test de `segment_store.rs` (8 requêtes HTTP mutantes) :
 | Exemple | `examples/finance/ontology.json` déclare trois domaines : `parties`, `contrats`, `facturation`. |
 | Tests | `graph` : 6 unitaires sur les domaines. `storage/tests/domains.rs` (8) : routage et tombstones, tombstone non routé refusé, 20 syncs pour 10 lots sur 2 domaines, `.xref` reconstruit à l'ouverture et rangé par partition, hydratation sélective (3 combinaisons + domaine inconnu), compaction complète (réduction, partitions, aucun `.old`, rejeu, écriture après, redémarrage avec xref), reroutage après changement de schéma dans le même lot, layout mono-domaine identique à la phase 2. `io` : 3 unitaires sur le découpage. |
 
+Revue avant fusion (2026-09-15), quatre décisions validées par le
+propriétaire et corrections apportées sur la branche :
+1. **Ids de relations stables après compaction** : nouveau `kind` 12
+   `RelationExact`, écrit par la compaction pour chaque relation vivante
+   (les deux sens d'une paire symétrique), rejoué sans matérialiser
+   d'inverse ; la vérification compare désormais concepts, relations
+   (par id, contenu compris), règles et actions. Sans cela, un tombstone
+   émis après compaction visait un id absent du disque et la relation
+   réapparaissait au redémarrage.
+2. **Gardes de schéma** : refus de supprimer un type (concept, relation,
+   règle, action) ayant des instances et de changer `domain`/`range` d'un
+   type de relation ayant des relations ; `check_ontology` appelé **avant**
+   d'écrire l'`Ontology` dans `PUT /ontology`, `/upload` et le seed (un
+   schéma refusé arrivait sur disque et bloquait le redémarrage).
+3. **Déclarations de types à l'ingest** : `merge_concept_type` — une
+   redéclaration ne touche ni `ns` ni `parent` ni ce qu'elle ne mentionne
+   pas ; l'exemple finance produit bien ses trois domaines.
+4. **Fragments** : `fragment_type_decl` résolu par l'ingesteur (type
+   `<Type>Fragment` dans le domaine du document, relation par type
+   `fragment_of_<type>`), fragments émis avant leurs relations, plafond de
+   2 000 fragments par document, fins de ligne CRLF normalisées.
+
+Autres corrections de la revue : bascule de compaction résistante au
+crash (staging `compacting/` + marqueur MANIFEST, reprise à l'ouverture) ;
+lot encodé et routé avant la première écriture, empoisonnement sur échec
+(hérité de la phase 2) ; `meta` réservé comme nom de domaine ; hydratation
+sélective n'ignorant qu'une cible manquante (une source manquante est une
+corruption) ; balayage des `.tmp` ; mappings du staging relâchés avant
+toute suppression.
+
 Non fait, volontairement : compaction par domaine et roulement par âge
-(ci-dessus), maintenance à chaud du `.xref`, exposition du champ `ns` dans
-l'UI web (l'API `PUT /ontology` et les fichiers JSON le prennent déjà).
+(ci-dessus), maintenance à chaud du `.xref` (et prise en compte des
+`DeleteRelation` dans le `.xref`, qui garde des arêtes obsolètes jusqu'à
+la compaction), exposition du champ `ns` dans l'UI web (l'API
+`PUT /ontology` et les fichiers JSON le prennent déjà).
 
 ---
 

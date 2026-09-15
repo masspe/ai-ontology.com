@@ -269,6 +269,7 @@ directement `(part, off, len)`.
 | `Relation`, `UpdateRelation`, `DeleteRelation` | `graph/<ns_source>` + entrée `.xref` dans `ns_cible` si différent | H14 |
 | `Rule`, `Action`, `DeleteRule`, `DeleteAction` | `meta` | Peu nombreux (H3), transverses aux domaines (`applies_to`, `subject`). Leur validation à l'hydratation tolère un id de concept d'un domaine non chargé |
 | `Clear` | **supprimé** | Jamais écrit ; si `DELETE /graph` revient, c'est une compaction de chaque domaine vers un segment vide |
+| `RelationExact` (`kind` 12, phase 3) | `graph/<ns_source>` | Écrit **uniquement par la compaction**, pour chaque relation vivante — les deux sens d'une paire symétrique, chacun avec son id. Au rejeu, insérée telle quelle : id conservé, aucun inverse matérialisé, pas de contrôle de cardinalité. C'est ce qui garde les ids identiques entre disque et mémoire après compaction, donc ce qui permet aux tombstones ultérieurs de viser un enregistrement qui existe |
 
 ### 4.4 Fichiers auxiliaires
 
@@ -333,6 +334,20 @@ graphe mémoire P0 ne représente pas une arête pendante. La « résolution
 Une règle de `meta` qui porte sur un domaine non chargé disparaît donc de la
 vue partielle ; c'est la limite documentée de ce mode, réservé au
 développement sur un sous-ensemble.
+
+**Compaction (phase 3) : protocole.** (1) L'état vivant est écrit dans une
+nouvelle partition par flux, dans `<flux>/compacting/`, répertoire que la
+découverte des partitions ignore ; les relations sont écrites en
+`RelationExact` avec leurs ids vivants. (2) Le résultat est rejoué dans un
+graphe de travail et comparé **entité par entité, ids compris** au graphe
+vivant ; un écart annule tout et supprime le staging. (3) **Point de
+validation** : le MANIFEST reçoit un marqueur `compaction { staged,
+remove }` et est sauvé. (4) Les partitions préparées sont déplacées dans
+leur flux, une partition active neuve est créée, les anciennes sont
+supprimées (`.old` si un mapping les retient encore), les `.xref`
+reconstruits, le marqueur effacé. À l'ouverture, un marqueur présent fait
+**terminer** la bascule (idempotent), un `compacting/` sans marqueur est
+jeté : dans les deux cas le store se rouvre dans un état cohérent.
 
 **Compaction (phase 3) : le store entier, pas un domaine.** Avec un rejeu
 ordonné par `seq`, réécrire un seul domaine donnerait à ses enregistrements
@@ -827,13 +842,33 @@ ce qu'une orchestration de processus gère confortablement (centaines).
 
 Tranché le 2026-09-15 : un document texte plus long que 4 000 caractères
 (`--chunk-chars`, 0 pour désactiver) est découpé en **fragments** aux
-frontières de paragraphes. Le concept document garde un extrait de 600
-caractères et les propriétés `fragments` et `chars` ; chaque fragment est un
-concept de type `<Type>Fragment` (déclaré à la volée, domaine `default` sauf
-déclaration explicite dans l'ontologie) relié au document par
-`fragment_of` (ManyToOne). Les payloads restent de l'ordre du Ko (H16) et le
-texte complet reste indexé par le retrieval, au lieu d'être tronqué à 64 Ko
-comme avant. Les fragments sont l'unité naturelle du RAG (chantier R).
+frontières de paragraphes (fins de ligne normalisées), au plus 2 000 par
+document. Le concept document garde un extrait de 600 caractères et les
+propriétés `fragments` et `chars` ; chaque fragment est un concept de type
+`<Type>Fragment`, créé **dans le domaine du type de document** par
+l'ingesteur (enregistrement `fragment_type_decl`), relié au document par
+une relation **par type** `fragment_of_<type>` (ManyToOne), sur le modèle
+de `mentions_<type>`, afin que deux types de documents ne se redéfinissent
+jamais mutuellement. Les fragments sont émis avant leurs relations, pour
+que l'ingest les regroupe sous une seule barrière. Les payloads restent de
+l'ordre du Ko (H16) et le texte complet reste indexé par le retrieval, au
+lieu d'être tronqué à 64 Ko comme avant. Les fragments sont l'unité
+naturelle du RAG (chantier R).
+
+### 10.10 Le schéma ne peut pas orphaniser des instances
+
+Une déclaration de type venant de l'ingest (`@concept_type`, document
+texte, proposition LLM) **rafraîchit sans écraser** : `ns`, `parent`,
+propriétés et description existants sont conservés si la déclaration ne
+les donne pas. Et `extend_ontology` refuse, tant que des instances
+existent : la suppression d'un type de concept, de relation, de règle ou
+d'action ; le changement de domaine d'un type de concept (déjà en phase 3) ;
+le changement de `domain`/`range` d'un type de relation. Sans ces gardes,
+les tombstones seraient routés vers un autre flux que l'enregistrement
+qu'ils annulent (R13 au niveau des relations) et le rejeu validerait des
+instances contre un schéma qui ne les décrit plus. `PUT /ontology`,
+`/upload` et le seed **valident avant de journaliser** (`check_ontology`) :
+un schéma refusé n'atteint jamais le disque.
 
 ### 10.5 Déséquilibre entre domaines
 

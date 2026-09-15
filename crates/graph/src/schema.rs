@@ -62,10 +62,15 @@ pub const MAX_NS_LEN: usize = 32;
 pub fn is_valid_ns(ns: &str) -> bool {
     !ns.is_empty()
         && ns.len() <= MAX_NS_LEN
+        && !RESERVED_NS.contains(&ns)
         && ns
             .bytes()
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
 }
+
+/// Names a domain can never take: `meta` is the schema/rules/actions stream
+/// of the store (`STORAGE.md` D3).
+pub const RESERVED_NS: &[&str] = &["meta"];
 
 /// An edge type in the ontology, e.g. `authored`, `treats`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -184,6 +189,35 @@ impl Ontology {
             }
         }
         self.invalidate_caches();
+    }
+
+    /// Register a type, or **refresh** an existing one without dropping what
+    /// the declaration does not mention: an ingest declaration that only
+    /// names a type (`@concept_type Contract`, a text document typed
+    /// `Contract`) must not reset its domain, parent, properties or
+    /// description. Fields the declaration does set win.
+    pub fn merge_concept_type(&mut self, mut decl: ConceptType) {
+        if let Some(existing) = self.concept_types.get(&decl.name) {
+            if decl.ns.is_none() {
+                decl.ns = existing.ns.clone();
+            }
+            if decl.parent.is_none() {
+                decl.parent = existing.parent.clone();
+            }
+            if decl.properties.is_none() {
+                decl.properties = existing.properties.clone();
+            }
+            if decl.description.is_empty() {
+                decl.description = existing.description.clone();
+            }
+            if decl.required_properties.is_empty() {
+                decl.required_properties = existing.required_properties.clone();
+            }
+            if decl.disjoint_with.is_empty() {
+                decl.disjoint_with = existing.disjoint_with.clone();
+            }
+        }
+        self.add_concept_type(decl);
     }
 
     pub fn add_relation_type(&mut self, rt: RelationType) -> GraphResult<()> {
@@ -347,6 +381,15 @@ impl Ontology {
         Ok(())
     }
 
+    /// Mutable access to a concept type; caches are invalidated. Used to
+    /// build schema variants (tests, tooling).
+    pub fn concept_type_mut(&mut self, name: &str) -> &mut ConceptType {
+        self.invalidate_caches();
+        self.concept_types
+            .get_mut(name)
+            .unwrap_or_else(|| panic!("unknown concept type `{name}`"))
+    }
+
     pub fn relation_type(&self, name: &str) -> GraphResult<&RelationType> {
         self.relation_types
             .get(name)
@@ -445,11 +488,37 @@ mod tests {
         assert!(is_valid_ns("default"));
         assert!(is_valid_ns("facturation-2026_v2"));
         assert!(!is_valid_ns(""));
+        assert!(!is_valid_ns("meta"), "reserved for the schema stream");
         assert!(!is_valid_ns("Modele"));
         assert!(!is_valid_ns("a b"));
         assert!(!is_valid_ns("é"));
         assert!(!is_valid_ns(&"x".repeat(MAX_NS_LEN + 1)));
         assert!(is_valid_ns(&"x".repeat(MAX_NS_LEN)));
+    }
+
+    #[test]
+    fn merge_keeps_what_a_bare_declaration_does_not_mention() {
+        let mut o = Ontology::new();
+        let mut full = ct("Contract", None, Some("contrats"));
+        full.description = "a legal agreement".into();
+        full.properties = Some(vec!["amount".into()]);
+        o.add_concept_type(full);
+        // A bare re-declaration (name only) changes nothing.
+        o.merge_concept_type(ct("Contract", None, None));
+        let c = o.concept_type("Contract").unwrap();
+        assert_eq!(c.ns.as_deref(), Some("contrats"));
+        assert_eq!(c.description, "a legal agreement");
+        assert_eq!(c.properties.as_deref(), Some(&["amount".to_string()][..]));
+        // Fields the declaration sets win.
+        let mut renamed = ct("Contract", None, None);
+        renamed.description = "updated".into();
+        o.merge_concept_type(renamed);
+        let c = o.concept_type("Contract").unwrap();
+        assert_eq!(c.description, "updated");
+        assert_eq!(c.ns.as_deref(), Some("contrats"));
+        // An unknown type is simply added.
+        o.merge_concept_type(ct("Invoice", None, Some("facturation")));
+        assert_eq!(o.ns_of_type("Invoice"), "facturation");
     }
 
     #[test]

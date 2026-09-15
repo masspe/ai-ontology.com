@@ -35,8 +35,9 @@ pub use charset::{decode_to_utf8, looks_binary, DecodedText};
 pub use csv::CsvSource;
 pub use docx::{extract_docx_text, is_zip};
 pub use extract::{
-    chunk_text, extract_from_text, extract_from_text_chunked, fragment_type_name,
-    DEFAULT_CHUNK_CHARS, EXCERPT_CHARS, FRAGMENT_OF,
+    chunk_text, extract_from_text, extract_from_text_chunked, fragment_relation_name,
+    fragment_type_name, DEFAULT_CHUNK_CHARS, EXCERPT_CHARS, FRAGMENT_OF_PREFIX,
+    MAX_FRAGMENTS_PER_DOCUMENT,
 };
 pub use ingest::{
     export_graph, ingest_records, ExportStats, IngestError, IngestStats, Sink, Source,

@@ -30,6 +30,12 @@ pub enum RecordKind {
     Action(Action),
     DeleteRule(RuleId),
     DeleteAction(ActionId),
+    /// A relation to insert **exactly** as stored: id kept, no symmetric
+    /// inverse materialized. Written only by compaction, for every live
+    /// relation (both directions of a symmetric pair), so relation ids on
+    /// disk stay equal to the ids the live graph uses — a later tombstone
+    /// then targets a record that exists (`STORAGE.md` §5).
+    RelationExact(Relation),
 }
 
 /// What a partitioned store needs to route a record whose payload does not
@@ -75,6 +81,9 @@ impl LogRecord {
     }
     pub fn relation(r: Relation) -> Self {
         Self::new(RecordKind::Relation(r))
+    }
+    pub fn relation_exact(r: Relation) -> Self {
+        Self::new(RecordKind::RelationExact(r))
     }
     pub fn update_relation(r: Relation) -> Self {
         Self::new(RecordKind::UpdateRelation(r))

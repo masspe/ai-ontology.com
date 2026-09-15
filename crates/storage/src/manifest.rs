@@ -91,7 +91,7 @@ impl PartitionEntry {
                     e.entity_min = e.entity_min.min(x.entity_id);
                     e.entity_max = e.entity_max.max(x.entity_id);
                 }
-                Kind::Relation => e.edges += 1,
+                Kind::Relation | Kind::RelationExact => e.edges += 1,
                 _ => {}
             }
         }
@@ -118,6 +118,22 @@ pub struct Manifest {
     pub ns: Vec<NsEntry>,
     pub relation_types: Vec<SymEntry>,
     pub streams: Vec<StreamEntry>,
+    /// Present between the commit point of a compaction and its completion:
+    /// the staged partitions have been verified and must replace the listed
+    /// old ones. `open` finishes the swap if the process died in between.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compaction: Option<CompactionMarker>,
+}
+
+/// Commit record of a compaction (see `SegmentStore::compact_all`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CompactionMarker {
+    /// `(ns_id, partition_id)` of every staged partition, in `compacting/`
+    /// under the stream directory until moved.
+    pub staged: Vec<(u16, u32)>,
+    /// `(ns_id, old partition ids)` to delete once the staged ones are in
+    /// place.
+    pub remove: Vec<(u16, Vec<u32>)>,
 }
 
 impl Manifest {
@@ -140,6 +156,7 @@ impl Manifest {
                 },
             ],
             relation_types: Vec::new(),
+            compaction: None,
             streams: vec![
                 StreamEntry {
                     ns_id: META_NS_ID,
