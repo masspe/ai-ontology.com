@@ -435,10 +435,19 @@ export default function GraphView() {
 
   // ---------- Handlers ----------
 
+  // Click selects; clicking the selected node again (or the empty canvas)
+  // clears the selection.
   const onNodeClick = (id: string) => {
-    setSelectedId(id);
+    setSelectedId((prev) => (prev === id ? null : id));
     setTab("inspector");
     setCollapseInspector(false);
+  };
+
+  const onPaneClick = () => setSelectedId(null);
+
+  const onNodeDoubleClick = (id: string) => {
+    setSelectedId(id);
+    canvasRef.current?.focusNode(id);
   };
 
   const onFocusNode = () => {
@@ -622,6 +631,8 @@ export default function GraphView() {
               selectedNodeId={selectedId}
               conceptTypeColors={conceptTypeColors}
               onNodeClick={onNodeClick}
+              onPaneClick={onPaneClick}
+              onNodeDoubleClick={onNodeDoubleClick}
             />
           </div>
           <div className="gv-legend">

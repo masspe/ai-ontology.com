@@ -124,3 +124,104 @@ impl Source for XlsxSource {
         Ok(self.pending.pop_front())
     }
 }
+
+/// Flatten every sheet of a spreadsheet into plain text for the LLM-assisted
+/// analysis (`POST /ingest/analyze`): a `# Sheet: <name>` heading per sheet,
+/// then one line per non-empty data row as `header: value; header: value`.
+/// The first non-empty row of a sheet is its header; a blank header cell is
+/// named by position (`col3`). Empty cells are omitted.
+pub fn spreadsheet_to_text(path: impl AsRef<Path>) -> Result<String, IngestError> {
+    let mut workbook =
+        open_workbook_auto(path.as_ref()).map_err(|e| IngestError::Source(e.to_string()))?;
+    let names: Vec<String> = workbook.sheet_names().to_vec();
+    if names.is_empty() {
+        return Err(IngestError::Source(
+            "spreadsheet: workbook has no sheets".into(),
+        ));
+    }
+    let mut out = String::new();
+    for name in names {
+        let range = workbook
+            .worksheet_range(&name)
+            .map_err(|e| IngestError::Source(format!("spreadsheet: {e}")))?;
+        let mut rows = range
+            .rows()
+            .filter(|r| !r.iter().all(|c| matches!(c, calamine::Data::Empty)));
+        let Some(header_row) = rows.next() else {
+            continue;
+        };
+        let header: Vec<String> = header_row
+            .iter()
+            .enumerate()
+            .map(|(i, c)| {
+                let h = c.to_string().trim().to_string();
+                if h.is_empty() {
+                    format!("col{}", i + 1)
+                } else {
+                    h
+                }
+            })
+            .collect();
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(&format!("# Sheet: {name}\n"));
+        for row in rows {
+            let cells: Vec<String> = row
+                .iter()
+                .enumerate()
+                .filter_map(|(i, c)| {
+                    let v = match c {
+                        calamine::Data::Empty => return None,
+                        other => other.to_string(),
+                    };
+                    let v = v.trim();
+                    if v.is_empty() {
+                        return None;
+                    }
+                    let h = header
+                        .get(i)
+                        .cloned()
+                        .unwrap_or_else(|| format!("col{}", i + 1));
+                    Some(format!("{h}: {v}"))
+                })
+                .collect();
+            if !cells.is_empty() {
+                out.push_str(&cells.join("; "));
+                out.push('\n');
+            }
+        }
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn finance_invoices_flatten_to_one_line_per_row() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../examples/finance/invoices.xlsx"
+        );
+        let text = spreadsheet_to_text(path).unwrap();
+        assert!(text.starts_with("# Sheet: "), "{text}");
+        let rows: Vec<&str> = text.lines().filter(|l| l.contains("name: ")).collect();
+        assert!(rows.len() >= 3, "expected the invoice rows, got:\n{text}");
+        assert!(
+            rows.iter().all(|l| l.contains("; ")),
+            "every row carries several `header: value` cells:\n{text}"
+        );
+        assert!(!text.contains("\u{0}"), "no control characters");
+    }
+
+    #[test]
+    fn a_non_spreadsheet_is_an_error_not_a_panic() {
+        let dir = std::env::temp_dir();
+        let p = dir.join(format!("not-a-sheet-{}.xlsx", std::process::id()));
+        std::fs::write(&p, b"hello, this is text").unwrap();
+        assert!(spreadsheet_to_text(&p).is_err());
+        let _ = std::fs::remove_file(&p);
+    }
+}

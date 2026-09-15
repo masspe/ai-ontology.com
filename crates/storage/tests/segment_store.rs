@@ -698,3 +698,53 @@ async fn meta_and_graph_records_replay_in_global_seq_order() {
     assert!(fresh.find_by_name("City", "Geneva").is_some());
     std::fs::remove_dir_all(&root).ok();
 }
+
+/// `reset` is a compaction from an empty graph: durable, crash-safe, and the
+/// store keeps accepting data afterwards (fresh partitions, seq continues).
+#[tokio::test]
+async fn reset_empties_the_store_durably_and_accepts_new_data() {
+    let dir = tempdir("reset");
+    {
+        let graph = OntologyGraph::with_arc(ontology());
+        let store = SegmentStore::open(&dir).await.unwrap();
+        store
+            .append(&LogRecord::ontology(ontology()))
+            .await
+            .unwrap();
+        let a = add_concept(&graph, &store, "a").await;
+        let b = add_concept(&graph, &store, "b").await;
+        add_relation(&graph, &store, "knows", a, b).await;
+        store.reset().await.unwrap();
+
+        let fresh = OntologyGraph::with_arc(Ontology::new());
+        store.load_into(&fresh).await.unwrap();
+        assert_eq!(fresh.concept_count(), 0);
+        assert_eq!(fresh.relation_count(), 0);
+        assert!(fresh.with_ontology(|o| o.concept_types.is_empty()));
+    }
+    // Reopen: nothing of the old content survives on disk either.
+    let fresh = OntologyGraph::with_arc(Ontology::new());
+    let store = SegmentStore::open(&dir).await.unwrap();
+    store.load_into(&fresh).await.unwrap();
+    assert_eq!(fresh.concept_count(), 0);
+    assert!(fresh.with_ontology(|o| o.concept_types.is_empty()));
+
+    // The store still works: schema again, a concept, reopen, still there.
+    store
+        .append(&LogRecord::ontology(ontology()))
+        .await
+        .unwrap();
+    fresh
+        .extend_ontology(|o| {
+            *o = ontology();
+            Ok(())
+        })
+        .unwrap();
+    add_concept(&fresh, &store, "c").await;
+    drop(store);
+    let again = OntologyGraph::with_arc(Ontology::new());
+    let store = SegmentStore::open(&dir).await.unwrap();
+    store.load_into(&again).await.unwrap();
+    assert_eq!(again.concept_count(), 1);
+    assert!(again.with_ontology(|o| o.concept_types.contains_key("Person")));
+}

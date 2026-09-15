@@ -7,7 +7,7 @@
 // from Winven AI Sarl. See LICENSE and LICENSE-COMMERCIAL.md.
 
 use async_trait::async_trait;
-use ontology_graph::{Concept, OntologyGraph, Relation};
+use ontology_graph::{Concept, Ontology, OntologyGraph, Relation};
 use std::sync::Arc;
 use thiserror::Error;
 
@@ -104,6 +104,18 @@ pub trait Store: Send + Sync + 'static {
     /// fall back to `snapshot`.
     async fn compact(&self, graph: &Arc<OntologyGraph>) -> StoreResult<()> {
         self.snapshot(graph).await
+    }
+
+    /// Empty the store durably: afterwards `load_into` on a fresh graph
+    /// yields no concept, relation, rule or action and an empty schema.
+    /// This is an operational command (a user starting over), not a
+    /// journaled record — `STORAGE.md` D3 has no `Clear` record — so the
+    /// default rewrites the store from an empty graph through `compact`,
+    /// which is crash-safe by construction. Callers clear the live graph
+    /// *after* this returns (disk first, R8).
+    async fn reset(&self) -> StoreResult<()> {
+        self.compact(&OntologyGraph::with_arc(Ontology::new()))
+            .await
     }
 }
 

@@ -984,6 +984,7 @@ fn build_router_inner(
         .route("/ontology", get(get_ontology).put(put_ontology))
         .route("/ontology/generate", post(generate_ontology_handler))
         .route("/concepts", get(list_concepts).post(create_concept))
+        .route("/concepts/delete", post(delete_concepts))
         .route(
             "/concepts/:id",
             get(get_concept)
@@ -1018,6 +1019,7 @@ fn build_router_inner(
         .route("/ask/stream", post(ask_stream))
         .route("/path", post(path))
         .route("/compact", post(compact))
+        .route("/reset", post(reset_all))
         .route("/upload", post(upload))
         .route("/ingest/analyze", post(ingest_review::analyze))
         .route("/ingest/apply", post(ingest_review::apply))
@@ -1679,6 +1681,90 @@ async fn delete_concept(
         .map_err(|e| ApiError::Store(e.to_string()))?;
     s.graph.remove_concept(cid)?;
     s.index.forget(cid);
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct DeleteConceptsRequest {
+    ids: Vec<u64>,
+}
+
+#[derive(Serialize)]
+struct DeleteConceptsResponse {
+    /// Concepts actually removed.
+    deleted: usize,
+    /// Distinct incident relations removed with them.
+    relations: usize,
+    /// Ids that did not exist (a stale selection is not an error).
+    missing: Vec<u64>,
+}
+
+/// `POST /concepts/delete` — delete many concepts under **one** durability
+/// barrier: every concept and every incident relation, each relation
+/// journaled once even when it joins two deleted concepts. Replay of any
+/// prefix is harmless (deletes are idempotent), like the single delete.
+async fn delete_concepts(
+    State(s): State<AppState>,
+    Json(req): Json<DeleteConceptsRequest>,
+) -> Result<Json<DeleteConceptsResponse>, ApiError> {
+    let _w = s.writer.lock().await;
+    let mut ids = req.ids;
+    ids.sort_unstable();
+    ids.dedup();
+    let mut records = Vec::new();
+    let mut seen_relations = std::collections::HashSet::new();
+    let mut targets = Vec::new();
+    let mut missing = Vec::new();
+    for id in ids {
+        let cid = ConceptId(id);
+        let Ok(concept) = s.graph.get_concept(cid) else {
+            missing.push(id);
+            continue;
+        };
+        records.push(LogRecord::delete_concept(cid, concept.concept_type));
+        for rid in s.graph.incident_relation_ids(cid)? {
+            if seen_relations.insert(rid) {
+                let relation_type = s.graph.get_relation(rid)?.relation_type;
+                records.push(LogRecord::delete_relation(rid, relation_type));
+            }
+        }
+        targets.push(cid);
+    }
+    if !records.is_empty() {
+        s.store
+            .append_batch(&records)
+            .await
+            .map_err(|e| ApiError::Store(e.to_string()))?;
+    }
+    for cid in &targets {
+        s.graph.remove_concept(*cid)?;
+        s.index.forget(*cid);
+    }
+    Ok(Json(DeleteConceptsResponse {
+        deleted: targets.len(),
+        relations: seen_relations.len(),
+        missing,
+    }))
+}
+
+/// `POST /reset` — start over: the store first (disk before memory, R8),
+/// then the live graph, its schema, the retrieval index, the uploaded-file
+/// registry and the stats history. Irreversible; server settings are kept.
+async fn reset_all(State(s): State<AppState>) -> Result<StatusCode, ApiError> {
+    let _w = s.writer.lock().await;
+    s.store
+        .reset()
+        .await
+        .map_err(|e| ApiError::Store(e.to_string()))?;
+    s.graph.clear_instances();
+    // No instance is left, so the schema guards cannot refuse this.
+    s.graph.extend_ontology(|o| {
+        *o = Ontology::new();
+        Ok(())
+    })?;
+    s.index.reindex_all();
+    *s.files.write() = FileRegistry::default();
+    *s.history.write() = StatsHistory::default();
     Ok(StatusCode::NO_CONTENT)
 }
 

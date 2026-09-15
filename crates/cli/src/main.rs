@@ -114,6 +114,10 @@ enum Cmd {
     /// STORAGE.md §5). The report is logged at `info`. No-op for the
     /// in-memory store.
     Compact,
+    /// Start over: remove every concept, relation, rule, action and the
+    /// schema from the store, durably. Refused while a server holds the
+    /// store (LOCK). Irreversible; `settings.json` is kept.
+    Reset,
     /// Migrate a legacy `graph.log` / `graph.snap` in `--data` into the
     /// segment store under `<data>/store/`. Runs automatically on startup
     /// when a legacy log is found and no store exists yet; this command
@@ -409,6 +413,10 @@ async fn main() -> Result<()> {
         Cmd::Compact => {
             store.compact(&graph).await?;
             println!("compact: done (see the `store compacted` log line for the report)");
+        }
+        Cmd::Reset => {
+            store.reset().await?;
+            println!("reset: store emptied (schema and instances); settings kept");
         }
         Cmd::Migrate => {
             let dir = cli
