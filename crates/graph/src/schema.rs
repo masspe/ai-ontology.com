@@ -22,7 +22,7 @@ pub enum Cardinality {
 }
 
 /// A node type in the ontology, e.g. `Person`, `Paper`, `Drug`.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConceptType {
     pub name: String,
     /// Names of properties that may appear on instances of this type.
@@ -73,7 +73,7 @@ pub fn is_valid_ns(ns: &str) -> bool {
 pub const RESERVED_NS: &[&str] = &["meta"];
 
 /// An edge type in the ontology, e.g. `authored`, `treats`.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RelationType {
     pub name: String,
     pub domain: String,
@@ -103,7 +103,7 @@ pub struct RelationType {
 /// RAG prompt. They are not evaluated by the graph engine — they ship to
 /// the LLM as part of the ontology context so the model is aware of the
 /// domain's expected invariants.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuleType {
     pub name: String,
     /// Condition under which the rule applies (free text).
@@ -127,7 +127,7 @@ pub struct RuleType {
 /// type, e.g. `"sign(Contract)"` or `"issue(Invoice)"`. Like [`RuleType`],
 /// actions are declarative metadata surfaced to the LLM — the graph does
 /// not execute them.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ActionType {
     pub name: String,
     /// Concept type that performs / receives the action.
@@ -196,7 +196,22 @@ impl Ontology {
     /// names a type (`@concept_type Contract`, a text document typed
     /// `Contract`) must not reset its domain, parent, properties or
     /// description. Fields the declaration does set win.
-    pub fn merge_concept_type(&mut self, mut decl: ConceptType) {
+    ///
+    /// Returns `false` when the merged type is identical to the registered
+    /// one, so callers can skip journaling a schema that did not change
+    /// (every text document re-declares its own type).
+    pub fn merge_concept_type(&mut self, decl: ConceptType) -> bool {
+        let merged = self.merged_concept_type(decl);
+        if self.concept_types.get(&merged.name) == Some(&merged) {
+            return false;
+        }
+        self.add_concept_type(merged);
+        true
+    }
+
+    /// The type `merge_concept_type` would register for `decl`: the
+    /// declaration completed with the registered type's unmentioned fields.
+    pub fn merged_concept_type(&self, mut decl: ConceptType) -> ConceptType {
         if let Some(existing) = self.concept_types.get(&decl.name) {
             if decl.ns.is_none() {
                 decl.ns = existing.ns.clone();
@@ -217,7 +232,7 @@ impl Ontology {
                 decl.disjoint_with = existing.disjoint_with.clone();
             }
         }
-        self.add_concept_type(decl);
+        decl
     }
 
     pub fn add_relation_type(&mut self, rt: RelationType) -> GraphResult<()> {

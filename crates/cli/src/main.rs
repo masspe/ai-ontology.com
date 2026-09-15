@@ -109,8 +109,10 @@ enum Cmd {
     /// Kept for compatibility: every acknowledged write is already durable
     /// in the segment store, so this is a no-op.
     Snapshot,
-    /// Compact the store. A no-op until per-domain compaction lands
-    /// (STORAGE-PLAN.md phase 3).
+    /// Compact the store: rewrite every stream from the live graph so
+    /// superseded and deleted records disappear (whole-store compaction,
+    /// STORAGE.md §5). The report is logged at `info`. No-op for the
+    /// in-memory store.
     Compact,
     /// Migrate a legacy `graph.log` / `graph.snap` in `--data` into the
     /// segment store under `<data>/store/`. Runs automatically on startup
@@ -406,7 +408,7 @@ async fn main() -> Result<()> {
         }
         Cmd::Compact => {
             store.compact(&graph).await?;
-            println!("compact: no-op until per-domain compaction (phase 3)");
+            println!("compact: done (see the `store compacted` log line for the report)");
         }
         Cmd::Migrate => {
             let dir = cli

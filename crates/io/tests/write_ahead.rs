@@ -92,6 +92,92 @@ async fn consecutive_concepts_are_journaled_in_batches_under_one_barrier() {
     assert_eq!(store.append_calls(), 0, "no per-record appends");
 }
 
+/// Every text document re-declares its own type and, when chunked, the
+/// fragment type: N documents must cost one schema record, not N, and must
+/// not break the concept batch into N barriers.
+#[tokio::test]
+async fn repeated_identical_declarations_are_not_journaled_and_keep_batching() {
+    let graph = OntologyGraph::with_arc(ontology());
+    let store = FlakyStore::new();
+    let n = 40;
+    let mut records = Vec::new();
+    for i in 0..n {
+        // What `extract_from_text_chunked` emits for a document typed
+        // `Person`: a bare declaration, the document, the fragment type.
+        records.push(Record::ConceptTypeDecl(ConceptType {
+            name: "Person".into(),
+            ..Default::default()
+        }));
+        records.push(person(&format!("doc{i}")));
+        records.push(Record::FragmentTypeDecl {
+            document_type: "Person".into(),
+        });
+        records.push(Record::RelationTypeDecl(RelationType {
+            name: "knows".into(),
+            domain: "Person".into(),
+            range: "Person".into(),
+            ..Default::default()
+        }));
+    }
+
+    let stats = ingest_records(&mut VecSource::new(records), &graph, Some(&store))
+        .await
+        .unwrap();
+
+    assert_eq!(stats.concepts as usize, n);
+    assert_eq!(
+        stats.ontology_updates, 1,
+        "only the first fragment declaration changes the schema"
+    );
+    let k = kinds(&store);
+    assert_eq!(
+        k.iter().filter(|k| **k == "ontology").count(),
+        1,
+        "one schema record for {n} documents: {k:?}"
+    );
+    assert_eq!(
+        store.batch_calls(),
+        2,
+        "the first fragment declaration settles doc0; the other {} concepts ride one barrier",
+        n - 1
+    );
+    assert!(
+        graph.with_ontology(|o| o.concept_types.contains_key("PersonFragment")
+            && o.relation_types.contains_key("fragment_of_person"))
+    );
+}
+
+/// A declaration that does change the type (new description) is journaled.
+#[tokio::test]
+async fn a_changed_declaration_is_journaled_once() {
+    let graph = OntologyGraph::with_arc(ontology());
+    let store = FlakyStore::new();
+    let records = vec![
+        Record::ConceptTypeDecl(ConceptType {
+            name: "Person".into(),
+            description: "a human".into(),
+            ..Default::default()
+        }),
+        person("a"),
+        Record::ConceptTypeDecl(ConceptType {
+            name: "Person".into(),
+            description: "a human".into(),
+            ..Default::default()
+        }),
+        person("b"),
+    ];
+    let stats = ingest_records(&mut VecSource::new(records), &graph, Some(&store))
+        .await
+        .unwrap();
+    assert_eq!(stats.ontology_updates, 1);
+    let k = kinds(&store);
+    assert_eq!(k, vec!["ontology", "concept", "concept"], "{k:?}");
+    assert_eq!(
+        graph.with_ontology(|o| o.concept_types["Person"].description.clone()),
+        "a human"
+    );
+}
+
 #[tokio::test]
 async fn type_declarations_produce_one_ontology_record_before_the_first_instance() {
     let graph = OntologyGraph::with_arc(Ontology::new());
