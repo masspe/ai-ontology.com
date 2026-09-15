@@ -437,8 +437,51 @@ impl<'a> Ingester<'a> {
                 // journaled once, before the first instance that needs it.
                 self.settle_pending().await?;
                 self.begin_schema_change();
+                // Refresh, never overwrite: a bare declaration keeps the
+                // type's domain, parent and properties.
                 self.graph.extend_ontology(|o| {
-                    o.add_concept_type(ct.clone());
+                    o.merge_concept_type(ct.clone());
+                    Ok(())
+                })?;
+                self.schema_dirty = true;
+                self.stats.ontology_updates += 1;
+                Ok(true)
+            }
+            Record::FragmentTypeDecl { document_type } => {
+                // Needs the document type to exist (its domain is inherited);
+                // deferred otherwise, like a relation type declaration.
+                if !self
+                    .graph
+                    .with_ontology(|o| o.concept_types.contains_key(document_type))
+                {
+                    return Ok(false);
+                }
+                self.settle_pending().await?;
+                self.begin_schema_change();
+                let ftype = crate::extract::fragment_type_name(document_type);
+                let rel = crate::extract::fragment_relation_name(document_type);
+                let doc = document_type.clone();
+                self.graph.extend_ontology(|o| {
+                    let ns = o.ns_of_type(&doc).to_string();
+                    if !o.concept_types.contains_key(&ftype) {
+                        o.add_concept_type(ontology_graph::ConceptType {
+                            name: ftype.clone(),
+                            description: format!("fragment of a {doc} document"),
+                            ns: Some(ns),
+                            ..Default::default()
+                        });
+                    }
+                    if !o.relation_types.contains_key(&rel) {
+                        o.add_relation_type(ontology_graph::RelationType {
+                            name: rel.clone(),
+                            domain: ftype.clone(),
+                            range: doc.clone(),
+                            cardinality: ontology_graph::Cardinality::ManyToOne,
+                            symmetric: false,
+                            description: "a fragment belongs to exactly one document".into(),
+                            ..Default::default()
+                        })?;
+                    }
                     Ok(())
                 })?;
                 self.schema_dirty = true;

@@ -21,6 +21,7 @@ pub mod active;
 pub mod format;
 pub mod recover;
 pub mod sealed;
+pub mod xref;
 
 pub use active::{data_path, idx_path, segment_stem, ActiveSegment, IndexFields};
 pub use format::{
@@ -31,3 +32,4 @@ pub use format::{
 };
 pub use recover::{recover_segment, Recovered};
 pub use sealed::SealedSegment;
+pub use xref::{read_xref, write_xref, xref_path, XrefEntry, XREF_ENTRY_LEN, XREF_MAGIC};

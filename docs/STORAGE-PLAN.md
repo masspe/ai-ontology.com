@@ -16,8 +16,8 @@ Convention : `H*` / `R*` renvoient aux hypothèses et règles de
 |---|---|---|---|---|
 | 1 | Chemin d'écriture : R8, `fsync`, group commit, recovery tolérante | — | 4-6 | **Livré** (§3.6) |
 | 2 | Conteneur binaire mono-flux : `.data`/`.idx` 48 o, MANIFEST, CRC, recovery, migration, compteurs d'ids par famille | 1, D1-D6 | 10-14 | **Livré** (§4.6) — `SegmentStore` remplace `FileStore` |
-| G | Décision gros documents : fragments ou texte hors graphe | — | 1 | Décision consignée dans STORAGE.md §10.7, avant la phase 3 |
-| 3 | Partitionnement par `ns` : routage, `.xref`, roulement, scellement `mmap`, compaction, group commit inter-requêtes | 2, G | 10-14 | Store conforme à STORAGE.md §4-§7, §9 |
+| G | Décision gros documents : fragments ou texte hors graphe | — | 1 | **Tranché et livré** : fragments (STORAGE.md §10.9) |
+| 3 | Partitionnement par `ns` : routage, `.xref`, roulement, scellement `mmap`, compaction, group commit inter-requêtes | 2, G | 10-14 | **Livré** (§5.6) — compaction store entier, group commit inter-requêtes reporté à la mesure |
 | T1 | Pagination par curseur | — | 2 | API prête pour P3 ; à livrer avant 5a |
 | 4 | Mesure et codec : générateur 10⁷ / 5×10⁷, benchs, `postcard` | 2 | 4-6 | Chiffres réels sur la cible ; codec activé si gain mesuré |
 | 5a | **P1** : budget mémoire, mode `strict`/`adaptive`, slot + `Loc`, payloads relus depuis le disque | 3, 4, T1 | 8-12 | Capacité 10⁷ concepts sur 16 Go |
@@ -505,6 +505,59 @@ Mesure sur le jeu de test de `segment_store.rs` (8 requêtes HTTP mutantes) :
 - Un store à un seul domaine se comporte exactement comme la phase 2 (mêmes
   fichiers, un `ns_id` de plus dans le MANIFEST).
 
+### 5.6 État — livré le 2026-09-15 (branche `feat/storage-phase3`)
+
+| Point du plan | Réalisation |
+|---|---|
+| 5.1 Ontologie | `ConceptType.ns: Option<String>` (`[a-z0-9_-]{1,32}`, hérité du parent, `default` sinon), `Ontology::ns_of_type`, `ns_of_relation_type`, `namespaces`, `validate_namespaces`. `extend_ontology` est devenu **atomique** : la fermeture travaille sur une copie, validée (domaines, enfant ≠ parent refusé, changement de domaine d'un type ayant des instances refusé — `NamespaceChangeWithInstances`), puis substituée. `ns` omis en JSON quand absent : les ontologies existantes se chargent inchangées. |
+| 5.2.1-2 MANIFEST, flux | `Manifest::intern_ns` (id gelé, jamais réutilisé, `retire_ns`), un flux `graph/<ns>` créé paresseusement au premier enregistrement du domaine, MANIFEST sauvé **avant** ce premier enregistrement. |
+| 5.2.3 Routage | Le store garde l'ontologie courante (dernier `Ontology` de `meta`, mis à jour au fil des lots) : concepts → `ns_of_type`, relations → domaine source, `target_ns_id` dans l'entrée d'index pour les relations inter-domaines. Les tombstones portent un **`RouteHint`** (`LogRecord::delete_concept(id, type)`, `delete_relation(id, type)`), jamais persisté ; un tombstone sans indice est refusé avant toute écriture. La migration legacy déduit les indices en rejouant le journal dans un graphe de travail. |
+| 5.2.4 Group commit | Un `sync_data` par domaine touché par lot (testé : 1 000 concepts sur 2 domaines en 10 lots = 20 syncs). Le group commit **inter-requêtes** n'est pas fait : `AppState.writer` sérialise les requêtes mutantes, il n'y a donc jamais deux lots en vol ; le batching inter-requêtes exigerait de relâcher ce verrou entre `prepare` et `apply`, ce qui rouvre les conflits de validation — à mesurer d'abord (phase 4). |
+| 5.2.5 Roulement | Par taille ou nombre d'enregistrements ; pas de roulement par âge. `ArcSwap` non introduit : en P0 aucun lecteur ne lit le store en cours de processus, le swap se fait sous le mutex du store. |
+| 5.2.6 `.xref` | Fichier dérivé reconstruit à chaque ouverture et après compaction depuis les `target_ns_id` des autres flux ; rangé par plage de `seq` de partition ; en-tête `GRFX`. Pas d'append à chaud (P1). |
+| 5.2.7-8 Compaction | **Store entier**, pas par domaine (voir STORAGE.md §5 pour la raison : le rejeu par `seq` et les dépendances inter-flux). Réécriture depuis le graphe vivant dans l'ordre des dépendances, vérification par rejeu et comparaison sémantique, bascule, suppression (`.old` + balayage à l'ouverture). `POST /compact` et `ontology compact` compactent tout ; `snapshot` reste un no-op. |
+| 5.3 Hydratation sélective | `Store::load_domains`, `SegmentStore::load_domains_report`, `serve --ns a,b`. Fusion par `seq` sur N flux (k-way sur les têtes décodées). Relations, règles, actions référençant un concept non chargé : ignorées et comptées. |
+| G | Fragments : `extract_from_text_chunked`, `chunk_text`, `TextDocumentSource::with_chunk_chars`, `--chunk-chars` (défaut 4 000). |
+| T5 | Un processus par tenant (STORAGE.md §10.8). |
+| Exemple | `examples/finance/ontology.json` déclare trois domaines : `parties`, `contrats`, `facturation`. |
+| Tests | `graph` : 6 unitaires sur les domaines. `storage/tests/domains.rs` (8) : routage et tombstones, tombstone non routé refusé, 20 syncs pour 10 lots sur 2 domaines, `.xref` reconstruit à l'ouverture et rangé par partition, hydratation sélective (3 combinaisons + domaine inconnu), compaction complète (réduction, partitions, aucun `.old`, rejeu, écriture après, redémarrage avec xref), reroutage après changement de schéma dans le même lot, layout mono-domaine identique à la phase 2. `io` : 3 unitaires sur le découpage. |
+
+Revue avant fusion (2026-09-15), quatre décisions validées par le
+propriétaire et corrections apportées sur la branche :
+1. **Ids de relations stables après compaction** : nouveau `kind` 12
+   `RelationExact`, écrit par la compaction pour chaque relation vivante
+   (les deux sens d'une paire symétrique), rejoué sans matérialiser
+   d'inverse ; la vérification compare désormais concepts, relations
+   (par id, contenu compris), règles et actions. Sans cela, un tombstone
+   émis après compaction visait un id absent du disque et la relation
+   réapparaissait au redémarrage.
+2. **Gardes de schéma** : refus de supprimer un type (concept, relation,
+   règle, action) ayant des instances et de changer `domain`/`range` d'un
+   type de relation ayant des relations ; `check_ontology` appelé **avant**
+   d'écrire l'`Ontology` dans `PUT /ontology`, `/upload` et le seed (un
+   schéma refusé arrivait sur disque et bloquait le redémarrage).
+3. **Déclarations de types à l'ingest** : `merge_concept_type` — une
+   redéclaration ne touche ni `ns` ni `parent` ni ce qu'elle ne mentionne
+   pas ; l'exemple finance produit bien ses trois domaines.
+4. **Fragments** : `fragment_type_decl` résolu par l'ingesteur (type
+   `<Type>Fragment` dans le domaine du document, relation par type
+   `fragment_of_<type>`), fragments émis avant leurs relations, plafond de
+   2 000 fragments par document, fins de ligne CRLF normalisées.
+
+Autres corrections de la revue : bascule de compaction résistante au
+crash (staging `compacting/` + marqueur MANIFEST, reprise à l'ouverture) ;
+lot encodé et routé avant la première écriture, empoisonnement sur échec
+(hérité de la phase 2) ; `meta` réservé comme nom de domaine ; hydratation
+sélective n'ignorant qu'une cible manquante (une source manquante est une
+corruption) ; balayage des `.tmp` ; mappings du staging relâchés avant
+toute suppression.
+
+Non fait, volontairement : compaction par domaine et roulement par âge
+(ci-dessus), maintenance à chaud du `.xref` (et prise en compte des
+`DeleteRelation` dans le `.xref`, qui garde des arêtes obsolètes jusqu'à
+la compaction), exposition du champ `ns` dans l'UI web (l'API
+`PUT /ontology` et les fichiers JSON le prennent déjà).
+
 ---
 
 ## 6. Phase 4 — Mesurer, puis codec
@@ -659,7 +712,7 @@ Jalons vérifiables :
 |---|---|
 | J1 (fin phase 1) | **Atteint** : test « append échoué → mémoire inchangée » vert sur les 13 endpoints ; `sync_data` présent ; 136 tests, CI 2 OS |
 | J2 (fin phase 2) | **Atteint** sur la branche : migration automatique de `graph.log` au démarrage, redémarrage HTTP sur `SegmentStore` testé, CI 2 OS à confirmer par la PR |
-| J3 (fin phase 3) | Deux domaines réels dans `examples/finance` (ex. `modele` / `source`), hydratation sélective démontrée, 2 `fsync` pour 100 écritures sur 2 domaines |
+| J3 (fin phase 3) | **Atteint** : trois domaines dans `examples/finance` (`parties`, `contrats`, `facturation`), hydratation sélective testée, 2 syncs par lot de 100 sur 2 domaines |
 | J4 (fin phase 4) | Tableau §7.7 de STORAGE.md rempli de chiffres mesurés sur 10⁷ concepts / 5×10⁷ relations |
 | J5 (P1) | Le store cible tient sur un nœud de 16 Go : RSS divisée par ≥ 5 par rapport à P0, P95 `GET /concepts/{id}` < 2× P0 |
 | JR (retrieval) | `reindex_all` supprimé du démarrage ; recherche vectorielle en O(log N) mesurée à 10⁷ |

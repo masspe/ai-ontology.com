@@ -36,7 +36,112 @@ use crate::record::Record;
 /// used to emit the document itself as a [`Concept`] (whose `description`
 /// is the full body) and to attach a `mentions` named relation from the
 /// document to every `@concept` or `@relation` endpoint it references.
+/// Documents longer than this many characters are split into fragments
+/// (decision G, STORAGE-PLAN.md §8): the document concept keeps a short
+/// excerpt, each fragment is a concept of type `<Type>Fragment` linked to the
+/// document by `fragment_of`, and retrieval works on fragments — payloads
+/// stay in the kilobyte range (`STORAGE.md` H16) and the full text remains
+/// searchable instead of being truncated.
+pub const DEFAULT_CHUNK_CHARS: usize = 4_000;
+/// Excerpt kept on the document concept when the body is fragmented.
+pub const EXCERPT_CHARS: usize = 600;
+
+/// Name of the fragment type derived from a document type.
+pub fn fragment_type_name(doc_type: &str) -> String {
+    format!("{doc_type}Fragment")
+}
+/// Relation from a fragment to its document, one per document type (like
+/// `mentions_<type>`), so two document types never redefine each other's
+/// domain/range.
+pub const FRAGMENT_OF_PREFIX: &str = "fragment_of_";
+pub fn fragment_relation_name(doc_type: &str) -> String {
+    format!("{FRAGMENT_OF_PREFIX}{}", doc_type.to_lowercase())
+}
+/// Upper bound on fragments per document; beyond it, chunks are merged so
+/// the count fits (a 50 MB text must not become 12 000 concepts).
+pub const MAX_FRAGMENTS_PER_DOCUMENT: usize = 2_000;
+
+/// `extract_from_text_chunked` with [`DEFAULT_CHUNK_CHARS`].
 pub fn extract_from_text(doc_type: &str, doc_name: &str, body: &str) -> Vec<Record> {
+    extract_from_text_chunked(doc_type, doc_name, body, DEFAULT_CHUNK_CHARS)
+}
+
+/// Split `body` into chunks of at most `chunk_chars` characters, cutting at
+/// blank lines (paragraphs) when possible and inside a paragraph otherwise.
+/// `chunk_chars == 0` disables chunking (one chunk).
+pub fn chunk_text(body: &str, chunk_chars: usize) -> Vec<String> {
+    if chunk_chars == 0 || body.chars().count() <= chunk_chars {
+        return vec![body.to_string()];
+    }
+    let mut chunks: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut current_len = 0usize;
+    let flush = |chunks: &mut Vec<String>, current: &mut String, len: &mut usize| {
+        let t = current.trim();
+        if !t.is_empty() {
+            chunks.push(t.to_string());
+        }
+        current.clear();
+        *len = 0;
+    };
+    let body = body.replace("\r\n", "\n");
+    for para in body.split("\n\n") {
+        let para = para.trim_matches(['\r', '\n']);
+        if para.trim().is_empty() {
+            continue;
+        }
+        let plen = para.chars().count();
+        if plen > chunk_chars {
+            // Oversized paragraph: settle what we have, then hard-split it.
+            flush(&mut chunks, &mut current, &mut current_len);
+            let chars: Vec<char> = para.chars().collect();
+            for piece in chars.chunks(chunk_chars) {
+                chunks.push(piece.iter().collect::<String>().trim().to_string());
+            }
+            continue;
+        }
+        if current_len > 0 && current_len + 2 + plen > chunk_chars {
+            flush(&mut chunks, &mut current, &mut current_len);
+        }
+        if current_len > 0 {
+            current.push_str("\n\n");
+            current_len += 2;
+        }
+        current.push_str(para);
+        current_len += plen;
+    }
+    flush(&mut chunks, &mut current, &mut current_len);
+    chunks.retain(|c| !c.is_empty());
+    if chunks.is_empty() {
+        chunks.push(body.trim().to_string());
+    }
+    chunks
+}
+
+/// Merge consecutive chunks so at most [`MAX_FRAGMENTS_PER_DOCUMENT`] remain.
+fn cap_fragments(chunks: Vec<String>) -> Vec<String> {
+    if chunks.len() <= MAX_FRAGMENTS_PER_DOCUMENT {
+        return chunks;
+    }
+    let per = chunks.len().div_ceil(MAX_FRAGMENTS_PER_DOCUMENT);
+    chunks.chunks(per).map(|group| group.join("\n\n")).collect()
+}
+
+fn excerpt(body: &str) -> String {
+    let mut s: String = body.chars().take(EXCERPT_CHARS).collect();
+    if body.chars().count() > EXCERPT_CHARS {
+        s = s.trim_end().to_string();
+        s.push('…');
+    }
+    s
+}
+
+pub fn extract_from_text_chunked(
+    doc_type: &str,
+    doc_name: &str,
+    body: &str,
+    chunk_chars: usize,
+) -> Vec<Record> {
     let mut out = Vec::new();
 
     // Ensure the document's own concept type is registered (idempotent).
@@ -54,8 +159,65 @@ pub fn extract_from_text(doc_type: &str, doc_name: &str, body: &str) -> Vec<Reco
     // and freezes the UI when rendered. Directive parsing below still runs over
     // the *full* body, so capping the stored description loses no structure.
     let mut doc = Concept::new(ConceptId(0), doc_type.to_string(), doc_name.to_string());
-    doc.description = document_description(body);
+    let fragments: Vec<String> = if chunk_chars > 0
+        && !crate::charset::looks_binary(body)
+        && body.chars().count() > chunk_chars
+    {
+        cap_fragments(chunk_text(body, chunk_chars))
+    } else {
+        Vec::new()
+    };
+    if fragments.is_empty() {
+        doc.description = document_description(body);
+    } else {
+        doc.description = excerpt(body);
+        doc.properties.insert(
+            "fragments".into(),
+            ontology_graph::PropertyValue::Number(fragments.len() as f64),
+        );
+        doc.properties.insert(
+            "chars".into(),
+            ontology_graph::PropertyValue::Number(body.chars().count() as f64),
+        );
+    }
     out.push(Record::Concept(doc));
+
+    if !fragments.is_empty() {
+        let ftype = fragment_type_name(doc_type);
+        let rel = fragment_relation_name(doc_type);
+        // The ingester creates `<Type>Fragment` in the document type's
+        // domain and the per-type `fragment_of_<type>` relation.
+        out.push(Record::FragmentTypeDecl {
+            document_type: doc_type.to_string(),
+        });
+        // All fragment concepts first, then all links: the ingester batches
+        // consecutive concepts under one durability barrier, and a relation
+        // in between would flush the batch every time.
+        for (i, chunk) in fragments.iter().enumerate() {
+            let fname = format!("{doc_name}#{:03}", i + 1);
+            let mut f = Concept::new(ConceptId(0), ftype.clone(), fname);
+            f.description = chunk.clone();
+            f.properties.insert(
+                "index".into(),
+                ontology_graph::PropertyValue::Number((i + 1) as f64),
+            );
+            f.properties.insert(
+                "document".into(),
+                ontology_graph::PropertyValue::Text(doc_name.to_string()),
+            );
+            out.push(Record::Concept(f));
+        }
+        for i in 0..fragments.len() {
+            out.push(Record::NamedRelation {
+                relation_type: rel.clone(),
+                source_type: ftype.clone(),
+                source_name: format!("{doc_name}#{:03}", i + 1),
+                target_type: doc_type.to_string(),
+                target_name: doc_name.to_string(),
+                weight: 1.0,
+            });
+        }
+    }
 
     let mut mentions: Vec<(String, String)> = Vec::new();
 
@@ -473,9 +635,130 @@ Some preamble.
     }
 
     #[test]
+    fn long_documents_are_split_into_fragments_linked_to_the_document() {
+        let para = "lorem ipsum ".repeat(120); // ~1 440 chars
+        let body = std::iter::repeat_n(para.as_str(), 6)
+            .collect::<Vec<_>>()
+            .join("\n\n"); // ~8 650 chars → 3 chunks of ≤ 4 000
+        let recs = extract_from_text("Contract", "C-9", &body);
+        let doc = recs
+            .iter()
+            .find_map(|r| match r {
+                Record::Concept(c) if c.concept_type == "Contract" => Some(c),
+                _ => None,
+            })
+            .unwrap();
+        assert!(doc.description.chars().count() <= EXCERPT_CHARS + 1);
+        assert!(doc.description.ends_with('…'));
+        let fragments: Vec<_> = recs
+            .iter()
+            .filter_map(|r| match r {
+                Record::Concept(c) if c.concept_type == "ContractFragment" => Some(c),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            fragments.len(),
+            3,
+            "{:?}",
+            fragments
+                .iter()
+                .map(|f| f.description.chars().count())
+                .collect::<Vec<_>>()
+        );
+        assert!(fragments
+            .iter()
+            .all(|f| f.description.chars().count() <= DEFAULT_CHUNK_CHARS));
+        assert_eq!(fragments[0].name, "C-9#001");
+        // Nothing lost: the fragments together carry the whole text.
+        let joined: usize = fragments
+            .iter()
+            .map(|f| f.description.chars().count())
+            .sum();
+        assert!(
+            joined >= body.chars().count() - 3 * 2 - 6,
+            "joined {joined} vs {}",
+            body.chars().count()
+        );
+        let links = recs
+            .iter()
+            .filter(|r| matches!(r, Record::NamedRelation { relation_type, .. } if *relation_type == fragment_relation_name("Contract")))
+            .count();
+        assert_eq!(links, 3);
+        assert!(recs
+            .iter()
+            .any(|r| matches!(r, Record::FragmentTypeDecl { document_type } if document_type == "Contract")));
+        // Concepts first, links last.
+        let first_link = recs
+            .iter()
+            .position(|r| matches!(r, Record::NamedRelation { .. }))
+            .unwrap();
+        let last_fragment = recs
+            .iter()
+            .rposition(|r| matches!(r, Record::Concept(c) if c.concept_type == "ContractFragment"))
+            .unwrap();
+        assert!(
+            last_fragment < first_link,
+            "fragments must precede their links"
+        );
+        match doc.properties.get("fragments") {
+            Some(ontology_graph::PropertyValue::Number(n)) => assert_eq!(*n, 3.0),
+            other => panic!("fragments property missing: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn short_documents_and_disabled_chunking_keep_the_full_body() {
+        let body = "short body\n\nsecond paragraph";
+        let recs = extract_from_text("Doc", "s", body);
+        assert!(!recs
+            .iter()
+            .any(|r| matches!(r, Record::FragmentTypeDecl { .. })));
+        let long = "x".repeat(10_000);
+        let recs = extract_from_text_chunked("Doc", "l", &long, 0);
+        let doc = recs
+            .iter()
+            .find_map(|r| match r {
+                Record::Concept(c) => Some(c),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(doc.description.len(), 10_000);
+        assert_eq!(
+            recs.iter()
+                .filter(|r| matches!(r, Record::Concept(_)))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn fragment_count_is_capped_and_crlf_is_normalized() {
+        let many: Vec<String> = (0..5_000).map(|i| format!("p{i}")).collect();
+        let capped = cap_fragments(many);
+        assert!(capped.len() <= MAX_FRAGMENTS_PER_DOCUMENT);
+        assert!(capped.len() >= MAX_FRAGMENTS_PER_DOCUMENT / 2);
+        assert!(capped[0].starts_with("p0\n\np1"));
+        let crlf = "aaa\r\n\r\nbbb";
+        assert_eq!(chunk_text(crlf, 5), vec!["aaa", "bbb"]);
+    }
+
+    #[test]
+    fn chunk_text_respects_paragraphs_and_splits_giant_ones() {
+        let body = "aaa\n\nbbb\n\nccc";
+        assert_eq!(chunk_text(body, 8), vec!["aaa\n\nbbb", "ccc"]);
+        assert_eq!(chunk_text(body, 0), vec![body.to_string()]);
+        let giant = "z".repeat(25);
+        let c = chunk_text(&giant, 10);
+        assert_eq!(c.len(), 3);
+        assert_eq!(c[2].len(), 5);
+        assert_eq!(chunk_text("", 5), vec!["".to_string()]);
+    }
+
+    #[test]
     fn oversized_text_body_is_truncated() {
         let big = "a".repeat(MAX_DOC_DESCRIPTION_BYTES + 5_000);
-        let recs = extract_from_text("Doc", "big.txt", &big);
+        let recs = extract_from_text_chunked("Doc", "big.txt", &big, 0);
         let doc = recs
             .iter()
             .find_map(|r| match r {

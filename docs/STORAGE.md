@@ -240,7 +240,8 @@ aujourd'hui, `bincode` demain, sans casser les fichiers existants (§7.1).
 | 24 | `entity_id` u64 — l'id de l'entité (`ConceptId`, `RelationId`, `RuleId`, `ActionId` selon `kind`) |
 | 32 | `endpoints` u64 — `(source << 32) \| target` pour une relation, 0 sinon |
 | 40 | `rtype_sym` u32 — symbole du type de relation (table gelée du MANIFEST), 0 sinon |
-| 44 | réservé u32 |
+| 44 | `target_ns_id` u16 — domaine de la **cible** d'une relation inter-domaine, 0 sinon (phase 3 : c'est ce qui permet de reconstruire le `.xref` du domaine cible depuis les seuls index) |
+| 46 | réservé u16 |
 
 **Décision D2 (2026-09-08).** L'entrée porte l'id de l'entité **et**, pour
 une relation, ses extrémités et son type. Sans l'id, `DeleteRelation` et
@@ -268,6 +269,7 @@ directement `(part, off, len)`.
 | `Relation`, `UpdateRelation`, `DeleteRelation` | `graph/<ns_source>` + entrée `.xref` dans `ns_cible` si différent | H14 |
 | `Rule`, `Action`, `DeleteRule`, `DeleteAction` | `meta` | Peu nombreux (H3), transverses aux domaines (`applies_to`, `subject`). Leur validation à l'hydratation tolère un id de concept d'un domaine non chargé |
 | `Clear` | **supprimé** | Jamais écrit ; si `DELETE /graph` revient, c'est une compaction de chaque domaine vers un segment vide |
+| `RelationExact` (`kind` 12, phase 3) | `graph/<ns_source>` | Écrit **uniquement par la compaction**, pour chaque relation vivante — les deux sens d'une paire symétrique, chacun avec son id. Au rejeu, insérée telle quelle : id conservé, aucun inverse matérialisé, pas de contrôle de cardinalité. C'est ce qui garde les ids identiques entre disque et mémoire après compaction, donc ce qui permet aux tombstones ultérieurs de viser un enregistrement qui existe |
 
 ### 4.4 Fichiers auxiliaires
 
@@ -275,7 +277,15 @@ directement `(part, off, len)`.
   la `HashMap` mémoire d'un domaine froid a été relâchée (§6.3).
 - `.xref` — 24 o par entrée, `(target_id, source_id, seq)`. Arêtes entrantes
   provenant d'un autre domaine, **sans duplication de payload** : le `ns`
-  cible garde une adjacence entrante complète même chargé seul.
+  cible garde une adjacence entrante complète même chargé seul. **Phase 3 :**
+  fichier entièrement dérivé (R7), **reconstruit à chaque ouverture** et
+  après compaction depuis les entrées `.idx` des autres domaines
+  (`target_ns_id`), jamais synchronisé, en-tête `GRFX`. Il échappe à la règle
+  d'immutabilité des segments scellés (`.data`/`.idx`), puisqu'il n'est
+  qu'une vue. Une entrée est rangée dans la partition du domaine cible dont
+  la plage de `seq` `[base_seq, base_seq suivant)` contient le `seq` de la
+  relation. La maintenance à chaud (append au fil des écritures) arrive
+  avec les lecteurs en cours de processus, en P1.
 - `.adj` — CSR gelée sur disque : lignes `(node_id u64, off u32, len u32)`
   triées par `node_id`, suivies du tableau contigu des voisins. Recherche
   binaire sur les lignes, puis lecture séquentielle des voisins. Permet la
@@ -314,6 +324,47 @@ honnête : en phases 2 et 3, le format n'accélère pas le démarrage — le
 parsing des payloads domine (§7.1) — il apporte la durabilité, l'isolation
 par domaine et la préparation de P1. Le gain de démarrage en P0 vient du
 codec binaire (phase 4) ; en P1 le problème disparaît.
+
+**Hydratation sélective en P0 (phase 3).** `load_domains(ns…)` charge
+`meta` et les flux demandés, fusionnés par `seq`. Une relation, une règle
+ou une action qui référence un concept d'un domaine non chargé est
+**ignorée et comptée** (`HydrationReport.skipped_cross_domain`) : le
+graphe mémoire P0 ne représente pas une arête pendante. La « résolution
+à la demande » d'un voisin non chargé décrite plus haut est un contrat P1+.
+Une règle de `meta` qui porte sur un domaine non chargé disparaît donc de la
+vue partielle ; c'est la limite documentée de ce mode, réservé au
+développement sur un sous-ensemble.
+
+**Compaction (phase 3) : protocole.** (1) L'état vivant est écrit dans une
+nouvelle partition par flux, dans `<flux>/compacting/`, répertoire que la
+découverte des partitions ignore ; les relations sont écrites en
+`RelationExact` avec leurs ids vivants. (2) Le résultat est rejoué dans un
+graphe de travail et comparé **entité par entité, ids compris** au graphe
+vivant ; un écart annule tout et supprime le staging. (3) **Point de
+validation** : le MANIFEST reçoit un marqueur `compaction { staged,
+remove }` et est sauvé. (4) Les partitions préparées sont déplacées dans
+leur flux, une partition active neuve est créée, les anciennes sont
+supprimées (`.old` si un mapping les retient encore), les `.xref`
+reconstruits, le marqueur effacé. À l'ouverture, un marqueur présent fait
+**terminer** la bascule (idempotent), un `compacting/` sans marqueur est
+jeté : dans les deux cas le store se rouvre dans un état cohérent.
+
+**Compaction (phase 3) : le store entier, pas un domaine.** Avec un rejeu
+ordonné par `seq`, réécrire un seul domaine donnerait à ses enregistrements
+des `seq` postérieurs aux règles de `meta` et aux relations inter-domaines
+qui en dépendent, et le rejeu échouerait. La compaction réécrit donc
+**tous** les flux depuis le graphe vivant, dans l'ordre des dépendances
+(ontologie, concepts, relations — direction canonique des symétriques —,
+règles, actions), avec des `seq` neufs, dans une nouvelle partition par
+flux ; elle **vérifie** par rejeu dans un graphe de travail que le résultat
+est sémantiquement identique au graphe vivant (concepts par id, multi-
+ensemble d'arêtes, règles et actions), puis bascule et supprime les
+anciennes partitions (renommées `.old` et balayées à l'ouverture suivante si
+un mapping les retient encore, cas Windows). Un échec de vérification
+laisse le store intact. La compaction **par domaine** de §1 reste
+l'objectif ; elle exige un rejeu par passes de dépendance plutôt que par
+`seq`, ce qui suppose de revalider les instances à chaque changement de
+schéma — chantier lié à P1.
 
 **L'ordre de rejeu est l'ordre global des `seq`, pas flux par flux.** Les
 flux sont des fichiers indépendants, mais une règle écrite dans `meta`
@@ -774,13 +825,50 @@ ou stocker le texte hors du graphe avec une référence. À trancher avant la
 phase 3 (chantier G de `STORAGE-PLAN.md`), car le choix influence le seuil de
 roulement des segments et l'estimation R14.
 
-### 10.8 Un store par tenant
+### 10.8 Un store par tenant — décision T5 : un processus par tenant
 
 Le `ns` sert la localité, la rétention et les droits, pas la répartition
 horizontale (H20 le borne à quelques dizaines). Le multi-tenant est **un
-store par tenant**. Reste à décider un processus par tenant ou un processus
-multi-store ; dans le second cas, le nombre de fichiers ouverts (§7.5) et le
-plancher (§8.7) se multiplient par le nombre de tenants.
+store par tenant, servi par un processus par tenant** (`ontology serve
+--data <tenant>`), tranché le 2026-09-15. Raisons : le verrou `LOCK`, le
+budget mémoire (§8.1) et l'isolation des pannes sont naturellement par
+processus ; un processus multi-store multiplierait fichiers ouverts (§7.5)
+et plancher (§8.7) par le nombre de tenants sans rien simplifier. Le
+routage des tenants vers leur processus est l'affaire du reverse proxy ou
+de l'`auth-server`, pas du store. À revoir si le nombre de tenants dépasse
+ce qu'une orchestration de processus gère confortablement (centaines).
+
+### 10.9 Gros documents — décision G : fragments
+
+Tranché le 2026-09-15 : un document texte plus long que 4 000 caractères
+(`--chunk-chars`, 0 pour désactiver) est découpé en **fragments** aux
+frontières de paragraphes (fins de ligne normalisées), au plus 2 000 par
+document. Le concept document garde un extrait de 600 caractères et les
+propriétés `fragments` et `chars` ; chaque fragment est un concept de type
+`<Type>Fragment`, créé **dans le domaine du type de document** par
+l'ingesteur (enregistrement `fragment_type_decl`), relié au document par
+une relation **par type** `fragment_of_<type>` (ManyToOne), sur le modèle
+de `mentions_<type>`, afin que deux types de documents ne se redéfinissent
+jamais mutuellement. Les fragments sont émis avant leurs relations, pour
+que l'ingest les regroupe sous une seule barrière. Les payloads restent de
+l'ordre du Ko (H16) et le texte complet reste indexé par le retrieval, au
+lieu d'être tronqué à 64 Ko comme avant. Les fragments sont l'unité
+naturelle du RAG (chantier R).
+
+### 10.10 Le schéma ne peut pas orphaniser des instances
+
+Une déclaration de type venant de l'ingest (`@concept_type`, document
+texte, proposition LLM) **rafraîchit sans écraser** : `ns`, `parent`,
+propriétés et description existants sont conservés si la déclaration ne
+les donne pas. Et `extend_ontology` refuse, tant que des instances
+existent : la suppression d'un type de concept, de relation, de règle ou
+d'action ; le changement de domaine d'un type de concept (déjà en phase 3) ;
+le changement de `domain`/`range` d'un type de relation. Sans ces gardes,
+les tombstones seraient routés vers un autre flux que l'enregistrement
+qu'ils annulent (R13 au niveau des relations) et le rejeu validerait des
+instances contre un schéma qui ne les décrit plus. `PUT /ontology`,
+`/upload` et le seed **valident avant de journaliser** (`check_ontology`) :
+un schéma refusé n'atteint jamais le disque.
 
 ### 10.5 Déséquilibre entre domaines
 

@@ -236,6 +236,7 @@ fn entry_for(v: &RecordView<'_>, f: IndexFields) -> IdxEntry {
         entity_id: f.entity_id,
         endpoints: f.endpoints,
         rtype_sym: f.rtype_sym,
+        target_ns_id: f.target_ns_id,
     }
 }
 

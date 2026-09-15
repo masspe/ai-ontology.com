@@ -91,7 +91,7 @@ impl PartitionEntry {
                     e.entity_min = e.entity_min.min(x.entity_id);
                     e.entity_max = e.entity_max.max(x.entity_id);
                 }
-                Kind::Relation => e.edges += 1,
+                Kind::Relation | Kind::RelationExact => e.edges += 1,
                 _ => {}
             }
         }
@@ -118,6 +118,22 @@ pub struct Manifest {
     pub ns: Vec<NsEntry>,
     pub relation_types: Vec<SymEntry>,
     pub streams: Vec<StreamEntry>,
+    /// Present between the commit point of a compaction and its completion:
+    /// the staged partitions have been verified and must replace the listed
+    /// old ones. `open` finishes the swap if the process died in between.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compaction: Option<CompactionMarker>,
+}
+
+/// Commit record of a compaction (see `SegmentStore::compact_all`).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CompactionMarker {
+    /// `(ns_id, partition_id)` of every staged partition, in `compacting/`
+    /// under the stream directory until moved.
+    pub staged: Vec<(u16, u32)>,
+    /// `(ns_id, old partition ids)` to delete once the staged ones are in
+    /// place.
+    pub remove: Vec<(u16, Vec<u32>)>,
 }
 
 impl Manifest {
@@ -140,6 +156,7 @@ impl Manifest {
                 },
             ],
             relation_types: Vec::new(),
+            compaction: None,
             streams: vec![
                 StreamEntry {
                     ns_id: META_NS_ID,
@@ -210,6 +227,61 @@ impl Manifest {
         (sym, true)
     }
 
+    /// Frozen id of a domain, allocating one (and its stream) if unseen.
+    /// Returns `(ns_id, newly_allocated)`. Ids are never reused, even after a
+    /// domain is retired (R10). Must be saved before the first record of a
+    /// new domain is written.
+    pub fn intern_ns(&mut self, name: &str) -> (u16, bool) {
+        if let Some(e) = self.ns.iter().find(|e| e.name == name && !e.retired) {
+            return (e.id, false);
+        }
+        let id = self.ns.iter().map(|e| e.id).max().unwrap_or(0) + 1;
+        self.ns.push(NsEntry {
+            id,
+            name: name.to_string(),
+            retired: false,
+        });
+        self.streams.push(StreamEntry {
+            ns_id: id,
+            dir: format!("graph/{name}"),
+            sealed: Vec::new(),
+        });
+        (id, true)
+    }
+
+    /// Id of a live domain by name.
+    pub fn ns_id(&self, name: &str) -> Option<u16> {
+        self.ns
+            .iter()
+            .find(|e| e.name == name && !e.retired)
+            .map(|e| e.id)
+    }
+
+    /// Name of a domain by id (retired ones included).
+    pub fn ns_name(&self, id: u16) -> Option<&str> {
+        self.ns.iter().find(|e| e.id == id).map(|e| e.name.as_str())
+    }
+
+    /// Live graph domains (everything but `meta`), by id.
+    pub fn graph_ns_ids(&self) -> Vec<u16> {
+        let mut v: Vec<u16> = self
+            .ns
+            .iter()
+            .filter(|e| e.id != META_NS_ID && !e.retired)
+            .map(|e| e.id)
+            .collect();
+        v.sort_unstable();
+        v
+    }
+
+    /// Mark a domain retired: its id and directory are kept, no record is
+    /// routed to it any more. A later domain with the same name gets a new id.
+    pub fn retire_ns(&mut self, id: u16) {
+        if let Some(e) = self.ns.iter_mut().find(|e| e.id == id) {
+            e.retired = true;
+        }
+    }
+
     pub fn relation_type_sym(&self, name: &str) -> Option<u32> {
         self.relation_types
             .iter()
@@ -260,6 +332,23 @@ mod tests {
         // continues from the max — never fills the hole.
         m.relation_types.retain(|e| e.name != "knows");
         assert_eq!(m.intern_relation_type("later"), (3, true));
+    }
+
+    #[test]
+    fn ns_ids_are_frozen_and_never_reused() {
+        let mut m = Manifest::new(0);
+        assert_eq!(m.ns_id("default"), Some(DEFAULT_NS_ID));
+        assert_eq!(m.intern_ns("parties"), (2, true));
+        assert_eq!(m.intern_ns("parties"), (2, false));
+        assert_eq!(m.stream(2).unwrap().dir, "graph/parties");
+        assert_eq!(m.graph_ns_ids(), vec![1, 2]);
+        m.retire_ns(2);
+        assert_eq!(m.ns_id("parties"), None);
+        assert_eq!(m.ns_name(2), Some("parties"));
+        assert_eq!(m.graph_ns_ids(), vec![1]);
+        // Same name again: a fresh id, the retired one stays frozen.
+        assert_eq!(m.intern_ns("parties"), (3, true));
+        assert_eq!(m.ns.len(), 4);
     }
 
     #[test]

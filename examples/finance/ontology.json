@@ -1,11 +1,11 @@
 {
   "concept_types": {
-    "Company":    { "name": "Company",    "description": "a legal entity that signs contracts and issues invoices" },
+    "Company":    { "name": "Company",    "ns": "parties",     "description": "a legal entity that signs contracts and issues invoices" },
     "Subsidiary": { "name": "Subsidiary", "parent": "Company", "description": "a company majority-owned by another company" },
-    "Person":     { "name": "Person",     "description": "an individual, typically a contract signatory" },
-    "Contract":   { "name": "Contract",   "description": "a legal agreement between two or more companies" },
-    "Invoice":    { "name": "Invoice",    "description": "a billing document issued by one company to another" },
-    "LineItem":   { "name": "LineItem",   "description": "a single billable line on an invoice" }
+    "Person":     { "name": "Person",     "ns": "parties",     "description": "an individual, typically a contract signatory" },
+    "Contract":   { "name": "Contract",   "ns": "contrats",    "description": "a legal agreement between two or more companies" },
+    "Invoice":    { "name": "Invoice",    "ns": "facturation", "description": "a billing document issued by one company to another" },
+    "LineItem":   { "name": "LineItem",   "ns": "facturation", "description": "a single billable line on an invoice" }
   },
   "relation_types": {
     "between":          { "name": "between",          "domain": "Contract", "range": "Company",  "cardinality": "ManyToMany", "description": "a contract is between two or more companies" },

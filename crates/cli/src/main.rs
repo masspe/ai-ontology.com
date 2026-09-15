@@ -72,6 +72,11 @@ enum Cmd {
         /// ingesting a directory. Default: `txt,md`.
         #[arg(long, default_value = "txt,md")]
         text_ext: String,
+        /// Text documents longer than this many characters are split into
+        /// `<Type>Fragment` concepts linked by `fragment_of`; 0 keeps each
+        /// document whole.
+        #[arg(long, default_value_t = ontology_io::DEFAULT_CHUNK_CHARS)]
+        chunk_chars: usize,
         path: PathBuf,
     },
     /// Print summary statistics.
@@ -158,6 +163,11 @@ enum Cmd {
         /// idempotent. Pass `examples/finance` to bootstrap the demo.
         #[arg(long)]
         seed: Option<PathBuf>,
+        /// Load only these storage domains (comma-separated `ns` names) plus
+        /// the schema. Relations to a domain that is not loaded are skipped.
+        /// Development aid for large stores; omit to load everything.
+        #[arg(long, value_delimiter = ',')]
+        ns: Option<Vec<String>>,
     },
 }
 
@@ -215,10 +225,23 @@ async fn main() -> Result<()> {
     };
 
     let graph = OntologyGraph::with_arc(Ontology::new());
-    store
-        .load_into(&graph)
-        .await
-        .context("loading existing data")?;
+    let selected_ns = match &cli.cmd {
+        Cmd::Serve { ns: Some(ns), .. } if !ns.is_empty() => Some(ns.clone()),
+        _ => None,
+    };
+    match &selected_ns {
+        Some(ns) => {
+            tracing::info!(domains = ?ns, "selective hydration");
+            store
+                .load_domains(&graph, ns)
+                .await
+                .context("loading selected domains")?;
+        }
+        None => store
+            .load_into(&graph)
+            .await
+            .context("loading existing data")?,
+    }
 
     let index = Arc::new(HybridIndex::with_default_embedder(graph.clone()));
     index.reindex_all();
@@ -233,12 +256,14 @@ async fn main() -> Result<()> {
             xlsx_type,
             text_type,
             text_ext,
+            chunk_chars,
             path,
         } => {
             if let Some(p) = ontology {
                 let raw = tokio::fs::read_to_string(&p).await?;
                 let onto: Ontology = serde_json::from_str(&raw)?;
-                // Durable first, then live (STORAGE.md R8).
+                // Validate, then durable, then live (STORAGE.md R8).
+                graph.check_ontology(&onto)?;
                 store
                     .append(&ontology_storage::LogRecord::ontology(onto.clone()))
                     .await?;
@@ -260,7 +285,9 @@ async fn main() -> Result<()> {
             } else if is_dir {
                 let ty = text_type.context("--text-type required when ingesting a directory")?;
                 let exts: Vec<&str> = text_ext.split(',').map(str::trim).collect();
-                let mut src = TextDocumentSource::from_dir(ty, &path, &exts).await?;
+                let mut src = TextDocumentSource::from_dir(ty, &path, &exts)
+                    .await?
+                    .with_chunk_chars(chunk_chars);
                 ingest_records(&mut src, &graph, Some(store.as_ref())).await?
             } else {
                 match path.extension().and_then(|s| s.to_str()) {
@@ -456,6 +483,7 @@ async fn main() -> Result<()> {
             jwt_issuer,
             jwt_audience,
             seed,
+            ns: _,
         } => {
             // Resolve a seed directory: explicit --seed wins, otherwise look
             // for ONTOLOGY_SEED_DIR, then <data>/seed, then ./seed. Seeding
@@ -630,7 +658,8 @@ async fn seed_from_dir(
             .with_context(|| format!("reading {}", onto_path.display()))?;
         let onto: Ontology = serde_json::from_str(&raw)
             .with_context(|| format!("parsing {}", onto_path.display()))?;
-        // Durable first, then live (STORAGE.md R8).
+        // Validate, then durable, then live (STORAGE.md R8).
+        graph.check_ontology(&onto)?;
         store
             .append(&ontology_storage::LogRecord::ontology(onto.clone()))
             .await?;
