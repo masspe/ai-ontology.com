@@ -98,10 +98,9 @@ mod tests {
 
     #[test]
     fn detects_italian() {
-        let t = detect_language(
-            "Il contratto è stato firmato dalle parti in data odierna a Milano.",
-        )
-        .expect("detection");
+        let t =
+            detect_language("Il contratto è stato firmato dalle parti in data odierna a Milano.")
+                .expect("detection");
         assert_eq!(t.code, "it");
     }
 

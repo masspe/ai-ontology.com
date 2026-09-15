@@ -2,7 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # Feature branches run the full matrix on push so a stacked branch is
+    # verified before its PR exists.
+    branches: [main, 'feat/**']
   pull_request:
 
 env:
@@ -32,8 +34,15 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
   test:
-    name: test
-    runs-on: ubuntu-latest
+    # The storage layer touches the filesystem directly (fsync, truncation,
+    # later mmap) and its behaviour differs between platforms; development
+    # happens on Windows and deployment on Linux, so both must stay green.
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

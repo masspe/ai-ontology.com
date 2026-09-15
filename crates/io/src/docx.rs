@@ -68,9 +68,7 @@ pub fn extract_docx_text(bytes: &[u8]) -> Result<String, String> {
                 }
             }
             Ok(Event::Text(t)) if in_text => {
-                let s = t
-                    .unescape()
-                    .map_err(|e| format!("xml unescape: {e}"))?;
+                let s = t.unescape().map_err(|e| format!("xml unescape: {e}"))?;
                 out.push_str(&s);
             }
             Ok(Event::Eof) => break,

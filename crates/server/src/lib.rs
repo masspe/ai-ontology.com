@@ -91,6 +91,12 @@ pub struct AppState {
     /// Optional path to a JSON file used to persist `settings` across
     /// restarts. When `None`, settings remain in-memory only.
     pub settings_path: Option<PathBuf>,
+    /// Serializes every graph-mutating request. The write-ahead sequence
+    /// `prepare_* → store.append → apply_prepared_*` (`STORAGE.md` R8) is
+    /// only sound if no other writer slips in between the validation and
+    /// the apply; the store is single-writer by design (H17), so one
+    /// process-wide async mutex is the natural fit. Readers never take it.
+    pub writer: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl AppState {
@@ -114,6 +120,7 @@ impl AppState {
             feedbacks: Arc::new(PlRwLock::new(FeedbackStore::default())),
             started_at: SystemTime::now(),
             settings_path: None,
+            writer: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -311,7 +318,7 @@ impl FileRegistry {
     }
     fn list(&self) -> Vec<FileRecord> {
         let mut v = self.records.clone();
-        v.sort_by(|a, b| b.uploaded_at.cmp(&a.uploaded_at));
+        v.sort_by_key(|a| std::cmp::Reverse(a.uploaded_at));
         v
     }
     fn get(&self, id: u64) -> Option<FileRecord> {
@@ -380,7 +387,7 @@ impl SavedQueryStore {
     }
     fn list(&self) -> Vec<SavedQuery> {
         let mut v = self.records.clone();
-        v.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        v.sort_by_key(|a| std::cmp::Reverse(a.created_at));
         v
     }
     fn get(&self, id: u64) -> Option<SavedQuery> {
@@ -595,7 +602,14 @@ fn key_hint(key: &str) -> String {
         return String::new();
     }
     let prefix = k.chars().take(3).collect::<String>();
-    let suffix: String = k.chars().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
+    let suffix: String = k
+        .chars()
+        .rev()
+        .take(4)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
     format!("{prefix}...{suffix}")
 }
 
@@ -788,7 +802,7 @@ impl FeedbackStore {
     }
     fn list(&self) -> Vec<Feedback> {
         let mut v = self.records.clone();
-        v.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        v.sort_by_key(|a| std::cmp::Reverse(a.created_at));
         v
     }
     fn remove(&mut self, id: u64) -> bool {
@@ -1190,7 +1204,10 @@ async fn request_id_layer(mut req: Request<axum::body::Body>, next: Next) -> Res
     let elapsed_ms = started.elapsed().as_millis() as u64;
     let code = status.as_u16();
     if !noisy {
-        let q = query.as_deref().map(|s| format!("?{s}")).unwrap_or_default();
+        let q = query
+            .as_deref()
+            .map(|s| format!("?{s}"))
+            .unwrap_or_default();
         push_recent_log(format!(
             "{} {} {}{} {} {}ms",
             now_ts(),
@@ -1283,7 +1300,10 @@ fn extract_bearer(req: &Request<axum::body::Body>) -> Option<String> {
     req.headers()
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|v: &HeaderValue| v.to_str().ok())
-        .and_then(|s| s.strip_prefix("Bearer ").or_else(|| s.strip_prefix("bearer ")))
+        .and_then(|s| {
+            s.strip_prefix("Bearer ")
+                .or_else(|| s.strip_prefix("bearer "))
+        })
         .map(|s| s.trim().to_string())
 }
 
@@ -1383,7 +1403,18 @@ async fn path(
     }))
 }
 
+/// Ingest failures: a store error is a server fault (500); anything else is
+/// the caller's input (400).
+fn ingest_api_error(e: ontology_io::IngestError) -> ApiError {
+    match e {
+        ontology_io::IngestError::Store(inner) => ApiError::Store(inner.to_string()),
+        other => ApiError::BadRequest(other.to_string()),
+    }
+}
+
 async fn compact(State(s): State<AppState>) -> Result<StatusCode, ApiError> {
+    // No mutation may land between the snapshot and the truncation.
+    let _w = s.writer.lock().await;
     s.store
         .compact(&s.graph)
         .await
@@ -1499,16 +1530,23 @@ struct CreatedConcept {
     id: ConceptId,
 }
 
+// Every mutating handler below follows the same write-ahead sequence
+// (`STORAGE.md` R8): take the writer lock, validate and allocate with
+// `prepare_*` / `preview_*`, append the record to the store, and only then
+// apply the change to the in-memory graph. A store failure therefore leaves
+// the graph exactly as it was — no phantom entity the disk knows nothing of.
+
 async fn create_concept(
     State(s): State<AppState>,
     Json(mut concept): Json<Concept>,
 ) -> Result<Json<CreatedConcept>, ApiError> {
-    let id = s.graph.upsert_concept(concept.clone())?;
-    concept.id = id;
+    let _w = s.writer.lock().await;
+    s.graph.prepare_concept(&mut concept)?;
     if let Err(e) = s.store.append(&LogRecord::concept(concept.clone())).await {
         warn!(error=%e, "wal append failed");
         return Err(ApiError::Store(e.to_string()));
     }
+    let id = s.graph.apply_prepared_concept(concept)?;
     s.index.index_concept(id)?;
     Ok(Json(CreatedConcept { id }))
 }
@@ -1570,7 +1608,10 @@ async fn list_concepts(
     // valid.
     let gen = s.graph.concepts_generation();
     let etag = format!("W/\"c{gen}\"");
-    if let Some(if_match) = headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok()) {
+    if let Some(if_match) = headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+    {
         if if_match == etag {
             return StatusCode::NOT_MODIFIED.into_response();
         }
@@ -1604,11 +1645,13 @@ async fn update_concept(
     Path(id): Path<u64>,
     Json(patch): Json<ConceptPatch>,
 ) -> Result<Json<Concept>, ApiError> {
-    let updated = s.graph.update_concept(ConceptId(id), patch)?;
+    let _w = s.writer.lock().await;
+    let updated = s.graph.preview_concept_update(ConceptId(id), &patch)?;
     s.store
         .append(&LogRecord::update_concept(updated.clone()))
         .await
         .map_err(|e| ApiError::Store(e.to_string()))?;
+    let updated = s.graph.apply_concept_update(updated)?;
     s.index.index_concept(ConceptId(id))?;
     Ok(Json(updated))
 }
@@ -1617,19 +1660,21 @@ async fn delete_concept(
     State(s): State<AppState>,
     Path(id): Path<u64>,
 ) -> Result<StatusCode, ApiError> {
+    let _w = s.writer.lock().await;
     let cid = ConceptId(id);
-    let removed = s.graph.remove_concept(cid)?;
-    s.index.forget(cid);
+    // Journal the whole cascade under one durability barrier: the concept
+    // and every incident relation go together, and a replay of any prefix
+    // is harmless (deletes are idempotent).
+    let cascade = s.graph.incident_relation_ids(cid)?;
+    let mut records = Vec::with_capacity(1 + cascade.len());
+    records.push(LogRecord::delete_concept(cid));
+    records.extend(cascade.into_iter().map(LogRecord::delete_relation));
     s.store
-        .append(&LogRecord::delete_concept(cid))
+        .append_batch(&records)
         .await
         .map_err(|e| ApiError::Store(e.to_string()))?;
-    for rid in removed {
-        s.store
-            .append(&LogRecord::delete_relation(rid))
-            .await
-            .map_err(|e| ApiError::Store(e.to_string()))?;
-    }
+    s.graph.remove_concept(cid)?;
+    s.index.forget(cid);
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1642,12 +1687,13 @@ async fn create_relation(
     State(s): State<AppState>,
     Json(mut rel): Json<Relation>,
 ) -> Result<Json<CreatedRelation>, ApiError> {
-    let id = s.graph.add_relation(rel.clone())?;
-    rel.id = id;
+    let _w = s.writer.lock().await;
+    s.graph.prepare_relation(&mut rel)?;
     s.store
-        .append(&LogRecord::relation(rel))
+        .append(&LogRecord::relation(rel.clone()))
         .await
         .map_err(|e| ApiError::Store(e.to_string()))?;
+    let id = s.graph.apply_prepared_relation(rel)?;
     Ok(Json(CreatedRelation { id }))
 }
 
@@ -1680,7 +1726,10 @@ async fn list_relations(
 ) -> Response {
     let gen = s.graph.relations_generation();
     let etag = format!("W/\"r{gen}\"");
-    if let Some(if_match) = headers.get(header::IF_NONE_MATCH).and_then(|v| v.to_str().ok()) {
+    if let Some(if_match) = headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|v| v.to_str().ok())
+    {
         if if_match == etag {
             return StatusCode::NOT_MODIFIED.into_response();
         }
@@ -1715,11 +1764,13 @@ async fn update_relation_handler(
     Path(id): Path<u64>,
     Json(patch): Json<RelationPatch>,
 ) -> Result<Json<Relation>, ApiError> {
-    let updated = s.graph.update_relation(RelationId(id), patch)?;
+    let _w = s.writer.lock().await;
+    let updated = s.graph.preview_relation_update(RelationId(id), &patch)?;
     s.store
         .append(&LogRecord::update_relation(updated.clone()))
         .await
         .map_err(|e| ApiError::Store(e.to_string()))?;
+    let updated = s.graph.apply_relation_update(updated)?;
     Ok(Json(updated))
 }
 
@@ -1727,12 +1778,15 @@ async fn delete_relation_handler(
     State(s): State<AppState>,
     Path(id): Path<u64>,
 ) -> Result<StatusCode, ApiError> {
+    let _w = s.writer.lock().await;
     let rid = RelationId(id);
-    s.graph.remove_relation(rid)?;
+    // 404 before touching the log.
+    s.graph.get_relation(rid)?;
     s.store
         .append(&LogRecord::delete_relation(rid))
         .await
         .map_err(|e| ApiError::Store(e.to_string()))?;
+    s.graph.remove_relation(rid)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1743,7 +1797,11 @@ struct CreatedRule {
 
 async fn list_rules(State(s): State<AppState>) -> Json<Vec<Rule>> {
     let mut all = s.graph.all_rules();
-    all.sort_by(|a, b| a.rule_type.cmp(&b.rule_type).then_with(|| a.name.cmp(&b.name)));
+    all.sort_by(|a, b| {
+        a.rule_type
+            .cmp(&b.rule_type)
+            .then_with(|| a.name.cmp(&b.name))
+    });
     Json(all)
 }
 
@@ -1751,12 +1809,13 @@ async fn create_rule(
     State(s): State<AppState>,
     Json(mut rule): Json<Rule>,
 ) -> Result<Json<CreatedRule>, ApiError> {
-    let id = s.graph.upsert_rule(rule.clone())?;
-    rule.id = id;
+    let _w = s.writer.lock().await;
+    s.graph.prepare_rule(&mut rule)?;
     s.store
-        .append(&LogRecord::rule(rule))
+        .append(&LogRecord::rule(rule.clone()))
         .await
         .map_err(|e| ApiError::Store(e.to_string()))?;
+    let id = s.graph.apply_prepared_rule(rule)?;
     Ok(Json(CreatedRule { id }))
 }
 
@@ -1772,12 +1831,14 @@ async fn delete_rule_handler(
     State(s): State<AppState>,
     Path(id): Path<u64>,
 ) -> Result<StatusCode, ApiError> {
+    let _w = s.writer.lock().await;
     let rid = RuleId(id);
-    s.graph.remove_rule(rid)?;
+    s.graph.get_rule(rid)?;
     s.store
         .append(&LogRecord::delete_rule(rid))
         .await
         .map_err(|e| ApiError::Store(e.to_string()))?;
+    s.graph.remove_rule(rid)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1786,11 +1847,13 @@ async fn update_rule_handler(
     Path(id): Path<u64>,
     Json(patch): Json<RulePatch>,
 ) -> Result<Json<Rule>, ApiError> {
-    let updated = s.graph.update_rule(RuleId(id), patch)?;
+    let _w = s.writer.lock().await;
+    let updated = s.graph.preview_rule_update(RuleId(id), &patch)?;
     s.store
         .append(&LogRecord::rule(updated.clone()))
         .await
         .map_err(|e| ApiError::Store(e.to_string()))?;
+    let updated = s.graph.apply_rule_update(updated)?;
     Ok(Json(updated))
 }
 
@@ -1813,12 +1876,13 @@ async fn create_action(
     State(s): State<AppState>,
     Json(mut action): Json<Action>,
 ) -> Result<Json<CreatedAction>, ApiError> {
-    let id = s.graph.upsert_action(action.clone())?;
-    action.id = id;
+    let _w = s.writer.lock().await;
+    s.graph.prepare_action(&mut action)?;
     s.store
-        .append(&LogRecord::action(action))
+        .append(&LogRecord::action(action.clone()))
         .await
         .map_err(|e| ApiError::Store(e.to_string()))?;
+    let id = s.graph.apply_prepared_action(action)?;
     Ok(Json(CreatedAction { id }))
 }
 
@@ -1834,12 +1898,14 @@ async fn delete_action_handler(
     State(s): State<AppState>,
     Path(id): Path<u64>,
 ) -> Result<StatusCode, ApiError> {
+    let _w = s.writer.lock().await;
     let aid = ActionId(id);
-    s.graph.remove_action(aid)?;
+    s.graph.get_action(aid)?;
     s.store
         .append(&LogRecord::delete_action(aid))
         .await
         .map_err(|e| ApiError::Store(e.to_string()))?;
+    s.graph.remove_action(aid)?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -1848,11 +1914,13 @@ async fn update_action_handler(
     Path(id): Path<u64>,
     Json(patch): Json<ActionPatch>,
 ) -> Result<Json<Action>, ApiError> {
-    let updated = s.graph.update_action(ActionId(id), patch)?;
+    let _w = s.writer.lock().await;
+    let updated = s.graph.preview_action_update(ActionId(id), &patch)?;
     s.store
         .append(&LogRecord::action(updated.clone()))
         .await
         .map_err(|e| ApiError::Store(e.to_string()))?;
+    let updated = s.graph.apply_action_update(updated)?;
     Ok(Json(updated))
 }
 
@@ -1993,18 +2061,21 @@ async fn upload(
     // Snapshot for the file registry — the match below consumes `concept_type`.
     let concept_type_for_record = concept_type.clone();
 
+    // The whole ingest is one write transaction from the graph's point of
+    // view; other writers wait (single-writer store, H17).
+    let _w = s.writer.lock().await;
     let stats = match kind.as_str() {
         "ontology" => {
             let onto: Ontology = serde_json::from_slice(&bytes)
                 .map_err(|e| ApiError::BadRequest(format!("ontology: {e}")))?;
-            s.graph.extend_ontology(|target| {
-                *target = onto.clone();
-                Ok(())
-            })?;
             s.store
-                .append(&LogRecord::ontology(onto))
+                .append(&LogRecord::ontology(onto.clone()))
                 .await
                 .map_err(|e| ApiError::Store(e.to_string()))?;
+            s.graph.extend_ontology(|target| {
+                *target = onto;
+                Ok(())
+            })?;
             IngestStats {
                 ontology_updates: 1,
                 ..Default::default()
@@ -2017,7 +2088,7 @@ async fn upload(
                 .map_err(|e| ApiError::BadRequest(e.to_string()))?;
             ingest_records(&mut src, &s.graph, Some(s.store.as_ref()))
                 .await
-                .map_err(|e| ApiError::BadRequest(e.to_string()))?
+                .map_err(ingest_api_error)?
         }
         "triples" => {
             let tmp = persist_temp(&bytes, "triples").await?;
@@ -2026,7 +2097,7 @@ async fn upload(
                 .map_err(|e| ApiError::BadRequest(e.to_string()))?;
             ingest_records(&mut src, &s.graph, Some(s.store.as_ref()))
                 .await
-                .map_err(|e| ApiError::BadRequest(e.to_string()))?
+                .map_err(ingest_api_error)?
         }
         "csv" => {
             let ty = concept_type
@@ -2037,7 +2108,7 @@ async fn upload(
                 .map_err(|e| ApiError::BadRequest(e.to_string()))?;
             ingest_records(&mut src, &s.graph, Some(s.store.as_ref()))
                 .await
-                .map_err(|e| ApiError::BadRequest(e.to_string()))?
+                .map_err(ingest_api_error)?
         }
         "xlsx" => {
             let ty = concept_type
@@ -2047,7 +2118,7 @@ async fn upload(
                 .map_err(|e| ApiError::BadRequest(e.to_string()))?;
             ingest_records(&mut src, &s.graph, Some(s.store.as_ref()))
                 .await
-                .map_err(|e| ApiError::BadRequest(e.to_string()))?
+                .map_err(ingest_api_error)?
         }
         "text" => {
             let ty = concept_type
@@ -2079,7 +2150,7 @@ async fn upload(
             let mut src = TextDocumentSource::from_files(ty, [path]);
             ingest_records(&mut src, &s.graph, Some(s.store.as_ref()))
                 .await
-                .map_err(|e| ApiError::BadRequest(e.to_string()))?
+                .map_err(ingest_api_error)?
         }
         other => return Err(ApiError::BadRequest(format!("unknown kind: {other}"))),
     };
@@ -2261,14 +2332,15 @@ async fn put_ontology(
     State(s): State<AppState>,
     Json(onto): Json<Ontology>,
 ) -> Result<Json<Ontology>, ApiError> {
-    s.graph.extend_ontology(|target| {
-        *target = onto.clone();
-        Ok(())
-    })?;
+    let _w = s.writer.lock().await;
     s.store
         .append(&LogRecord::ontology(onto.clone()))
         .await
         .map_err(|e| ApiError::Store(e.to_string()))?;
+    s.graph.extend_ontology(|target| {
+        *target = onto.clone();
+        Ok(())
+    })?;
     Ok(Json(onto))
 }
 
@@ -2312,11 +2384,7 @@ async fn subgraph_handler(
     let limit = req.limit.clamp(1, 2_000);
 
     // 1. Collect seed concept ids.
-    let mut seeds: Vec<ConceptId> = req
-        .seed_concept_ids
-        .into_iter()
-        .map(ConceptId)
-        .collect();
+    let mut seeds: Vec<ConceptId> = req.seed_concept_ids.into_iter().map(ConceptId).collect();
 
     if let Some(q) = req.seed_query.as_ref().filter(|q| !q.trim().is_empty()) {
         let req = RetrievalRequest {
@@ -2351,9 +2419,9 @@ async fn subgraph_handler(
             }
         } else {
             'outer: for t in &req.seed_concept_types {
-                let (_, page) = s
-                    .graph
-                    .list_concepts_page(Some(t), None, 0, limit - seeds.len(), false, true);
+                let (_, page) =
+                    s.graph
+                        .list_concepts_page(Some(t), None, 0, limit - seeds.len(), false, true);
                 for c in page {
                     seeds.push(c.id);
                     if seeds.len() >= limit {
@@ -2728,7 +2796,12 @@ fn probe_version(cmd: &str, arg: &str) -> Option<String> {
     // Strip a leading binary name to keep just the version token.
     let v = first
         .split_whitespace()
-        .find(|t| t.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false))
+        .find(|t| {
+            t.chars()
+                .next()
+                .map(|c| c.is_ascii_digit())
+                .unwrap_or(false)
+        })
         .map(|s| s.to_string())
         .unwrap_or(first);
     if v.is_empty() {
@@ -3345,13 +3418,15 @@ fn parse_infomaniak_products(v: &serde_json::Value) -> Vec<InfomaniakProduct> {
     };
     rows.iter()
         .filter_map(|row| {
-            let product_id = ["product_id", "id"].iter().find_map(|k| match row.get(*k) {
-                Some(serde_json::Value::String(s)) if !s.trim().is_empty() => {
-                    Some(s.trim().to_string())
-                }
-                Some(serde_json::Value::Number(n)) => Some(n.to_string()),
-                _ => None,
-            })?;
+            let product_id = ["product_id", "id"]
+                .iter()
+                .find_map(|k| match row.get(*k) {
+                    Some(serde_json::Value::String(s)) if !s.trim().is_empty() => {
+                        Some(s.trim().to_string())
+                    }
+                    Some(serde_json::Value::Number(n)) => Some(n.to_string()),
+                    _ => None,
+                })?;
             let name = ["name", "customer_name", "label"]
                 .iter()
                 .find_map(|k| row.get(*k).and_then(|n| n.as_str()))
@@ -3567,7 +3642,12 @@ mod provider_tests {
     #[test]
     fn blank_or_default_override_falls_back_to_active_provider() {
         let llm = infomaniak_settings();
-        for probe in [None, Some("".to_string()), Some("  ".to_string()), Some("default".to_string())] {
+        for probe in [
+            None,
+            Some("".to_string()),
+            Some("  ".to_string()),
+            Some("default".to_string()),
+        ] {
             let ov = LlmOverrides {
                 provider: probe.clone(),
                 ..Default::default()
@@ -4067,7 +4147,8 @@ mod provider_tests {
 
     #[test]
     fn fingerprint_changes_with_every_field_that_shapes_a_client() {
-        let base = resolve_provider_creds(&infomaniak_settings(), &LlmOverrides::default()).unwrap();
+        let base =
+            resolve_provider_creds(&infomaniak_settings(), &LlmOverrides::default()).unwrap();
         let reference = base.fingerprint();
 
         for mutate in [

@@ -91,7 +91,7 @@ fn make_state_with_store() -> (AppState, Arc<dyn Store>) {
     let graph = OntologyGraph::with_arc(ontology());
     let index = Arc::new(HybridIndex::with_default_embedder(graph.clone()));
     let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
-    let pipeline = Arc::new(RagPipeline::new(index.clone(), Arc::new(FakeLlm::default())));
+    let pipeline = Arc::new(RagPipeline::new(index.clone(), Arc::new(FakeLlm)));
     let state = AppState::new(graph, index, store.clone(), pipeline);
     (state, store)
 }
@@ -162,9 +162,7 @@ async fn analyze_then_apply_round_trip() {
         .unwrap()
         .iter()
         .chain(proposal["relations"].as_array().unwrap())
-        .map(|item| {
-            json!({ "client_ref": item["client_ref"], "action": "create_new" })
-        })
+        .map(|item| json!({ "client_ref": item["client_ref"], "action": "create_new" }))
         .collect();
     let payload = json!({
         "proposal": proposal,

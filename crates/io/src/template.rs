@@ -274,7 +274,13 @@ pub fn record_to_proposal(
         .iter()
         .map(|f| (prop_name(&f.key), value_to_string(&f.value)))
         .collect();
-    let head_conf = mean_conf(&record.fields.iter().map(|f| f.confidence).collect::<Vec<_>>());
+    let head_conf = mean_conf(
+        &record
+            .fields
+            .iter()
+            .map(|f| f.confidence)
+            .collect::<Vec<_>>(),
+    );
     let head_evidence = record.fields.iter().find_map(|f| f.evidence.clone());
 
     proposal.concepts.push(ProposalConcept {

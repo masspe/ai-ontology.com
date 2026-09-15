@@ -332,7 +332,14 @@ fn mint_jwt(secret: &[u8], sub: &str, iss: &str, aud: &str, expires_in: i64) -> 
         + expires_in) as usize;
     encode(
         &Header::default(),
-        &Claims { sub, iss, aud, exp, email: "alice@example.com", name: "Alice" },
+        &Claims {
+            sub,
+            iss,
+            aud,
+            exp,
+            email: "alice@example.com",
+            name: "Alice",
+        },
         &EncodingKey::from_secret(secret),
     )
     .unwrap()
@@ -346,7 +353,12 @@ async fn jwt_auth_accepts_valid_token() {
     // Healthz is open.
     let resp = app
         .clone()
-        .oneshot(Request::builder().uri("/healthz").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/healthz")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
@@ -354,7 +366,12 @@ async fn jwt_auth_accepts_valid_token() {
     // No token → 401.
     let resp = app
         .clone()
-        .oneshot(Request::builder().uri("/stats").body(Body::empty()).unwrap())
+        .oneshot(
+            Request::builder()
+                .uri("/stats")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
@@ -381,7 +398,13 @@ async fn jwt_auth_rejects_bad_signature_wrong_claims_and_expired() {
     let app = build_router_with_jwt(make_state(), JwtAuth::from_secret(secret.to_vec()));
 
     // Wrong signing key → 401.
-    let token = mint_jwt(b"wrong-key-wrong-key-wrong-key-wrong", "u", "ai-ontology", "web", 60);
+    let token = mint_jwt(
+        b"wrong-key-wrong-key-wrong-key-wrong",
+        "u",
+        "ai-ontology",
+        "web",
+        60,
+    );
     let resp = app
         .clone()
         .oneshot(
@@ -518,7 +541,6 @@ async fn request_id_is_minted_and_round_trips() {
     assert_eq!(resp.headers().get("x-request-id").unwrap(), "trace-42");
 }
 
-
 // ---------------------------------------------------------------------------
 // Smoke tests for the new endpoints
 // ---------------------------------------------------------------------------
@@ -634,11 +656,19 @@ async fn subgraph_returns_concepts() {
     // Seed two concepts so the subgraph isn't empty.
     state
         .graph
-        .upsert_concept(ontology_graph::Concept::new(Default::default(), "Topic", "A"))
+        .upsert_concept(ontology_graph::Concept::new(
+            Default::default(),
+            "Topic",
+            "A",
+        ))
         .unwrap();
     state
         .graph
-        .upsert_concept(ontology_graph::Concept::new(Default::default(), "Topic", "B"))
+        .upsert_concept(ontology_graph::Concept::new(
+            Default::default(),
+            "Topic",
+            "B",
+        ))
         .unwrap();
     let app = build_router(state);
 
@@ -664,7 +694,11 @@ async fn export_jsonl_streams() {
     let state = make_state();
     state
         .graph
-        .upsert_concept(ontology_graph::Concept::new(Default::default(), "Topic", "A"))
+        .upsert_concept(ontology_graph::Concept::new(
+            Default::default(),
+            "Topic",
+            "A",
+        ))
         .unwrap();
     let app = build_router(state);
 
@@ -715,9 +749,8 @@ async fn stats_history_grows_after_calls() {
         .unwrap();
     let v = read_body(resp.into_body()).await;
     // The 60s dedupe means we'll have exactly one sample for two quick calls.
-    assert!(v["samples"].as_array().unwrap().len() >= 1);
+    assert!(!v["samples"].as_array().unwrap().is_empty());
 }
-
 
 #[tokio::test]
 async fn openapi_spec_endpoint_returns_valid_document() {
@@ -757,12 +790,7 @@ async fn openapi_spec_endpoint_returns_valid_document() {
 async fn swagger_ui_page_is_served() {
     let app = build_router(make_state());
     let resp = app
-        .oneshot(
-            Request::builder()
-                .uri("/docs")
-                .body(Body::empty())
-                .unwrap(),
-        )
+        .oneshot(Request::builder().uri("/docs").body(Body::empty()).unwrap())
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
