@@ -98,6 +98,31 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * A `fetch` that never reached the server (connection refused, DNS, CORS
+ * block, aborted) surfaces in browsers as a bare "NetworkError" /
+ * "Failed to fetch". Say what was dialled and the most likely cause: with
+ * `npm run dev` the Rust API compiles for a minute or two before it listens.
+ */
+export function unreachableMessage(url: string, e: unknown): string {
+  const detail = e instanceof Error ? e.message : String(e);
+  const target = url.startsWith("http") ? new URL(url).origin : "le proxy Vite";
+  return (
+    `API injoignable sur ${target} (${detail}). ` +
+    `Le serveur est-il démarré ? Avec \`npm run dev\` il compile d'abord (1 à 2 minutes) : réessaie ensuite. ` +
+    `L'adresse se règle dans Réglages → Connexion serveur.`
+  );
+}
+
+/** `fetch` whose network-level failures become readable `ApiError`s. */
+export async function fetchOrExplain(url: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch (e: unknown) {
+    throw new ApiError(unreachableMessage(url, e), 0, null);
+  }
+}
+
 async function http<T>(path: string, init: RequestInit = {}): Promise<T> {
   const url = `${apiBase()}${path}`;
   // Merge in Authorization automatically when the caller didn't already set
@@ -114,7 +139,7 @@ async function http<T>(path: string, init: RequestInit = {}): Promise<T> {
     merged.headers = auto;
   }
 
-  const res = await fetch(url, merged);
+  const res = await fetchOrExplain(url, merged);
   if (res.status === 401) {
     onUnauthorized();
     throw new ApiError("Unauthorized", 401, null);
@@ -620,7 +645,7 @@ export async function askStream(
   signal?: AbortSignal,
 ): Promise<void> {
   const url = `${apiBase()}/ask/stream`;
-  const res = await fetch(url, {
+  const res = await fetchOrExplain(url, {
     method: "POST",
     headers: { ...headers(true), accept: "text/event-stream" },
     body: JSON.stringify({
@@ -683,7 +708,7 @@ export async function upload(
   const h: Record<string, string> = {};
   const t = apiToken();
   if (t) h["authorization"] = `Bearer ${t}`;
-  const res = await fetch(url, { method: "POST", body: form, headers: h });
+  const res = await fetchOrExplain(url, { method: "POST", body: form, headers: h });
   if (res.status === 401) {
     onUnauthorized();
     throw new ApiError("Unauthorized", 401, null);
