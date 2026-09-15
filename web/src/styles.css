@@ -1890,3 +1890,24 @@ label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px
   background: #f8fafc;
 }
 .feedback-preview img { max-width: 100%; max-height: 220px; object-fit: contain; }
+
+/* ---- Concept library: multi-selection ------------------------------------ */
+.check-col { width: 36px; text-align: center; }
+.check-col input[type="checkbox"] { width: 15px; height: 15px; cursor: pointer; accent-color: var(--accent); margin: 0; }
+.table tr.row-checked td { background: var(--accent-soft); }
+.bulk-bar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin: 0 0 10px; padding: 8px 12px;
+  border: 1px solid var(--accent); border-radius: var(--radius-sm);
+  background: var(--accent-soft); font-size: 13px;
+}
+.bulk-bar .btn-danger, .bulk-bar .btn-outline { padding: 6px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border); cursor: pointer; font: inherit; font-size: 13px; }
+.bulk-bar .btn-outline { background: var(--panel); color: var(--text); }
+.bulk-bar .btn-outline:hover { border-color: var(--border-strong); }
+
+/* ---- Graph view: React Flow chrome ---------------------------------------- */
+.gv-canvas .react-flow__controls { box-shadow: 0 2px 8px rgba(15, 23, 42, 0.12); border-radius: var(--radius-sm); overflow: hidden; }
+.gv-canvas .react-flow__controls-button { border-bottom: 1px solid var(--border); width: 26px; height: 26px; }
+.gv-canvas .react-flow__minimap { border: 1px solid var(--border); border-radius: var(--radius-sm); box-shadow: 0 2px 8px rgba(15, 23, 42, 0.12); }
+.gv-canvas .react-flow__edge.animated path { stroke-dasharray: 6; animation: gv-dash 0.6s linear infinite; }
+@keyframes gv-dash { to { stroke-dashoffset: -12; } }

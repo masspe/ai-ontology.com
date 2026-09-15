@@ -13,6 +13,7 @@ import {
   createConcept,
   createRelation,
   deleteConcept,
+  deleteConcepts,
   deleteRelation,
   generateOntology,
   getOntology,
@@ -346,6 +347,11 @@ export default function Concepts() {
   const [concepts, setConcepts] = useState<Concept[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(0);
+  // Bumped after every mutation so the list effect re-fetches; setting the
+  // search to its own value (the previous trick) does not re-run effects.
+  const [reloadTick, setReloadTick] = useState(0);
+  // Multi-selection for bulk actions (ids across the current page).
+  const [checked, setChecked] = useState<Set<number>>(() => new Set());
 
   const [selected, setSelected] = useState<Concept | null>(null);
   const [recent, setRecent] = useState<Concept[]>([]);
@@ -494,7 +500,17 @@ export default function Concepts() {
     return () => {
       cancelled = true;
     };
-  }, [debouncedSearch, typeFilter, statusFilter, sort, page]);
+  }, [debouncedSearch, typeFilter, statusFilter, sort, page, reloadTick]);
+
+  // Drop selections that no longer exist on screen.
+  useEffect(() => {
+    setChecked((prev) => {
+      if (prev.size === 0) return prev;
+      const visible = new Set(concepts.map((c) => c.id));
+      const next = new Set([...prev].filter((id) => visible.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [concepts]);
 
   // ---- Actions ----
   const openCreate = () => {
@@ -519,8 +535,8 @@ export default function Concepts() {
       setInfo(`Concept "${data.name}" created.`);
       setCreateOpen(false);
       setPage(0);
+      setReloadTick((t) => t + 1);
       await Promise.all([refreshSidecar(), refreshRecent()]);
-      setDebouncedSearch((s) => s);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -543,7 +559,8 @@ export default function Concepts() {
       setInfo(`Concept "${updated.name}" updated.`);
       setSelected(updated);
       setEditingConcept(null);
-      setDebouncedSearch((s) => s);
+      setConcepts((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
+      setReloadTick((t) => t + 1);
       await refreshRecent();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
@@ -564,8 +581,65 @@ export default function Concepts() {
     try {
       await deleteConcept(c.id);
       setInfo(`Deleted "${c.name}".`);
-      if (selected?.id === c.id) setSelected(null);
-      setDebouncedSearch((s) => s);
+      removeFromView([c.id]);
+      await Promise.all([refreshSidecar(), refreshRecent()]);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Take deleted rows out of the table at once, then re-fetch the page so
+  // the counts and the next rows fill in — no manual refresh needed.
+  const removeFromView = (ids: number[]) => {
+    const gone = new Set(ids);
+    setConcepts((prev) => prev.filter((c) => !gone.has(c.id)));
+    setTotal((t) => Math.max(0, t - ids.length));
+    setSelected((prev) => (prev && gone.has(prev.id) ? null : prev));
+    setChecked((prev) => {
+      const next = new Set([...prev].filter((id) => !gone.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+    setReloadTick((t) => t + 1);
+  };
+
+  const toggleChecked = (id: number) => {
+    setChecked((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const allOnPageChecked = concepts.length > 0 && concepts.every((c) => checked.has(c.id));
+  const toggleAllOnPage = () => {
+    setChecked((prev) => {
+      const next = new Set(prev);
+      if (allOnPageChecked) concepts.forEach((c) => next.delete(c.id));
+      else concepts.forEach((c) => next.add(c.id));
+      return next;
+    });
+  };
+
+  const handleBulkDelete = async () => {
+    const ids = [...checked];
+    if (ids.length === 0) return;
+    const ok = await confirm({
+      title: "Delete selected concepts",
+      message: `Delete ${ids.length} concept${ids.length > 1 ? "s" : ""} and every relation attached to them? This cannot be undone.`,
+      confirmLabel: `Delete ${ids.length}`,
+      danger: true,
+    });
+    if (!ok) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await deleteConcepts(ids);
+      const rel = r.relations > 0 ? ` and ${r.relations} relation${r.relations > 1 ? "s" : ""}` : "";
+      setInfo(`Deleted ${r.deleted} concept${r.deleted > 1 ? "s" : ""}${rel}.`);
+      removeFromView(ids);
       await Promise.all([refreshSidecar(), refreshRecent()]);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
@@ -714,9 +788,35 @@ export default function Concepts() {
             </select>
           </div>
 
+          {checked.size > 0 && (
+            <div className="bulk-bar" role="toolbar" aria-label="Bulk actions">
+              <span>
+                <strong>{checked.size}</strong> selected
+              </span>
+              <button className="btn-danger" onClick={handleBulkDelete} disabled={busy}>
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ width: 14, height: 14, display: "inline-flex" }}>{Icon.trash}</span>
+                  Delete selected
+                </span>
+              </button>
+              <button className="btn-outline" onClick={() => setChecked(new Set())} disabled={busy}>
+                Clear selection
+              </button>
+            </div>
+          )}
+
           <table className="table">
             <thead>
               <tr>
+                <th className="check-col">
+                  <input
+                    type="checkbox"
+                    aria-label="Select all concepts on this page"
+                    checked={allOnPageChecked}
+                    onChange={toggleAllOnPage}
+                    disabled={concepts.length === 0}
+                  />
+                </th>
                 <th>Concept Name</th>
                 <th>Domain</th>
                 <th>Definition</th>
@@ -728,7 +828,7 @@ export default function Concepts() {
             </thead>
             <tbody>
               {concepts.length === 0 && (
-                <tr><td colSpan={7} className="empty">No concepts match the current filters.</td></tr>
+                <tr><td colSpan={8} className="empty">No concepts match the current filters.</td></tr>
               )}
               {concepts.map((c) => {
                 const st = conceptStatus(c);
@@ -737,10 +837,18 @@ export default function Concepts() {
                 return (
                   <tr
                     key={c.id}
-                    className={isSel ? "row-active" : undefined}
+                    className={[isSel ? "row-active" : "", checked.has(c.id) ? "row-checked" : ""].filter(Boolean).join(" ") || undefined}
                     onClick={() => setSelected(c)}
                     style={{ cursor: "pointer" }}
                   >
+                    <td className="check-col" onClick={(e) => e.stopPropagation()}>
+                      <input
+                        type="checkbox"
+                        aria-label={`Select concept ${c.name}`}
+                        checked={checked.has(c.id)}
+                        onChange={() => toggleChecked(c.id)}
+                      />
+                    </td>
                     <td>
                       <div className="concept-name-cell">
                         <span
@@ -926,12 +1034,17 @@ export default function Concepts() {
             <button
               type="button"
               className="quick-action qa-amber"
-              onClick={() => setInfo("Bulk edit coming soon.")}
+              onClick={() => {
+                if (checked.size > 0) void handleBulkDelete();
+                else setInfo("Tick the boxes in the library to select concepts, then delete them together.");
+              }}
             >
-              <span className="qa-icon">{Icon.edit}</span>
+              <span className="qa-icon">{Icon.trash}</span>
               <div style={{ textAlign: "left" }}>
-                <div className="qa-title">Bulk Edit</div>
-                <div className="qa-sub muted">Edit multiple concepts</div>
+                <div className="qa-title">Bulk Delete</div>
+                <div className="qa-sub muted">
+                  {checked.size > 0 ? `Delete ${checked.size} selected` : "Select concepts, then delete"}
+                </div>
               </div>
             </button>
             <button

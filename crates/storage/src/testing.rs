@@ -100,4 +100,9 @@ impl Store for FlakyStore {
     async fn load_into(&self, graph: &Arc<OntologyGraph>) -> StoreResult<()> {
         self.inner.load_into(graph).await
     }
+
+    async fn reset(&self) -> StoreResult<()> {
+        self.check()?;
+        self.inner.reset().await
+    }
 }

@@ -3,6 +3,8 @@
 
 import { useEffect, useState } from "react";
 import Card from "../components/Card";
+// @ts-expect-error JSX module
+import { useConfirm } from "../components/ConfirmDialog.jsx";
 import {
   apiBase,
   deleteFeedback,
@@ -21,6 +23,7 @@ import {
   type LlmSettingsPatch,
   type OcrStatus,
   type Settings as ServerSettings,
+  resetAll,
 } from "../api";
 import {
   loadProviderConfig,
@@ -335,7 +338,58 @@ function GeneralSettings({
           Currently resolving API base to <code>{apiBase() || "(same-origin)"}</code>.
         </p>
       </Card>
+
+      <DangerZone />
     </>
+  );
+}
+
+// -- Danger zone --------------------------------------------------------------
+
+/** Start over: `POST /reset` empties the store, the graph, the schema and the
+ *  index. The page reloads afterwards so every cached list is dropped. */
+function DangerZone() {
+  const confirm = useConfirm();
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const onReset = async () => {
+    const ok = await confirm({
+      title: "Réinitialiser toutes les données",
+      message:
+        "Tous les concepts, relations, règles, actions et le schéma seront supprimés définitivement du store. " +
+        "Les réglages (fournisseur LLM, préférences) sont conservés. Continuer ?",
+      confirmLabel: "Tout supprimer",
+      cancelLabel: "Annuler",
+      danger: true,
+    });
+    if (!ok) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      await resetAll();
+      window.location.assign("/");
+    } catch (e: unknown) {
+      setErr(e instanceof Error ? e.message : String(e));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card
+      title="Zone de danger"
+      subtitle="Repartir de zéro. Irréversible : le store est vidé, le graphe, le schéma et l'index avec."
+    >
+      {err && <div className="error-banner">{err}</div>}
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 12, flexWrap: "wrap" }}>
+        <button className="btn btn-danger" onClick={onReset} disabled={busy}>
+          {busy ? "Réinitialisation…" : "🗑 Réinitialiser toutes les données"}
+        </button>
+        <span className="muted" style={{ fontSize: 12 }}>
+          Équivalent CLI : <code>ontology --data ./data reset</code> (serveur arrêté).
+        </span>
+      </div>
+    </Card>
   );
 }
 

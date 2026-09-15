@@ -327,3 +327,50 @@ async fn analyze_decodes_windows_1252() {
         "Windows-1252 bytes should not be detected as UTF-8 (got {encoding})",
     );
 }
+
+/// A spreadsheet dropped on the analyzer is flattened to text server-side
+/// instead of being refused as a binary blob.
+#[tokio::test]
+async fn analyze_accepts_a_spreadsheet() {
+    let state = make_state();
+    let app = build_router(state);
+    let xlsx = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../examples/finance/invoices.xlsx"
+    ))
+    .unwrap();
+    let (ct, body) = multipart_body("invoices.xlsx", &xlsx);
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/ingest/analyze")
+                .header("content-type", ct)
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let proposal = read_body(resp.into_body()).await;
+    assert_eq!(proposal["source"]["name"], "invoices.xlsx");
+
+    // A real binary that is not an office document is still refused.
+    let (ct, body) = multipart_body(
+        "photo.png",
+        b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x01\x02",
+    );
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/ingest/analyze")
+                .header("content-type", ct)
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
