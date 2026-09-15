@@ -193,13 +193,14 @@ async fn main() -> Result<()> {
             if let Some(p) = ontology {
                 let raw = tokio::fs::read_to_string(&p).await?;
                 let onto: Ontology = serde_json::from_str(&raw)?;
+                // Durable first, then live (STORAGE.md R8).
+                store
+                    .append(&ontology_storage::LogRecord::ontology(onto.clone()))
+                    .await?;
                 graph.extend_ontology(|target| {
-                    *target = onto.clone();
+                    *target = onto;
                     Ok(())
                 })?;
-                store
-                    .append(&ontology_storage::LogRecord::ontology(onto))
-                    .await?;
             }
 
             let is_dir = tokio::fs::metadata(&path)
@@ -553,13 +554,14 @@ async fn seed_from_dir(
             .with_context(|| format!("reading {}", onto_path.display()))?;
         let onto: Ontology = serde_json::from_str(&raw)
             .with_context(|| format!("parsing {}", onto_path.display()))?;
+        // Durable first, then live (STORAGE.md R8).
+        store
+            .append(&ontology_storage::LogRecord::ontology(onto.clone()))
+            .await?;
         graph.extend_ontology(|target| {
-            *target = onto.clone();
+            *target = onto;
             Ok(())
         })?;
-        store
-            .append(&ontology_storage::LogRecord::ontology(graph.ontology()))
-            .await?;
         tracing::info!(path = %onto_path.display(), "seed: ontology loaded");
     }
 
@@ -646,17 +648,9 @@ async fn seed_from_dir(
     //    TitleCase singular of the directory name (e.g. `contracts/` →
     //    `Contract`). Recognised text extensions only.
     for sub in &subdirs {
-        let sub_name = sub
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("");
+        let sub_name = sub.file_name().and_then(|s| s.to_str()).unwrap_or("");
         let concept_type = infer_concept_type(sub_name);
-        let mut src = TextDocumentSource::from_dir(
-            &concept_type,
-            sub,
-            &["txt", "md"],
-        )
-        .await?;
+        let mut src = TextDocumentSource::from_dir(&concept_type, sub, &["txt", "md"]).await?;
         let s = ingest_records(&mut src, graph, Some(store)).await?;
         tracing::info!(
             path = %sub.display(),
@@ -669,10 +663,7 @@ async fn seed_from_dir(
 
     // 6. Spreadsheets.
     for path in &xlsx {
-        let stem = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("");
+        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
         let concept_type = infer_concept_type(stem);
         let mut src = XlsxSource::open(path, &concept_type)?;
         let s = ingest_records(&mut src, graph, Some(store)).await?;
@@ -710,7 +701,7 @@ async fn seed_from_dir(
 /// the bundled examples).
 fn infer_concept_type(raw: &str) -> String {
     let mut out = String::new();
-    for word in raw.split(|c: char| c == '_' || c == '-' || c == ' ') {
+    for word in raw.split(['_', '-', ' ']) {
         let mut chars = word.chars();
         if let Some(first) = chars.next() {
             out.extend(first.to_uppercase());

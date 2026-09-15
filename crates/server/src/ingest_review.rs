@@ -31,7 +31,7 @@ use axum::{
     Json,
 };
 use ontology_graph::{
-    Action, ActionId, Concept, ConceptId, OntologyGraph, Relation, RelationId, Rule,
+    Action, ActionId, Concept, ConceptId, Ontology, OntologyGraph, Relation, RelationId, Rule,
     RuleId,
 };
 use ontology_io::{
@@ -108,9 +108,9 @@ pub(crate) async fn analyze(
         .await
         .map_err(|e| match e {
             ontology_rag::ExtractError::Llm(e) => ApiError::Llm(e.to_string()),
-            ontology_rag::ExtractError::Parse(msg) => ApiError::Unprocessable(format!(
-                "LLM returned unparseable JSON: {msg}"
-            )),
+            ontology_rag::ExtractError::Parse(msg) => {
+                ApiError::Unprocessable(format!("LLM returned unparseable JSON: {msg}"))
+            }
         })?;
 
     // 5. Decorate with provenance and conflicts.
@@ -166,10 +166,7 @@ pub(crate) async fn apply(
         .map(|d| (d.client_ref, d.action))
         .collect();
     let decide = |client_ref: &str| -> DecisionAction {
-        decisions
-            .get(client_ref)
-            .copied()
-            .unwrap_or(default_action)
+        decisions.get(client_ref).copied().unwrap_or(default_action)
     };
 
     let mut report = ApplyReport::default();
@@ -177,12 +174,24 @@ pub(crate) async fn apply(
     // later relations / actions can target newly-created concepts.
     let mut concept_refs: HashMap<String, ConceptId> = HashMap::new();
 
+    // One write transaction for the whole proposal (single-writer store).
+    // Every instance below follows `STORAGE.md` R8: prepare → append → apply.
+    let _w = s.writer.lock().await;
+    // Type declarations are applied to the live ontology as they come and
+    // journaled as a single `Ontology` record before the first instance.
+    let mut schema_changed = false;
+    // Snapshot to restore if the declarations cannot be journaled: the live
+    // schema must never be ahead of the store (R8).
+    let schema_baseline = s.graph.ontology();
+
     // ---- concept types ----
     for ct in &proposal.concept_types {
         let action = decide(&ct.client_ref);
         if action == DecisionAction::Skip {
             report.skipped += 1;
-            report.concept_types.push((ct.client_ref.clone(), ApplyOutcome::Skipped));
+            report
+                .concept_types
+                .push((ct.client_ref.clone(), ApplyOutcome::Skipped));
             continue;
         }
         let res = s.graph.extend_ontology(|onto| {
@@ -201,35 +210,25 @@ pub(crate) async fn apply(
         });
         match res {
             Ok(()) => {
-                // Schema lives in the ontology, which has no per-item log
-                // record — persist a full snapshot so the new type survives a
-                // restart. Replay applies snapshots in order (last wins), so a
-                // snapshot per accepted type is correct if slightly redundant.
-                if let Err(e) = s.store.append(&LogRecord::ontology(s.graph.ontology())).await {
-                    warn!(error=%e, name=%ct.name, "wal append failed for concept type");
-                    report.failed += 1;
-                    report.concept_types.push((
-                        ct.client_ref.clone(),
-                        ApplyOutcome::Failed { error: e.to_string() },
-                    ));
-                    if strict {
-                        return Ok(Json(report));
-                    }
-                    continue;
-                }
+                schema_changed = true;
                 report.created += 1;
                 report.concept_types.push((
                     ct.client_ref.clone(),
-                    ApplyOutcome::Created { id: ct.name.clone() },
+                    ApplyOutcome::Created {
+                        id: ct.name.clone(),
+                    },
                 ));
             }
             Err(e) => {
                 report.failed += 1;
                 report.concept_types.push((
                     ct.client_ref.clone(),
-                    ApplyOutcome::Failed { error: e.to_string() },
+                    ApplyOutcome::Failed {
+                        error: e.to_string(),
+                    },
                 ));
                 if strict {
+                    rollback_schema(&s, &schema_baseline, schema_changed);
                     return Ok(Json(report));
                 }
             }
@@ -240,7 +239,9 @@ pub(crate) async fn apply(
     for rt in &proposal.relation_types {
         let action = decide(&rt.client_ref);
         if action == DecisionAction::Skip {
-            report.relation_types.push((rt.client_ref.clone(), ApplyOutcome::Skipped));
+            report
+                .relation_types
+                .push((rt.client_ref.clone(), ApplyOutcome::Skipped));
             report.skipped += 1;
             continue;
         }
@@ -257,34 +258,45 @@ pub(crate) async fn apply(
         });
         match res {
             Ok(()) => {
-                if let Err(e) = s.store.append(&LogRecord::ontology(s.graph.ontology())).await {
-                    warn!(error=%e, name=%rt.name, "wal append failed for relation type");
-                    report.failed += 1;
-                    report.relation_types.push((
-                        rt.client_ref.clone(),
-                        ApplyOutcome::Failed { error: e.to_string() },
-                    ));
-                    if strict {
-                        return Ok(Json(report));
-                    }
-                    continue;
-                }
+                schema_changed = true;
                 report.created += 1;
                 report.relation_types.push((
                     rt.client_ref.clone(),
-                    ApplyOutcome::Created { id: rt.name.clone() },
+                    ApplyOutcome::Created {
+                        id: rt.name.clone(),
+                    },
                 ));
             }
             Err(e) => {
                 report.failed += 1;
                 report.relation_types.push((
                     rt.client_ref.clone(),
-                    ApplyOutcome::Failed { error: e.to_string() },
+                    ApplyOutcome::Failed {
+                        error: e.to_string(),
+                    },
                 ));
                 if strict {
+                    rollback_schema(&s, &schema_baseline, schema_changed);
                     return Ok(Json(report));
                 }
             }
+        }
+    }
+
+    // Schema lives in the ontology, which has no per-item log record: one
+    // full snapshot makes every accepted type durable before any instance
+    // that may reference it is journaled. A failure here aborts the apply —
+    // continuing would journal concepts whose types are not on disk, and the
+    // next replay would reject them.
+    if schema_changed {
+        if let Err(e) = s
+            .store
+            .append(&LogRecord::ontology(s.graph.ontology()))
+            .await
+        {
+            warn!(error=%e, "wal append failed for ontology; type declarations rolled back");
+            rollback_schema(&s, &schema_baseline, true);
+            return Err(ApiError::Store(e.to_string()));
         }
     }
 
@@ -292,16 +304,18 @@ pub(crate) async fn apply(
     for c in &proposal.concepts {
         let action = decide(&c.client_ref);
         if action == DecisionAction::Skip {
-            report.concepts.push((c.client_ref.clone(), ApplyOutcome::Skipped));
+            report
+                .concepts
+                .push((c.client_ref.clone(), ApplyOutcome::Skipped));
             report.skipped += 1;
             continue;
         }
 
         // Merge maps to an existing concept (if any); otherwise behave like CreateNew.
-        // Each arm returns the live id, whether it was a merge, and the WAL
-        // record that makes the change durable.
+        // Each arm returns the fully validated concept and whether it was a
+        // merge; nothing has been applied yet.
         let existing_id = s.graph.find_by_name(&c.concept_type, &c.name);
-        let result: Result<(ConceptId, bool, LogRecord), ontology_graph::GraphError> =
+        let prepared: Result<(bool, Concept), ontology_graph::GraphError> =
             match (action, existing_id) {
                 (DecisionAction::Merge, Some(id)) => {
                     let patch = ontology_graph::ConceptPatch {
@@ -322,12 +336,13 @@ pub(crate) async fn apply(
                         },
                     };
                     s.graph
-                        .update_concept(id, patch)
-                        .map(|updated| (id, true, LogRecord::update_concept(updated)))
+                        .preview_concept_update(id, &patch)
+                        .map(|updated| (true, updated))
                 }
                 _ => {
-                    let mut concept = Concept::new(ConceptId(0), c.concept_type.clone(), c.name.clone())
-                        .with_description(c.description.clone());
+                    let mut concept =
+                        Concept::new(ConceptId(0), c.concept_type.clone(), c.name.clone())
+                            .with_description(c.description.clone());
                     // Stamp the detected language onto the concept so search
                     // and downstream filters can disambiguate by locale.
                     if let Some(lang) = proposal.language.as_ref() {
@@ -337,25 +352,27 @@ pub(crate) async fn apply(
                         );
                     }
                     for (k, v) in &c.properties {
-                        concept.properties.insert(
-                            k.clone(),
-                            ontology_graph::PropertyValue::Text(v.clone()),
-                        );
+                        concept
+                            .properties
+                            .insert(k.clone(), ontology_graph::PropertyValue::Text(v.clone()));
                     }
-                    let mut record_concept = concept.clone();
-                    s.graph.upsert_concept(concept).map(|id| {
-                        record_concept.id = id;
-                        (id, false, LogRecord::concept(record_concept))
-                    })
+                    s.graph
+                        .prepare_concept(&mut concept)
+                        .map(|()| (false, concept))
                 }
             };
 
-        match result {
-            Ok((id, merged, record)) => {
-                // Persist before registering the ref / counting success: if the
-                // WAL write fails the concept must not be advertised as created
-                // (and dependent relations must dangle rather than target an
-                // unpersisted node).
+        match prepared {
+            Ok((merged, concept)) => {
+                // Persist before applying or registering the ref: if the WAL
+                // write fails the graph is untouched and the concept must not
+                // be advertised as created (dependent relations dangle rather
+                // than target an unpersisted node).
+                let record = if merged {
+                    LogRecord::update_concept(concept.clone())
+                } else {
+                    LogRecord::concept(concept.clone())
+                };
                 if let Err(e) = s.store.append(&record).await {
                     warn!(error=%e, name=%c.name, "wal append failed for concept");
                     report.failed += 1;
@@ -370,6 +387,29 @@ pub(crate) async fn apply(
                     }
                     continue;
                 }
+                let applied = if merged {
+                    s.graph.apply_concept_update(concept).map(|c| c.id)
+                } else {
+                    s.graph.apply_prepared_concept(concept)
+                };
+                let id = match applied {
+                    Ok(id) => id,
+                    Err(e) => {
+                        // Cannot happen after a successful prepare/preview
+                        // under the writer lock; reported rather than hidden.
+                        report.failed += 1;
+                        report.concepts.push((
+                            c.client_ref.clone(),
+                            ApplyOutcome::Failed {
+                                error: e.to_string(),
+                            },
+                        ));
+                        if strict {
+                            return Ok(Json(report));
+                        }
+                        continue;
+                    }
+                };
                 concept_refs.insert(c.client_ref.clone(), id);
                 concept_refs.insert(format!("{}:{}", c.concept_type, c.name), id);
                 let outcome = if merged {
@@ -404,7 +444,9 @@ pub(crate) async fn apply(
     for r in &proposal.relations {
         let action = decide(&r.client_ref);
         if action == DecisionAction::Skip {
-            report.relations.push((r.client_ref.clone(), ApplyOutcome::Skipped));
+            report
+                .relations
+                .push((r.client_ref.clone(), ApplyOutcome::Skipped));
             report.skipped += 1;
             continue;
         }
@@ -436,24 +478,24 @@ pub(crate) async fn apply(
         if let Some(w) = r.weight {
             rel.weight = w;
         }
-        match s.graph.add_relation(rel.clone()) {
-            Ok(id) => {
-                let mut stored = rel;
-                stored.id = id;
-                if let Err(e) = s.store.append(&LogRecord::relation(stored)).await {
+        let outcome: Result<RelationId, String> = async {
+            s.graph
+                .prepare_relation(&mut rel)
+                .map_err(|e| e.to_string())?;
+            s.store
+                .append(&LogRecord::relation(rel.clone()))
+                .await
+                .map_err(|e| {
                     warn!(error=%e, "wal append failed for relation");
-                    report.failed += 1;
-                    report.relations.push((
-                        r.client_ref.clone(),
-                        ApplyOutcome::Failed {
-                            error: e.to_string(),
-                        },
-                    ));
-                    if strict {
-                        return Ok(Json(report));
-                    }
-                    continue;
-                }
+                    e.to_string()
+                })?;
+            s.graph
+                .apply_prepared_relation(rel)
+                .map_err(|e| e.to_string())
+        }
+        .await;
+        match outcome {
+            Ok(id) => {
                 report.created += 1;
                 report.relations.push((
                     r.client_ref.clone(),
@@ -481,7 +523,9 @@ pub(crate) async fn apply(
     for r in &proposal.rules {
         let action = decide(&r.client_ref);
         if action == DecisionAction::Skip {
-            report.rules.push((r.client_ref.clone(), ApplyOutcome::Skipped));
+            report
+                .rules
+                .push((r.client_ref.clone(), ApplyOutcome::Skipped));
             report.skipped += 1;
             continue;
         }
@@ -497,24 +541,20 @@ pub(crate) async fn apply(
                 rule.applies_to.push(id);
             }
         }
-        let mut record_rule = rule.clone();
-        match s.graph.upsert_rule(rule) {
-            Ok(id) => {
-                record_rule.id = id;
-                if let Err(e) = s.store.append(&LogRecord::rule(record_rule)).await {
+        let outcome: Result<RuleId, String> = async {
+            s.graph.prepare_rule(&mut rule).map_err(|e| e.to_string())?;
+            s.store
+                .append(&LogRecord::rule(rule.clone()))
+                .await
+                .map_err(|e| {
                     warn!(error=%e, "wal append failed for rule");
-                    report.failed += 1;
-                    report.rules.push((
-                        r.client_ref.clone(),
-                        ApplyOutcome::Failed {
-                            error: e.to_string(),
-                        },
-                    ));
-                    if strict {
-                        return Ok(Json(report));
-                    }
-                    continue;
-                }
+                    e.to_string()
+                })?;
+            s.graph.apply_prepared_rule(rule).map_err(|e| e.to_string())
+        }
+        .await;
+        match outcome {
+            Ok(id) => {
                 report.created += 1;
                 report.rules.push((
                     r.client_ref.clone(),
@@ -542,7 +582,9 @@ pub(crate) async fn apply(
     for a in &proposal.actions {
         let action = decide(&a.client_ref);
         if action == DecisionAction::Skip {
-            report.actions.push((a.client_ref.clone(), ApplyOutcome::Skipped));
+            report
+                .actions
+                .push((a.client_ref.clone(), ApplyOutcome::Skipped));
             report.skipped += 1;
             continue;
         }
@@ -571,29 +613,27 @@ pub(crate) async fn apply(
         act.effect = a.effect.clone();
         act.description = a.description.clone();
         for (k, v) in &a.parameters {
-            act.parameters.insert(
-                k.clone(),
-                ontology_graph::PropertyValue::Text(v.clone()),
-            );
+            act.parameters
+                .insert(k.clone(), ontology_graph::PropertyValue::Text(v.clone()));
         }
-        let mut record_action = act.clone();
-        match s.graph.upsert_action(act) {
-            Ok(id) => {
-                record_action.id = id;
-                if let Err(e) = s.store.append(&LogRecord::action(record_action)).await {
+        let outcome: Result<ActionId, String> = async {
+            s.graph
+                .prepare_action(&mut act)
+                .map_err(|e| e.to_string())?;
+            s.store
+                .append(&LogRecord::action(act.clone()))
+                .await
+                .map_err(|e| {
                     warn!(error=%e, "wal append failed for action");
-                    report.failed += 1;
-                    report.actions.push((
-                        a.client_ref.clone(),
-                        ApplyOutcome::Failed {
-                            error: e.to_string(),
-                        },
-                    ));
-                    if strict {
-                        return Ok(Json(report));
-                    }
-                    continue;
-                }
+                    e.to_string()
+                })?;
+            s.graph
+                .apply_prepared_action(act)
+                .map_err(|e| e.to_string())
+        }
+        .await;
+        match outcome {
+            Ok(id) => {
                 report.created += 1;
                 report.actions.push((
                     a.client_ref.clone(),
@@ -624,6 +664,20 @@ pub(crate) async fn apply(
 }
 
 // ---------- helpers ----------
+
+/// Undo type declarations applied to the live ontology but never journaled.
+/// Only instances of journaled types can exist, so this cannot orphan data.
+fn rollback_schema(s: &AppState, baseline: &Ontology, changed: bool) {
+    if !changed {
+        return;
+    }
+    if let Err(e) = s.graph.extend_ontology(|o| {
+        *o = baseline.clone();
+        Ok(())
+    }) {
+        warn!(error=%e, "could not roll back un-journaled schema changes");
+    }
+}
 
 async fn read_analyze_form(mut form: Multipart) -> Result<AnalyzeForm, ApiError> {
     let mut out = AnalyzeForm::default();
@@ -713,4 +767,3 @@ fn resolve_ref(
     }
     None
 }
-

@@ -9,7 +9,7 @@ answers in retrieved subgraphs.
 | Crate              | Role |
 | ------------------ | ---- |
 | `ontology-graph`   | Concepts, typed relations, schema validation, traversals. |
-| `ontology-storage` | Append-only WAL + bincode snapshots; pluggable `Store` trait. |
+| `ontology-storage` | Append-only WAL (fsync per batch, torn-tail recovery) + JSON snapshots; pluggable `Store` trait. See [docs/STORAGE.md](docs/STORAGE.md) for the binary, partitioned format under development. |
 | `ontology-index`   | Lexical (TF-IDF) + vector (cosine) + graph-expansion retrieval. |
 | `ontology-io`      | `Source` / `Sink` traits with JSONL and triples adapters. |
 | `ontology-rag`     | Prompt builder + `LanguageModel` trait (echo, Anthropic, OpenAI, DeepSeek; with prompt caching). |
@@ -139,9 +139,12 @@ retrieval is a function of `top_k` and `TraversalSpec`, not of total graph size.
 * **Schema-validated ingestion.** Concepts and relations are checked against the
   ontology schema on the way in, so the graph stays consistent and the index
   never sees malformed nodes.
-* **Durable + crash-safe storage.** An append-only WAL plus bincode snapshots
-  (with `compact` to truncate) gives fast restarts and a clean recovery story
-  behind a pluggable `Store` trait.
+* **Durable + crash-safe storage.** Every write is journaled *before* the
+  in-memory graph changes and `fsync`ed (one sync per batch), a torn tail is
+  truncated on restart, and JSON snapshots (with `compact` to truncate the
+  WAL) keep restarts fast — all behind a pluggable `Store` trait. The
+  binary, per-domain format is specified in [docs/STORAGE.md](docs/STORAGE.md)
+  and planned in [docs/STORAGE-PLAN.md](docs/STORAGE-PLAN.md).
 * **Provider-agnostic LLM layer with caching.** Anthropic, OpenAI, DeepSeek, or
   an offline echo model behind one `LanguageModel` trait — with prompt/prefix
   caching that drops repeat-query input cost to ≈10% on a stable knowledge base.

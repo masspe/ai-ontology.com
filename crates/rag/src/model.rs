@@ -1024,7 +1024,10 @@ fn take_one_openai_sse_frame(buf: &mut Vec<u8>) -> Option<Option<String>> {
     buf.drain(..pos + 2);
     let mut data = String::new();
     for line in raw.split('\n') {
-        if let Some(rest) = line.strip_prefix("data: ").or_else(|| line.strip_prefix("data:")) {
+        if let Some(rest) = line
+            .strip_prefix("data: ")
+            .or_else(|| line.strip_prefix("data:"))
+        {
             if !data.is_empty() {
                 data.push('\n');
             }
@@ -1153,7 +1156,9 @@ impl LanguageModel for OpenAiModel {
             max_tokens: req.max_tokens,
             temperature: req.temperature,
             stream: true,
-            stream_options: Some(OpenAiStreamOptions { include_usage: true }),
+            stream_options: Some(OpenAiStreamOptions {
+                include_usage: true,
+            }),
         };
 
         let url = self.chat_completions_url()?;

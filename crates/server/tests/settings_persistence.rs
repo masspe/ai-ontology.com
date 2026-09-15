@@ -180,7 +180,12 @@ async fn get_settings_never_leaks_a_raw_key() {
 
     let view = get_settings(&file).await;
     let flat = view.to_string();
-    for secret in ["sk-openai-1111", "sk-ant-2222", "tok-info-3333", "goog-4444"] {
+    for secret in [
+        "sk-openai-1111",
+        "sk-ant-2222",
+        "tok-info-3333",
+        "goog-4444",
+    ] {
         assert!(!flat.contains(secret), "{secret} leaked in {flat}");
     }
 
@@ -190,7 +195,10 @@ async fn get_settings_never_leaks_a_raw_key() {
         .iter()
         .filter(|n| n.ends_with("_api_key") || n.ends_with("_secret") || n.ends_with("_token"))
         .collect();
-    assert!(leaked.is_empty(), "secret-shaped fields exposed: {leaked:?}");
+    assert!(
+        leaked.is_empty(),
+        "secret-shaped fields exposed: {leaked:?}"
+    );
 
     // The hints the UI needs are still there.
     assert_eq!(view["llm"]["openai_api_key_hint"], "sk-...1111");
@@ -281,7 +289,10 @@ async fn missing_credentials_are_reported_before_any_request() {
         "no endpoint should be resolved yet: {test}"
     );
     assert!(
-        test["error"].as_str().unwrap().contains("Clé API Infomaniak"),
+        test["error"]
+            .as_str()
+            .unwrap()
+            .contains("Clé API Infomaniak"),
         "unhelpful error: {test}"
     );
 

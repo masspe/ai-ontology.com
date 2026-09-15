@@ -24,6 +24,7 @@ pub mod memory;
 pub mod periodic;
 pub mod snapshot;
 pub mod store;
+pub mod testing;
 
 pub use file::FileStore;
 pub use log::{LogRecord, RecordKind};
@@ -31,3 +32,4 @@ pub use memory::MemoryStore;
 pub use periodic::{spawn_snapshotter, SnapshotHandle};
 pub use snapshot::Snapshot;
 pub use store::{Store, StoreError, StoreResult};
+pub use testing::FlakyStore;

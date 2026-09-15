@@ -220,7 +220,10 @@ impl Ontology {
         let mut children: AHashMap<&str, Vec<&str>> = AHashMap::new();
         for ct in self.concept_types.values() {
             if let Some(p) = &ct.parent {
-                children.entry(p.as_str()).or_default().push(ct.name.as_str());
+                children
+                    .entry(p.as_str())
+                    .or_default()
+                    .push(ct.name.as_str());
             }
         }
         let mut out: AHashMap<String, Vec<String>> = AHashMap::new();
@@ -337,8 +340,14 @@ mod tests {
     #[test]
     fn validate_inverses_happy_and_sad() {
         let mut o = Ontology::new();
-        o.add_concept_type(ConceptType { name: "A".into(), ..Default::default() });
-        o.add_concept_type(ConceptType { name: "B".into(), ..Default::default() });
+        o.add_concept_type(ConceptType {
+            name: "A".into(),
+            ..Default::default()
+        });
+        o.add_concept_type(ConceptType {
+            name: "B".into(),
+            ..Default::default()
+        });
         o.add_relation_type(RelationType {
             name: "fwd".into(),
             domain: "A".into(),
