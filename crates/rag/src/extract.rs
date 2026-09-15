@@ -29,13 +29,22 @@ use ontology_io::{
 };
 use serde::Deserialize;
 
-use crate::model::{LanguageModel, LlmError, LlmRequest, Message, Role};
+use crate::model::{LanguageModel, LlmError, LlmRequest, LlmResponse, Message, Role};
 
 /// Maximum characters per LLM call. Empirically chosen so a single call
 /// stays well under the 12 K input-token budget on `gpt-4o-mini` and
 /// leaves room for the schema context. Above this size, the document is
 /// chunked on paragraph boundaries.
 const CHUNK_BUDGET_CHARS: usize = 12_000;
+/// Budget for line-structured inputs (JSONL, CSV, flattened spreadsheets):
+/// every line becomes concepts and relations in the answer, so the output
+/// grows with the input and a prose-sized chunk overflows `max_tokens`.
+const LINE_CHUNK_BUDGET_CHARS: usize = 3_000;
+/// Below this size a truncated answer is not retried on halves: the model
+/// is not running out of room, it is misbehaving.
+const MIN_SPLIT_CHARS: usize = 400;
+/// Hard cap on LLM calls per document (bisection included).
+const MAX_PIECES: usize = 256;
 
 /// Top-level extractor error. Wraps LLM transport errors and surfaces
 /// JSON-shape failures so the caller can decide to retry with a
@@ -61,7 +70,11 @@ pub async fn extract_proposal(
     language: Option<&LangTag>,
     schema: &Ontology,
 ) -> Result<OntologyProposal, ExtractError> {
-    let chunks = chunk_text(text, CHUNK_BUDGET_CHARS);
+    let budget = if looks_line_structured(text) {
+        LINE_CHUNK_BUDGET_CHARS
+    } else {
+        CHUNK_BUDGET_CHARS
+    };
     let schema_block = render_schema(schema);
     let lang_hint = language
         .map(|l| format!("Document language (ISO 639-1): {}.", l.code))
@@ -72,13 +85,113 @@ pub async fn extract_proposal(
         ..Default::default()
     };
 
-    for (idx, chunk) in chunks.iter().enumerate() {
-        let raw = call_llm(model, &schema_block, &lang_hint, chunk, idx, chunks.len()).await?;
-        let parsed = parse_response(&raw, idx)?;
-        merge_into(&mut accumulator, parsed);
+    // Work queue of pieces still to extract, in document order. A piece
+    // whose answer was cut off at `max_tokens` is split in two at a line
+    // boundary and both halves go back to the front of the queue, so the
+    // output size adapts to the model's limit instead of failing the file.
+    let mut pending: std::collections::VecDeque<String> = chunk_text(text, budget).into();
+    let total = pending.len();
+    let mut idx = 0usize;
+    while let Some(piece) = pending.pop_front() {
+        if idx >= MAX_PIECES {
+            return Err(ExtractError::Parse(format!(
+                "gave up after {MAX_PIECES} LLM calls: answers keep getting truncated"
+            )));
+        }
+        let resp = call_llm(model, &schema_block, &lang_hint, &piece, idx, total).await?;
+        let truncated_by_model = matches!(
+            resp.stop_reason.as_deref(),
+            Some("max_tokens") | Some("length")
+        );
+        match parse_response(&resp.content, idx) {
+            Ok(parsed) if !truncated_by_model => {
+                merge_into(&mut accumulator, parsed);
+            }
+            outcome => {
+                let cut_off = truncated_by_model || looks_truncated(&resp.content);
+                match (cut_off, split_in_half(&piece)) {
+                    (true, Some((a, b))) => {
+                        tracing::info!(
+                            piece = idx,
+                            chars = piece.chars().count(),
+                            "LLM answer truncated; retrying on two halves"
+                        );
+                        pending.push_front(b);
+                        pending.push_front(a);
+                    }
+                    (true, None) => {
+                        return Err(ExtractError::Parse(format!(
+                            "chunk {idx}: the model's answer was cut off (max_tokens) on a piece \
+                             too small to split further"
+                        )));
+                    }
+                    (false, _) => {
+                        // A genuine parse failure: surface it.
+                        outcome?;
+                    }
+                }
+            }
+        }
+        idx += 1;
     }
 
     Ok(accumulator)
+}
+
+/// Many short lines and (almost) no blank lines: records, not prose.
+fn looks_line_structured(text: &str) -> bool {
+    let mut lines = 0usize;
+    let mut blank = 0usize;
+    let mut chars = 0usize;
+    for l in text.lines() {
+        lines += 1;
+        if l.trim().is_empty() {
+            blank += 1;
+        }
+        chars += l.chars().count();
+    }
+    lines >= 8 && blank * 8 < lines && chars / lines <= 300
+}
+
+/// A JSON object that does not close was cut off mid-answer.
+fn looks_truncated(raw: &str) -> bool {
+    let cleaned = strip_code_fences(raw).trim_end();
+    // A fence that was itself cut off leaves `}` followed by a partial fence.
+    !cleaned.ends_with('}') && !cleaned.trim_end_matches('`').trim_end().ends_with('}')
+}
+
+/// Split at the line break nearest the middle; fall back to a character
+/// boundary for a single huge line. `None` when the piece is already small.
+fn split_in_half(piece: &str) -> Option<(String, String)> {
+    let n = piece.chars().count();
+    if n < MIN_SPLIT_CHARS {
+        return None;
+    }
+    let mid_byte = piece
+        .char_indices()
+        .nth(n / 2)
+        .map(|(b, _)| b)
+        .unwrap_or(piece.len());
+    let before = piece[..mid_byte].rfind('\n');
+    let after = piece[mid_byte..].find('\n').map(|i| mid_byte + i);
+    let cut = match (before, after) {
+        (Some(b), Some(a)) => {
+            if mid_byte - b <= a - mid_byte {
+                b
+            } else {
+                a
+            }
+        }
+        (Some(b), None) => b,
+        (None, Some(a)) => a,
+        (None, None) => mid_byte,
+    };
+    let (a, b) = piece.split_at(cut);
+    let (a, b) = (a.trim_end(), b.trim_start());
+    if a.is_empty() || b.is_empty() {
+        return None;
+    }
+    Some((a.to_string(), b.to_string()))
 }
 
 /// Decorate every proposed item with conflict information sourced from
@@ -222,22 +335,61 @@ fn chunk_text(text: &str, budget: usize) -> Vec<String> {
     if text.chars().count() <= budget {
         return vec![text.to_string()];
     }
-    // Split on blank lines (paragraph boundary) and greedily pack.
+    // Split on blank lines (paragraph boundary) and greedily pack. A
+    // paragraph over budget (a JSONL or CSV file has no blank lines at all)
+    // is split on single line breaks first, and a single oversize line is
+    // cut at the budget.
     let mut chunks = Vec::new();
     let mut current = String::new();
     for para in text.split("\n\n") {
-        if current.chars().count() + para.chars().count() + 2 > budget && !current.is_empty() {
-            chunks.push(std::mem::take(&mut current));
+        for piece in split_oversize(para, budget) {
+            if current.chars().count() + piece.chars().count() + 2 > budget && !current.is_empty() {
+                chunks.push(std::mem::take(&mut current));
+            }
+            if !current.is_empty() {
+                current.push_str("\n\n");
+            }
+            current.push_str(&piece);
         }
-        if !current.is_empty() {
-            current.push_str("\n\n");
-        }
-        current.push_str(para);
     }
     if !current.is_empty() {
         chunks.push(current);
     }
     chunks
+}
+
+fn split_oversize(para: &str, budget: usize) -> Vec<String> {
+    if para.chars().count() <= budget {
+        return vec![para.to_string()];
+    }
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    for line in para.split('\n') {
+        for piece in hard_split(line, budget) {
+            if cur.chars().count() + piece.chars().count() + 1 > budget && !cur.is_empty() {
+                out.push(std::mem::take(&mut cur));
+            }
+            if !cur.is_empty() {
+                cur.push('\n');
+            }
+            cur.push_str(&piece);
+        }
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+fn hard_split(line: &str, budget: usize) -> Vec<String> {
+    if line.chars().count() <= budget {
+        return vec![line.to_string()];
+    }
+    let chars: Vec<char> = line.chars().collect();
+    chars
+        .chunks(budget.max(1))
+        .map(|c| c.iter().collect())
+        .collect()
 }
 
 fn render_schema(s: &Ontology) -> String {
@@ -274,7 +426,7 @@ async fn call_llm(
     chunk: &str,
     chunk_idx: usize,
     chunk_total: usize,
-) -> Result<String, LlmError> {
+) -> Result<LlmResponse, LlmError> {
     let system = SYSTEM_INSTRUCTION.to_string();
     let user = format!(
         "{lang_hint}\nChunk {n}/{m}.\n\nKnown schema (reuse names where possible):\n{schema_block}\n\
@@ -298,8 +450,7 @@ Do not wrap it in markdown fences. Do not include commentary.",
         max_tokens: 4096,
         temperature: 0.1,
     };
-    let resp = model.generate(&req).await?;
-    Ok(resp.content)
+    model.generate(&req).await
 }
 
 /// Lenient JSON parser: strips Markdown code fences if the model stubbornly
@@ -743,7 +894,7 @@ Return ONLY this JSON object. No prose, no markdown fences."#;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{EchoModel, LanguageModel, LlmRequest, LlmResponse, TokenUsage};
+    use crate::model::{EchoModel, TokenUsage};
     use async_trait::async_trait;
     use ontology_graph::OntologyGraph;
 
@@ -861,6 +1012,134 @@ mod tests {
         let raw = r#"{"concepts": [{"concept_type": "Invoice", "name": null}]}"#;
         let err = parse_response(raw, 0).unwrap_err();
         assert!(matches!(err, ExtractError::Parse(_)));
+    }
+
+    /// A model whose answer is cut off whenever the piece has more than
+    /// `max_lines` lines, and otherwise returns one concept per line.
+    struct TruncatingModel {
+        max_lines: usize,
+        calls: std::sync::atomic::AtomicUsize,
+    }
+    #[async_trait]
+    impl LanguageModel for TruncatingModel {
+        async fn generate(&self, req: &LlmRequest) -> Result<LlmResponse, LlmError> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let content = &req.messages[0].content;
+            let doc = content
+                .split("Document:\n")
+                .nth(1)
+                .and_then(|s| s.split("\n---\n").next())
+                .unwrap_or("");
+            let lines: Vec<&str> = doc.lines().filter(|l| !l.trim().is_empty()).collect();
+            if lines.len() > self.max_lines {
+                return Ok(LlmResponse {
+                    content: r#"{"concepts": [{"concept_type": "Row", "name": "cut off mid"#.into(),
+                    model: "trunc".into(),
+                    stop_reason: Some("max_tokens".into()),
+                    usage: TokenUsage::default(),
+                });
+            }
+            let concepts: Vec<String> = lines
+                .iter()
+                .map(|l| {
+                    format!(
+                        r#"{{"concept_type":"Row","name":"{}"}}"#,
+                        l.trim().replace('"', "'")
+                    )
+                })
+                .collect();
+            Ok(LlmResponse {
+                content: format!(r#"{{"concepts": [{}]}}"#, concepts.join(",")),
+                model: "trunc".into(),
+                stop_reason: Some("stop".into()),
+                usage: TokenUsage::default(),
+            })
+        }
+    }
+
+    fn records(n: usize) -> String {
+        (0..n)
+            .map(|i| format!(r#"{{"kind":"Relation","source":"S{i:03}","target":"T{i:03}","relation_type":"between","weight":1.0,"padding":"{}"}}"#, "x".repeat(60)))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// A truncated answer is retried on halves until every piece fits; the
+    /// document is never rejected for being dense.
+    #[tokio::test]
+    async fn truncated_answers_are_retried_on_halves() {
+        let model = TruncatingModel {
+            max_lines: 3,
+            calls: Default::default(),
+        };
+        let doc = records(16);
+        assert!(looks_line_structured(&doc));
+        let p = extract_proposal(&model, &doc, None, &Ontology::default())
+            .await
+            .expect("bisection recovers");
+        assert_eq!(
+            p.concepts.len(),
+            16,
+            "one concept per record: {:?}",
+            p.concepts.iter().map(|c| &c.name).collect::<Vec<_>>()
+        );
+        let calls = model.calls.load(std::sync::atomic::Ordering::SeqCst);
+        // 16 records fit in one 3 000-char chunk: 1 + 2 + 4 + 8 calls.
+        assert_eq!(calls, 15, "calls");
+        let refs: std::collections::HashSet<_> =
+            p.concepts.iter().map(|c| c.client_ref.clone()).collect();
+        assert_eq!(refs.len(), 16, "client refs stay unique across pieces");
+    }
+
+    /// A piece too small to split that still gets cut off is a real error.
+    #[tokio::test]
+    async fn truncation_on_a_tiny_piece_is_an_error() {
+        let model = TruncatingModel {
+            max_lines: 0,
+            calls: Default::default(),
+        };
+        let err = extract_proposal(&model, "a\nb", None, &Ontology::default())
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ExtractError::Parse(_)), "{err:?}");
+        assert_eq!(model.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn line_structured_inputs_get_the_small_budget() {
+        assert!(looks_line_structured(&records(20)));
+        let prose = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. ".repeat(40);
+        let doc = format!("{prose}\n\n{prose}\n\n{prose}");
+        assert!(!looks_line_structured(&doc));
+    }
+
+    #[test]
+    fn chunking_splits_an_oversize_paragraph_on_lines() {
+        let doc = records(200); // ~150 chars per line, no blank line
+        let chunks = chunk_text(&doc, 3_000);
+        assert!(chunks.len() >= 8, "{}", chunks.len());
+        for c in &chunks {
+            assert!(c.chars().count() <= 3_000, "chunk over budget");
+            assert!(
+                c.starts_with('{') && c.ends_with('}'),
+                "lines are never cut: {c:?}"
+            );
+        }
+        let rejoined: Vec<&str> = chunks.iter().flat_map(|c| c.lines()).collect();
+        assert_eq!(rejoined.len(), 200);
+        assert_eq!(rejoined.join("\n"), doc);
+    }
+
+    #[test]
+    fn split_in_half_prefers_a_line_break() {
+        let doc = records(4);
+        let (a, b) = split_in_half(&doc).unwrap();
+        assert_eq!(a.lines().count(), 2);
+        assert_eq!(b.lines().count(), 2);
+        assert!(split_in_half("short").is_none());
+        let huge = "y".repeat(1_000);
+        let (a, b) = split_in_half(&huge).unwrap();
+        assert_eq!(a.len() + b.len(), 1_000);
     }
 
     #[test]
