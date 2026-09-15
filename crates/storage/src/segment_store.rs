@@ -76,6 +76,10 @@ struct Inner {
     meta: Stream,
     graph: Stream,
     next_seq: u64,
+    /// Set after a batch failed part-way: the buffered tail is in an unknown
+    /// state, so every further append is refused until restart, where
+    /// recovery truncates whatever is torn (see `StoreError::Poisoned`).
+    poisoned: bool,
     /// Held for the life of the store (H17: single writer per store).
     _lock: File,
 }
@@ -223,6 +227,7 @@ impl SegmentStore {
                 meta,
                 graph,
                 next_seq,
+                poisoned: false,
                 _lock: lock,
             })),
             root: root.to_path_buf(),
@@ -242,6 +247,16 @@ impl SegmentStore {
     pub fn open_report(&self) -> &OpenReport {
         &self.report
     }
+    /// `true` once a batch failed part-way; every append is refused since.
+    pub fn is_poisoned(&self) -> bool {
+        self.inner.lock().poisoned
+    }
+    /// Test hook: simulate a failed batch.
+    #[doc(hidden)]
+    pub fn poison_for_test(&self) {
+        self.inner.lock().poisoned = true;
+    }
+
     pub fn manifest(&self) -> Manifest {
         self.inner.lock().manifest.clone()
     }
@@ -262,15 +277,21 @@ impl SegmentStore {
             .unwrap_or(0)
     }
 
-    /// Encode, route, append, then one sync per touched stream and a roll
-    /// check. Returns the number of syncs issued.
+    /// Encode and route the whole batch first (nothing touches a file until
+    /// every record is known to be writable), then append, then one sync per
+    /// touched stream **in the order the streams were first touched** — so a
+    /// crash between two syncs leaves a durable *prefix* of the batch in seq
+    /// order — then a roll check. Any failure after the first append poisons
+    /// the store. Returns the number of syncs issued.
     fn commit_batch(inner: &mut Inner, records: &[LogRecord]) -> StoreResult<u64> {
         if records.is_empty() {
             return Ok(0);
         }
-        let ts = Self::now_micros();
-        let mut touched_meta = false;
-        let mut touched_graph = false;
+        if inner.poisoned {
+            return Err(StoreError::Poisoned(inner.root.display().to_string()));
+        }
+        // 1. Encode + route without side effects on the streams.
+        let mut planned: Vec<(u16, Kind, Vec<u8>, IndexFields)> = Vec::with_capacity(records.len());
         for r in records {
             let payload =
                 serde_json::to_vec(&r.kind).map_err(|e| StoreError::Encode(e.to_string()))?;
@@ -287,34 +308,62 @@ impl SegmentStore {
                 }
                 None => 0,
             };
-            let (stream, ns_id) = if meta.kind.is_meta() {
-                touched_meta = true;
-                (&mut inner.meta, META_NS_ID)
+            let ns_id = if meta.kind.is_meta() {
+                META_NS_ID
             } else {
-                touched_graph = true;
-                (&mut inner.graph, DEFAULT_NS_ID)
+                DEFAULT_NS_ID
             };
-            let fields = IndexFields {
+            planned.push((
                 ns_id,
-                entity_id: meta.entity_id,
-                endpoints: meta.endpoints,
-                rtype_sym,
-            };
-            let seq = inner.next_seq;
-            stream.append(seq, ts, meta.kind, &payload, fields)?;
-            inner.next_seq += 1;
+                meta.kind,
+                payload,
+                IndexFields {
+                    ns_id,
+                    entity_id: meta.entity_id,
+                    endpoints: meta.endpoints,
+                    rtype_sym,
+                },
+            ));
         }
+        // 2. Append + sync; from here on a failure poisons the store.
+        match Self::write_planned(inner, planned) {
+            Ok(n) => Ok(n),
+            Err(e) => {
+                inner.poisoned = true;
+                warn!(error = %e, root = %inner.root.display(), "batch failed part-way; store poisoned until restart");
+                Err(e)
+            }
+        }
+    }
 
+    fn write_planned(
+        inner: &mut Inner,
+        planned: Vec<(u16, Kind, Vec<u8>, IndexFields)>,
+    ) -> StoreResult<u64> {
+        let ts = Self::now_micros();
+        let mut touched: Vec<u16> = Vec::new();
+        for (ns_id, kind, payload, fields) in &planned {
+            let seq = inner.next_seq;
+            let stream = if *ns_id == META_NS_ID {
+                &mut inner.meta
+            } else {
+                &mut inner.graph
+            };
+            stream.append(seq, ts, *kind, payload, *fields)?;
+            inner.next_seq += 1;
+            if !touched.contains(ns_id) {
+                touched.push(*ns_id);
+            }
+        }
         let mut syncs = 0;
         let mut manifest_dirty = false;
         let next_seq = inner.next_seq;
-        for (touched, stream, ns_id) in [
-            (touched_meta, &mut inner.meta, META_NS_ID),
-            (touched_graph, &mut inner.graph, DEFAULT_NS_ID),
-        ] {
-            if !touched {
-                continue;
-            }
+        for ns_id in touched {
+            let stream = if ns_id == META_NS_ID {
+                &mut inner.meta
+            } else {
+                &mut inner.graph
+            };
             stream.commit()?;
             syncs += 1;
             if let Some(entry) =

@@ -82,6 +82,9 @@ impl ActiveSegment {
             .open(idx_path(dir, partition_id))?;
         idx.write_all(&IdxHeader::new(partition_id, base_seq, 0).encode())?;
         idx.sync_all()?;
+        // The directory entries must survive a crash too, or acknowledged
+        // records could live in a file nobody can find (ext4 delayed alloc).
+        fsync_dir(dir);
         Ok(Self {
             dir: dir.to_path_buf(),
             partition_id,
@@ -242,4 +245,15 @@ impl ActiveSegment {
     pub fn idx_len_for(count: u32) -> u64 {
         (FILE_HEADER_LEN + count as usize * IDX_ENTRY_LEN) as u64
     }
+}
+
+/// Flush a directory's entries to disk where the platform allows (Unix);
+/// on Windows metadata writes are not reordered past a file's own sync.
+pub fn fsync_dir(dir: &Path) {
+    #[cfg(unix)]
+    if let Ok(d) = File::open(dir) {
+        let _ = d.sync_all();
+    }
+    #[cfg(not(unix))]
+    let _ = dir;
 }

@@ -22,8 +22,8 @@ use std::sync::Arc;
 use ontology_graph::{Ontology, OntologyGraph};
 use tracing::{info, warn};
 
-use crate::file::FileStore;
 use crate::log::{LogRecord, RecordKind};
+use crate::memory::apply;
 use crate::segment_store::SegmentStore;
 use crate::snapshot::Snapshot;
 use crate::store::{Store, StoreError, StoreResult};
@@ -109,14 +109,41 @@ pub fn legacy_records(data_dir: &Path) -> StoreResult<Vec<LogRecord>> {
     Ok(records)
 }
 
+/// Directory the store is built in before it is renamed to its final name.
+pub fn staging_dir_for(store_dir: &Path) -> PathBuf {
+    let mut name = store_dir
+        .file_name()
+        .map(|n| n.to_os_string())
+        .unwrap_or_else(|| "store".into());
+    name.push(".migrating");
+    store_dir.with_file_name(name)
+}
+
 /// Migrate `data_dir`'s legacy files into a fresh store at `store_dir`.
-/// Fails without touching anything if `store_dir` already holds records.
+///
+/// The store is built and verified in a **staging directory** and only then
+/// renamed to `store_dir`, so an interrupted or failed migration never
+/// leaves a half-built `store/` that a later start would mistake for the
+/// real one; a leftover staging directory is discarded and redone. Fails
+/// without touching anything if `store_dir` already exists.
 pub async fn migrate_legacy(data_dir: &Path, store_dir: &Path) -> StoreResult<MigrationReport> {
     if !legacy_present(data_dir) {
         return Err(StoreError::Format(format!(
             "nothing to migrate in {}: no {LEGACY_LOG} or {LEGACY_SNAPSHOT}",
             data_dir.display()
         )));
+    }
+    if store_dir.exists() {
+        return Err(StoreError::Format(format!(
+            "{} already exists; refusing to migrate over it (remove it to redo the migration, \
+             or rename the legacy files to *.{MIGRATED_SUFFIX} if the store is authoritative)",
+            store_dir.display()
+        )));
+    }
+    let staging = staging_dir_for(store_dir);
+    if staging.exists() {
+        warn!(path = %staging.display(), "discarding an interrupted migration");
+        std::fs::remove_dir_all(&staging)?;
     }
     let mut report = MigrationReport::default();
     for name in [LEGACY_LOG, LEGACY_SNAPSHOT] {
@@ -138,31 +165,27 @@ pub async fn migrate_legacy(data_dir: &Path, store_dir: &Path) -> StoreResult<Mi
         }
     }
 
-    // 1. Write.
+    // 1. Write into the staging directory.
     {
-        let store = SegmentStore::open(store_dir).await?;
-        if store.record_count() > 0 {
-            return Err(StoreError::Format(format!(
-                "{} already holds {} records; refusing to migrate into it",
-                store_dir.display(),
-                store.record_count()
-            )));
-        }
+        let store = SegmentStore::open(&staging).await?;
         for chunk in records.chunks(1000) {
             store.append_batch(chunk).await?;
         }
-        report.store_bytes = dir_size(store_dir)?;
+        report.store_bytes = dir_size(&staging)?;
 
-        // 2. Verify: both sides replay to the same graph.
-        let legacy = FileStore::open(data_dir).await?;
+        // 2. Verify: the records as read from the legacy files, replayed
+        //    in memory (the legacy files are not opened for writing, not
+        //    truncated, not created), against what the new store replays.
         let a = OntologyGraph::with_arc(Ontology::new());
-        legacy.load_into(&a).await?;
+        for r in &records {
+            apply(&a, r.clone())?;
+        }
         let b = OntologyGraph::with_arc(Ontology::new());
         store.load_into(&b).await?;
         compare_graphs(&a, &b)?;
-        // `store` and `legacy` drop here: the store's LOCK is released for
-        // whoever opens it next.
+        // `store` drops here: its LOCK is released before the rename.
     }
+    std::fs::rename(&staging, store_dir)?;
 
     // 3. Retire the legacy files (rename, never delete).
     for name in [LEGACY_LOG, LEGACY_SNAPSHOT] {
@@ -235,12 +258,28 @@ pub fn compare_graphs(a: &OntologyGraph, b: &OntologyGraph) -> StoreResult<()> {
         }
     }
     for r in a.all_rules() {
-        b.get_rule(r.id)
+        let other = b
+            .get_rule(r.id)
             .map_err(|_| mismatch(format!("rule {} missing", r.id)))?;
+        let (x, y) = (
+            serde_json::to_value(&r).map_err(|e| StoreError::Encode(e.to_string()))?,
+            serde_json::to_value(&other).map_err(|e| StoreError::Encode(e.to_string()))?,
+        );
+        if x != y {
+            return Err(mismatch(format!("rule {} differs", r.id)));
+        }
     }
     for x in a.all_actions() {
-        b.get_action(x.id)
+        let other = b
+            .get_action(x.id)
             .map_err(|_| mismatch(format!("action {} missing", x.id)))?;
+        let (p, q) = (
+            serde_json::to_value(&x).map_err(|e| StoreError::Encode(e.to_string()))?,
+            serde_json::to_value(&other).map_err(|e| StoreError::Encode(e.to_string()))?,
+        );
+        if p != q {
+            return Err(mismatch(format!("action {} differs", x.id)));
+        }
     }
     Ok(())
 }
