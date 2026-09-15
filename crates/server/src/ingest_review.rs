@@ -31,7 +31,8 @@ use axum::{
     Json,
 };
 use ontology_graph::{
-    Action, ActionId, Concept, ConceptId, OntologyGraph, Relation, RelationId, Rule, RuleId,
+    Action, ActionId, Concept, ConceptId, Ontology, OntologyGraph, Relation, RelationId, Rule,
+    RuleId,
 };
 use ontology_io::{
     decode_to_utf8, detect_language, ApplyDecision, ApplyOutcome, ApplyReport, DecisionAction,
@@ -179,6 +180,9 @@ pub(crate) async fn apply(
     // Type declarations are applied to the live ontology as they come and
     // journaled as a single `Ontology` record before the first instance.
     let mut schema_changed = false;
+    // Snapshot to restore if the declarations cannot be journaled: the live
+    // schema must never be ahead of the store (R8).
+    let schema_baseline = s.graph.ontology();
 
     // ---- concept types ----
     for ct in &proposal.concept_types {
@@ -224,6 +228,7 @@ pub(crate) async fn apply(
                     },
                 ));
                 if strict {
+                    rollback_schema(&s, &schema_baseline, schema_changed);
                     return Ok(Json(report));
                 }
             }
@@ -271,6 +276,7 @@ pub(crate) async fn apply(
                     },
                 ));
                 if strict {
+                    rollback_schema(&s, &schema_baseline, schema_changed);
                     return Ok(Json(report));
                 }
             }
@@ -283,13 +289,15 @@ pub(crate) async fn apply(
     // continuing would journal concepts whose types are not on disk, and the
     // next replay would reject them.
     if schema_changed {
-        s.store
+        if let Err(e) = s
+            .store
             .append(&LogRecord::ontology(s.graph.ontology()))
             .await
-            .map_err(|e| {
-                warn!(error=%e, "wal append failed for ontology");
-                ApiError::Store(e.to_string())
-            })?;
+        {
+            warn!(error=%e, "wal append failed for ontology; type declarations rolled back");
+            rollback_schema(&s, &schema_baseline, true);
+            return Err(ApiError::Store(e.to_string()));
+        }
     }
 
     // ---- concepts ----
@@ -656,6 +664,20 @@ pub(crate) async fn apply(
 }
 
 // ---------- helpers ----------
+
+/// Undo type declarations applied to the live ontology but never journaled.
+/// Only instances of journaled types can exist, so this cannot orphan data.
+fn rollback_schema(s: &AppState, baseline: &Ontology, changed: bool) {
+    if !changed {
+        return;
+    }
+    if let Err(e) = s.graph.extend_ontology(|o| {
+        *o = baseline.clone();
+        Ok(())
+    }) {
+        warn!(error=%e, "could not roll back un-journaled schema changes");
+    }
+}
 
 async fn read_analyze_form(mut form: Multipart) -> Result<AnalyzeForm, ApiError> {
     let mut out = AnalyzeForm::default();

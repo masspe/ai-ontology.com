@@ -340,3 +340,36 @@ async fn record_kind_round_trips_through_the_framing() {
     );
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[tokio::test]
+async fn a_poisoned_store_refuses_every_further_append_until_restart() {
+    let dir = tempdir("poison");
+    let store = FileStore::open(&dir).await.unwrap();
+    store.append(&concept("before")).await.unwrap();
+    store.poison_for_test();
+    assert!(store.is_poisoned());
+    let err = store.append(&concept("after")).await.unwrap_err();
+    assert!(
+        matches!(err, ontology_storage::StoreError::Poisoned(_)),
+        "{err}"
+    );
+    let err = store.append_batch(&[concept("x")]).await.unwrap_err();
+    assert!(
+        matches!(err, ontology_storage::StoreError::Poisoned(_)),
+        "{err}"
+    );
+    assert_eq!(
+        frames(&dir.join("graph.log")).len(),
+        1,
+        "nothing written while poisoned"
+    );
+    drop(store);
+    // A fresh open (restart) recovers normally and writes again.
+    let store = FileStore::open(&dir).await.unwrap();
+    assert!(!store.is_poisoned());
+    let graph = OntologyGraph::with_arc(ontology());
+    store.load_into(&graph).await.unwrap();
+    store.append(&concept("after-restart")).await.unwrap();
+    assert_eq!(frames(&dir.join("graph.log")).len(), 2);
+    std::fs::remove_dir_all(&dir).ok();
+}

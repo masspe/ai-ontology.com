@@ -31,6 +31,13 @@ pub enum StoreError {
 
     #[error("corrupt log at offset {0}")]
     Corrupt(u64),
+
+    /// A write failed part-way (disk full, I/O error). The on-disk tail is
+    /// in an unknown state, so the store refuses every further append until
+    /// the process restarts and recovery truncates the torn tail. Retrying
+    /// through a poisoned store would let a rejected record become durable.
+    #[error("store poisoned after a failed write; restart to recover: {0}")]
+    Poisoned(String),
 }
 
 /// Pluggable persistence backend.

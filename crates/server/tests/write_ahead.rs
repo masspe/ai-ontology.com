@@ -455,3 +455,46 @@ async fn file_store_survives_a_restart_after_http_writes() {
     assert_eq!(graph.ontology().concept_types.len(), 1);
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[tokio::test]
+async fn ingest_apply_rolls_back_type_declarations_when_the_store_fails() {
+    // Type declarations are applied to the live schema first and journaled
+    // as one Ontology record; if that record cannot be written, the schema
+    // must be restored — otherwise a later concept of that type would be
+    // accepted, journaled, and refused on replay.
+    let store = Arc::new(FlakyStore::new());
+    let graph = OntologyGraph::with_arc(ontology());
+    let app = build_router(state_with(store.clone(), graph.clone()));
+    let before = graph.ontology();
+    store.set_failing(true);
+
+    let body = json!({
+        "proposal": { "concept_types": [ { "client_ref": "t1", "name": "Widget" } ] },
+        "decisions": [ { "client_ref": "t1", "action": "create_new" } ],
+        "strict": true
+    });
+    let (st, v) = call(&app, "POST", "/ingest/apply", Some(body.clone())).await;
+    assert_eq!(st, StatusCode::INTERNAL_SERVER_ERROR, "{v}");
+    assert!(!graph.ontology().concept_types.contains_key("Widget"));
+    assert_eq!(
+        serde_json::to_value(graph.ontology()).unwrap(),
+        serde_json::to_value(&before).unwrap()
+    );
+
+    // A concept of the un-journaled type is therefore refused, not accepted.
+    let (st, _) = call(
+        &app,
+        "POST",
+        "/concepts",
+        Some(json!({ "id": 0, "concept_type": "Widget", "name": "w", "description": "", "properties": {} })),
+    )
+    .await;
+    assert_ne!(st, StatusCode::OK);
+
+    // With the store back, the same apply journals the schema and succeeds.
+    store.set_failing(false);
+    let (st, v) = call(&app, "POST", "/ingest/apply", Some(body)).await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert!(graph.ontology().concept_types.contains_key("Widget"));
+    assert_eq!(store.records_written(), 1, "one Ontology record");
+}
