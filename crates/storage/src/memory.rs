@@ -46,6 +46,11 @@ impl Store for MemoryStore {
         Ok(())
     }
 
+    async fn reset(&self) -> StoreResult<()> {
+        self.inner.lock().clear();
+        Ok(())
+    }
+
     async fn load_into(&self, graph: &Arc<OntologyGraph>) -> StoreResult<()> {
         let records = self.inner.lock().clone();
         for r in records {

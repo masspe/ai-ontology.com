@@ -448,6 +448,23 @@ export const listConcepts = (params: {
 export const deleteConcept = (id: number) =>
   http<void>(`/concepts/${id}`, { method: "DELETE", headers: headers() });
 
+export interface DeleteConceptsResult {
+  deleted: number;
+  relations: number;
+  missing: number[];
+}
+
+/** Delete many concepts (and their relations) in one request. */
+export const deleteConcepts = (ids: number[]) =>
+  http<DeleteConceptsResult>("/concepts/delete", {
+    method: "POST",
+    headers: headers(true),
+    body: JSON.stringify({ ids }),
+  });
+
+/** Start over: empties the store, the graph, the schema and the index. */
+export const resetAll = () => http<void>("/reset", { method: "POST", headers: headers() });
+
 export const createConcept = (c: {
   concept_type: string;
   name: string;

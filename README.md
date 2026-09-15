@@ -228,13 +228,15 @@ Stop-Process -Id $server.Id
 | GET    | `/concepts/:id`     | fetch one concept                                        |
 | PATCH  | `/concepts/:id`     | partial update (`ConceptPatch`)                          |
 | DELETE | `/concepts/:id`     | remove concept and cascade incident edges                |
+| POST   | `/concepts/delete`  | `{ids}` → remove many concepts under one barrier; returns `{deleted, relations, missing}` |
 | POST   | `/relations`        | create a `Relation`, returns `{id}`                      |
 | POST   | `/retrieve`         | `RetrievalRequest` → ranked seeds + subgraph             |
 | POST   | `/ask`              | `RetrievalRequest` → full `RagAnswer`                    |
 | POST   | `/ask/stream`       | same, streamed as Server-Sent Events                     |
 | POST   | `/path`             | shortest path between two named concepts                 |
 | POST   | `/upload`           | multipart ingest (`kind`, `file`, optional `concept_type`) |
-| POST   | `/compact`          | compaction (no-op until per-domain compaction lands)     |
+| POST   | `/compact`          | whole-store compaction (rewrite from the live graph)     |
+| POST   | `/reset`            | start over: empty store, graph, schema and index (irreversible) |
 
 ## Web UI
 

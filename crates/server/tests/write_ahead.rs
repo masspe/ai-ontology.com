@@ -18,7 +18,7 @@ use ontology_graph::{ActionType, ConceptType, Ontology, OntologyGraph, RelationT
 use ontology_index::HybridIndex;
 use ontology_rag::{EchoModel, RagPipeline};
 use ontology_server::{build_router, AppState};
-use ontology_storage::{FileStore, FlakyStore, SegmentStore, Store};
+use ontology_storage::{FileStore, FlakyStore, RecordKind, SegmentStore, Store};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use tower::ServiceExt;
@@ -670,4 +670,125 @@ async fn a_refused_schema_is_never_journaled() {
     .await;
     assert_eq!(st, StatusCode::OK, "{v}");
     assert_eq!(store.records_written(), written + 1);
+}
+
+async fn create_topic(app: &axum::Router, name: &str) -> u64 {
+    let (st, v) = call(
+        app,
+        "POST",
+        "/concepts",
+        Some(json!({ "id": 0, "concept_type": "Topic", "name": name })),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    v["id"].as_u64().unwrap()
+}
+
+async fn relate(app: &axum::Router, a: u64, b: u64) {
+    let (st, v) = call(
+        app,
+        "POST",
+        "/relations",
+        Some(
+            json!({ "id": 0, "relation_type": "related_to", "source": a, "target": b,
+                     "weight": 1.0, "properties": {} }),
+        ),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+}
+
+/// Bulk delete: one barrier for the whole selection, every relation
+/// tombstoned once even when it joins two deleted concepts, unknown ids
+/// reported rather than failing the request.
+#[tokio::test]
+async fn bulk_delete_journals_every_cascade_once_under_one_barrier() {
+    let graph = OntologyGraph::with_arc(ontology());
+    let store = Arc::new(FlakyStore::new());
+    let app = build_router(state_with(store.clone(), graph.clone()));
+    let a = create_topic(&app, "a").await;
+    let b = create_topic(&app, "b").await;
+    let c = create_topic(&app, "c").await;
+    relate(&app, a, b).await; // symmetric: two stored directions
+    relate(&app, b, c).await;
+    let relations_before = graph.relation_count();
+    let batches_before = store.batch_calls();
+    let records_before = store.records().len();
+
+    let (st, v) = call(
+        &app,
+        "POST",
+        "/concepts/delete",
+        Some(json!({ "ids": [a, b, 999_999] })),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert_eq!(v["deleted"], 2);
+    assert_eq!(v["missing"], json!([999_999]));
+    // Every relation touching a or b is gone (a-b both ways and b-c both ways).
+    assert_eq!(v["relations"].as_u64().unwrap() as usize, relations_before);
+    assert_eq!(graph.concept_count(), 1);
+    assert_eq!(graph.relation_count(), 0);
+    assert_eq!(store.batch_calls(), batches_before + 1, "one barrier");
+
+    let tail = &store.records()[records_before..];
+    let concept_tombstones = tail
+        .iter()
+        .filter(|r| matches!(r.kind, RecordKind::DeleteConcept(_)))
+        .count();
+    let mut relation_tombstones: Vec<u64> = tail
+        .iter()
+        .filter_map(|r| match r.kind {
+            RecordKind::DeleteRelation(id) => Some(id.0),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(concept_tombstones, 2);
+    let n = relation_tombstones.len();
+    relation_tombstones.sort_unstable();
+    relation_tombstones.dedup();
+    assert_eq!(n, relation_tombstones.len(), "each relation journaled once");
+    assert_eq!(n, relations_before);
+
+    // Replaying the journal gives the same end state (the schema was
+    // installed directly on the graph here, not journaled, hence the seed).
+    let replayed = OntologyGraph::with_arc(ontology());
+    store.load_into(&replayed).await.unwrap();
+    assert_eq!(replayed.concept_count(), 1);
+    assert_eq!(replayed.relation_count(), 0);
+}
+
+/// `POST /reset`: store emptied first, then graph, schema and index.
+#[tokio::test]
+async fn reset_empties_store_graph_and_schema() {
+    let graph = OntologyGraph::with_arc(ontology());
+    let store = Arc::new(FlakyStore::new());
+    let app = build_router(state_with(store.clone(), graph.clone()));
+    let a = create_topic(&app, "a").await;
+    let b = create_topic(&app, "b").await;
+    relate(&app, a, b).await;
+
+    let (st, _) = call(&app, "POST", "/reset", None).await;
+    assert_eq!(st, StatusCode::NO_CONTENT);
+
+    let (st, stats) = call(&app, "GET", "/stats", None).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(stats["concepts"], 0);
+    assert_eq!(stats["relations"], 0);
+    assert_eq!(stats["concept_types"], 0);
+    assert!(graph.with_ontology(|o| o.concept_types.is_empty()));
+    assert!(store.records().is_empty(), "nothing left to replay");
+
+    // The server is usable again: a schema, then a concept.
+    let (st, v) = call(
+        &app,
+        "PUT",
+        "/ontology",
+        Some(serde_json::to_value(ontology()).unwrap()),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    let id = create_topic(&app, "again").await;
+    assert_eq!(id, 1, "ids restart from 1 after a reset");
+    assert_eq!(graph.concept_count(), 1);
 }
