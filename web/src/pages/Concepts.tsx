@@ -1348,6 +1348,18 @@ function ConceptDetails({ concept, domain, onEdit, onDelete }: DetailsProps) {
   })();
   const owner = (concept.properties?.owner as string | undefined) ?? "—";
   const updated = conceptUpdatedAt(concept);
+  // Every property the record carries (imported columns, LLM extraction),
+  // minus the ones already rendered above.
+  const shownElsewhere = new Set(["synonyms", "owner"]);
+  const propEntries = Object.entries(concept.properties ?? {})
+    .filter(([k]) => !shownElsewhere.has(k))
+    .sort(([a], [b]) => a.localeCompare(b));
+  const fmtProp = (v: unknown): string => {
+    if (Array.isArray(v)) return v.map(String).join(", ");
+    if (v && typeof v === "object") return JSON.stringify(v);
+    if (typeof v === "number") return fmtNum(v);
+    return String(v);
+  };
   return (
     <div className="concept-details">
       <div className="cd-head">
@@ -1391,6 +1403,24 @@ function ConceptDetails({ concept, domain, onEdit, onDelete }: DetailsProps) {
 
         <dt>Last Updated</dt>
         <dd>{fmtDate(updated)}</dd>
+
+        <dt>Properties ({propEntries.length})</dt>
+        <dd>
+          {propEntries.length === 0 ? (
+            <span className="muted">—</span>
+          ) : (
+            <table className="cd-props">
+              <tbody>
+                {propEntries.map(([k, v]) => (
+                  <tr key={k}>
+                    <th>{k}</th>
+                    <td title={fmtProp(v)}>{fmtProp(v)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </dd>
       </dl>
 
       <div className="cd-actions">
