@@ -513,8 +513,13 @@ pub fn decode_record(
 /// ```text
 /// 0  seq u64        8  offset u64        16 payload_len u32
 /// 20 kind u8        21 flags u8          22 ns_id u16
-/// 24 entity_id u64  32 endpoints u64     40 rtype_sym u32   44 reserved u32
+/// 24 entity_id u64  32 endpoints u64     40 rtype_sym u32   44 target_ns_id u16   46 reserved u16
 /// ```
+///
+/// `target_ns_id` (phase 3) is the domain of a relation's **target**
+/// concept type; it lets the `.xref` of that domain be rebuilt from indexes
+/// alone (`STORAGE.md` §4.4). 0 for non-relation records and for relations
+/// whose target is in the record's own domain.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IdxEntry {
     pub seq: u64,
@@ -527,6 +532,9 @@ pub struct IdxEntry {
     pub entity_id: u64,
     pub endpoints: u64,
     pub rtype_sym: u32,
+    /// Domain of the target endpoint when it differs from the record's own
+    /// domain (relations only); 0 otherwise.
+    pub target_ns_id: u16,
 }
 
 impl IdxEntry {
@@ -541,6 +549,7 @@ impl IdxEntry {
         b[24..32].copy_from_slice(&self.entity_id.to_le_bytes());
         b[32..40].copy_from_slice(&self.endpoints.to_le_bytes());
         b[40..44].copy_from_slice(&self.rtype_sym.to_le_bytes());
+        b[44..46].copy_from_slice(&self.target_ns_id.to_le_bytes());
         b
     }
     pub fn decode(buf: &[u8], at: usize) -> Result<Self, FormatError> {
@@ -555,6 +564,7 @@ impl IdxEntry {
             entity_id: u64_at(b, 24),
             endpoints: u64_at(b, 32),
             rtype_sym: u32_at(b, 40),
+            target_ns_id: u16_at(b, 44),
         })
     }
     /// Byte offset of entry `i` in an `.idx` file (positional, decision D1).
@@ -759,6 +769,7 @@ mod tests {
             entity_id: 9,
             endpoints: pack_endpoints(5, 6),
             rtype_sym: 12,
+            target_ns_id: 4,
         };
         let b = e.encode();
         assert_eq!(b.len(), IDX_ENTRY_LEN);

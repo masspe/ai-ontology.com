@@ -318,7 +318,7 @@ async fn record_kind_round_trips_through_the_framing() {
     let records = vec![
         LogRecord::ontology(ontology()),
         concept("alpha"),
-        LogRecord::delete_concept(ontology_graph::ConceptId(7)),
+        LogRecord::delete_concept(ontology_graph::ConceptId(7), "Person"),
     ];
     store.append_batch(&records).await.unwrap();
     let bytes = std::fs::read(dir.join("graph.log")).unwrap();

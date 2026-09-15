@@ -210,6 +210,61 @@ impl Manifest {
         (sym, true)
     }
 
+    /// Frozen id of a domain, allocating one (and its stream) if unseen.
+    /// Returns `(ns_id, newly_allocated)`. Ids are never reused, even after a
+    /// domain is retired (R10). Must be saved before the first record of a
+    /// new domain is written.
+    pub fn intern_ns(&mut self, name: &str) -> (u16, bool) {
+        if let Some(e) = self.ns.iter().find(|e| e.name == name && !e.retired) {
+            return (e.id, false);
+        }
+        let id = self.ns.iter().map(|e| e.id).max().unwrap_or(0) + 1;
+        self.ns.push(NsEntry {
+            id,
+            name: name.to_string(),
+            retired: false,
+        });
+        self.streams.push(StreamEntry {
+            ns_id: id,
+            dir: format!("graph/{name}"),
+            sealed: Vec::new(),
+        });
+        (id, true)
+    }
+
+    /// Id of a live domain by name.
+    pub fn ns_id(&self, name: &str) -> Option<u16> {
+        self.ns
+            .iter()
+            .find(|e| e.name == name && !e.retired)
+            .map(|e| e.id)
+    }
+
+    /// Name of a domain by id (retired ones included).
+    pub fn ns_name(&self, id: u16) -> Option<&str> {
+        self.ns.iter().find(|e| e.id == id).map(|e| e.name.as_str())
+    }
+
+    /// Live graph domains (everything but `meta`), by id.
+    pub fn graph_ns_ids(&self) -> Vec<u16> {
+        let mut v: Vec<u16> = self
+            .ns
+            .iter()
+            .filter(|e| e.id != META_NS_ID && !e.retired)
+            .map(|e| e.id)
+            .collect();
+        v.sort_unstable();
+        v
+    }
+
+    /// Mark a domain retired: its id and directory are kept, no record is
+    /// routed to it any more. A later domain with the same name gets a new id.
+    pub fn retire_ns(&mut self, id: u16) {
+        if let Some(e) = self.ns.iter_mut().find(|e| e.id == id) {
+            e.retired = true;
+        }
+    }
+
     pub fn relation_type_sym(&self, name: &str) -> Option<u32> {
         self.relation_types
             .iter()
@@ -260,6 +315,23 @@ mod tests {
         // continues from the max — never fills the hole.
         m.relation_types.retain(|e| e.name != "knows");
         assert_eq!(m.intern_relation_type("later"), (3, true));
+    }
+
+    #[test]
+    fn ns_ids_are_frozen_and_never_reused() {
+        let mut m = Manifest::new(0);
+        assert_eq!(m.ns_id("default"), Some(DEFAULT_NS_ID));
+        assert_eq!(m.intern_ns("parties"), (2, true));
+        assert_eq!(m.intern_ns("parties"), (2, false));
+        assert_eq!(m.stream(2).unwrap().dir, "graph/parties");
+        assert_eq!(m.graph_ns_ids(), vec![1, 2]);
+        m.retire_ns(2);
+        assert_eq!(m.ns_id("parties"), None);
+        assert_eq!(m.ns_name(2), Some("parties"));
+        assert_eq!(m.graph_ns_ids(), vec![1]);
+        // Same name again: a fresh id, the retired one stays frozen.
+        assert_eq!(m.intern_ns("parties"), (3, true));
+        assert_eq!(m.ns.len(), 4);
     }
 
     #[test]
