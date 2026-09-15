@@ -23,7 +23,8 @@ use ontology_graph::{Ontology, OntologyGraph};
 use tracing::{info, warn};
 
 use crate::file::FileStore;
-use crate::log::{LogRecord, RecordKind};
+use crate::log::{LogRecord, RecordKind, RouteHint};
+use crate::memory::apply;
 use crate::segment_store::SegmentStore;
 use crate::snapshot::Snapshot;
 use crate::store::{Store, StoreError, StoreResult};
@@ -125,7 +126,7 @@ pub async fn migrate_legacy(data_dir: &Path, store_dir: &Path) -> StoreResult<Mi
         }
     }
 
-    let records = legacy_records(data_dir)?;
+    let records = route_legacy(legacy_records(data_dir)?)?;
     for r in &records {
         report.records += 1;
         match r.kind {
@@ -182,6 +183,38 @@ pub async fn migrate_legacy(data_dir: &Path, store_dir: &Path) -> StoreResult<Mi
         "legacy store migrated"
     );
     Ok(report)
+}
+
+/// Legacy tombstones carry only an id; the partitioned store needs the
+/// entity's type to route them (`RouteHint`). Replay the stream into a
+/// scratch graph and look each deleted entity up just before its deletion.
+/// A tombstone for an entity that does not exist at that point was a no-op
+/// and is dropped.
+pub fn route_legacy(records: Vec<LogRecord>) -> StoreResult<Vec<LogRecord>> {
+    let scratch = OntologyGraph::with_arc(Ontology::new());
+    let mut out = Vec::with_capacity(records.len());
+    for mut r in records {
+        match &r.kind {
+            RecordKind::DeleteConcept(id) => match scratch.get_concept(*id) {
+                Ok(c) => r.route = Some(RouteHint::ConceptType(c.concept_type)),
+                Err(_) => {
+                    warn!(%id, "legacy DeleteConcept of an unknown concept dropped (no-op)");
+                    continue;
+                }
+            },
+            RecordKind::DeleteRelation(id) => match scratch.get_relation(*id) {
+                Ok(rel) => r.route = Some(RouteHint::RelationType(rel.relation_type)),
+                Err(_) => {
+                    warn!(%id, "legacy DeleteRelation of an unknown relation dropped (no-op)");
+                    continue;
+                }
+            },
+            _ => {}
+        }
+        apply(&scratch, r.clone())?;
+        out.push(r);
+    }
+    Ok(out)
 }
 
 /// Entity-by-entity comparison; any difference is a migration failure.

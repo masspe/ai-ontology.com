@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use std::path::{Path, PathBuf};
 use tokio::fs;
 
-use crate::extract::extract_from_text;
+use crate::extract::{extract_from_text_chunked, DEFAULT_CHUNK_CHARS};
 use crate::ingest::{IngestError, Source};
 use crate::record::Record;
 
@@ -33,6 +33,9 @@ pub struct TextDocumentSource {
     concept_type: String,
     queue: Vec<PathBuf>,
     pending: Vec<Record>,
+    /// Documents longer than this are split into fragments (decision G);
+    /// 0 disables. Default [`DEFAULT_CHUNK_CHARS`].
+    chunk_chars: usize,
 }
 
 impl TextDocumentSource {
@@ -48,7 +51,14 @@ impl TextDocumentSource {
                 .map(|p| p.as_ref().to_path_buf())
                 .collect(),
             pending: Vec::new(),
+            chunk_chars: DEFAULT_CHUNK_CHARS,
         }
+    }
+
+    /// Fragment size in characters; 0 keeps each document whole.
+    pub fn with_chunk_chars(mut self, chunk_chars: usize) -> Self {
+        self.chunk_chars = chunk_chars;
+        self
     }
 
     pub async fn from_dir(
@@ -78,6 +88,7 @@ impl TextDocumentSource {
             concept_type: concept_type.into(),
             queue,
             pending: Vec::new(),
+            chunk_chars: DEFAULT_CHUNK_CHARS,
         })
     }
 }
@@ -129,7 +140,8 @@ impl Source for TextDocumentSource {
             };
             // Extract emits records in dependency-friendly order; we drain
             // via `pop`, so reverse to preserve that order to the consumer.
-            let mut recs = extract_from_text(&self.concept_type, &name, &body);
+            let mut recs =
+                extract_from_text_chunked(&self.concept_type, &name, &body, self.chunk_chars);
             recs.reverse();
             self.pending = recs;
         }

@@ -173,6 +173,7 @@ DATA=./data
 # One-off model override, not written back to the config:
 ./target/release/ontology --data $DATA ask --model gpt-4o-mini "Who wrote about RAG?"
 ./target/release/ontology --data $DATA migrate           # legacy graph.log -> store/ (also automatic on start)
+./target/release/ontology --data $DATA compact           # rewrite the store from the live graph (verified)
 ./target/release/ontology --data $DATA path \
     --from-type Person --from-name Alice \
     --to-type   Person --to-name   Bob
@@ -180,6 +181,8 @@ DATA=./data
 
 # HTTP API
 ./target/release/ontology --data $DATA serve --bind 127.0.0.1:5000 &
+# dev on a subset: load only some storage domains (see `ns` on concept types)
+# ./target/release/ontology --data $DATA serve --ns parties,contrats
 curl -s localhost:5000/stats | jq
 curl -s -XPOST localhost:5000/retrieve -H 'content-type: application/json' \
   -d '{"query":"retrieval augmented generation","top_k":4,"lexical_weight":0.5,"expansion":{"max_depth":2}}'

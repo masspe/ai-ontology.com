@@ -79,4 +79,31 @@ pub enum GraphError {
     /// D6). Rejected where the id is born, never assumed downstream.
     #[error("concept id {0} exceeds the storage format limit of 2^32 - 1")]
     ConceptIdOutOfRange(ConceptId),
+
+    /// A concept type declares a domain that is not `[a-z0-9_-]{1,32}`.
+    #[error("concept type `{concept_type}` declares invalid domain `{ns}` (expected [a-z0-9_-]{{1,32}})")]
+    InvalidNamespace { concept_type: String, ns: String },
+
+    /// A child type declares a domain different from its parent's.
+    #[error(
+        "concept type `{concept_type}` declares domain `{ns}` but its parent `{parent}` is in `{parent_ns}`"
+    )]
+    NamespaceMismatch {
+        concept_type: String,
+        ns: String,
+        parent: String,
+        parent_ns: String,
+    },
+
+    /// Moving a type to another domain while instances exist would need
+    /// tombstones on the old side (`STORAGE.md` R13); refused for now.
+    #[error(
+        "concept type `{concept_type}` cannot move from domain `{from}` to `{to}`: {instances} instance(s) exist"
+    )]
+    NamespaceChangeWithInstances {
+        concept_type: String,
+        from: String,
+        to: String,
+        instances: usize,
+    },
 }

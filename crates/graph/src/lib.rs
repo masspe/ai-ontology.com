@@ -28,5 +28,8 @@ pub use model::{
     Action, ActionPatch, Concept, ConceptPatch, Property, PropertyValue, Relation, RelationPatch,
     Rule, RulePatch,
 };
-pub use schema::{ActionType, Cardinality, ConceptType, Ontology, RelationType, RuleType};
+pub use schema::{
+    is_valid_ns, ActionType, Cardinality, ConceptType, Ontology, RelationType, RuleType,
+    DEFAULT_NS, MAX_NS_LEN,
+};
 pub use traversal::{Direction, Path, PathStep, Subgraph, TraversalSpec};

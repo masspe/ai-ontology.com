@@ -233,12 +233,50 @@ impl OntologyGraph {
         f(&g)
     }
 
+    /// Mutate the ontology **atomically**: `f` runs on a copy, the result is
+    /// validated (domain rules, no domain change under existing instances),
+    /// and only then replaces the live schema. If `f` or a validation fails
+    /// the live ontology is untouched — R1's single write door for the
+    /// schema.
     pub fn extend_ontology<F>(&self, f: F) -> GraphResult<()>
     where
         F: FnOnce(&mut Ontology) -> GraphResult<()>,
     {
         let mut g = self.ontology.write();
-        f(&mut g)
+        let mut candidate = g.clone();
+        f(&mut candidate)?;
+        candidate.validate_namespaces()?;
+        // A type may not change domain while it has instances: the records
+        // already on disk live in the old domain's stream and would need
+        // tombstones there (STORAGE.md R13). Refused until that lands.
+        for name in candidate.concept_types.keys() {
+            if !g.concept_types.contains_key(name) {
+                continue;
+            }
+            let (from, to) = (g.ns_of_type(name), candidate.ns_of_type(name));
+            if from != to {
+                let instances = self
+                    .concepts_by_type
+                    .get(name)
+                    .map(|b| b.len())
+                    .unwrap_or(0);
+                if instances > 0 {
+                    return Err(GraphError::NamespaceChangeWithInstances {
+                        concept_type: name.clone(),
+                        from: from.to_string(),
+                        to: to.to_string(),
+                        instances,
+                    });
+                }
+            }
+        }
+        *g = candidate;
+        Ok(())
+    }
+
+    /// Storage domain of a concept type (see `Ontology::ns_of_type`).
+    pub fn ns_of_type(&self, concept_type: &str) -> String {
+        self.ontology.read().ns_of_type(concept_type).to_string()
     }
 
     /// Remove every concept, relation, rule and action from the graph,
@@ -2127,6 +2165,63 @@ mod tests {
             .unwrap();
         let res = g.add_relation(Relation::new(Default::default(), "authored", a, b));
         assert!(res.is_err());
+    }
+
+    // ---- domains (ns) ----
+
+    #[test]
+    fn extend_ontology_is_atomic_and_guards_domain_moves() {
+        let g = OntologyGraph::new(toy_ontology());
+        // A failing closure leaves the schema untouched.
+        let before = g.ontology().concept_types.len();
+        let err = g.extend_ontology(|o| {
+            o.add_concept_type(ConceptType {
+                name: "Ghost".into(),
+                ..Default::default()
+            });
+            Err(GraphError::Serde("boom".into()))
+        });
+        assert!(err.is_err());
+        assert_eq!(g.ontology().concept_types.len(), before);
+        // An invalid domain is rejected as a whole.
+        let err = g.extend_ontology(|o| {
+            o.add_concept_type(ConceptType {
+                name: "Bad".into(),
+                ns: Some("Not Valid".into()),
+                ..Default::default()
+            });
+            Ok(())
+        });
+        assert!(matches!(err, Err(GraphError::InvalidNamespace { .. })));
+        assert!(!g.ontology().concept_types.contains_key("Bad"));
+        // Moving Person to another domain is fine while it has no instances…
+        g.extend_ontology(|o| {
+            let mut ct = o.concept_type("Person").unwrap().clone();
+            ct.ns = Some("people".into());
+            o.add_concept_type(ct);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(g.ns_of_type("Person"), "people");
+        g.upsert_concept(Concept::new(Default::default(), "Person", "Alice"))
+            .unwrap();
+        // …and refused once instances exist.
+        let err = g.extend_ontology(|o| {
+            let mut ct = o.concept_type("Person").unwrap().clone();
+            ct.ns = Some("staff".into());
+            o.add_concept_type(ct);
+            Ok(())
+        });
+        assert!(
+            matches!(
+                err,
+                Err(GraphError::NamespaceChangeWithInstances { instances: 1, .. })
+            ),
+            "{err:?}"
+        );
+        assert_eq!(g.ns_of_type("Person"), "people");
+        // Unrelated types keep resolving to the default domain.
+        assert_eq!(g.ns_of_type("Paper"), "default");
     }
 
     // ---- write-ahead (R8) API: prepare / apply, preview / apply ----

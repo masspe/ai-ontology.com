@@ -227,10 +227,11 @@ async fn segments_roll_and_seal_and_the_store_survives_a_restart() {
     let store = SegmentStore::open_with(&root, small_roll()).await.unwrap();
     let r = store.open_report();
     assert!(!r.created);
-    assert_eq!(r.graph.sealed, 5);
-    assert_eq!(r.graph.active_records, 4);
-    assert_eq!(r.graph.truncated_bytes, 0);
-    assert!(r.graph.resealed.is_empty());
+    let g = &r.graph[&DEFAULT_NS_ID];
+    assert_eq!(g.sealed, 5);
+    assert_eq!(g.active_records, 4);
+    assert_eq!(g.truncated_bytes, 0);
+    assert!(g.resealed.is_empty());
     assert_eq!(r.next_seq, 56);
     let fresh = OntologyGraph::with_arc(Ontology::new());
     store.load_into(&fresh).await.unwrap();
@@ -298,9 +299,10 @@ async fn a_torn_active_segment_in_each_stream_and_a_lost_manifest_recover() {
 
     let store = SegmentStore::open_with(&root, small_roll()).await.unwrap();
     let r = store.open_report();
-    assert!(r.graph.truncated_bytes > 0 && r.meta.truncated_bytes > 0);
-    assert_eq!(r.graph.sealed, 1);
-    assert_eq!(r.graph.active_records, 3);
+    let g = &r.graph[&DEFAULT_NS_ID];
+    assert!(g.truncated_bytes > 0 && r.meta.truncated_bytes > 0);
+    assert_eq!(g.sealed, 1);
+    assert_eq!(g.active_records, 3);
     assert_eq!(r.meta.active_records, 2);
     assert!(r.manifest_rewritten);
     // Symbols were rebuilt from the payloads (none here — no relation);
@@ -348,7 +350,7 @@ async fn a_seal_interrupted_before_the_manifest_write_is_completed_at_open() {
     m.save(&root).unwrap();
 
     let store = SegmentStore::open_with(&root, small_roll()).await.unwrap();
-    assert_eq!(store.open_report().graph.resealed, vec![2]);
+    assert_eq!(store.open_report().graph[&DEFAULT_NS_ID].resealed, vec![2]);
     assert_eq!(
         store.manifest().stream(DEFAULT_NS_ID).unwrap().sealed.len(),
         1
@@ -445,8 +447,10 @@ async fn a_legacy_log_and_snapshot_migrate_verifiably() {
         }
         add_relation(&graph, &legacy, "knows", ids[3], ids[4]).await;
         let cascade = graph.incident_relation_ids(ids[2]).unwrap();
-        let mut recs = vec![LogRecord::delete_concept(ids[2])];
-        recs.extend(cascade.into_iter().map(LogRecord::delete_relation));
+        let mut recs = vec![LogRecord::delete_concept(ids[2], "Person")];
+        recs.extend(cascade.into_iter().map(|rid| {
+            LogRecord::delete_relation(rid, graph.get_relation(rid).unwrap().relation_type)
+        }));
         legacy.append_batch(&recs).await.unwrap();
         graph.remove_concept(ids[2]).unwrap();
         deleted = ids[2];

@@ -42,6 +42,8 @@ pub struct IndexFields {
     pub entity_id: u64,
     pub endpoints: u64,
     pub rtype_sym: u32,
+    /// Domain of a relation's target when it differs from `ns_id`; 0 otherwise.
+    pub target_ns_id: u16,
 }
 
 pub struct ActiveSegment {
@@ -182,6 +184,7 @@ impl ActiveSegment {
             entity_id: fields.entity_id,
             endpoints: fields.endpoints,
             rtype_sym: fields.rtype_sym,
+            target_ns_id: fields.target_ns_id,
         });
         self.first_seq.get_or_insert(seq);
         self.last_seq = seq;
@@ -219,6 +222,42 @@ impl ActiveSegment {
         Ok(buf)
     }
 
+    /// Every committed index entry, read back from the `.idx` file (the
+    /// pending ones are not included). Used to rebuild `.xref` files at open
+    /// and after compaction.
+    pub fn committed_entries(&mut self) -> io::Result<Vec<IdxEntry>> {
+        self.idx.flush()?;
+        let mut bytes = Vec::new();
+        File::open(idx_path(&self.dir, self.partition_id))?.read_to_end(&mut bytes)?;
+        let n = IdxEntry::count_in(bytes.len() as u64).min(self.count as usize);
+        let mut out = Vec::with_capacity(n);
+        for i in 0..n {
+            out.push(
+                IdxEntry::decode(&bytes, IdxEntry::file_offset(i))
+                    .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?,
+            );
+        }
+        Ok(out)
+    }
+
+    /// Committed bytes of `.data` past the file header, for a sequential
+    /// scan of the active segment (hydration, D4).
+    pub fn committed_data(&mut self) -> io::Result<Vec<u8>> {
+        let len = self.data_len as usize;
+        if len <= FILE_HEADER_LEN {
+            return Ok(Vec::new());
+        }
+        self.read_span(FILE_HEADER_LEN as u64, len - FILE_HEADER_LEN)
+    }
+
+    /// Delete this segment's files. Consumes the segment; used by
+    /// compaction once the replacement is durable.
+    pub fn remove_files(self) -> io::Result<()> {
+        let (dir, id) = (self.dir.clone(), self.partition_id);
+        drop(self);
+        remove_segment_files(&dir, id)
+    }
+
     /// Close the segment for good: commit, stamp the final count into the
     /// `.idx` header, sync both files once, and hand back the immutable,
     /// memory-mapped form. After this the files never change (H11).
@@ -242,4 +281,40 @@ impl ActiveSegment {
     pub fn idx_len_for(count: u32) -> u64 {
         (FILE_HEADER_LEN + count as usize * IDX_ENTRY_LEN) as u64
     }
+}
+
+/// Delete the `.data`, `.idx` and `.xref` of a partition. On Windows a file
+/// that is still memory-mapped cannot be deleted; it is renamed to `.old`
+/// instead and swept at the next open (`sweep_old_files`).
+pub fn remove_segment_files(dir: &Path, partition_id: u32) -> io::Result<()> {
+    for p in [
+        data_path(dir, partition_id),
+        idx_path(dir, partition_id),
+        super::xref::xref_path(dir, partition_id),
+    ] {
+        if !p.exists() {
+            continue;
+        }
+        if let Err(e) = std::fs::remove_file(&p) {
+            let old = p.with_extension(format!(
+                "{}.old",
+                p.extension().and_then(|x| x.to_str()).unwrap_or("bin")
+            ));
+            std::fs::rename(&p, &old).map_err(|_| e)?;
+        }
+    }
+    Ok(())
+}
+
+/// Remove leftover `*.old` files from a previous compaction.
+pub fn sweep_old_files(dir: &Path) -> io::Result<usize> {
+    let mut n = 0;
+    for entry in std::fs::read_dir(dir)? {
+        let p = entry?.path();
+        if p.extension().and_then(|e| e.to_str()) == Some("old") && std::fs::remove_file(&p).is_ok()
+        {
+            n += 1;
+        }
+    }
+    Ok(n)
 }

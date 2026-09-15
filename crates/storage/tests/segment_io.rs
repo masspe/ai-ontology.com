@@ -46,6 +46,7 @@ fn fields_for(payload: &[u8]) -> IndexFields {
         entity_id: sum,
         endpoints: sum << 1,
         rtype_sym: (sum % 7) as u32,
+        target_ns_id: (sum % 3) as u16,
     }
 }
 

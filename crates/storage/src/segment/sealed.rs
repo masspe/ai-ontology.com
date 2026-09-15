@@ -166,6 +166,12 @@ impl SealedSegment {
     pub fn data_bytes(&self) -> &[u8] {
         &self.data
     }
+
+    /// Incoming cross-domain edges recorded for this partition (read from
+    /// the derived `.xref`, rebuilt at every open).
+    pub fn xref(&self, dir: &Path) -> io::Result<Vec<super::xref::XrefEntry>> {
+        super::xref::read_xref(dir, self.partition_id)
+    }
 }
 
 impl std::fmt::Debug for SealedSegment {

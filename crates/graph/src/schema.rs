@@ -43,6 +43,28 @@ pub struct ConceptType {
     /// a (type, lowercase-name) identity with. Auto-symmetrised at insert.
     #[serde(default)]
     pub disjoint_with: Vec<String>,
+    /// Storage domain (`STORAGE.md` H13): the unit of retention, compaction,
+    /// backup and rights. `None` inherits the parent's domain, or
+    /// [`DEFAULT_NS`] for a root type. Identifier `[a-z0-9_-]{1,32}`. Named
+    /// `ns`, never `domain` — `domain` is the relation-type source
+    /// constraint (`STORAGE.md` §10.3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ns: Option<String>,
+}
+
+/// Domain of every concept type that declares none (and has no parent).
+pub const DEFAULT_NS: &str = "default";
+/// Longest accepted domain identifier.
+pub const MAX_NS_LEN: usize = 32;
+
+/// `true` when `ns` is a well-formed domain identifier: 1 to 32 chars from
+/// `[a-z0-9_-]`. Domain names become directory names on disk.
+pub fn is_valid_ns(ns: &str) -> bool {
+    !ns.is_empty()
+        && ns.len() <= MAX_NS_LEN
+        && ns
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
 }
 
 /// An edge type in the ontology, e.g. `authored`, `treats`.
@@ -253,6 +275,78 @@ impl Ontology {
             .ok_or_else(|| GraphError::UnknownConceptType(name.to_string()))
     }
 
+    /// Effective storage domain of a concept type: its own `ns`, else the
+    /// nearest ancestor's, else [`DEFAULT_NS`]. Unknown types resolve to
+    /// [`DEFAULT_NS`] too, so a caller can route without a second lookup;
+    /// validate existence separately. Static per H13.
+    pub fn ns_of_type(&self, name: &str) -> &str {
+        let mut cursor = self.concept_types.get(name);
+        let mut hops = 0;
+        while let Some(ct) = cursor {
+            if let Some(ns) = &ct.ns {
+                return ns.as_str();
+            }
+            cursor = ct.parent.as_deref().and_then(|p| self.concept_types.get(p));
+            hops += 1;
+            if hops > self.concept_types.len() {
+                break; // defensive: a parent cycle must not loop forever
+            }
+        }
+        DEFAULT_NS
+    }
+
+    /// `(source_ns, target_ns)` of a relation type through its `domain` /
+    /// `range` concept types (H14): a relation is routable before its
+    /// endpoints are inspected.
+    pub fn ns_of_relation_type(&self, name: &str) -> GraphResult<(&str, &str)> {
+        let rt = self.relation_type(name)?;
+        Ok((self.ns_of_type(&rt.domain), self.ns_of_type(&rt.range)))
+    }
+
+    /// Every distinct domain declared or inherited by the concept types,
+    /// sorted. Always contains [`DEFAULT_NS`] if any type resolves to it.
+    pub fn namespaces(&self) -> Vec<String> {
+        let mut out: Vec<String> = self
+            .concept_types
+            .keys()
+            .map(|t| self.ns_of_type(t).to_string())
+            .collect();
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    /// Domain rules (STORAGE-PLAN.md §5.1): every declared `ns` is a valid
+    /// identifier, and a child type that declares a `ns` declares the same
+    /// one as its parent — otherwise `?type=Parent&include_subtypes` would
+    /// silently span domains.
+    pub fn validate_namespaces(&self) -> GraphResult<()> {
+        for ct in self.concept_types.values() {
+            if let Some(ns) = &ct.ns {
+                if !is_valid_ns(ns) {
+                    return Err(GraphError::InvalidNamespace {
+                        concept_type: ct.name.clone(),
+                        ns: ns.clone(),
+                    });
+                }
+                if let Some(parent) = &ct.parent {
+                    if self.concept_types.contains_key(parent) {
+                        let parent_ns = self.ns_of_type(parent);
+                        if parent_ns != ns {
+                            return Err(GraphError::NamespaceMismatch {
+                                concept_type: ct.name.clone(),
+                                ns: ns.clone(),
+                                parent: parent.clone(),
+                                parent_ns: parent_ns.to_string(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub fn relation_type(&self, name: &str) -> GraphResult<&RelationType> {
         self.relation_types
             .get(name)
@@ -336,6 +430,99 @@ impl Ontology {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ct(name: &str, parent: Option<&str>, ns: Option<&str>) -> ConceptType {
+        ConceptType {
+            name: name.into(),
+            parent: parent.map(str::to_string),
+            ns: ns.map(str::to_string),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn ns_identifiers_are_validated() {
+        assert!(is_valid_ns("default"));
+        assert!(is_valid_ns("facturation-2026_v2"));
+        assert!(!is_valid_ns(""));
+        assert!(!is_valid_ns("Modele"));
+        assert!(!is_valid_ns("a b"));
+        assert!(!is_valid_ns("é"));
+        assert!(!is_valid_ns(&"x".repeat(MAX_NS_LEN + 1)));
+        assert!(is_valid_ns(&"x".repeat(MAX_NS_LEN)));
+    }
+
+    #[test]
+    fn ns_is_inherited_along_the_parent_chain() {
+        let mut o = Ontology::new();
+        o.add_concept_type(ct("Company", None, Some("parties")));
+        o.add_concept_type(ct("Subsidiary", Some("Company"), None));
+        o.add_concept_type(ct("Branch", Some("Subsidiary"), None));
+        o.add_concept_type(ct("Invoice", None, None));
+        assert_eq!(o.ns_of_type("Company"), "parties");
+        assert_eq!(o.ns_of_type("Subsidiary"), "parties");
+        assert_eq!(o.ns_of_type("Branch"), "parties");
+        assert_eq!(o.ns_of_type("Invoice"), DEFAULT_NS);
+        assert_eq!(o.ns_of_type("Unknown"), DEFAULT_NS);
+        assert_eq!(
+            o.namespaces(),
+            vec!["default".to_string(), "parties".to_string()]
+        );
+        o.validate_namespaces().unwrap();
+    }
+
+    #[test]
+    fn ns_of_relation_type_follows_domain_and_range() {
+        let mut o = Ontology::new();
+        o.add_concept_type(ct("Contract", None, Some("contrats")));
+        o.add_concept_type(ct("Company", None, Some("parties")));
+        o.add_relation_type(RelationType {
+            name: "between".into(),
+            domain: "Contract".into(),
+            range: "Company".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(
+            o.ns_of_relation_type("between").unwrap(),
+            ("contrats", "parties")
+        );
+        assert!(o.ns_of_relation_type("nope").is_err());
+    }
+
+    #[test]
+    fn a_child_cannot_leave_its_parents_domain() {
+        let mut o = Ontology::new();
+        o.add_concept_type(ct("Company", None, Some("parties")));
+        o.add_concept_type(ct("Subsidiary", Some("Company"), Some("parties")));
+        o.validate_namespaces().unwrap();
+        o.add_concept_type(ct("Rogue", Some("Company"), Some("elsewhere")));
+        assert!(matches!(
+            o.validate_namespaces(),
+            Err(GraphError::NamespaceMismatch { .. })
+        ));
+        let mut o = Ontology::new();
+        o.add_concept_type(ct("Bad", None, Some("Not Valid")));
+        assert!(matches!(
+            o.validate_namespaces(),
+            Err(GraphError::InvalidNamespace { .. })
+        ));
+    }
+
+    #[test]
+    fn ns_round_trips_through_json_and_is_omitted_when_unset() {
+        let with = ct("A", None, Some("x"));
+        let js = serde_json::to_string(&with).unwrap();
+        assert!(js.contains("\"ns\":\"x\""));
+        let back: ConceptType = serde_json::from_str(&js).unwrap();
+        assert_eq!(back.ns.as_deref(), Some("x"));
+        let without = ct("B", None, None);
+        let js = serde_json::to_string(&without).unwrap();
+        assert!(!js.contains("\"ns\""), "{js}");
+        // Older ontology files without the field keep loading.
+        let legacy: ConceptType = serde_json::from_str(r#"{"name":"C"}"#).unwrap();
+        assert_eq!(legacy.ns, None);
+    }
 
     #[test]
     fn validate_inverses_happy_and_sad() {

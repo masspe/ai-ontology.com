@@ -76,6 +76,16 @@ pub trait Store: Send + Sync + 'static {
     /// Replay every persisted record into the supplied graph.
     async fn load_into(&self, graph: &Arc<OntologyGraph>) -> StoreResult<()>;
 
+    /// Replay only the given storage domains (the schema is always loaded).
+    /// Stores without domains load everything.
+    async fn load_domains(
+        &self,
+        graph: &Arc<OntologyGraph>,
+        _domains: &[String],
+    ) -> StoreResult<()> {
+        self.load_into(graph).await
+    }
+
     /// Optional snapshot of the full graph for fast cold start.
     async fn snapshot(&self, _graph: &Arc<OntologyGraph>) -> StoreResult<()> {
         Ok(())

@@ -86,11 +86,14 @@ async fn deletes_replay_through_wal() {
     // Delete Alice and journal the cascade.
     let removed = g.remove_concept(alice).unwrap();
     store
-        .append(&LogRecord::delete_concept(alice))
+        .append(&LogRecord::delete_concept(alice, "Person"))
         .await
         .unwrap();
     for r in &removed {
-        store.append(&LogRecord::delete_relation(*r)).await.unwrap();
+        store
+            .append(&LogRecord::delete_relation(*r, "authored"))
+            .await
+            .unwrap();
     }
 
     // Reload from disk. Final state should have only the Paper.
