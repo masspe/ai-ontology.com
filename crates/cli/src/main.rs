@@ -115,7 +115,13 @@ enum Cmd {
     /// superseded and deleted records disappear (whole-store compaction,
     /// STORAGE.md §5). The report is logged at `info`. No-op for the
     /// in-memory store.
-    Compact,
+    Compact {
+        /// Also switch the payload codec of the whole store (`json` or
+        /// `postcard`, STORAGE.md §7.1): every record is rewritten in it
+        /// and later appends use it. Omit to keep the current codec.
+        #[arg(long)]
+        codec: Option<String>,
+    },
     /// Start over: remove every concept, relation, rule, action and the
     /// schema from the store, durably. Refused while a server holds the
     /// store (LOCK). Irreversible; `settings.json` is kept.
@@ -210,6 +216,9 @@ async fn main() -> Result<()> {
         return bench::run(cmd.clone(), data, *json).await;
     }
 
+    // The concrete store is kept for the operations only a segment store
+    // has (codec switch); everything else goes through the trait.
+    let mut segment_store: Option<Arc<SegmentStore>> = None;
     let store: Arc<dyn Store> = match &cli.data {
         Some(dir) => {
             let store_dir = store_dir_for(dir);
@@ -242,11 +251,13 @@ async fn main() -> Result<()> {
                     "migration complete; legacy files renamed to *.migrated"
                 );
             }
-            Arc::new(
+            let seg = Arc::new(
                 SegmentStore::open(&store_dir)
                     .await
                     .with_context(|| format!("opening store at {}", store_dir.display()))?,
-            )
+            );
+            segment_store = Some(seg.clone());
+            seg
         }
         None => Arc::new(MemoryStore::new()),
     };
@@ -431,10 +442,29 @@ async fn main() -> Result<()> {
             store.snapshot(&graph).await?;
             println!("snapshot: no-op - every acknowledged write is already durable");
         }
-        Cmd::Compact => {
-            store.compact(&graph).await?;
-            println!("compact: done (see the `store compacted` log line for the report)");
-        }
+        Cmd::Compact { codec } => match codec {
+            Some(name) => {
+                let codec = ontology_storage::parse_codec(&name)
+                    .with_context(|| format!("unknown codec `{name}` (json or postcard)"))?;
+                let seg = segment_store
+                    .as_ref()
+                    .context("--codec needs a persistent store (--data)")?;
+                let before = seg.codec();
+                let report = seg.compact_with_codec(&graph, codec).await?;
+                println!(
+                    "compact: {} -> {} codec; {} records, {} -> {} bytes",
+                    ontology_storage::codec_name(before),
+                    ontology_storage::codec_name(codec),
+                    report.records_after,
+                    report.bytes_before,
+                    report.bytes_after
+                );
+            }
+            None => {
+                store.compact(&graph).await?;
+                println!("compact: done (see the `store compacted` log line for the report)");
+            }
+        },
         Cmd::Reset => {
             store.reset().await?;
             println!("reset: store emptied (schema and instances); settings kept");
