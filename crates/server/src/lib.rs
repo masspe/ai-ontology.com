@@ -1414,6 +1414,19 @@ fn ingest_api_error(e: ontology_io::IngestError) -> ApiError {
     }
 }
 
+/// A path id that resolves to nothing is a 404. The graph reports the miss
+/// as a `GraphError` — which maps to 400 like every other graph refusal —
+/// so every handler that addresses an entity by its path id funnels the
+/// lookup through here first. Only ever wrapped around `get_*` lookups,
+/// whose sole failure mode is the unknown id.
+fn lookup<T>(
+    found: Result<T, ontology_graph::GraphError>,
+    what: &str,
+    id: u64,
+) -> Result<T, ApiError> {
+    found.map_err(|_| ApiError::NotFound(format!("{what} {id}")))
+}
+
 async fn compact(State(s): State<AppState>) -> Result<StatusCode, ApiError> {
     // No mutation may land between the snapshot and the truncation.
     let _w = s.writer.lock().await;
@@ -1557,7 +1570,7 @@ async fn get_concept(
     State(s): State<AppState>,
     Path(id): Path<u64>,
 ) -> Result<Json<Concept>, ApiError> {
-    let c = s.graph.get_concept(ConceptId(id))?;
+    let c = lookup(s.graph.get_concept(ConceptId(id)), "concept", id)?;
     Ok(Json(c))
 }
 
@@ -1648,6 +1661,7 @@ async fn update_concept(
     Json(patch): Json<ConceptPatch>,
 ) -> Result<Json<Concept>, ApiError> {
     let _w = s.writer.lock().await;
+    lookup(s.graph.get_concept(ConceptId(id)), "concept", id)?;
     let updated = s.graph.preview_concept_update(ConceptId(id), &patch)?;
     s.store
         .append(&LogRecord::update_concept(updated.clone()))
@@ -1667,7 +1681,7 @@ async fn delete_concept(
     // Journal the whole cascade under one durability barrier: the concept
     // and every incident relation go together, and a replay of any prefix
     // is harmless (deletes are idempotent).
-    let concept_type = s.graph.get_concept(cid)?.concept_type;
+    let concept_type = lookup(s.graph.get_concept(cid), "concept", id)?.concept_type;
     let cascade = s.graph.incident_relation_ids(cid)?;
     let mut records = Vec::with_capacity(1 + cascade.len());
     records.push(LogRecord::delete_concept(cid, concept_type));
@@ -1846,7 +1860,11 @@ async fn get_relation_handler(
     State(s): State<AppState>,
     Path(id): Path<u64>,
 ) -> Result<Json<Relation>, ApiError> {
-    Ok(Json(s.graph.get_relation(RelationId(id))?))
+    Ok(Json(lookup(
+        s.graph.get_relation(RelationId(id)),
+        "relation",
+        id,
+    )?))
 }
 
 async fn update_relation_handler(
@@ -1855,6 +1873,7 @@ async fn update_relation_handler(
     Json(patch): Json<RelationPatch>,
 ) -> Result<Json<Relation>, ApiError> {
     let _w = s.writer.lock().await;
+    lookup(s.graph.get_relation(RelationId(id)), "relation", id)?;
     let updated = s.graph.preview_relation_update(RelationId(id), &patch)?;
     s.store
         .append(&LogRecord::update_relation(updated.clone()))
@@ -1871,7 +1890,7 @@ async fn delete_relation_handler(
     let _w = s.writer.lock().await;
     let rid = RelationId(id);
     // 404 before touching the log; the type routes the tombstone.
-    let relation_type = s.graph.get_relation(rid)?.relation_type;
+    let relation_type = lookup(s.graph.get_relation(rid), "relation", id)?.relation_type;
     s.store
         .append(&LogRecord::delete_relation(rid, relation_type))
         .await
@@ -1913,7 +1932,7 @@ async fn get_rule_handler(
     State(s): State<AppState>,
     Path(id): Path<u64>,
 ) -> Result<Json<Rule>, ApiError> {
-    let r = s.graph.get_rule(RuleId(id))?;
+    let r = lookup(s.graph.get_rule(RuleId(id)), "rule", id)?;
     Ok(Json(r))
 }
 
@@ -1923,7 +1942,7 @@ async fn delete_rule_handler(
 ) -> Result<StatusCode, ApiError> {
     let _w = s.writer.lock().await;
     let rid = RuleId(id);
-    s.graph.get_rule(rid)?;
+    lookup(s.graph.get_rule(rid), "rule", id)?;
     s.store
         .append(&LogRecord::delete_rule(rid))
         .await
@@ -1938,6 +1957,7 @@ async fn update_rule_handler(
     Json(patch): Json<RulePatch>,
 ) -> Result<Json<Rule>, ApiError> {
     let _w = s.writer.lock().await;
+    lookup(s.graph.get_rule(RuleId(id)), "rule", id)?;
     let updated = s.graph.preview_rule_update(RuleId(id), &patch)?;
     s.store
         .append(&LogRecord::rule(updated.clone()))
@@ -1980,7 +2000,7 @@ async fn get_action_handler(
     State(s): State<AppState>,
     Path(id): Path<u64>,
 ) -> Result<Json<Action>, ApiError> {
-    let a = s.graph.get_action(ActionId(id))?;
+    let a = lookup(s.graph.get_action(ActionId(id)), "action", id)?;
     Ok(Json(a))
 }
 
@@ -1990,7 +2010,7 @@ async fn delete_action_handler(
 ) -> Result<StatusCode, ApiError> {
     let _w = s.writer.lock().await;
     let aid = ActionId(id);
-    s.graph.get_action(aid)?;
+    lookup(s.graph.get_action(aid), "action", id)?;
     s.store
         .append(&LogRecord::delete_action(aid))
         .await
@@ -2005,6 +2025,7 @@ async fn update_action_handler(
     Json(patch): Json<ActionPatch>,
 ) -> Result<Json<Action>, ApiError> {
     let _w = s.writer.lock().await;
+    lookup(s.graph.get_action(ActionId(id)), "action", id)?;
     let updated = s.graph.preview_action_update(ActionId(id), &patch)?;
     s.store
         .append(&LogRecord::action(updated.clone()))

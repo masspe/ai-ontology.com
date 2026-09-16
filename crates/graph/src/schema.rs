@@ -6,7 +6,7 @@
 // Dual-licensed: AGPL-3.0-or-later OR a commercial license
 // from Winven AI Sarl. See LICENSE and LICENSE-COMMERCIAL.md.
 
-use ahash::AHashMap;
+use ahash::{AHashMap, AHashSet};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{GraphError, GraphResult};
@@ -300,8 +300,16 @@ impl Ontology {
         let mut out: AHashMap<String, Vec<String>> = AHashMap::new();
         for name in self.concept_types.keys() {
             let mut acc = vec![name.clone()];
+            // `seen` bounds the walk: a parent cycle (refused by
+            // `validate_hierarchy`, but the read path must never rely on
+            // it) would otherwise loop forever.
+            let mut seen: AHashSet<&str> = AHashSet::new();
+            seen.insert(name.as_str());
             let mut stack: Vec<&str> = children.get(name.as_str()).cloned().unwrap_or_default();
             while let Some(c) = stack.pop() {
+                if !seen.insert(c) {
+                    continue;
+                }
                 acc.push(c.to_string());
                 if let Some(grand) = children.get(c) {
                     stack.extend(grand);
@@ -312,6 +320,37 @@ impl Ontology {
             out.insert(name.clone(), acc);
         }
         out
+    }
+
+    /// The `parent` chains must be acyclic: a type that is its own
+    /// ancestor has no effective domain, no finite descendant set and no
+    /// subtype answer. Unknown parents are tolerated here (the chain simply
+    /// stops), so out-of-order declarations keep working.
+    pub fn validate_hierarchy(&self) -> GraphResult<()> {
+        for start in self.concept_types.values() {
+            let mut cursor = start.parent.as_deref();
+            let mut hops = 0usize;
+            while let Some(p) = cursor {
+                if p == start.name {
+                    return Err(GraphError::ParentCycle {
+                        concept_type: start.name.clone(),
+                    });
+                }
+                hops += 1;
+                if hops > self.concept_types.len() {
+                    // Only reachable through a cycle that does not pass
+                    // through `start`; `start` is still on it.
+                    return Err(GraphError::ParentCycle {
+                        concept_type: start.name.clone(),
+                    });
+                }
+                cursor = self
+                    .concept_types
+                    .get(p)
+                    .and_then(|ct| ct.parent.as_deref());
+            }
+        }
+        Ok(())
     }
 
     fn invalidate_caches(&mut self) {
@@ -454,11 +493,16 @@ impl Ontology {
             return true;
         }
         let mut cursor = self.concept_types.get(child);
+        let mut hops = 0usize;
         while let Some(ct) = cursor {
             match &ct.parent {
                 Some(p) if p == ancestor => return true,
                 Some(p) => cursor = self.concept_types.get(p),
                 None => return false,
+            }
+            hops += 1;
+            if hops > self.concept_types.len() {
+                return false; // defensive: a parent cycle must not loop forever
             }
         }
         false
