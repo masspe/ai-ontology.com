@@ -541,20 +541,93 @@ partition pour que les lecteurs en cours terminent sur l'ancien mapping
 avant que le fichier ne disparaisse. Même mécanisme qu'en R11 pour le
 scellement.
 
-### 7.7 Coût en écriture — ordres de grandeur
+### 7.7 Coût en écriture — mesuré (phase 4, 2026-09-16)
 
-Un append de concept, en plus du coût mémoire déjà chiffré dans
-`PERFORMANCE.md` §6 (~30 µs) :
+Un append de concept (~1,3 Ko), chemin `prepare → append → apply` (R8),
+store de 500 000 concepts et 2 500 000 relations :
 
-| Poste | Coût |
+| Poste | Estimé (avant phase 4) | Mesuré |
+|---|---|---|
+| Sérialisation du payload | ~5 µs JSON, ~0,3 µs binaire | **1,0 µs JSON, 1,34 µs postcard** (criterion, concept 1,3 Ko) |
+| Désérialisation du payload | — | **3,8 µs JSON, 1,27 µs postcard** (3,0×) ; relation : 0,46 µs / 0,18 µs |
+| Append unitaire (1 enregistrement par barrière) | `fsync` 50–200 µs | **p50 367 µs, p99 1,0 ms** — dominé par le `fdatasync` |
+| Append par lots de 100 | — | **16 µs par enregistrement** (p99 24 µs), soit 23× l'unitaire |
+| Générateur (`append_batch` ×5 000, sans graphe) | — | 244 000 à 311 000 enregistrements/s |
+
+La sérialisation JSON est plus rapide que prévu et **plus rapide à écrire**
+que postcard (le miroir tagué coûte une conversion) ; le gain de postcard est
+à la lecture (3×) et sur le volume (−28 %). Sans group commit le `fsync`
+domine d'un facteur 20 ; avec, en lots de 100, le coût par enregistrement
+descend sous celui de l'insertion mémoire (`PERFORMANCE.md` §6).
+
+### 7.8 Hydratation, mémoire, compaction, requêtes — mesuré (phase 4)
+
+Conditions : `ontology bench` (binaire release, Windows 11, portable 14 threads,
+16 Go dont 4 à 5 Go libres, SSD NVMe), stores synthétiques du générateur
+(`--ns 5 --payload 1300`, noms courts H4, relations 80 % intra-domaine /
+20 % inter-domaines), une exécution par point, machine par ailleurs au repos.
+Les chiffres sont reproductibles avec les commandes du README (§ Benchmarks).
+
+**Hydratation (P0, tout en mémoire).** `decode` = parcours décodé de tout
+le store sans graphe (`scan_records`) ; `apply` = hydratation totale moins
+`decode`, c'est-à-dire la construction des index mémoire.
+
+| Store | Codec | Disque | Hydratation | dont décodage | dont `apply` | RSS |
+|---|---|---|---|---|---|---|
+| 200 k concepts, 1 M relations (1,2 M enr.) | JSON | 444 Mio | 10,7 s (112 k enr./s) | 2,9 s (27 %) | 7,8 s | +1 380 Mio |
+| idem | postcard | 338 Mio | 11,5 s (105 k enr./s) | 1,8 s (16 %) | 9,6 s | +1 314 Mio |
+| 500 k concepts, 2,5 M relations (3 M enr.) | JSON | 1 111 Mio | 23,1 s (130 k enr./s) | 3,7 s (16 %) | 19,4 s | +3 521 Mio |
+| idem | postcard | 842 Mio | 18,7 s (161 k enr./s) | 1,7 s (9 %) | 17,0 s | +3 295 Mio |
+| 1 domaine sur 5 (`--ns d0`), 500 k / 2,5 M | JSON | — | 2,7 s (100 k concepts, 400 k relations) | — | — | +710 Mio |
+
+Trois faits en sortent. (1) **La désérialisation ne domine pas** : elle pèse
+9 à 27 % de l'hydratation ; 73 à 91 % du temps est dans `apply`, c'est-à-dire
+dans les index mémoire de `PERFORMANCE.md` §4 rejoués mutation par mutation
+(§7.8 de ce document-là). L'hypothèse de §7.1 (« ~98 % du temps dans le
+parsing ») était fausse pour ce chemin : elle décrivait le coût d'un accès
+isolé, pas celui d'une hydratation qui construit les index. (2) Le codec
+binaire divise le décodage par 2 à 3 et le disque par 1,4, mais le temps
+d'hydratation total bouge de 0,93× à 1,24× : **en dessous du seuil de 3×
+fixé pour l'activer par défaut**. (3) L'hydratation sélective d'un domaine
+coûte proportionnellement à ce qu'elle charge : 2,7 s pour un cinquième du
+store.
+
+**Empreinte mémoire P0 (RSS, hydratation complète).**
+
+| Mesure | Résultat |
 |---|---|
-| Sérialisation du payload | ~5 µs en JSON, ~0,3 µs en bincode |
-| `write` bufferisé data + idx | ~0,2 µs (pas de `syscall` par enregistrement) |
-| `fsync` | 50–200 µs, **amorti par le group commit** |
-| Mise à jour `delta` d'adjacence | ~50 ns |
+| 500 k concepts, 0 relation | +1 649 Mio → **3,46 Ko par concept** (payload ~1,3 Ko + ~2,1 Ko d'index : nom, trigrammes, ensembles triés, propriétés) |
+| 100 k concepts, 2,5 M relations | +1 675 Mio → **~560 o par relation** (structure, adjacence dans 4 index, ensemble trié, chaîne du type) |
+| Vérification : 500 k / 2,5 M | prédit 3,1 Gio, mesuré 3,4 Gio |
+| **Extrapolation à la cible 10⁷ / 5×10⁷** | **~35 Go de concepts + ~28 Go de relations ≈ 62 Go** en P0 |
 
-Sans group commit, le `fsync` domine tout le reste d'un facteur 5. Avec, en
-lots de 100, le poste dominant redevient la sérialisation — donc §7.1.
+La cible « 10⁷ concepts et 5×10⁷ relations sur un nœud de 16 Go » n'est
+donc pas atteignable en P0, ce que la stratégie prévoyait (« en P1 sinon »),
+mais **P1 seul ne suffit pas non plus** : sortir les payloads de la RAM
+(P1) retire ~1,3 Ko par concept, soit ~13 Go sur 62 ; il reste ~49 Go dont
+28 Go de relations. Le palier qui compte pour la cible est le CSR de §6.3
+(P2–P4 : ~16 o par arête au lieu de ~560 o) et le slot de §6.2 pour les
+index de concepts. Voir §8.1 et `STORAGE-PLAN.md` §6.6 pour la décision.
+
+**Compaction complète** (réécriture, vérification par rejeu, permutation) :
+40 s pour 1,2 M enregistrements, 56 à 81 s pour 3 M (30 000 à 54 000
+enr./s), soit de l'ordre de **20 à 30 minutes pour la cible** — la
+vérification par rejeu est une hydratation complète de plus. La compaction
+par domaine (report documenté) et une vérification par comptage plutôt que
+par rejeu sont les deux leviers.
+
+**Requêtes (graphe hydraté, 500 k / 2,5 M, appels des endpoints).**
+
+| Requête | p50 | p99 |
+|---|---|---|
+| `GET /concepts` page de 200 à un offset aléatoire | 12–13 ms | 26–33 ms |
+| `?q=` trigrammes (3 caractères), 50 résultats | 0,22 ms | 3,6–4,8 ms |
+| `expand` profondeur 2 (~130 nœuds) | 1,1–1,3 ms | 2,3–3,1 ms |
+
+La page à offset aléatoire est **O(offset)** (parcours de l'ensemble trié
+jusqu'à l'offset) : 13 ms à 500 k concepts, donc ~250 ms à 10⁷. C'est le
+chantier T1 de `STORAGE-PLAN.md` (pagination par curseur), à faire avant
+toute phase 5, comme prévu.
 
 ---
 
@@ -605,6 +678,14 @@ qui a déclenché. Une dégradation qui ne se voit pas dans les logs est un
 bug.
 
 ### 8.1 Le budget, pas la RAM totale
+
+> **Mesuré en phase 4 (§7.8)** : en P0 un concept de 1,3 Ko coûte ~3,46 Ko
+> de RSS et une relation ~560 o. La cible 10⁷ / 5×10⁷ pèse ~62 Go en P0 ;
+> P1 en retire ~13 Go, le CSR (P2–P4) ~26 Go. L'affirmation « P1 supprime
+> ~90 % de l'empreinte » ci-dessous était vraie pour des payloads de
+> plusieurs Ko et peu de relations ; pour un ratio 1:5 avec des payloads de
+> 1,3 Ko, **les relations et les index de concepts pèsent plus que les
+> payloads**. L'ordre des paliers est à retrancher (`STORAGE-PLAN.md` §6.6).
 
 Le budget se lit dans l'environnement d'exécution, jamais dans
 `/proc/meminfo` `MemTotal` — un conteneur avec `memory.max = 2 Gi` sur un
