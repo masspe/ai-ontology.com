@@ -304,6 +304,14 @@ famille (H15) et, par partition, les zone maps : `base_seq`/`last_seq`,
 `payload_bytes` et `edges` (nécessaires à l'estimation R14). Une requête
 bornée à un domaine élague ses partitions avant d'ouvrir un fichier.
 
+`MANIFEST.codec` est le codec **d'écriture** : celui des prochains segments
+actifs. La lecture ne le consulte jamais — chaque en-tête d'enregistrement
+porte son propre octet `codec` (§4.2), si bien qu'un store peut contenir des
+segments scellés en JSON et des segments récents en binaire. Le changement
+de codec passe par une compaction complète (`compact --codec`), qui réécrit
+tout dans le nouveau codec et le fixe pour les appends suivants ; en cas
+d'échec la compaction laisse les anciens segments et rétablit l'ancien codec.
+
 ---
 
 ## 5. Hydratation
@@ -457,6 +465,27 @@ Tant qu'on reste en JSON, optimiser l'alignement, le CRC ou le nombre de
 (l'octet `codec` est prévu pour) : 10 à 20× sur la désérialisation, ~40 % de
 volume en moins sur les enregistrements `Ontology` qui répètent les mêmes
 clés. **C'est la seule optimisation dont le gain se voit sans instrument.**
+
+**Codec 1 — `postcard` (livré en phase 4).** `PropertyValue` est
+`#[serde(untagged)]` : c'est la forme que l'API HTTP et les fichiers JSON
+exposent, et elle reste telle. Un format auto-descriptif comme JSON lit un
+`untagged` en regardant la valeur ; `postcard` n'a pas de `deserialize_any`
+et ne peut pas. Le codec 1 sérialise donc un **miroir tagué**
+(`codec::StoredValue`, `StoredRecord`) converti depuis et vers les types du
+graphe ; les propriétés y sont triées par clé, donc deux enregistrements de
+même contenu donnent les mêmes octets. Ce miroir est le contrat disque du
+codec 1 : ordre des variantes et des champs gelés, on ajoute, on ne réordonne
+jamais. Le schéma `Ontology` ne contient pas de type `untagged` et est
+sérialisé tel quel.
+
+Une conséquence mesurée par les tests de propriété : le parseur JSON de
+`serde_json` n'est pas correctement arrondi par défaut et pouvait modifier un
+`f64` d'un ULP à la relecture. La fonctionnalité `float_roundtrip` est
+activée pour tout l'espace de travail ; le codec 0 est désormais exact bit à
+bit, comme le codec 1.
+
+Les chiffres mesurés (générateur, hydratation, append, requêtes,
+compaction) sont dans `STORAGE-PLAN.md` §6.6 et §7.7 ci-dessous.
 
 ### 7.2 `fsync`, multiplié par le nombre de domaines
 

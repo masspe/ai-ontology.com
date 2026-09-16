@@ -527,6 +527,27 @@ The CLI flag reads from a named environment variable rather than taking
 the literal value, so the token never appears in process listings or
 shell history. Comparison is constant-time.
 
+## Benchmarks (`ontology bench`)
+
+The measurements of `docs/STORAGE-PLAN.md` phase 4 are reproducible with a
+dedicated data directory (never point it at real data):
+
+```bash
+DATA=/tmp/bench-1m
+ontology --data $DATA bench gen --concepts 1000000 --relations 5000000 --ns 5 --payload 1300
+ontology --data $DATA bench hydrate           # open + load_into, then decode-only scan, RSS
+ontology --data $DATA bench query             # page 200, ?q= trigram, expand depth 2
+ontology --data $DATA bench append --n 2000 --batch 100
+ontology --data $DATA bench compact --codec postcard
+ontology --data $DATA bench hydrate --json    # same store, binary codec
+cargo bench -p ontology-storage --bench codec # per-record encode/decode, JSON vs postcard
+```
+
+`--json` prints one object per run. `ontology --data D compact --codec postcard`
+switches an existing store to the binary codec (whole-store compaction; every
+record header carries its codec, so JSON and postcard segments coexist until
+then).
+
 ## Testing
 
 ```bash
