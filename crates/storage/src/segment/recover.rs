@@ -58,7 +58,7 @@ pub struct Recovered {
 pub fn recover_segment(
     dir: &Path,
     partition_id: u32,
-    mut resolve: impl FnMut(Kind, &[u8]) -> Result<IndexFields, String>,
+    mut resolve: impl FnMut(Kind, u8, &[u8]) -> Result<IndexFields, String>,
 ) -> io::Result<Recovered> {
     let dpath = data_path(dir, partition_id);
     let ipath = idx_path(dir, partition_id);
@@ -116,7 +116,7 @@ pub fn recover_segment(
         };
         match decode_record(&data, at, true) {
             Ok(v) => {
-                let fields = match resolve(v.header.kind, v.payload) {
+                let fields = match resolve(v.header.kind, v.header.codec, v.payload) {
                     Ok(f) => f,
                     Err(e) => {
                         cut_reason = Some(refuse_unless_last(

@@ -25,6 +25,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing_subscriber::{fmt, EnvFilter};
 
+mod bench;
+
 #[derive(Parser, Debug)]
 #[command(name = "ontology", version, about = "Ontology graph + RAG CLI")]
 struct Cli {
@@ -118,6 +120,15 @@ enum Cmd {
     /// schema from the store, durably. Refused while a server holds the
     /// store (LOCK). Irreversible; `settings.json` is kept.
     Reset,
+    /// Benchmarks of `STORAGE-PLAN.md` phase 4: generate a large store,
+    /// time hydration, appends, queries and compaction. Requires `--data`.
+    Bench {
+        #[command(subcommand)]
+        cmd: bench::BenchCmd,
+        /// Print one JSON object instead of the human-readable table.
+        #[arg(long, global = true)]
+        json: bool,
+    },
     /// Migrate a legacy `graph.log` / `graph.snap` in `--data` into the
     /// segment store under `<data>/store/`. Runs automatically on startup
     /// when a legacy log is found and no store exists yet; this command
@@ -188,6 +199,16 @@ async fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
+
+    // Benchmarks manage the store themselves (they time its opening and
+    // hydration), so they run before the generic open below.
+    if let Cmd::Bench { cmd, json } = &cli.cmd {
+        let data = cli
+            .data
+            .clone()
+            .context("`bench` needs --data <dir> (a dedicated directory)")?;
+        return bench::run(cmd.clone(), data, *json).await;
+    }
 
     let store: Arc<dyn Store> = match &cli.data {
         Some(dir) => {
@@ -418,6 +439,7 @@ async fn main() -> Result<()> {
             store.reset().await?;
             println!("reset: store emptied (schema and instances); settings kept");
         }
+        Cmd::Bench { .. } => unreachable!("bench runs before the store is opened"),
         Cmd::Migrate => {
             let dir = cli
                 .data
