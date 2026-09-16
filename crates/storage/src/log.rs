@@ -31,10 +31,11 @@ pub enum RecordKind {
     DeleteRule(RuleId),
     DeleteAction(ActionId),
     /// A relation to insert **exactly** as stored: id kept, no symmetric
-    /// inverse materialized. Written only by compaction, for every live
+    /// inverse materialized. Written by compaction, for every live
     /// relation (both directions of a symmetric pair), so relation ids on
     /// disk stay equal to the ids the live graph uses — a later tombstone
-    /// then targets a record that exists (`STORAGE.md` §5).
+    /// then targets a record that exists (`STORAGE.md` §5) — and by bulk
+    /// writers that own their ids (`ontology bench gen`).
     RelationExact(Relation),
 }
 

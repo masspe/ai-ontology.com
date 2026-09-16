@@ -33,7 +33,7 @@ fn tempdir(tag: &str) -> PathBuf {
 
 /// Test resolver: index fields are a deterministic function of the payload
 /// so a rebuilt index must equal the original one byte for byte.
-fn resolve(_kind: Kind, payload: &[u8]) -> Result<IndexFields, String> {
+fn resolve(_kind: Kind, _codec: u8, payload: &[u8]) -> Result<IndexFields, String> {
     if payload.first() == Some(&0xFF) {
         return Err("poison payload".into());
     }

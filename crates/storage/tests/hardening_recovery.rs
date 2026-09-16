@@ -36,7 +36,7 @@ fn fields(payload: &[u8]) -> IndexFields {
         target_ns_id: 0,
     }
 }
-fn resolve(_k: Kind, p: &[u8]) -> Result<IndexFields, String> {
+fn resolve(_k: Kind, _codec: u8, p: &[u8]) -> Result<IndexFields, String> {
     Ok(fields(p))
 }
 fn onto_person() -> Ontology {

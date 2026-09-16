@@ -256,7 +256,7 @@ fn stream_entries_come_back_in_seq_order_across_partitions() {
         max_records: 3,
     };
     let mut next_partition = 1u32;
-    let mut resolve = |_k: Kind, p: &[u8]| -> Result<IndexFields, String> {
+    let mut resolve = |_k: Kind, _codec: u8, p: &[u8]| -> Result<IndexFields, String> {
         Ok(IndexFields {
             ns_id: 1,
             entity_id: p.len() as u64,
