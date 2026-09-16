@@ -216,20 +216,64 @@ impl<'a> Ingester<'a> {
         // Retry deferred records once both endpoints should now exist.
         for rec in deferred {
             if !self.apply(&rec).await? {
-                if let Record::NamedRelation {
-                    source_type,
-                    source_name,
-                    ..
-                } = &rec
-                {
-                    return Err(IngestError::UnknownNamed {
-                        concept_type: source_type.clone(),
-                        name: source_name.clone(),
-                    });
+                if let Some(err) = self.unresolved_error(&rec) {
+                    return Err(err);
                 }
+                // A type declaration whose prerequisites never came (a
+                // `@relation_type` naming an undeclared type, …) is dropped:
+                // the extractor is lenient by contract, and no instance can
+                // depend on a type that was never registered.
             }
         }
         self.flush().await
+    }
+
+    /// The error for an *instance* record that still cannot be applied after
+    /// the retry pass. Instances are never dropped silently: the stats would
+    /// otherwise claim less than the source contained without saying so.
+    /// `None` for dependent type declarations, which are dropped.
+    fn unresolved_error(&self, rec: &Record) -> Option<IngestError> {
+        match rec {
+            Record::NamedRelation {
+                source_type,
+                source_name,
+                target_type,
+                target_name,
+                ..
+            } => {
+                // Name the endpoint that is actually missing.
+                let (concept_type, name) =
+                    if self.graph.find_by_name(source_type, source_name).is_none() {
+                        (source_type, source_name)
+                    } else {
+                        (target_type, target_name)
+                    };
+                Some(IngestError::UnknownNamed {
+                    concept_type: concept_type.clone(),
+                    name: name.clone(),
+                })
+            }
+            Record::Rule(rule) => {
+                let missing = rule
+                    .applies_to
+                    .iter()
+                    .find(|cid| self.graph.get_concept(**cid).is_err());
+                Some(match missing {
+                    Some(cid) => GraphError::UnknownConcept(*cid).into(),
+                    None => GraphError::UnknownRelationType(rule.rule_type.clone()).into(),
+                })
+            }
+            Record::Action(action) => {
+                let missing = std::iter::once(action.subject)
+                    .chain(action.object)
+                    .find(|cid| self.graph.get_concept(*cid).is_err());
+                Some(match missing {
+                    Some(cid) => GraphError::UnknownConcept(cid).into(),
+                    None => GraphError::UnknownRelationType(action.action_type.clone()).into(),
+                })
+            }
+            _ => None,
+        }
     }
 
     /// Remember the schema before the first un-journaled declaration.
@@ -386,8 +430,12 @@ impl<'a> Ingester<'a> {
     async fn apply(&mut self, rec: &Record) -> Result<bool, IngestError> {
         match rec {
             Record::Ontology(o) => {
-                // Full schema replacement: durable first, then live.
+                // Full schema replacement: validated, then durable, then
+                // live. A schema the graph would refuse (it orphans instances,
+                // `STORAGE.md` §10.10) must never reach the disk, or the next
+                // replay fails on it.
                 self.flush().await?;
+                self.graph.check_ontology(o)?;
                 if let Some(s) = self.store {
                     s.append(&LogRecord::ontology(o.clone())).await?;
                 }

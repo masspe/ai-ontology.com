@@ -88,6 +88,12 @@ type ListRelationsCacheKey = (
 
 const LIST_RELATIONS_CACHE_CAP: usize = 256;
 
+/// Upper bound on the page buffer pre-allocated from a caller-supplied
+/// `limit`. The HTTP layer caps `limit` at 1000, but the graph API must not
+/// abort the process (`Vec::with_capacity` overflow / OOM) when handed a
+/// huge one (`STORAGE.md` R17: fail explicitly, never get killed).
+const LIST_PREALLOC_CAP: usize = 1024;
+
 /// In-memory ontology graph. Built for high read concurrency: lookups go
 /// through `DashMap`s (sharded, lock-free reads) while edge index updates
 /// take a single short write lock. Ordered listings are served from
@@ -265,6 +271,7 @@ impl OntologyGraph {
     /// disappear — the records on disk would otherwise be routed, validated
     /// or replayed against a schema that no longer describes them.
     fn validate_candidate(&self, old: &Ontology, candidate: &Ontology) -> GraphResult<()> {
+        candidate.validate_hierarchy()?;
         candidate.validate_namespaces()?;
         // Concept types: no domain move, no removal, while instances exist.
         for name in old.concept_types.keys() {
@@ -468,6 +475,12 @@ impl OntologyGraph {
                         concept.concept_type.clone(),
                     ));
                 }
+            }
+            // Refuse *before* observing: an out-of-range explicit id must
+            // not raise the watermark, or every later fresh allocation
+            // would be out of range too.
+            if !concept.id.fits_storage() {
+                return Err(GraphError::ConceptIdOutOfRange(concept.id));
             }
             self.ids.observe_concept(concept.id);
         }
@@ -829,7 +842,12 @@ impl OntologyGraph {
             .ok_or(GraphError::UnknownRelation(updated.id))?;
         entry.weight = updated.weight;
         entry.properties = updated.properties;
-        Ok(entry.clone())
+        let snapshot = entry.clone();
+        drop(entry);
+        // R2: the relation set changed — the `list_relations_page` cache
+        // and the HTTP ETag both key on this generation.
+        self.bump_relations_gen();
+        Ok(snapshot)
     }
 
     /// Apply a partial update to an existing relation. Only `weight` and
@@ -1494,9 +1512,13 @@ impl OntologyGraph {
                     .collect();
                 drop(idx);
 
+                // Candidates arrive in id order, not in output order, so
+                // every survivor must be collected before sorting — an early
+                // exit at `offset + limit` would page over the wrong subset
+                // when `track_total` is off. The intersection is already the
+                // selective step; `total` is simply exact here.
                 let mut survivors: Vec<(String, String, ConceptId, Concept)> =
                     Vec::with_capacity(candidates.len());
-                let cap = offset.saturating_add(limit);
                 for id in candidates.drain(..) {
                     let Some(c) = self.concepts.get(&id) else {
                         continue;
@@ -1510,11 +1532,20 @@ impl OntologyGraph {
                         continue;
                     }
                     survivors.push((c.concept_type.clone(), c.name.clone(), id, c.clone()));
-                    if !track_total && survivors.len() >= cap {
-                        break;
-                    }
                 }
-                survivors.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+                // R6: same order as the needle-less listing with the same
+                // filters — `(name, id)` across the buckets of a type filter
+                // (the k-way merge below), `(concept_type, name, id)` for the
+                // global scan.
+                if type_filter.is_some() {
+                    survivors.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.2.cmp(&b.2)));
+                } else {
+                    survivors.sort_by(|a, b| {
+                        a.0.cmp(&b.0)
+                            .then_with(|| a.1.cmp(&b.1))
+                            .then_with(|| a.2.cmp(&b.2))
+                    });
+                }
                 let total = survivors.len();
                 let page: Vec<Concept> = survivors
                     .into_iter()
@@ -1527,7 +1558,7 @@ impl OntologyGraph {
         }
 
         let mut total = 0usize;
-        let mut page: Vec<Concept> = Vec::with_capacity(limit);
+        let mut page: Vec<Concept> = Vec::with_capacity(limit.min(LIST_PREALLOC_CAP));
 
         let mut consume = |name: &str, id: &ConceptId| -> bool {
             if let Some(n) = name_substring_lowercase {
@@ -1733,7 +1764,7 @@ impl OntologyGraph {
             };
             candidates.sort_unstable();
             let mut total = 0usize;
-            let mut page: Vec<Relation> = Vec::with_capacity(limit);
+            let mut page: Vec<Relation> = Vec::with_capacity(limit.min(LIST_PREALLOC_CAP));
             for rid in &candidates {
                 let Some(rel) = self.relations.get(rid) else {
                     continue;
@@ -1767,7 +1798,7 @@ impl OntologyGraph {
 
         let idx = self.relations_sorted.read();
         let mut total = 0usize;
-        let mut page: Vec<Relation> = Vec::with_capacity(limit);
+        let mut page: Vec<Relation> = Vec::with_capacity(limit.min(LIST_PREALLOC_CAP));
         for rid in idx.iter() {
             let Some(rel) = self.relations.get(rid) else {
                 continue;

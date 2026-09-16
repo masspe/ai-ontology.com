@@ -159,7 +159,7 @@ pub fn extract_from_text_chunked(
     // and freezes the UI when rendered. Directive parsing below still runs over
     // the *full* body, so capping the stored description loses no structure.
     let mut doc = Concept::new(ConceptId(0), doc_type.to_string(), doc_name.to_string());
-    let fragments: Vec<String> = if chunk_chars > 0
+    let mut fragments: Vec<String> = if chunk_chars > 0
         && !crate::charset::looks_binary(body)
         && body.chars().count() > chunk_chars
     {
@@ -167,6 +167,12 @@ pub fn extract_from_text_chunked(
     } else {
         Vec::new()
     };
+    // A body made only of whitespace has nothing to fragment: `chunk_text`
+    // falls back to one empty chunk, which must not become an empty
+    // fragment concept plus its link.
+    if fragments.iter().all(|f| f.trim().is_empty()) {
+        fragments.clear();
+    }
     if fragments.is_empty() {
         doc.description = document_description(body);
     } else {
@@ -768,6 +774,32 @@ Some preamble.
             .expect("document concept missing");
         assert!(doc.description.len() <= MAX_DOC_DESCRIPTION_BYTES + 4);
         assert!(doc.description.ends_with('…'));
+    }
+
+    /// `cap_fragments` is the identity up to the cap, and above it merges
+    /// consecutive chunks so nothing is dropped and order is kept; the
+    /// last group may be short.
+    #[test]
+    fn cap_fragments_is_identity_up_to_the_cap_and_merges_losslessly_above_it() {
+        let at_cap: Vec<String> = (0..MAX_FRAGMENTS_PER_DOCUMENT)
+            .map(|i| format!("c{i}"))
+            .collect();
+        assert_eq!(cap_fragments(at_cap.clone()), at_cap);
+
+        let over: Vec<String> = (0..MAX_FRAGMENTS_PER_DOCUMENT + 1)
+            .map(|i| format!("c{i}"))
+            .collect();
+        let capped = cap_fragments(over.clone());
+        assert_eq!(capped.len(), MAX_FRAGMENTS_PER_DOCUMENT / 2 + 1);
+        assert_eq!(capped[0], "c0\n\nc1");
+        assert_eq!(capped.last().unwrap(), "c2000", "odd one out stays alone");
+        assert_eq!(capped.join("\n\n"), over.join("\n\n"));
+
+        let many: Vec<String> = (0..4_501).map(|i| format!("c{i}")).collect();
+        let capped = cap_fragments(many.clone());
+        assert_eq!(capped.len(), 1_501, "ceil(4501 / 2000) = 3 per group");
+        assert!(capped.len() <= MAX_FRAGMENTS_PER_DOCUMENT);
+        assert_eq!(capped.join("\n\n"), many.join("\n\n"));
     }
 
     #[test]

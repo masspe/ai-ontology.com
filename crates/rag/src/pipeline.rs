@@ -593,6 +593,13 @@ mod tests {
             ..Default::default()
         })
         .unwrap();
+        o.add_relation_type(RelationType {
+            name: "leads_to".into(),
+            domain: "Topic".into(),
+            range: "Topic".into(),
+            ..Default::default()
+        })
+        .unwrap();
         o
     }
 
@@ -643,5 +650,483 @@ mod tests {
         assert!(!ans.retrieved.is_empty());
         assert!(ans.answer.starts_with("[echo]"));
         assert!(!ans.subgraph.concepts.is_empty());
+    }
+
+    // -- hardening: citation parsing -----------------------------------
+
+    /// `Cited: []`, an upper-case label, a leading BOM and an `Answer:`
+    /// prefix on the body are all handled; the body keeps its own lines.
+    #[test]
+    fn parse_cited_handles_empty_brackets_uppercase_bom_and_answer_prefix() {
+        let p =
+            parse_cited_answer("Cited: []\nAnswer: I don't know based on the supplied context.");
+        assert!(p.cited.is_empty());
+        assert_eq!(p.body, "I don't know based on the supplied context.");
+
+        let p = parse_cited_answer("\u{feff}  CITED: [#5]\nanswer: Yes.\nSecond line.");
+        assert_eq!(p.cited, vec![ConceptId(5)]);
+        assert_eq!(p.body, "Yes.\nSecond line.");
+
+        // A cited line that is not the first line, with prose before it:
+        // the `Answer:` label is only stripped when it opens the body.
+        let p = parse_cited_answer("Sure!\nCited: [#2]\nAnswer: ok");
+        assert_eq!(p.cited, vec![ConceptId(2)]);
+        assert_eq!(p.body, "Sure!\nAnswer: ok");
+    }
+
+    /// Pins the contract: only the first five lines are scanned for the
+    /// `Cited:` label, and digits in the prose are never taken as ids.
+    #[test]
+    fn parse_cited_only_scans_the_first_five_lines_and_ignores_body_digits() {
+        let late = "a\nb\nc\nd\ne\nCited: [#1]\nAnswer: x";
+        let p = parse_cited_answer(late);
+        assert!(p.cited.is_empty());
+        assert_eq!(p.body, late);
+
+        let p = parse_cited_answer("Cited: [#3]\nAnswer: Built in 1999 by #42.");
+        assert_eq!(p.cited, vec![ConceptId(3)]);
+        assert_eq!(p.body, "Built in 1999 by #42.");
+    }
+
+    /// Fences, commentary around the object, braces inside string literals
+    /// and escaped quotes do not confuse the block extractor.
+    #[test]
+    fn extract_json_block_handles_fences_commentary_and_braces_in_strings() {
+        let raw = "Sure, here it is:\n{\"a\": \"}{\\\"\", \"b\": {\"c\": 1}}\nHope this helps.";
+        assert_eq!(
+            extract_json_block(raw).as_deref(),
+            Some("{\"a\": \"}{\\\"\", \"b\": {\"c\": 1}}")
+        );
+        assert_eq!(
+            extract_json_block("```json\n{\"a\":1}\n```").as_deref(),
+            Some("{\"a\":1}")
+        );
+        assert_eq!(
+            extract_json_block("\u{feff}```\n{\"a\":1}\n```\ntrailing").as_deref(),
+            Some("{\"a\":1}")
+        );
+        assert!(extract_json_block("no object here").is_none());
+        assert!(
+            extract_json_block("{\"a\": {\"b\": 1}").is_none(),
+            "unbalanced"
+        );
+        assert!(extract_json_block("{\"a\": \"unterminated}").is_none());
+    }
+
+    // -- hardening: pipeline behaviour ---------------------------------
+
+    /// Records every request and answers from a script, one entry per call
+    /// (the last entry repeats). `{first_allowed}` in a scripted answer is
+    /// replaced by the last `#<id>` found in the last user message — a
+    /// subgraph id on the first call, an allowed id on a retry.
+    struct ScriptedModel {
+        script: Vec<&'static str>,
+        requests: std::sync::Mutex<Vec<LlmRequest>>,
+    }
+    impl ScriptedModel {
+        fn new(script: &[&'static str]) -> Arc<Self> {
+            Arc::new(Self {
+                script: script.to_vec(),
+                requests: Default::default(),
+            })
+        }
+        fn calls(&self) -> usize {
+            self.requests.lock().unwrap().len()
+        }
+        fn request(&self, i: usize) -> LlmRequest {
+            self.requests.lock().unwrap()[i].clone()
+        }
+    }
+    #[async_trait::async_trait]
+    impl LanguageModel for ScriptedModel {
+        async fn generate(&self, req: &LlmRequest) -> Result<LlmResponse, LlmError> {
+            let mut reqs = self.requests.lock().unwrap();
+            let idx = reqs.len().min(self.script.len() - 1);
+            reqs.push(req.clone());
+            let last_user = req
+                .messages
+                .iter()
+                .rev()
+                .find(|m| m.role == crate::model::Role::User)
+                .map(|m| m.content.as_str())
+                .unwrap_or("");
+            let first_id = last_user
+                .split('#')
+                .skip(1)
+                .map(|s| {
+                    s.chars()
+                        .take_while(char::is_ascii_digit)
+                        .collect::<String>()
+                })
+                .filter(|d| !d.is_empty())
+                .last()
+                .unwrap_or_default();
+            Ok(LlmResponse {
+                content: self.script[idx].replace("{first_allowed}", &first_id),
+                model: "scripted".into(),
+                stop_reason: Some("end_turn".into()),
+                usage: TokenUsage::default(),
+            })
+        }
+    }
+
+    /// Three chained topics so retrieval depth and top-k are observable.
+    fn chained_graph() -> Arc<OntologyGraph> {
+        let g = OntologyGraph::with_arc(ont());
+        let a = g
+            .upsert_concept(
+                Concept::new(Default::default(), "Topic", "Alpha")
+                    .with_description("alpha is the first topic"),
+            )
+            .unwrap();
+        let b = g
+            .upsert_concept(
+                Concept::new(Default::default(), "Topic", "Beta")
+                    .with_description("beta is the second topic"),
+            )
+            .unwrap();
+        let c = g
+            .upsert_concept(
+                Concept::new(Default::default(), "Topic", "Gamma")
+                    .with_description("gamma is the third topic"),
+            )
+            .unwrap();
+        g.add_relation(Relation::new(Default::default(), "leads_to", a, b))
+            .unwrap();
+        g.add_relation(Relation::new(Default::default(), "leads_to", b, c))
+            .unwrap();
+        g
+    }
+
+    fn pipeline_over(g: Arc<OntologyGraph>, llm: Arc<dyn LanguageModel>) -> RagPipeline {
+        let idx = Arc::new(HybridIndex::with_default_embedder(g));
+        idx.reindex_all();
+        RagPipeline::new(idx, llm)
+    }
+
+    /// An empty knowledge base still answers: nothing retrieved, no
+    /// citations, and the body is the raw answer when no `Cited:` line exists.
+    #[tokio::test]
+    async fn empty_graph_answers_without_citations() {
+        let g = OntologyGraph::with_arc(ont());
+        let pipe = pipeline_over(g, Arc::new(EchoModel));
+        let ans = pipe.answer("anything?").await.unwrap();
+        assert!(ans.retrieved.is_empty());
+        assert!(ans.subgraph.concepts.is_empty());
+        assert!(ans.cited.is_empty());
+        assert!(ans.answer.starts_with("[echo] Use the context below"));
+        assert!(ans.answer.ends_with("Question: anything?"));
+        assert_eq!(ans.answer_body, ans.answer);
+        assert_eq!(ans.model, "echo");
+    }
+
+    /// `top_k` bounds the seeds and `expansion.max_depth` bounds the
+    /// subgraph, both flowing from the `RetrievalRequest` unchanged.
+    #[tokio::test]
+    async fn retrieval_request_top_k_and_depth_are_honored() {
+        let g = chained_graph();
+        let pipe = pipeline_over(g.clone(), Arc::new(EchoModel));
+        let alpha = g.find_by_name("Topic", "Alpha").unwrap();
+
+        let mut req = RetrievalRequest {
+            query: "alpha first topic".into(),
+            top_k: 1,
+            ..Default::default()
+        };
+        req.expansion.max_depth = 0;
+        let ans = pipe.answer_with(req.clone()).await.unwrap();
+        assert_eq!(ans.retrieved.len(), 1);
+        assert_eq!(ans.retrieved[0].id, alpha);
+        assert_eq!(ans.subgraph.concepts.len(), 1, "depth 0 = seeds only");
+        assert!(ans.subgraph.relations.is_empty());
+        assert_eq!(ans.query, "alpha first topic");
+
+        req.expansion.max_depth = 2;
+        let ans = pipe.answer_with(req).await.unwrap();
+        assert_eq!(ans.retrieved.len(), 1);
+        assert_eq!(ans.subgraph.concepts.len(), 3, "two hops reach Gamma");
+        assert_eq!(ans.subgraph.relations.len(), 2);
+    }
+
+    /// The prompt carries the cached ontology as `cached_context`, the
+    /// pipeline's sampling settings, and one user turn with the question.
+    #[tokio::test]
+    async fn answer_request_carries_cached_ontology_and_pipeline_settings() {
+        let model = ScriptedModel::new(&["Cited: []\nAnswer: none"]);
+        let mut pipe = pipeline_over(chained_graph(), model.clone());
+        pipe.max_tokens = 55;
+        pipe.temperature = 0.25;
+        pipe.max_context_chars = 4000;
+        pipe.answer("beta").await.unwrap();
+        let req = model.request(0);
+        assert_eq!(req.max_tokens, 55);
+        assert_eq!(req.temperature, 0.25);
+        assert_eq!(req.system.as_deref(), Some(PromptBuilder::system_message()));
+        let cached = req
+            .cached_context
+            .expect("ontology is sent as cached context");
+        assert!(cached.starts_with("# Ontology\n"));
+        assert!(cached.contains("- Topic :: subject of study"));
+        assert_eq!(req.messages.len(), 1);
+        assert_eq!(req.messages[0].role, crate::model::Role::User);
+        assert!(req.messages[0].content.contains("---RETRIEVED---"));
+        assert!(req.messages[0].content.ends_with("Question: beta"));
+    }
+
+    /// Citing an id outside the subgraph triggers exactly one retry whose
+    /// reminder names the bad id and the allowed set; a clean retry wins.
+    #[tokio::test]
+    async fn invalid_citations_trigger_one_retry_with_the_allowed_ids() {
+        let model = ScriptedModel::new(&[
+            "Cited: [#999]\nAnswer: made up",
+            "Cited: [#{first_allowed}]\nAnswer: grounded",
+        ]);
+        let pipe = pipeline_over(chained_graph(), model.clone());
+        let ans = pipe.answer("alpha").await.unwrap();
+        assert_eq!(model.calls(), 2);
+        assert_eq!(ans.answer_body, "grounded");
+        assert_eq!(ans.cited.len(), 1);
+        assert!(ans.subgraph.concepts.iter().any(|c| c.id == ans.cited[0]));
+
+        let retry = model.request(1);
+        assert_eq!(retry.messages.len(), 3, "original, first answer, reminder");
+        assert_eq!(retry.messages[1].role, crate::model::Role::Assistant);
+        assert_eq!(retry.messages[1].content, "Cited: [#999]\nAnswer: made up");
+        let reminder = &retry.messages[2].content;
+        assert!(reminder.contains("#999"), "{reminder}");
+        for c in &ans.subgraph.concepts {
+            assert!(reminder.contains(&format!("#{}", c.id.0)), "{reminder}");
+        }
+    }
+
+    /// When the retry is no better the first answer is kept, with the
+    /// invented ids filtered out of `cited`.
+    #[tokio::test]
+    async fn retry_keeps_the_first_answer_when_the_retry_is_no_better() {
+        let model = ScriptedModel::new(&["Cited: [#999]\nAnswer: made up"]);
+        let pipe = pipeline_over(chained_graph(), model.clone());
+        let ans = pipe.answer("alpha").await.unwrap();
+        assert_eq!(model.calls(), 2, "exactly one retry, never more");
+        assert!(ans.cited.is_empty());
+        assert_eq!(ans.answer, "Cited: [#999]\nAnswer: made up");
+        assert_eq!(ans.answer_body, "made up");
+    }
+
+    /// Valid citations are kept in ascending order and no retry happens.
+    #[tokio::test]
+    async fn valid_citations_need_no_retry() {
+        let model =
+            ScriptedModel::new(&["Cited: [#{first_allowed}, #{first_allowed}]\nAnswer: ok"]);
+        let pipe = pipeline_over(chained_graph(), model.clone());
+        let ans = pipe.answer("gamma").await.unwrap();
+        assert_eq!(model.calls(), 1);
+        assert_eq!(ans.cited.len(), 1, "duplicates collapse");
+        assert_eq!(ans.answer_body, "ok");
+    }
+
+    /// Transitive relation types widen the subgraph along their closure
+    /// even when the expansion depth is zero, with depths marked seed + 1.
+    #[tokio::test]
+    async fn transitive_relations_enrich_the_subgraph_beyond_expansion_depth() {
+        let mut o = Ontology::new();
+        o.add_concept_type(ConceptType {
+            name: "Company".into(),
+            ..Default::default()
+        });
+        o.add_relation_type(RelationType {
+            name: "parent_company".into(),
+            domain: "Company".into(),
+            range: "Company".into(),
+            transitive: true,
+            ..Default::default()
+        })
+        .unwrap();
+        let g = OntologyGraph::with_arc(o);
+        let a = g
+            .upsert_concept(Concept::new(Default::default(), "Company", "Acme Robotics"))
+            .unwrap();
+        let b = g
+            .upsert_concept(Concept::new(Default::default(), "Company", "Acme Holding"))
+            .unwrap();
+        let c = g
+            .upsert_concept(Concept::new(
+                Default::default(),
+                "Company",
+                "Umbrella Group",
+            ))
+            .unwrap();
+        g.add_relation(Relation::new(Default::default(), "parent_company", a, b))
+            .unwrap();
+        g.add_relation(Relation::new(Default::default(), "parent_company", b, c))
+            .unwrap();
+        let pipe = pipeline_over(g, Arc::new(EchoModel));
+        let mut req = RetrievalRequest {
+            query: "Acme Robotics".into(),
+            top_k: 1,
+            ..Default::default()
+        };
+        req.expansion.max_depth = 0;
+        let ans = pipe.answer_with(req).await.unwrap();
+        assert_eq!(ans.retrieved[0].id, a);
+        let ids: std::collections::HashSet<ConceptId> =
+            ans.subgraph.concepts.iter().map(|c| c.id).collect();
+        assert!(ids.contains(&b) && ids.contains(&c), "{ids:?}");
+        assert_eq!(ans.subgraph.depth_of.get(&c), Some(&1));
+    }
+
+    // -- hardening: generation helpers ---------------------------------
+
+    /// No `{` in the answer and a JSON object that is not an `Ontology`
+    /// are both `Parse` errors carrying the raw answer for display.
+    #[tokio::test]
+    async fn generate_ontology_maps_non_json_and_bad_schema_to_parse_errors() {
+        let pipe = pipeline_over(chained_graph(), Arc::new(EchoModel));
+        match pipe.generate_ontology("a brief").await {
+            Err(OntologyGenError::Parse { raw, error }) => {
+                assert!(raw.starts_with("[echo] Brief:\na brief"), "{raw}");
+                assert_eq!(error, "no JSON object found in response");
+            }
+            other => panic!("expected Parse, got {other:?}"),
+        }
+        let model = ScriptedModel::new(&[r#"{"concept_types": []}"#]);
+        let pipe = pipeline_over(chained_graph(), model);
+        match pipe.generate_ontology("a brief").await {
+            Err(OntologyGenError::Parse { raw, error }) => {
+                assert_eq!(raw, r#"{"concept_types": []}"#);
+                assert_ne!(error, "no JSON object found in response");
+            }
+            other => panic!("expected Parse, got {other:?}"),
+        }
+    }
+
+    /// A fenced ontology with commentary parses; the request uses the
+    /// strict-JSON system prompt, at least 2 048 tokens and temperature 0.
+    #[tokio::test]
+    async fn generate_ontology_accepts_fenced_json_and_pins_request_shape() {
+        let model = ScriptedModel::new(&["Here you go:\n```json\n{\n  \"concept_types\": {\"Person\": {\"name\": \"Person\", \"parent\": null, \"description\": \"a human\", \"properties\": null}},\n  \"relation_types\": {\"knows\": {\"name\": \"knows\", \"domain\": \"Person\", \"range\": \"Person\", \"cardinality\": \"ManyToMany\", \"symmetric\": true, \"description\": \"\"}},\n  \"rule_types\": {},\n  \"action_types\": {}\n}\n```\nLet me know if you want changes."]);
+        let mut pipe = pipeline_over(chained_graph(), model.clone());
+        pipe.max_tokens = 100;
+        pipe.temperature = 0.9;
+        let onto = pipe
+            .generate_ontology("  people who know each other  ")
+            .await
+            .unwrap();
+        assert!(onto.concept_types.contains_key("Person"));
+        assert!(onto.relation_types["knows"].symmetric);
+        let req = model.request(0);
+        assert_eq!(req.max_tokens, 2048, "raised to the generation floor");
+        assert_eq!(req.temperature, 0.0);
+        assert!(req.cached_context.is_none());
+        assert_eq!(
+            req.system.as_deref(),
+            Some(PromptBuilder::ontology_generation_system_message())
+        );
+        assert_eq!(
+            req.messages[0].content,
+            "Brief:\npeople who know each other\n\nReturn the JSON ontology document now."
+        );
+    }
+
+    /// `generate_rule` fills defaults for optional fields, requires `name`,
+    /// and floors `max_tokens` at 1 024.
+    #[tokio::test]
+    async fn generate_rule_parses_the_documented_shape_and_requires_name() {
+        let model = ScriptedModel::new(&[r#"{"name": "InvoiceNeedsContract", "strict": true}"#]);
+        let mut pipe = pipeline_over(chained_graph(), model.clone());
+        pipe.max_tokens = 10;
+        let rule = pipe
+            .generate_rule(
+                "every invoice bills a contract",
+                "constraint",
+                &["Invoice".into()],
+            )
+            .await
+            .unwrap();
+        assert_eq!(rule.name, "InvoiceNeedsContract");
+        assert!(rule.strict);
+        assert_eq!((rule.when.as_str(), rule.then.as_str()), ("", ""));
+        let req = model.request(0);
+        assert_eq!(req.max_tokens, 1024);
+        assert_eq!(
+            req.messages[0].content,
+            "Rule type: constraint\nApplies to concepts: Invoice\n\nPrompt:\nevery invoice bills a contract\n\nReturn the JSON rule object now."
+        );
+
+        let model = ScriptedModel::new(&[r#"{"when": "x", "then": "y"}"#]);
+        let pipe = pipeline_over(chained_graph(), model);
+        match pipe.generate_rule("p", "t", &[]).await {
+            Err(OntologyGenError::Parse { error, .. }) => {
+                assert!(error.contains("name"), "{error}")
+            }
+            other => panic!("expected Parse, got {other:?}"),
+        }
+    }
+
+    // -- hardening: streaming ------------------------------------------
+
+    /// The stream is exactly `Retrieved`, then tokens, then one `End`.
+    #[tokio::test]
+    async fn answer_stream_emits_retrieved_then_tokens_then_end() {
+        let pipe = pipeline_over(chained_graph(), Arc::new(EchoModel));
+        let stream = pipe
+            .answer_stream(RetrievalRequest {
+                query: "alpha".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let events: Vec<RagStreamEvent> = stream.map(|e| e.unwrap()).collect().await;
+        assert!(events.len() >= 3, "{events:?}");
+        match &events[0] {
+            RagStreamEvent::Retrieved {
+                query,
+                scored,
+                subgraph,
+            } => {
+                assert_eq!(query, "alpha");
+                assert!(!scored.is_empty());
+                assert!(!subgraph.concepts.is_empty());
+            }
+            other => panic!("first frame must be Retrieved, got {other:?}"),
+        }
+        let middle = &events[1..events.len() - 1];
+        assert!(middle
+            .iter()
+            .all(|e| matches!(e, RagStreamEvent::Token { .. })));
+        let text: String = middle
+            .iter()
+            .map(|e| match e {
+                RagStreamEvent::Token { text } => text.as_str(),
+                _ => "",
+            })
+            .collect();
+        assert!(text.starts_with("[echo] "));
+        match events.last().unwrap() {
+            RagStreamEvent::End {
+                model, stop_reason, ..
+            } => {
+                assert_eq!(model, "echo");
+                assert_eq!(stop_reason.as_deref(), Some("end_turn"));
+            }
+            other => panic!("last frame must be End, got {other:?}"),
+        }
+    }
+
+    /// The wire shape the web client depends on: a `type` tag and a `text`
+    /// key for tokens, snake_case tags everywhere.
+    #[test]
+    fn rag_stream_event_serializes_with_snake_case_tags() {
+        let v = serde_json::to_value(RagStreamEvent::Token { text: "hi".into() }).unwrap();
+        assert_eq!(v, serde_json::json!({"type": "token", "text": "hi"}));
+        let v = serde_json::to_value(RagStreamEvent::End {
+            usage: TokenUsage::default(),
+            model: "m".into(),
+            stop_reason: None,
+        })
+        .unwrap();
+        assert_eq!(v["type"], "end");
+        assert_eq!(v["model"], "m");
+        let back: RagStreamEvent = serde_json::from_str(r#"{"type":"end"}"#).unwrap();
+        assert!(matches!(back, RagStreamEvent::End { model, .. } if model.is_empty()));
     }
 }
