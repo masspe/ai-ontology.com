@@ -129,3 +129,93 @@ pub(crate) fn apply(graph: &Arc<OntologyGraph>, r: LogRecord) -> StoreResult<()>
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ontology_graph::{Concept, ConceptId, ConceptType, Ontology};
+
+    fn schema() -> Ontology {
+        let mut o = Ontology::new();
+        o.add_concept_type(ConceptType {
+            name: "Person".into(),
+            ..Default::default()
+        });
+        o
+    }
+
+    /// `reset` empties the store durably (here: in RAM) and the store keeps
+    /// accepting records that replay on their own afterwards.
+    #[tokio::test]
+    async fn reset_clears_every_record_and_the_store_stays_usable() {
+        let store = MemoryStore::new();
+        store.append(&LogRecord::ontology(schema())).await.unwrap();
+        store
+            .append(&LogRecord::concept(Concept::new(
+                ConceptId(1),
+                "Person",
+                "a",
+            )))
+            .await
+            .unwrap();
+        assert_eq!(store.len(), 2);
+        assert_eq!(store.records()[1].seq, 2);
+
+        store.reset().await.unwrap();
+        assert!(store.is_empty());
+        assert_eq!(store.len(), 0);
+        let g = OntologyGraph::with_arc(Ontology::new());
+        store.load_into(&g).await.unwrap();
+        assert_eq!(g.concept_count(), 0);
+        assert!(g.with_ontology(|o| o.concept_types.is_empty()));
+
+        store.append(&LogRecord::ontology(schema())).await.unwrap();
+        store
+            .append(&LogRecord::concept(Concept::new(
+                ConceptId(1),
+                "Person",
+                "b",
+            )))
+            .await
+            .unwrap();
+        let g = OntologyGraph::with_arc(Ontology::new());
+        store.load_into(&g).await.unwrap();
+        assert_eq!(g.concept_count(), 1);
+        assert!(g.find_by_name("Person", "b").is_some());
+        // Idempotent.
+        store.reset().await.unwrap();
+        store.reset().await.unwrap();
+        assert!(store.is_empty());
+    }
+
+    /// Replay is idempotent for tombstones: a `DeleteConcept` of an unknown
+    /// id (already gone, or never there) is a no-op, not an error.
+    #[tokio::test]
+    async fn replaying_a_tombstone_of_an_unknown_entity_is_a_no_op() {
+        let store = MemoryStore::new();
+        store.append(&LogRecord::ontology(schema())).await.unwrap();
+        store
+            .append(&LogRecord::concept(Concept::new(
+                ConceptId(1),
+                "Person",
+                "a",
+            )))
+            .await
+            .unwrap();
+        store
+            .append(&LogRecord::delete_concept_unrouted(ConceptId(1)))
+            .await
+            .unwrap();
+        store
+            .append(&LogRecord::delete_concept_unrouted(ConceptId(1)))
+            .await
+            .unwrap();
+        store
+            .append(&LogRecord::delete_concept_unrouted(ConceptId(42)))
+            .await
+            .unwrap();
+        let g = OntologyGraph::with_arc(Ontology::new());
+        store.load_into(&g).await.unwrap();
+        assert_eq!(g.concept_count(), 0);
+    }
+}

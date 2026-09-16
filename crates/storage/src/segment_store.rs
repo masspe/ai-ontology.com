@@ -536,6 +536,14 @@ impl SegmentStore {
                 "`{META_NS}` is the schema stream, not a graph domain"
             )));
         }
+        // The schema is validated before it is journaled (`check_ontology`),
+        // but the store must not trust that: a domain name becomes a
+        // directory under the root, so a malformed one is refused here too.
+        if !ontology_graph::is_valid_ns(name) {
+            return Err(StoreError::Format(format!(
+                "`{name}` is not a valid domain name ([a-z0-9_-], 1 to 32 chars)"
+            )));
+        }
         let (id, fresh) = inner.manifest.intern_ns(name);
         if fresh {
             inner.manifest.save(&inner.root)?;
@@ -884,6 +892,12 @@ impl SegmentStore {
     /// Rewrite the whole store from `graph` into fresh partitions, verify by
     /// replay, swap, delete the old files, rebuild `.xref`s.
     fn compact_all(inner: &mut Inner, graph: &Arc<OntologyGraph>) -> StoreResult<CompactionReport> {
+        // Same rule as `commit_batch`: after a failed write nothing is
+        // written to this store until a restart has recovered its tail —
+        // compaction (and `reset`, which is one) included.
+        if inner.poisoned {
+            return Err(StoreError::Poisoned(inner.root.display().to_string()));
+        }
         let records_before = inner.total_records();
         let bytes_before = inner.total_bytes();
 

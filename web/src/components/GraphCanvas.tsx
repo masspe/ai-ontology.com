@@ -55,7 +55,7 @@ interface NodeMeta {
   fill: string;
 }
 
-function layoutGraph(nodes: Node[], edges: Edge[], dir: LayoutDir): Node[] {
+export function layoutGraph(nodes: Node[], edges: Edge[], dir: LayoutDir): Node[] {
   const g = new dagre.graphlib.Graph();
   g.setDefaultEdgeLabel(() => ({}));
   g.setGraph({ rankdir: dir, nodesep: 50, ranksep: 90 });
@@ -68,7 +68,7 @@ function layoutGraph(nodes: Node[], edges: Edge[], dir: LayoutDir): Node[] {
   });
 }
 
-function softFill(hex: string): string {
+export function softFill(hex: string): string {
   // Lighten by mixing with white at ~85%
   const m = /^#?([a-f\d]{6})$/i.exec(hex);
   if (!m) return "#dbeafe";

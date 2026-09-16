@@ -208,6 +208,10 @@ impl HybridIndex {
                 out.retain(|s| s.score >= floor);
             }
         }
+        // No positive evidence is no hit: an empty query embeds to the zero
+        // vector and matches no term, which must not surface the whole
+        // corpus at score 0 (and a negative cosine is noise, not a match).
+        out.retain(|s| s.score > 0.0);
         out.truncate(req.top_k);
         out
     }
