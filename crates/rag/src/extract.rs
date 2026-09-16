@@ -546,15 +546,21 @@ fn normalize_pairs(v: &mut serde_json::Value) {
     *v = Value::Array(pairs);
 }
 
+/// Strip a Markdown code fence wrapping the answer. The opening fence may
+/// carry a language tag (```` ```json ````); the closing fence may be
+/// followed by commentary, which is dropped. Without a closing fence (an
+/// answer cut off mid-JSON) the remainder is returned as is, so
+/// [`looks_truncated`] still sees the unterminated object.
 fn strip_code_fences(s: &str) -> &str {
     let s = s.trim();
-    if let Some(rest) = s.strip_prefix("```json") {
-        return rest.trim().trim_end_matches("```").trim();
+    let Some(rest) = s.strip_prefix("```") else {
+        return s;
+    };
+    let rest = rest.trim_start_matches(|c: char| c.is_ascii_alphabetic());
+    match rest.find("```") {
+        Some(end) => rest[..end].trim(),
+        None => rest.trim(),
     }
-    if let Some(rest) = s.strip_prefix("```") {
-        return rest.trim().trim_end_matches("```").trim();
-    }
-    s
 }
 
 /// Merge `incoming` into `acc`, deduplicating concepts by
@@ -1165,5 +1171,614 @@ mod tests {
     fn strip_code_fences_handles_json_fence() {
         let s = "```json\n{\"a\":1}\n```";
         assert_eq!(strip_code_fences(s), "{\"a\":1}");
+    }
+
+    // -- hardening: proposal parsing -----------------------------------
+
+    /// A language-tagged fence followed by commentary still yields the JSON
+    /// object; a fence with no closing marker keeps the (truncated) body.
+    #[test]
+    fn strip_code_fences_drops_language_tag_and_trailing_prose() {
+        let s = "```json\n{\"a\":1}\n```\nHere is the extraction you asked for.";
+        assert_eq!(strip_code_fences(s), "{\"a\":1}");
+        assert_eq!(strip_code_fences("```JSON\n{\"a\":1}\n```"), "{\"a\":1}");
+        assert_eq!(strip_code_fences("```\n{\"a\":1}\n```  "), "{\"a\":1}");
+        assert_eq!(strip_code_fences("```json\n{\"a\": ["), "{\"a\": [");
+        assert_eq!(strip_code_fences("  {\"a\":1}  "), "{\"a\":1}");
+        // Through the full parser: the commentary must not poison the parse.
+        let p = parse_response(
+            "```json\n{\"concepts\":[{\"concept_type\":\"T\",\"name\":\"n\"}]}\n```\nDone.",
+            0,
+        )
+        .expect("fenced answer with trailing prose parses");
+        assert_eq!(p.concepts.len(), 1);
+    }
+
+    /// Extra keys at any level are ignored; nested objects / arrays used as
+    /// property values are stringified rather than rejected.
+    #[test]
+    fn parse_ignores_unknown_fields_and_stringifies_nested_property_values() {
+        let raw = r#"{
+            "summary": "ignored top-level key",
+            "concepts": [
+                {"concept_type": "Company", "name": "Acme", "source_line": 3,
+                 "properties": {"address": {"city": "Lyon", "zip": 69001}, "tags": ["a", "b"]}}
+            ]
+        }"#;
+        let p = parse_response(raw, 0).expect("unknown fields are tolerated");
+        let props: std::collections::BTreeMap<_, _> =
+            p.concepts[0].properties.iter().cloned().collect();
+        assert_eq!(
+            props.get("address").map(String::as_str),
+            Some(r#"{"city":"Lyon","zip":69001}"#)
+        );
+        assert_eq!(props.get("tags").map(String::as_str), Some(r#"["a","b"]"#));
+    }
+
+    /// `parameters` on an action gets the same object → pairs treatment as
+    /// `properties`, and a `null` `object_ref` means "no object".
+    #[test]
+    fn parse_normalizes_action_parameters_object_into_pairs() {
+        let raw = r#"{"actions": [
+            {"action_type": "sign", "name": "Sign C-1", "subject_ref": "Person:Alice",
+             "object_ref": null, "parameters": {"date": "2025-01-15", "copies": 2, "witness": null}}
+        ]}"#;
+        let p = parse_response(raw, 2).unwrap();
+        let a = &p.actions[0];
+        assert_eq!(a.client_ref, "c2-a-0");
+        assert!(a.object_ref.is_none());
+        let params: std::collections::BTreeMap<_, _> = a.parameters.iter().cloned().collect();
+        assert_eq!(params.get("date").map(String::as_str), Some("2025-01-15"));
+        assert_eq!(params.get("copies").map(String::as_str), Some("2"));
+        assert!(
+            !params.contains_key("witness"),
+            "null-valued parameter dropped"
+        );
+    }
+
+    /// Pins current behaviour: `confidence` must be a number; a quoted
+    /// number is a parse error naming the chunk.
+    #[test]
+    fn parse_rejects_confidence_given_as_a_string() {
+        let raw = r#"{"concepts": [{"concept_type": "T", "name": "n", "confidence": "0.9"}]}"#;
+        let err = parse_response(raw, 4).unwrap_err();
+        match err {
+            ExtractError::Parse(msg) => assert!(msg.starts_with("chunk 4:"), "{msg}"),
+            other => panic!("expected Parse, got {other:?}"),
+        }
+    }
+
+    /// `client_ref`s are `c<chunk>-<kind>-<index>`: unique across chunks
+    /// and across kinds within a chunk.
+    #[test]
+    fn client_refs_encode_chunk_index_and_are_unique_per_kind() {
+        let raw = r#"{
+            "concept_types": [{"name":"A"}],
+            "relation_types": [{"name":"r","domain":"A","range":"A"}],
+            "concepts": [{"concept_type":"A","name":"x"},{"concept_type":"A","name":"y"}],
+            "relations": [{"relation_type":"r","source_ref":"A:x","target_ref":"A:y"}],
+            "rules": [{"rule_type":"k","name":"R"}],
+            "actions": [{"action_type":"k","name":"Do","subject_ref":"A:x"}]
+        }"#;
+        let p = parse_response(raw, 7).unwrap();
+        let mut refs: Vec<String> = Vec::new();
+        refs.extend(p.concept_types.iter().map(|x| x.client_ref.clone()));
+        refs.extend(p.relation_types.iter().map(|x| x.client_ref.clone()));
+        refs.extend(p.concepts.iter().map(|x| x.client_ref.clone()));
+        refs.extend(p.relations.iter().map(|x| x.client_ref.clone()));
+        refs.extend(p.rules.iter().map(|x| x.client_ref.clone()));
+        refs.extend(p.actions.iter().map(|x| x.client_ref.clone()));
+        assert_eq!(
+            refs,
+            ["c7-ct-0", "c7-rt-0", "c7-c-0", "c7-c-1", "c7-r-0", "c7-ru-0", "c7-a-0"]
+        );
+        let unique: std::collections::HashSet<_> = refs.iter().collect();
+        assert_eq!(unique.len(), refs.len());
+    }
+
+    // -- hardening: merge ---------------------------------------------
+
+    fn concept(ty: &str, name: &str, conf: f32, r: &str) -> ProposalConcept {
+        ProposalConcept {
+            client_ref: r.into(),
+            concept_type: ty.into(),
+            name: name.into(),
+            description: String::new(),
+            properties: vec![],
+            evidence: None,
+            confidence: conf,
+            conflict: None,
+        }
+    }
+
+    fn concept_type(name: &str, conf: f32, r: &str) -> ProposalConceptType {
+        ProposalConceptType {
+            client_ref: r.into(),
+            name: name.into(),
+            description: String::new(),
+            properties: vec![],
+            parent: None,
+            confidence: conf,
+            conflict: None,
+        }
+    }
+
+    fn relation_type(name: &str, conf: f32, r: &str) -> ProposalRelationType {
+        ProposalRelationType {
+            client_ref: r.into(),
+            name: name.into(),
+            domain: "A".into(),
+            range: "A".into(),
+            symmetric: false,
+            description: String::new(),
+            confidence: conf,
+            conflict: None,
+        }
+    }
+
+    fn relation(src: &str, tgt: &str, r: &str) -> ProposalRelation {
+        ProposalRelation {
+            client_ref: r.into(),
+            relation_type: "rel".into(),
+            source_ref: src.into(),
+            target_ref: tgt.into(),
+            weight: None,
+            evidence: None,
+            confidence: 0.5,
+            conflict: None,
+        }
+    }
+
+    fn action(subject: &str, object: Option<&str>, r: &str) -> ProposalAction {
+        ProposalAction {
+            client_ref: r.into(),
+            action_type: "sign".into(),
+            name: "Sign".into(),
+            subject_ref: subject.into(),
+            object_ref: object.map(str::to_string),
+            parameters: vec![],
+            effect: String::new(),
+            description: String::new(),
+            evidence: None,
+            confidence: 0.5,
+            conflict: None,
+        }
+    }
+
+    /// Same `(type, name)` modulo case and surrounding whitespace is one
+    /// concept; the higher-confidence version wins, the first one stays on
+    /// a tie, and the same name under another type is a different concept.
+    #[test]
+    fn merge_dedupes_concepts_case_insensitively_keeping_higher_confidence() {
+        let mut acc = OntologyProposal {
+            concepts: vec![
+                concept("Party", "Acme", 0.5, "c0-c-0"),
+                concept("Party", "Globex", 0.9, "c0-c-1"),
+            ],
+            ..Default::default()
+        };
+        let incoming = OntologyProposal {
+            concepts: vec![
+                concept("Party", "  acme ", 0.9, "c1-c-0"),
+                concept("Party", "GLOBEX", 0.1, "c1-c-1"),
+                concept("Contract", "Acme", 0.2, "c1-c-2"),
+            ],
+            ..Default::default()
+        };
+        merge_into(&mut acc, incoming);
+        let names: Vec<(String, String, f32)> = acc
+            .concepts
+            .iter()
+            .map(|c| (c.concept_type.clone(), c.name.clone(), c.confidence))
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                ("Party".into(), "  acme ".into(), 0.9),
+                ("Party".into(), "Globex".into(), 0.9),
+                ("Contract".into(), "Acme".into(), 0.2),
+            ]
+        );
+        // The winner keeps its own client_ref (no ref rewriting).
+        assert_eq!(acc.concepts[0].client_ref, "c1-c-0");
+        assert_eq!(acc.concepts[1].client_ref, "c0-c-1");
+    }
+
+    /// Concept types dedupe by exact name with higher confidence winning;
+    /// relation types dedupe by name, first one wins; relations, rules and
+    /// actions dedupe by `client_ref` only, so two chunks may each keep a
+    /// relation to the same concept.
+    #[test]
+    fn merge_dedupes_types_by_name_and_keeps_all_relations() {
+        let mut acc = OntologyProposal {
+            concept_types: vec![concept_type("Party", 0.4, "c0-ct-0")],
+            relation_types: vec![relation_type("signs", 0.4, "c0-rt-0")],
+            relations: vec![relation("Party:Acme", "Contract:C-1", "c0-r-0")],
+            ..Default::default()
+        };
+        let incoming = OntologyProposal {
+            concept_types: vec![
+                concept_type("Party", 0.8, "c1-ct-0"),
+                concept_type("party", 0.1, "c1-ct-1"),
+            ],
+            relation_types: vec![relation_type("signs", 0.9, "c1-rt-0")],
+            relations: vec![
+                relation("Party:Acme", "Contract:C-2", "c1-r-0"),
+                relation("Party:Acme", "Contract:C-1", "c0-r-0"),
+            ],
+            ..Default::default()
+        };
+        merge_into(&mut acc, incoming);
+        assert_eq!(acc.concept_types.len(), 2, "type names are case-sensitive");
+        assert_eq!(acc.concept_types[0].confidence, 0.8);
+        assert_eq!(acc.concept_types[0].client_ref, "c1-ct-0");
+        assert_eq!(acc.relation_types.len(), 1);
+        assert_eq!(
+            acc.relation_types[0].client_ref, "c0-rt-0",
+            "relation types: first declaration wins regardless of confidence"
+        );
+        let rels: Vec<&str> = acc
+            .relations
+            .iter()
+            .map(|r| r.client_ref.as_str())
+            .collect();
+        assert_eq!(rels, ["c0-r-0", "c1-r-0"]);
+    }
+
+    // -- hardening: conflicts -----------------------------------------
+
+    fn graph_with_party_acme() -> (OntologyGraph, ontology_graph::ConceptId) {
+        let mut o = Ontology::new();
+        o.add_concept_type(ontology_graph::ConceptType {
+            name: "Party".into(),
+            description: "signing party".into(),
+            ..Default::default()
+        });
+        o.add_concept_type(ontology_graph::ConceptType {
+            name: "Contract".into(),
+            ..Default::default()
+        });
+        o.add_relation_type(ontology_graph::RelationType {
+            name: "signs".into(),
+            domain: "Party".into(),
+            range: "Contract".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let g = OntologyGraph::new(o);
+        let id = g
+            .upsert_concept(ontology_graph::Concept::new(
+                Default::default(),
+                "Party",
+                "Acme Corp",
+            ))
+            .unwrap();
+        (g, id)
+    }
+
+    /// Existing schema names and existing concepts (matched case-
+    /// insensitively by name) are flagged `Exists` with the live identity.
+    #[test]
+    fn attach_conflicts_flags_existing_types_and_concepts() {
+        let (g, acme_id) = graph_with_party_acme();
+        let mut p = OntologyProposal {
+            concept_types: vec![
+                concept_type("Party", 0.9, "c0-ct-0"),
+                concept_type("Invoice", 0.9, "c0-ct-1"),
+            ],
+            relation_types: vec![
+                relation_type("signs", 0.9, "c0-rt-0"),
+                relation_type("owns", 0.9, "c0-rt-1"),
+            ],
+            concepts: vec![
+                concept("Party", "acme corp", 0.9, "c0-c-0"),
+                concept("Party", "Globex", 0.9, "c0-c-1"),
+                concept("Contract", "Acme Corp", 0.9, "c0-c-2"),
+            ],
+            ..Default::default()
+        };
+        attach_conflicts(&mut p, &g);
+
+        match &p.concept_types[0].conflict {
+            Some(ConflictInfo {
+                kind: ConflictKind::Exists { existing_id, .. },
+                summary,
+            }) => {
+                assert_eq!(existing_id, "Party");
+                assert!(summary.contains("`Party`"), "{summary}");
+            }
+            other => panic!("expected Exists on Party, got {other:?}"),
+        }
+        assert!(p.concept_types[1].conflict.is_none());
+
+        match &p.relation_types[0].conflict {
+            Some(ConflictInfo {
+                kind:
+                    ConflictKind::Exists {
+                        existing_display, ..
+                    },
+                ..
+            }) => assert_eq!(existing_display, "signs: Party → Contract"),
+            other => panic!("expected Exists on signs, got {other:?}"),
+        }
+        assert!(p.relation_types[1].conflict.is_none());
+
+        match &p.concepts[0].conflict {
+            Some(ConflictInfo {
+                kind:
+                    ConflictKind::Exists {
+                        existing_id,
+                        existing_display,
+                    },
+                ..
+            }) => {
+                assert_eq!(existing_id, &acme_id.0.to_string());
+                assert_eq!(existing_display, "Party:Acme Corp");
+            }
+            other => panic!("expected Exists on acme corp, got {other:?}"),
+        }
+        assert!(p.concepts[1].conflict.is_none(), "unknown name");
+        assert!(
+            p.concepts[2].conflict.is_none(),
+            "same name under another type is not a collision"
+        );
+    }
+
+    /// Relation and action endpoints must resolve to a proposal concept
+    /// (by `client_ref` or `Type:Name`) or a live graph concept; the first
+    /// unresolved endpoint is reported, and a missing `object_ref` is fine.
+    #[test]
+    fn attach_conflicts_flags_dangling_relation_and_action_refs() {
+        let (g, _) = graph_with_party_acme();
+        let mut p = OntologyProposal {
+            concepts: vec![concept("Contract", "C-1", 0.9, "c0-c-0")],
+            relations: vec![
+                // source by Type:Name of a live concept, target by client_ref.
+                relation("Party:Acme Corp", "c0-c-0", "c0-r-0"),
+                // source by Type:Name of a proposal concept, target unknown.
+                relation("Contract:C-1", "Party:Nobody", "c0-r-1"),
+                // both unknown: the source is reported first.
+                relation("c9-c-9", "Party:Nobody", "c0-r-2"),
+                // no colon and not a client_ref: dangling.
+                relation("Acme Corp", "c0-c-0", "c0-r-3"),
+            ],
+            actions: vec![
+                action("Party:acme corp", None, "c0-a-0"),
+                action("c0-c-0", Some("Contract:C-404"), "c0-a-1"),
+            ],
+            ..Default::default()
+        };
+        attach_conflicts(&mut p, &g);
+
+        fn missing(c: &Option<ConflictInfo>) -> Option<&str> {
+            match c {
+                Some(ConflictInfo {
+                    kind: ConflictKind::DanglingRef { missing_ref },
+                    ..
+                }) => Some(missing_ref.as_str()),
+                _ => None,
+            }
+        }
+        fn summary(c: &Option<ConflictInfo>) -> &str {
+            c.as_ref().map(|c| c.summary.as_str()).unwrap_or("")
+        }
+        assert!(p.relations[0].conflict.is_none());
+        assert_eq!(missing(&p.relations[1].conflict), Some("Party:Nobody"));
+        assert!(summary(&p.relations[1].conflict).starts_with("Target"));
+        assert_eq!(missing(&p.relations[2].conflict), Some("c9-c-9"));
+        assert!(summary(&p.relations[2].conflict).starts_with("Source"));
+        assert_eq!(missing(&p.relations[3].conflict), Some("Acme Corp"));
+        assert!(
+            p.actions[0].conflict.is_none(),
+            "live lookup is case-insensitive and a missing object is allowed"
+        );
+        assert_eq!(missing(&p.actions[1].conflict), Some("Contract:C-404"));
+        assert!(summary(&p.actions[1].conflict).starts_with("Object"));
+    }
+
+    /// Re-running `attach_conflicts` after the proposal was edited replaces
+    /// stale annotations instead of accumulating them.
+    #[test]
+    fn attach_conflicts_is_idempotent_and_clears_resolved_refs() {
+        let (g, _) = graph_with_party_acme();
+        let mut p = OntologyProposal {
+            relations: vec![relation("Contract:C-1", "Party:Acme Corp", "c0-r-0")],
+            ..Default::default()
+        };
+        attach_conflicts(&mut p, &g);
+        assert!(matches!(
+            p.relations[0].conflict,
+            Some(ConflictInfo {
+                kind: ConflictKind::DanglingRef { .. },
+                ..
+            })
+        ));
+        // The reviewer adds the missing concept: the relation now resolves.
+        p.concepts.push(concept("Contract", "C-1", 0.9, "c0-c-0"));
+        attach_conflicts(&mut p, &g);
+        assert!(p.relations[0].conflict.is_none());
+        attach_conflicts(&mut p, &g);
+        assert!(p.relations[0].conflict.is_none());
+    }
+
+    // -- hardening: chunking ------------------------------------------
+
+    /// A single line over budget is cut on character boundaries: no
+    /// panic inside a multi-byte sequence, no character lost or reordered.
+    #[test]
+    fn hard_split_is_lossless_on_multibyte_text() {
+        let line: String = "é漢😀x".repeat(250); // 1 000 chars, 2 500 bytes
+        let pieces = hard_split(&line, 300);
+        assert_eq!(pieces.len(), 4);
+        assert!(pieces.iter().all(|p| p.chars().count() <= 300));
+        assert_eq!(pieces.concat(), line);
+        // Same guarantee through the public chunker on a blank-line-free text.
+        let chunks = chunk_text(&line, 300);
+        assert_eq!(chunks.concat(), line);
+        // And the bisection fallback on a huge single line.
+        let (a, b) = split_in_half(&line).unwrap();
+        assert_eq!(format!("{a}{b}"), line);
+    }
+
+    /// Prose paragraphs mixed with a blank-line-free table: no chunk over
+    /// budget, no line ever cut, and document order preserved.
+    #[test]
+    fn chunking_keeps_mixed_prose_and_table_lines_intact_and_ordered() {
+        let prose = |i: usize| format!("Paragraph {i}: ") + &"lorem ipsum ".repeat(30);
+        let table: Vec<String> = (0..60)
+            .map(|i| format!("row: R{i:03}; amount: {}; currency: EUR", i * 10))
+            .collect();
+        let doc = format!(
+            "{}\n\n{}\n\n{}\n\n{}",
+            prose(1),
+            prose(2),
+            table.join("\n"),
+            prose(3)
+        );
+        assert!(
+            looks_line_structured(&doc),
+            "a table-dominated document counts as line-structured"
+        );
+        let budget = 1_000;
+        let chunks = chunk_text(&doc, budget);
+        assert!(chunks.len() >= 3, "{}", chunks.len());
+        for c in &chunks {
+            assert!(
+                c.chars().count() <= budget,
+                "chunk over budget: {}",
+                c.len()
+            );
+        }
+        let original: Vec<&str> = doc.lines().filter(|l| !l.is_empty()).collect();
+        let rejoined: Vec<&str> = chunks
+            .iter()
+            .flat_map(|c| c.lines())
+            .filter(|l| !l.is_empty())
+            .collect();
+        assert_eq!(rejoined, original);
+    }
+
+    /// Fenced answers: an unterminated object is truncated, a complete one
+    /// is not — even when the closing fence itself was cut off.
+    #[test]
+    fn looks_truncated_recognises_cut_off_fenced_output() {
+        assert!(looks_truncated("```json\n{\"concepts\": [{\"name\": \"x"));
+        assert!(looks_truncated("{\"concepts\": ["));
+        assert!(!looks_truncated("```json\n{\"concepts\": []}\n```"));
+        assert!(!looks_truncated("```json\n{\"concepts\": []}\n``"));
+        assert!(!looks_truncated("{\"concepts\": []}\n\n"));
+        assert!(!looks_truncated("```json\n{}\n```\nThat is all."));
+    }
+
+    // -- hardening: work queue ----------------------------------------
+
+    /// Answers a syntactically complete but partial object with an OpenAI
+    /// `length` stop reason whenever the piece has more than `max_lines`.
+    struct PartialOnLengthModel {
+        max_lines: usize,
+        calls: std::sync::atomic::AtomicUsize,
+    }
+    #[async_trait]
+    impl LanguageModel for PartialOnLengthModel {
+        async fn generate(&self, req: &LlmRequest) -> Result<LlmResponse, LlmError> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let doc = req.messages[0]
+                .content
+                .split("Document:\n")
+                .nth(1)
+                .and_then(|s| s.split("\n---\n").next())
+                .unwrap_or("");
+            let lines: Vec<&str> = doc.lines().filter(|l| !l.trim().is_empty()).collect();
+            if lines.len() > self.max_lines {
+                return Ok(LlmResponse {
+                    content: r#"{"concepts": [{"concept_type": "Row", "name": "PARTIAL"}]}"#.into(),
+                    model: "m".into(),
+                    stop_reason: Some("length".into()),
+                    usage: TokenUsage::default(),
+                });
+            }
+            let concepts: Vec<String> = lines
+                .iter()
+                .map(|l| format!(r#"{{"concept_type":"Row","name":"{}"}}"#, l.trim()))
+                .collect();
+            Ok(LlmResponse {
+                content: format!(r#"{{"concepts": [{}]}}"#, concepts.join(",")),
+                model: "m".into(),
+                stop_reason: Some("stop".into()),
+                usage: TokenUsage::default(),
+            })
+        }
+    }
+
+    /// A `length` / `max_tokens` stop reason marks the answer as cut off
+    /// even when the JSON happens to parse: the partial result is dropped
+    /// and the piece is bisected.
+    #[tokio::test]
+    async fn truncation_stop_reason_discards_a_parseable_partial_answer() {
+        let model = PartialOnLengthModel {
+            max_lines: 2,
+            calls: Default::default(),
+        };
+        let doc: String = (0..4)
+            .map(|i| format!("line{i} {}", "x".repeat(150)))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let p = extract_proposal(&model, &doc, None, &Ontology::default())
+            .await
+            .expect("halves fit");
+        let names: Vec<&str> = p.concepts.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(names.len(), 4);
+        assert!(names.iter().all(|n| n.starts_with("line")), "{names:?}");
+        assert!(
+            !names.contains(&"PARTIAL"),
+            "partial answer must not be merged"
+        );
+        assert_eq!(model.calls.load(std::sync::atomic::Ordering::SeqCst), 3);
+    }
+
+    /// Bisection is bounded: once `MAX_PIECES` calls were spent the
+    /// extraction fails with a `Parse` error instead of running on.
+    #[tokio::test]
+    async fn max_pieces_cap_fails_fast_with_a_parse_error() {
+        // ~130 chars per record, ~22 per 3 000-char chunk; every chunk is
+        // answered truncated once, then its halves succeed: 3 calls per
+        // chunk, far more than the cap over 2 000 records.
+        let model = TruncatingModel {
+            max_lines: 12,
+            calls: Default::default(),
+        };
+        let doc = records(2_000);
+        let err = extract_proposal(&model, &doc, None, &Ontology::default())
+            .await
+            .unwrap_err();
+        match &err {
+            ExtractError::Parse(msg) => {
+                assert!(msg.contains("gave up after"), "{msg}");
+                assert!(msg.contains(&MAX_PIECES.to_string()), "{msg}");
+            }
+            other => panic!("expected Parse, got {other:?}"),
+        }
+        assert_eq!(
+            model.calls.load(std::sync::atomic::Ordering::SeqCst),
+            MAX_PIECES,
+            "exactly MAX_PIECES calls are spent before giving up"
+        );
+    }
+
+    /// Halves go back to the front of the queue, so the merged concepts
+    /// come out in document order even after several levels of bisection.
+    #[tokio::test]
+    async fn bisection_preserves_document_order() {
+        let model = TruncatingModel {
+            max_lines: 3,
+            calls: Default::default(),
+        };
+        let doc = records(16);
+        let p = extract_proposal(&model, &doc, None, &Ontology::default())
+            .await
+            .unwrap();
+        let expected: Vec<String> = doc.lines().map(|l| l.replace('"', "'")).collect();
+        let got: Vec<String> = p.concepts.iter().map(|c| c.name.clone()).collect();
+        assert_eq!(got, expected);
     }
 }

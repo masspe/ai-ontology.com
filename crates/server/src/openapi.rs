@@ -612,6 +612,118 @@ const SPEC_JSON: &str = r##"{
             },
             "/settings/llm/infomaniak/products": {
                 "post": { "summary": "Resolve the Infomaniak AI Tools product id(s) a token can reach", "tags": ["admin"], "responses": { "200": { "description": "Products" } } }
+            },
+            "/settings/ocr/status": {
+                "get": { "summary": "Availability of the OCR engines (tesseract / ocrmypdf / ghostscript, Google Vision key)", "tags": ["admin"], "responses": { "200": { "description": "Engine probes" } } }
+            },
+            "/ingest/analyze": {
+                "post": {
+                    "summary": "LLM-analyze an uploaded document into an ontology proposal (nothing is written)",
+                    "tags": ["ingest"],
+                    "requestBody": {
+                        "required": true,
+                        "content": {
+                            "multipart/form-data": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": ["file"],
+                                    "properties": {
+                                        "file": { "type": "string", "format": "binary", "description": "Text, CSV, spreadsheet (.xlsx/.xls/.ods) or .docx; office formats are flattened to text server-side" },
+                                        "provider": { "type": "string", "description": "LLM provider override; omitted or `default` uses the configured one" },
+                                        "model": { "type": "string" },
+                                        "language_hint": { "type": "string", "description": "ISO language code; skips detection" }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "responses": {
+                        "200": { "description": "OntologyProposal annotated with per-item conflicts" },
+                        "400": { "description": "Missing `file` or unusable provider configuration", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+                        "422": { "description": "Empty or binary file, or unparseable LLM output", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } },
+                        "502": { "description": "LLM call failed", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+                    }
+                }
+            },
+            "/ingest/apply": {
+                "post": {
+                    "summary": "Write a reviewed proposal into the graph, item by item, in one write transaction",
+                    "tags": ["ingest"],
+                    "requestBody": {
+                        "required": true,
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": ["proposal"],
+                                    "properties": {
+                                        "proposal": { "type": "object", "description": "The (possibly edited) proposal returned by /ingest/analyze" },
+                                        "decisions": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "object",
+                                                "required": ["client_ref", "action"],
+                                                "properties": {
+                                                    "client_ref": { "type": "string" },
+                                                    "action": { "type": "string", "enum": ["create_new", "merge", "skip"] }
+                                                }
+                                            }
+                                        },
+                                        "strict": { "type": "boolean", "default": false, "description": "Abort at the first failing item" },
+                                        "default_action": { "type": "string", "enum": ["create_new", "merge", "skip"], "default": "skip" }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "responses": {
+                        "200": { "description": "ApplyReport: per-client_ref outcome plus created / merged / skipped / failed counts. Per-item failures are reported here, not as an error status." },
+                        "500": { "description": "The schema snapshot could not be journaled; type declarations were rolled back", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } } }
+                    }
+                }
+            },
+            "/feedbacks": {
+                "get":  { "summary": "List submitted feedback (in-memory)", "tags": ["admin"], "responses": { "200": { "description": "List" } } },
+                "post": {
+                    "summary": "Submit feedback (bug report, suggestion); captures the recent server log tail",
+                    "tags": ["admin"],
+                    "requestBody": {
+                        "required": true,
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": ["title"],
+                                    "properties": {
+                                        "kind": { "type": "string", "enum": ["bug", "error", "evolution", "improvement"], "default": "bug" },
+                                        "title": { "type": "string" },
+                                        "description": { "type": "string" },
+                                        "screenshot": { "type": "string", "description": "data:image/png;base64,… URL" },
+                                        "frontend_logs": { "type": "string" },
+                                        "user_agent": { "type": "string" },
+                                        "url": { "type": "string" },
+                                        "reporter_email": { "type": "string" }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "responses": { "200": { "description": "Stored feedback" } }
+                }
+            },
+            "/feedbacks/{id}": {
+                "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
+                "delete": { "summary": "Delete a feedback entry", "tags": ["admin"], "responses": { "204": { "description": "Deleted" }, "404": { "description": "Not found" } } }
+            },
+            "/logs/tail": {
+                "get": {
+                    "summary": "Recent server log lines (ring buffer, newest last)",
+                    "tags": ["admin"],
+                    "parameters": [
+                        { "name": "limit", "in": "query", "schema": { "type": "integer", "default": 200, "maximum": 500 } }
+                    ],
+                    "responses": { "200": { "description": "{lines: [...]}" } }
+                }
             }
         }
     }"##;

@@ -1484,4 +1484,347 @@ mod tests {
             Ok(_) => panic!("expected Config error, got a stream"),
         }
     }
+
+    // -- hardening: SSE framing (Anthropic) -----------------------------
+
+    /// Several `data:` lines in one event are joined with `\n`, and only
+    /// the first complete event is consumed — the rest stays buffered.
+    #[test]
+    fn anthropic_sse_event_joins_multiline_data_and_leaves_the_rest_buffered() {
+        let mut buf =
+            b"event: content_block_delta\ndata: {\"a\":\ndata: 1}\n\nevent: next\ndata: x\n\n"
+                .to_vec();
+        let (event, data) = take_one_sse_event(&mut buf).unwrap();
+        assert_eq!(event, "content_block_delta");
+        assert_eq!(data, "{\"a\":\n1}");
+        assert_eq!(buf, b"event: next\ndata: x\n\n");
+        let (event, data) = take_one_sse_event(&mut buf).unwrap();
+        assert_eq!((event.as_str(), data.as_str()), ("next", "x"));
+        assert!(buf.is_empty());
+    }
+
+    /// A frame split across two reads is not consumed until its `\n\n`
+    /// terminator arrives; comment-only frames yield an empty event.
+    #[test]
+    fn anthropic_sse_event_waits_for_a_complete_frame() {
+        let partial = b"event: message_stop\ndata: {\"type\":\"mess";
+        let mut buf = partial.to_vec();
+        assert!(take_one_sse_event(&mut buf).is_none());
+        assert_eq!(buf, partial, "an incomplete frame is left untouched");
+        buf.extend_from_slice(b"age_stop\"}\n\n");
+        let (event, data) = take_one_sse_event(&mut buf).unwrap();
+        assert_eq!(event, "message_stop");
+        assert_eq!(data, "{\"type\":\"message_stop\"}");
+
+        let mut buf = b": keep-alive\n\n".to_vec();
+        let (event, data) = take_one_sse_event(&mut buf).unwrap();
+        assert!(event.is_empty() && data.is_empty());
+    }
+
+    fn fresh_state() -> StreamState {
+        StreamState {
+            body: None,
+            buf: Vec::new(),
+            model: String::new(),
+            usage: TokenUsage::default(),
+            stop_reason: None,
+            end_emitted: false,
+        }
+    }
+
+    /// `message_start` carries the model and the input/cache counts,
+    /// `message_delta` the stop reason and output count, `message_stop`
+    /// emits the accumulated `End`; a zero `output_tokens` never clobbers a
+    /// previous value.
+    #[test]
+    fn parse_anthropic_event_accumulates_usage_model_and_stop_reason() {
+        let mut st = fresh_state();
+        assert!(parse_anthropic_event(
+            "message_start",
+            r#"{"type":"message_start","message":{"model":"claude-x","usage":{"input_tokens":30,"cache_read_input_tokens":20,"cache_creation_input_tokens":5}}}"#,
+            &mut st
+        )
+        .is_none());
+        assert!(parse_anthropic_event("content_block_start", "{}", &mut st).is_none());
+        assert!(parse_anthropic_event("ping", "{}", &mut st).is_none());
+        // A non-text delta (tool input) is ignored, as is an empty text delta.
+        assert!(parse_anthropic_event(
+            "content_block_delta",
+            r#"{"delta":{"type":"input_json_delta","partial_json":"{"}}"#,
+            &mut st
+        )
+        .is_none());
+        assert!(parse_anthropic_event(
+            "content_block_delta",
+            r#"{"delta":{"type":"text_delta","text":""}}"#,
+            &mut st
+        )
+        .is_none());
+        match parse_anthropic_event(
+            "content_block_delta",
+            r#"{"delta":{"type":"text_delta","text":"hi"}}"#,
+            &mut st,
+        ) {
+            Some(Ok(StreamChunk::Text(t))) => assert_eq!(t, "hi"),
+            other => panic!("expected Text, got {other:?}"),
+        }
+        assert!(parse_anthropic_event(
+            "message_delta",
+            r#"{"delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":9}}"#,
+            &mut st
+        )
+        .is_none());
+        // A later delta without a stop reason or with 0 output tokens
+        // keeps what was accumulated.
+        assert!(parse_anthropic_event(
+            "message_delta",
+            r#"{"delta":{},"usage":{"output_tokens":0}}"#,
+            &mut st
+        )
+        .is_none());
+        match parse_anthropic_event("message_stop", "{}", &mut st) {
+            Some(Ok(StreamChunk::End {
+                usage,
+                stop_reason,
+                model,
+            })) => {
+                assert_eq!(model, "claude-x");
+                assert_eq!(stop_reason.as_deref(), Some("end_turn"));
+                assert_eq!(usage.input_tokens, 30);
+                assert_eq!(usage.cache_read_input_tokens, 20);
+                assert_eq!(usage.cache_creation_input_tokens, 5);
+                assert_eq!(usage.output_tokens, 9);
+            }
+            other => panic!("expected End, got {other:?}"),
+        }
+        match parse_anthropic_event("error", r#"{"type":"overloaded_error"}"#, &mut st) {
+            Some(Err(LlmError::Api(msg))) => assert!(msg.contains("overloaded_error")),
+            other => panic!("expected Api error, got {other:?}"),
+        }
+    }
+
+    // -- hardening: SSE framing (OpenAI) --------------------------------
+
+    /// Comment frames come back as an empty payload (never as `[DONE]`),
+    /// `data:` without a space is accepted, multi-line data is joined, a
+    /// partial frame waits, and `[DONE]` leaves later bytes buffered.
+    #[test]
+    fn openai_sse_frame_handles_comments_multiline_and_partial_reads() {
+        let mut buf = b": keep-alive\n\n".to_vec();
+        assert_eq!(
+            take_one_openai_sse_frame(&mut buf),
+            Some(Some(String::new()))
+        );
+        assert!(buf.is_empty());
+
+        let mut buf = b"data:{\"a\":\ndata:  1}\n\n".to_vec();
+        assert_eq!(
+            take_one_openai_sse_frame(&mut buf),
+            Some(Some("{\"a\":\n1}".to_string()))
+        );
+
+        let mut buf = b"data: {\"a\":1".to_vec();
+        assert_eq!(take_one_openai_sse_frame(&mut buf), None);
+        buf.extend_from_slice(b"}\n\ndata: [DONE]\n\nextra");
+        assert_eq!(
+            take_one_openai_sse_frame(&mut buf),
+            Some(Some("{\"a\":1}".to_string()))
+        );
+        assert_eq!(take_one_openai_sse_frame(&mut buf), Some(None));
+        assert_eq!(buf, b"extra");
+        assert_eq!(take_one_openai_sse_frame(&mut buf), None);
+    }
+
+    /// Without either cache field the cached count is zero, not an error.
+    #[test]
+    fn openai_usage_defaults_to_zero_cached_tokens() {
+        let u: OpenAiUsage =
+            serde_json::from_str(r#"{"prompt_tokens": 12, "completion_tokens": 4}"#).unwrap();
+        let t = u.into_token_usage();
+        assert_eq!((t.input_tokens, t.output_tokens), (12, 4));
+        assert_eq!(t.cache_read_input_tokens, 0);
+        assert_eq!(t.cache_creation_input_tokens, 0);
+    }
+
+    // -- hardening: retry policy ---------------------------------------
+
+    /// Only 408, 409, 429 and 5xx are retried; client errors surface at once.
+    #[test]
+    fn retryable_statuses_are_exactly_408_409_429_and_5xx() {
+        use reqwest::StatusCode;
+        for code in [408u16, 409, 429, 500, 502, 503, 529, 599] {
+            assert!(
+                is_retryable_status(StatusCode::from_u16(code).unwrap()),
+                "{code} should be retried"
+            );
+        }
+        for code in [200u16, 400, 401, 403, 404, 413, 422] {
+            assert!(
+                !is_retryable_status(StatusCode::from_u16(code).unwrap()),
+                "{code} must not be retried"
+            );
+        }
+    }
+
+    /// Full-jitter backoff never exceeds `base · 2^attempt`, and the
+    /// exponent is capped at 8 so late attempts cannot overflow or stall.
+    #[test]
+    fn jittered_backoff_is_bounded_by_base_times_two_pow_attempt_capped_at_8() {
+        let base = Duration::from_millis(100);
+        for attempt in 0..12u32 {
+            let cap = base * (1u32 << attempt.min(8));
+            for _ in 0..50 {
+                let d = jittered_backoff(base, attempt);
+                assert!(d <= cap, "attempt {attempt}: {d:?} > {cap:?}");
+            }
+        }
+        // A zero base yields a zero delay rather than a division by zero.
+        assert_eq!(jittered_backoff(Duration::ZERO, 3), Duration::ZERO);
+    }
+
+    // -- hardening: request building -----------------------------------
+
+    /// With only a cached context the single system message is exactly the
+    /// cached text; an empty instruction adds no separator; a `System`
+    /// role inside `messages` is forwarded as `system`.
+    #[test]
+    fn openai_messages_with_cached_only_and_empty_instruction() {
+        let msgs = vec![
+            Message::system("inline"),
+            Message::assistant("a"),
+            Message::user("q"),
+        ];
+        let mut merged = String::new();
+        let out = build_openai_messages(None, Some("ONTOLOGY"), &msgs, &mut merged);
+        assert_eq!(out.len(), 4);
+        assert_eq!((out[0].role, out[0].content), ("system", "ONTOLOGY"));
+        assert_eq!((out[1].role, out[1].content), ("system", "inline"));
+        assert_eq!((out[2].role, out[2].content), ("assistant", "a"));
+        assert_eq!((out[3].role, out[3].content), ("user", "q"));
+
+        let mut merged = String::new();
+        let out = build_openai_messages(Some(""), Some("ONTOLOGY"), &[], &mut merged);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].content, "ONTOLOGY", "no dangling separator");
+    }
+
+    /// An empty instruction is skipped, so the block array holds only the
+    /// cached block — still carrying its `cache_control` breakpoint.
+    #[test]
+    fn system_field_skips_an_empty_instruction_but_keeps_the_cached_block() {
+        for instruction in [None, Some("")] {
+            let f = build_system_field(instruction, Some("big ontology")).unwrap();
+            let v: serde_json::Value = serde_json::to_value(&f).unwrap();
+            let arr = v.as_array().expect("block array");
+            assert_eq!(arr.len(), 1, "instruction {instruction:?}");
+            assert_eq!(arr[0]["text"], "big ontology");
+            assert_eq!(arr[0]["cache_control"]["type"], "ephemeral");
+        }
+    }
+
+    /// The Anthropic body omits `temperature`, `system` and `stream` when
+    /// they are unset/false and carries `max_tokens` verbatim.
+    #[test]
+    fn anthropic_request_omits_unset_optional_fields() {
+        let body = AnthropicRequest {
+            model: "claude-opus-4-7",
+            max_tokens: 321,
+            temperature: None,
+            system: None,
+            messages: vec![AnthropicMessage {
+                role: "user",
+                content: "hi",
+            }],
+            stream: false,
+        };
+        let v = serde_json::to_value(&body).unwrap();
+        assert_eq!(v["max_tokens"], 321);
+        assert_eq!(v["model"], "claude-opus-4-7");
+        for key in ["temperature", "system", "stream"] {
+            assert!(v.get(key).is_none(), "{key} leaked: {v}");
+        }
+        assert_eq!(v["messages"][0]["role"], "user");
+
+        let streaming = AnthropicRequest {
+            stream: true,
+            temperature: Some(0.5),
+            ..body
+        };
+        let v = serde_json::to_value(&streaming).unwrap();
+        assert_eq!(v["stream"], true);
+        assert_eq!(v["temperature"], 0.5);
+    }
+
+    /// The OpenAI body always carries `temperature` and `max_tokens`, and
+    /// `stream_options` only alongside `stream: true`.
+    #[test]
+    fn openai_request_serializes_stream_options_only_when_streaming() {
+        let body = OpenAiRequest {
+            model: "gpt-4o-mini",
+            messages: vec![],
+            max_tokens: 77,
+            temperature: 0.0,
+            stream: false,
+            stream_options: None,
+        };
+        let v = serde_json::to_value(&body).unwrap();
+        assert_eq!(v["max_tokens"], 77);
+        assert_eq!(v["temperature"], 0.0);
+        assert!(v.get("stream").is_none());
+        assert!(v.get("stream_options").is_none());
+
+        let streaming = OpenAiRequest {
+            stream: true,
+            stream_options: Some(OpenAiStreamOptions {
+                include_usage: true,
+            }),
+            ..body
+        };
+        let v = serde_json::to_value(&streaming).unwrap();
+        assert_eq!(v["stream"], true);
+        assert_eq!(v["stream_options"]["include_usage"], true);
+    }
+
+    /// The trait's default `generate_stream` wraps `generate` into exactly
+    /// one `Text` chunk followed by one `End` carrying the response metadata.
+    #[tokio::test]
+    async fn default_generate_stream_wraps_generate_into_text_then_end() {
+        let stream = EchoModel
+            .generate_stream(&LlmRequest {
+                messages: vec![Message::user("hi")],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let chunks: Vec<StreamChunk> = stream.map(|c| c.unwrap()).collect().await;
+        assert_eq!(chunks.len(), 2);
+        assert!(matches!(&chunks[0], StreamChunk::Text(t) if t == "[echo] hi"));
+        assert!(matches!(
+            &chunks[1],
+            StreamChunk::End { model, stop_reason, .. }
+                if model == "echo" && stop_reason.as_deref() == Some("end_turn")
+        ));
+    }
+
+    /// `EchoModel` echoes the last *user* turn, not a trailing assistant
+    /// turn, and yields an empty echo when there is no user message.
+    #[tokio::test]
+    async fn echo_model_echoes_the_last_user_turn_only() {
+        let r = EchoModel
+            .generate(&LlmRequest {
+                system: Some("ignored".into()),
+                messages: vec![
+                    Message::user("first"),
+                    Message::assistant("reply"),
+                    Message::user("second"),
+                    Message::assistant("trailing"),
+                ],
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(r.content, "[echo] second");
+        let r = EchoModel.generate(&LlmRequest::default()).await.unwrap();
+        assert_eq!(r.content, "[echo] ");
+    }
 }

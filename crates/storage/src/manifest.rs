@@ -390,4 +390,51 @@ mod tests {
         assert!(!dir.join("MANIFEST.json.tmp").exists());
         std::fs::remove_dir_all(&dir).ok();
     }
+    /// The compaction marker is the commit point of a compaction (§5): it
+    /// is absent from the JSON when there is none (older manifests load
+    /// unchanged) and round-trips exactly when present.
+    #[test]
+    fn compaction_marker_is_omitted_when_absent_and_round_trips_when_present() {
+        let m = Manifest::new(0);
+        let json = serde_json::to_string(&m).unwrap();
+        assert!(!json.contains("compaction"), "{json}");
+        let back: Manifest = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.compaction, None);
+
+        let mut with = Manifest::new(0);
+        with.compaction = Some(CompactionMarker {
+            staged: vec![(0, 7), (2, 8)],
+            remove: vec![(0, vec![1]), (1, vec![2]), (2, vec![3, 5])],
+        });
+        let json = serde_json::to_string(&with).unwrap();
+        assert!(json.contains("compaction"), "{json}");
+        let back: Manifest = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, with);
+    }
+
+    /// `save` is write + fsync + rename: a stale `.tmp` from an interrupted
+    /// save is overwritten and consumed, never read.
+    #[test]
+    fn save_overwrites_a_stale_tmp_and_load_never_reads_it() {
+        let dir = std::env::temp_dir().join(format!(
+            "ontology-manifest-tmp-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("MANIFEST.json.tmp"), b"{ garbage").unwrap();
+        assert!(
+            Manifest::load(&dir).unwrap().is_none(),
+            "tmp is not a manifest"
+        );
+        let mut m = Manifest::new(0);
+        m.intern_ns("parties");
+        m.save(&dir).unwrap();
+        assert!(!dir.join("MANIFEST.json.tmp").exists());
+        assert_eq!(Manifest::load(&dir).unwrap().unwrap(), m);
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }
