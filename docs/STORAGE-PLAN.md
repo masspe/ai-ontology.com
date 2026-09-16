@@ -588,6 +588,60 @@ enregistrements, aucune mesure n'a de sens »).
    **différés** jusqu'à mesure de contention. Ouvrir un ticket, pas une
    branche.
 
+### 6.6 État — mesuré le 2026-09-16 (branche `feat/storage-phase4`)
+
+Livré :
+
+- **Générateur** `ontology bench gen` : écrit directement sur disque (sans
+  graphe en mémoire), N concepts / M relations / K domaines, payload cible,
+  codec au choix, barrières par lots de 5 000 ; refuse un store non vide.
+  10⁶ concepts + 5×10⁶ relations se génèrent en ~20 s ; la cible 10⁷ /
+  5×10⁷ (~22 Go en JSON) en ~4 min — mais ne s'hydrate pas sur cette
+  machine (voir mémoire ci-dessous).
+- **Benchs** `bench hydrate | append | query | compact` (résultats en JSON
+  avec `--json`) et le micro-bench criterion `crates/storage/benches/codec.rs`.
+  Les figures sont dans `STORAGE.md` §7.7–7.8.
+- **Codec 1 `postcard`** via un miroir tagué (`storage::codec`), octet codec
+  par enregistrement, changement par `compact --codec`, store mixte lisible.
+  Correction collatérale : `serde_json` en `float_roundtrip` (le parseur par
+  défaut n'était pas correctement arrondi ; trouvé par un test de propriété).
+- Tests : codec (unitaires, intégration, propriété), bench (unitaires + bout
+  en bout CLI), résolveurs de recovery conscients du codec.
+
+Mesuré (détail dans `STORAGE.md` §7.7–7.8) :
+
+| Question de la phase | Réponse |
+|---|---|
+| Le parsing domine-t-il l'hydratation ? | **Non** : 9–27 %. `apply` (index mémoire) : 73–91 %. |
+| Gain du codec binaire | décodage 3× par concept (micro-bench), 1,6–2,2× in situ, disque −24 %, **hydratation 0,93–1,24×** |
+| Seuil « activer par défaut si > 3× » | **Non atteint → NO-GO comme défaut** ; codec 1 disponible en option (`compact --codec postcard`), lisible et testé |
+| `bulk_load` justifié ? | **Oui** : `apply` domine ; c'est le levier de l'hydratation (item 4) |
+| Empreinte P0 (tas, store refermé) | ~2,75 Ko / concept (1,3 Ko de payload), ~350–475 o / relation → **45 à 50 Go pour la cible**, 16 Go visés |
+| Compaction complète | 30–54 k enr./s → 20–30 min à la cible ; compaction par domaine et vérification sans rejeu à prévoir |
+| Page à offset | O(offset) : 13 ms à 500 k → T1 (curseur) avant la phase 5, comme prévu |
+
+Décisions à prendre (proposées, à valider) :
+
+1. **Codec** : garder JSON par défaut (lisible, aucun outil à adapter),
+   postcard en option documentée. Réévaluer après `bulk_load` : in situ le
+   décodage coûte 1,23 µs par enregistrement en JSON contre 0,57 en
+   postcard (3 M enr.) ; si `apply` tombe à ~2 µs par enregistrement, le
+   codec 1 gagnera ~1,25× sur l'hydratation totale, ~1,5× si `apply` tombe
+   à 1 µs. Le codec ne devient décisif qu'une fois `apply` optimisé.
+   Restriction retenue : le flux `meta` (schéma, règles, actions) reste en
+   JSON quel que soit le codec du store — les types du schéma ne sont pas un
+   contrat disque gelé ; un store non-JSON déclare `format_version = 2`, que
+   les builds antérieurs refusent à l'ouverture au lieu de tronquer.
+2. **`bulk_load`** : à faire maintenant (item 4), méthode publique de
+   `OntologyGraph` (R1), un seul bump de génération (R2) ; cible 2–3× sur
+   `apply`.
+3. **Phase 5** : la cible 10⁷ / 5×10⁷ sur 16 Go exige P1 **et** le CSR
+   (P2–P4). Réordonner : P1 (payloads hors tas, −13 Go) puis CSR des
+   relations (−16 à −23 Go) avant les index de concepts (~14 Go). Ou revoir
+   la cible. Les chiffres sont des mesures de tas sur un portable, une
+   exécution par point : à confirmer sur le nœud cible avant d'engager la
+   phase 5.
+
 ---
 
 ## 7. Phase 5 — Mémoire contrainte (P1 → P5)
@@ -713,7 +767,7 @@ Jalons vérifiables :
 | J1 (fin phase 1) | **Atteint** : test « append échoué → mémoire inchangée » vert sur les 13 endpoints ; `sync_data` présent ; 136 tests, CI 2 OS |
 | J2 (fin phase 2) | **Atteint** sur la branche : migration automatique de `graph.log` au démarrage, redémarrage HTTP sur `SegmentStore` testé, CI 2 OS à confirmer par la PR |
 | J3 (fin phase 3) | **Atteint** : trois domaines dans `examples/finance` (`parties`, `contrats`, `facturation`), hydratation sélective testée, 2 syncs par lot de 100 sur 2 domaines |
-| J4 (fin phase 4) | Tableau §7.7 de STORAGE.md rempli de chiffres mesurés sur 10⁷ concepts / 5×10⁷ relations |
+| J4 (fin phase 4) | **Partiellement atteint** : §7.7–7.8 de STORAGE.md remplis de chiffres mesurés à 2×10⁵ / 10⁶ et 5×10⁵ / 2,5×10⁶ ; la cible 10⁷ / 5×10⁷ (~62 Go en P0) n'est pas hydratable sur 16 Go — c'est la mesure elle-même qui le montre ; extrapolation linéaire documentée |
 | J5 (P1) | Le store cible tient sur un nœud de 16 Go : RSS divisée par ≥ 5 par rapport à P0, P95 `GET /concepts/{id}` < 2× P0 |
 | JR (retrieval) | `reindex_all` supprimé du démarrage ; recherche vectorielle en O(log N) mesurée à 10⁷ |
 

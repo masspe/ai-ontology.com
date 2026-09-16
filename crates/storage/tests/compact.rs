@@ -14,10 +14,14 @@ use ontology_storage::{FileStore, LogRecord, Store};
 use std::sync::Arc;
 
 fn tempdir() -> std::path::PathBuf {
+    // pid + clock is not unique on Windows: two tests of this binary start
+    // within the same clock tick (~1-16 ms) and would share a directory.
+    static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let mut p = std::env::temp_dir();
     p.push(format!(
-        "ontology-compact-{}-{}",
+        "ontology-compact-{}-{}-{}",
         std::process::id(),
+        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()

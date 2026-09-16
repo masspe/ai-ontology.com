@@ -27,8 +27,8 @@ pub use active::{data_path, idx_path, segment_stem, ActiveSegment, IndexFields};
 pub use format::{
     crc32c, decode_record, encode_record, pack_endpoints, padded_len, record_span,
     unpack_endpoints, DataHeader, FormatError, IdxEntry, IdxHeader, Kind, RecordHeader, RecordMeta,
-    RecordView, CODEC_JSON, DATA_MAGIC, FILE_HEADER_LEN, FORMAT_VERSION, IDX_ENTRY_LEN, IDX_MAGIC,
-    PAYLOAD_ALIGN, RECORD_HEADER_LEN,
+    RecordView, CODEC_JSON, DATA_MAGIC, FILE_HEADER_LEN, FORMAT_VERSION, FORMAT_VERSION_CODECS,
+    IDX_ENTRY_LEN, IDX_MAGIC, PAYLOAD_ALIGN, RECORD_HEADER_LEN,
 };
 pub use recover::{recover_segment, Recovered};
 pub use sealed::SealedSegment;

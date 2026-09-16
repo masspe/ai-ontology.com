@@ -171,10 +171,26 @@ impl ActiveSegment {
         payload: &[u8],
         fields: IndexFields,
     ) -> io::Result<u64> {
+        self.append_with_codec(seq, ts_micros, kind, self.codec, payload, fields)
+    }
+
+    /// Like [`append`](Self::append), stamping the record header with the
+    /// codec `payload` was actually encoded with. The segment header's codec
+    /// is only the default; the record header is what readers trust, so the
+    /// two must never disagree for a given payload.
+    pub fn append_with_codec(
+        &mut self,
+        seq: u64,
+        ts_micros: u64,
+        kind: Kind,
+        codec: u8,
+        payload: &[u8],
+        fields: IndexFields,
+    ) -> io::Result<u64> {
         debug_assert!(seq > self.last_seq || self.first_seq.is_none() && self.count == 0);
         let offset = self.data_len;
         let mut buf = Vec::with_capacity(payload.len() + 40);
-        encode_record(&mut buf, seq, ts_micros, kind, self.codec, payload);
+        encode_record(&mut buf, seq, ts_micros, kind, codec, payload);
         self.data.write_all(&buf)?;
         self.data_len += buf.len() as u64;
         self.pending_idx.push(IdxEntry {

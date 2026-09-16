@@ -18,6 +18,7 @@
 //! The on-disk format is a sequence of length-prefixed [`LogRecord`]s,
 //! decoupled from the in-memory graph types so the schema can evolve.
 
+pub mod codec;
 pub mod file;
 pub mod log;
 pub mod manifest;
@@ -31,6 +32,7 @@ pub mod store;
 pub mod stream;
 pub mod testing;
 
+pub use codec::{codec_name, parse_codec, CodecError, CODEC_JSON, CODEC_POSTCARD, KNOWN_CODECS};
 pub use file::FileStore;
 pub use log::{LogRecord, RecordKind};
 pub use manifest::Manifest;

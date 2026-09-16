@@ -25,6 +25,11 @@ pub const IDX_MAGIC: [u8; 4] = *b"GRFI";
 /// Current layout version of both files. Bump it — and keep reading the
 /// old one — rather than ever rewriting a sealed segment (`STORAGE.md` §11.3).
 pub const FORMAT_VERSION: u16 = 1;
+/// `MANIFEST.format_version` of a store whose graph streams use a payload
+/// codec other than JSON. Builds that only know codec 0 refuse such a store
+/// at open instead of mis-reading (or truncating) binary payloads; this
+/// build reads both versions. File headers keep `FORMAT_VERSION`.
+pub const FORMAT_VERSION_CODECS: u16 = 2;
 /// Size of the `.data` and `.idx` file headers.
 pub const FILE_HEADER_LEN: usize = 32;
 /// Size of the header that precedes every record payload.

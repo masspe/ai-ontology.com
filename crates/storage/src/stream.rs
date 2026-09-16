@@ -59,7 +59,9 @@ pub struct StreamOpenReport {
 
 /// Resolver turning a decoded payload into its index fields; supplied by
 /// the store, which owns the symbol tables and the schema.
-pub type Resolver<'a> = dyn FnMut(Kind, &[u8]) -> Result<IndexFields, String> + 'a;
+/// Turns a decoded record (`kind`, `codec` of its payload, `payload`) into
+/// its index fields; the store owns the id and symbol resolution.
+pub type Resolver<'a> = dyn FnMut(Kind, u8, &[u8]) -> Result<IndexFields, String> + 'a;
 
 pub struct Stream {
     dir: PathBuf,
@@ -286,6 +288,12 @@ impl Stream {
     pub fn codec(&self) -> u8 {
         self.codec
     }
+
+    /// Codec the *next* active segments are created with. Sealed segments
+    /// keep theirs (the record header says); only compaction rewrites them.
+    pub fn set_codec(&mut self, codec: u8) {
+        self.codec = codec;
+    }
     pub fn sealed(&self) -> &[Arc<SealedSegment>] {
         &self.sealed
     }
@@ -340,6 +348,22 @@ impl Stream {
         fields: IndexFields,
     ) -> io::Result<()> {
         self.active.append(seq, ts_micros, kind, payload, fields)?;
+        Ok(())
+    }
+
+    /// Append a payload encoded with `codec`, which may differ from the
+    /// stream's default (the record header carries it).
+    pub fn append_with_codec(
+        &mut self,
+        seq: u64,
+        ts_micros: u64,
+        kind: Kind,
+        codec: u8,
+        payload: &[u8],
+        fields: IndexFields,
+    ) -> io::Result<()> {
+        self.active
+            .append_with_codec(seq, ts_micros, kind, codec, payload, fields)?;
         Ok(())
     }
 
