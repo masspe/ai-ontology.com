@@ -112,6 +112,7 @@ fn bench_commands_run_end_to_end_on_a_small_store() {
     let h1 = run_json(&data, &["bench", "--json", "hydrate", "--ns", "d0"]);
     assert_eq!(h1["concepts"], 200, "{h1}");
     assert!(h1["relations"].as_u64().unwrap() < 1500);
+    assert!(h1["apply_estimate_ms"].is_null(), "no decode/apply split on a partial load");
 
     let q = run_json(&data, &["bench", "--json", "query", "--iterations", "10"]);
     for key in ["page200_p50_us", "search_q_p50_us", "expand_d2_p50_us"] {
