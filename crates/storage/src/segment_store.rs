@@ -49,6 +49,7 @@ use ontology_graph::{GraphError, Ontology, OntologyGraph};
 use parking_lot::Mutex;
 use tracing::{info, warn};
 
+use crate::codec::{self, CODEC_JSON};
 use crate::log::{LogRecord, RecordKind, RouteHint};
 use crate::manifest::{CompactionMarker, META_NS};
 use crate::manifest::{Manifest, META_NS_ID};
@@ -57,7 +58,7 @@ use crate::segment::active::{move_segment_files, remove_segment_files};
 use crate::segment::xref::{read_xref, XrefEntry};
 use crate::segment::{
     unpack_endpoints, ActiveSegment, IndexFields, Kind, RecordMeta, RecordView, SealedSegment,
-    CODEC_JSON, FORMAT_VERSION,
+    FORMAT_VERSION,
 };
 use crate::store::{Store, StoreError, StoreResult};
 use crate::stream::{RollPolicy, SnapshotCursor, Stream, StreamOpenReport, StreamSnapshot};
@@ -218,20 +219,22 @@ impl SegmentStore {
         // 1. meta: no relation types to intern, no target domains.
         let meta_dir = root.join(&manifest.stream(META_NS_ID).unwrap().dir);
         let (mut meta, meta_report) = {
-            let mut resolve = |kind: Kind, payload: &[u8]| -> Result<IndexFields, String> {
-                let rk: RecordKind = serde_json::from_slice(payload).map_err(|e| e.to_string())?;
-                let m = RecordMeta::of(&rk);
-                if m.kind != kind {
-                    return Err(format!("header kind {kind:?} but payload is {:?}", m.kind));
-                }
-                Ok(IndexFields {
-                    ns_id: META_NS_ID,
-                    entity_id: m.entity_id,
-                    endpoints: 0,
-                    rtype_sym: 0,
-                    target_ns_id: 0,
-                })
-            };
+            let mut resolve =
+                |kind: Kind, codec: u8, payload: &[u8]| -> Result<IndexFields, String> {
+                    let rk: RecordKind =
+                        codec::decode(codec, payload).map_err(|e| e.to_string())?;
+                    let m = RecordMeta::of(&rk);
+                    if m.kind != kind {
+                        return Err(format!("header kind {kind:?} but payload is {:?}", m.kind));
+                    }
+                    Ok(IndexFields {
+                        ns_id: META_NS_ID,
+                        entity_id: m.entity_id,
+                        endpoints: 0,
+                        rtype_sym: 0,
+                        target_ns_id: 0,
+                    })
+                };
             Stream::open(
                 &meta_dir,
                 META_NS_ID,
@@ -255,9 +258,12 @@ impl SegmentStore {
             let (stream, report) = {
                 let onto = &ontology;
                 let lookup = &manifest;
-                let mut resolve = |kind: Kind, payload: &[u8]| -> Result<IndexFields, String> {
+                let mut resolve = |kind: Kind,
+                                   codec: u8,
+                                   payload: &[u8]|
+                 -> Result<IndexFields, String> {
                     let rk: RecordKind =
-                        serde_json::from_slice(payload).map_err(|e| e.to_string())?;
+                        codec::decode(codec, payload).map_err(|e| e.to_string())?;
                     let m = RecordMeta::of(&rk);
                     if m.kind != kind {
                         return Err(format!("header kind {kind:?} but payload is {:?}", m.kind));
@@ -381,6 +387,94 @@ impl SegmentStore {
         self.inner.lock().poisoned = true;
     }
 
+    /// Codec new records are written with (`MANIFEST.codec`).
+    pub fn codec(&self) -> u8 {
+        self.inner.lock().manifest.codec
+    }
+
+    /// Whole-store compaction that also switches the write codec: the
+    /// rewritten segments are in `codec`, and so is every later append.
+    /// Reading never depended on the manifest's codec (each record header
+    /// carries its own), so a store is readable at every step.
+    pub async fn compact_with_codec(
+        &self,
+        graph: &Arc<OntologyGraph>,
+        codec: u8,
+    ) -> StoreResult<CompactionReport> {
+        if !codec::is_known(codec) {
+            return Err(StoreError::Format(format!(
+                "codec {codec} not supported by this build"
+            )));
+        }
+        let inner = self.inner.clone();
+        let graph = graph.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut g = inner.lock();
+            if g.poisoned {
+                return Err(StoreError::Poisoned(g.root.display().to_string()));
+            }
+            let before = g.manifest.codec;
+            g.manifest.codec = codec;
+            match Self::compact_all(&mut g, &graph) {
+                Ok(report) => {
+                    info!(
+                        from = codec::codec_name(before),
+                        to = codec::codec_name(codec),
+                        "store codec switched"
+                    );
+                    Ok(report)
+                }
+                Err(e) => {
+                    // compact_all left the old segments in place; keep the
+                    // old codec so the next rolls stay consistent with them.
+                    g.manifest.codec = before;
+                    let _ = g.manifest.save(&g.root);
+                    Err(e)
+                }
+            }
+        })
+        .await
+        .map_err(|e| StoreError::Io(std::io::Error::other(e)))?
+    }
+
+    /// Visit every record of the store, decoded, in global `seq` order
+    /// (H12), without touching any graph. Returns `(records, payload bytes)`.
+    /// This is the read path minus `apply`: the bench uses it to split
+    /// hydration time between decoding and index building.
+    pub fn scan_records(&self, mut visit: impl FnMut(&LogRecord)) -> StoreResult<(u64, u64)> {
+        let mut g = self.inner.lock();
+        let mut snapshots = vec![g.meta.snapshot()?];
+        let ns_ids: Vec<u16> = g.graph.keys().copied().collect();
+        for ns_id in ns_ids {
+            snapshots.push(g.stream_mut(ns_id).snapshot()?);
+        }
+        drop(g);
+        let mut cursors: Vec<SnapshotCursor<'_>> =
+            snapshots.iter().map(|s| s.cursor(true)).collect();
+        let mut heads: Vec<Option<(u64, LogRecord)>> = Vec::with_capacity(cursors.len());
+        for (i, c) in cursors.iter_mut().enumerate() {
+            heads.push(next_decoded_sized(snapshots[i].ns_id, c)?);
+        }
+        let (mut records, mut bytes) = (0u64, 0u64);
+        loop {
+            let mut best: Option<usize> = None;
+            for (i, h) in heads.iter().enumerate() {
+                if let Some((_, r)) = h {
+                    if best.is_none_or(|b| r.seq < heads[b].as_ref().unwrap().1.seq) {
+                        best = Some(i);
+                    }
+                }
+            }
+            let Some(i) = best else { break };
+            let (len, rec) = heads[i].take().unwrap();
+            visit(&rec);
+            records += 1;
+            bytes += len;
+            heads[i] = next_decoded_sized(snapshots[i].ns_id, &mut cursors[i])?;
+        }
+        Ok((records, bytes))
+    }
+
     pub fn manifest(&self) -> Manifest {
         self.inner.lock().manifest.clone()
     }
@@ -449,7 +543,7 @@ impl SegmentStore {
         if !inner.graph.contains_key(&id) {
             let dir = inner.root.join(&inner.manifest.stream(id).unwrap().dir);
             let mut next_partition = inner.manifest.next_partition_id;
-            let mut resolve = |_k: Kind, _p: &[u8]| -> Result<IndexFields, String> {
+            let mut resolve = |_k: Kind, _c: u8, _p: &[u8]| -> Result<IndexFields, String> {
                 Err("fresh domain stream has no records to recover".into())
             };
             let (stream, _) = Stream::open(
@@ -567,8 +661,8 @@ impl SegmentStore {
     fn plan_batch(inner: &mut Inner, records: &[LogRecord]) -> StoreResult<Vec<Planned>> {
         let mut planned = Vec::with_capacity(records.len());
         for r in records {
-            let payload =
-                serde_json::to_vec(&r.kind).map_err(|e| StoreError::Encode(e.to_string()))?;
+            let payload = codec::encode(inner.manifest.codec, &r.kind)
+                .map_err(|e| StoreError::Encode(e.to_string()))?;
             let meta = RecordMeta::of(&r.kind);
             let rtype_sym = match meta.relation_type {
                 Some(rt) => {
@@ -647,17 +741,17 @@ impl SegmentStore {
     /// Decode one on-disk record into a `LogRecord`, naming its location on
     /// failure.
     fn decode(ns: u16, partition: u32, v: &RecordView<'_>) -> StoreResult<LogRecord> {
-        if v.header.codec != CODEC_JSON {
-            return Err(StoreError::Format(format!(
-                "ns {ns} partition {partition} seq {}: codec {} not supported",
-                v.header.seq, v.header.codec
-            )));
-        }
-        let kind: RecordKind = serde_json::from_slice(v.payload).map_err(|e| {
-            StoreError::Decode(format!(
-                "ns {ns} partition {partition} seq {}: {e}",
+        // The header names the codec of *this* payload: a store may hold
+        // JSON sealed segments next to postcard ones (codec::*).
+        let kind = codec::decode(v.header.codec, v.payload).map_err(|e| match e {
+            codec::CodecError::Unknown(c) => StoreError::Format(format!(
+                "ns {ns} partition {partition} seq {}: codec {c} not supported",
                 v.header.seq
-            ))
+            )),
+            other => StoreError::Decode(format!(
+                "ns {ns} partition {partition} seq {}: {other}",
+                v.header.seq
+            )),
         })?;
         Ok(LogRecord {
             seq: v.header.seq,
@@ -804,8 +898,8 @@ impl SegmentStore {
         let ts = Self::now_micros();
         let mut staged: BTreeMap<u16, ActiveSegment> = BTreeMap::new();
         for r in &records {
-            let payload =
-                serde_json::to_vec(&r.kind).map_err(|e| StoreError::Encode(e.to_string()))?;
+            let payload = codec::encode(inner.manifest.codec, &r.kind)
+                .map_err(|e| StoreError::Encode(e.to_string()))?;
             let meta = RecordMeta::of(&r.kind);
             let rtype_sym = match meta.relation_type {
                 Some(rt) => inner.manifest.intern_relation_type(rt).0,
@@ -913,6 +1007,9 @@ impl SegmentStore {
             let entries = {
                 let stream = inner.stream_mut(ns_id);
                 removed += stream.replace_segments(sealed, fresh)?.len();
+                // Rolls after a codec change must create segments in the
+                // store's current codec, not the one this stream opened with.
+                stream.set_codec(codec);
                 stream.sealed_entries()
             };
             inner.manifest.stream_mut(ns_id).unwrap().sealed = entries;
@@ -979,6 +1076,23 @@ fn next_decoded(ns: u16, cursor: &mut SnapshotCursor<'_>) -> StoreResult<Option<
 }
 
 /// Latest `Ontology` record on the meta stream, if any.
+/// Like `next_decoded`, also reporting the payload length of the record.
+fn next_decoded_sized(
+    ns_id: u16,
+    cursor: &mut SnapshotCursor<'_>,
+) -> StoreResult<Option<(u64, LogRecord)>> {
+    match cursor.next() {
+        None => Ok(None),
+        Some(Err((p, e))) => Err(StoreError::Corrupt(format!(
+            "ns {ns_id} partition {p}: {e}"
+        ))),
+        Some(Ok((p, v))) => {
+            let len = v.payload.len() as u64;
+            SegmentStore::decode(ns_id, p, &v).map(|r| Some((len, r)))
+        }
+    }
+}
+
 fn latest_ontology(meta: &mut Stream) -> StoreResult<Option<Ontology>> {
     let snap = meta.snapshot()?;
     let mut cursor = snap.cursor(true);

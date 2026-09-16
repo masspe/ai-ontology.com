@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 7f06f15ffa4ece842d57690dc27d5732d57f8e3f7a6a203238a56c451bff165e # shrinks to kind = Concept(Concept { id: C#1, concept_type: "Aa", name: "", description: "", properties: {"_": List([Number(-1.8854965612953506e-119)])} })

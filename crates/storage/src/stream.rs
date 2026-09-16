@@ -59,7 +59,9 @@ pub struct StreamOpenReport {
 
 /// Resolver turning a decoded payload into its index fields; supplied by
 /// the store, which owns the symbol tables and the schema.
-pub type Resolver<'a> = dyn FnMut(Kind, &[u8]) -> Result<IndexFields, String> + 'a;
+/// Turns a decoded record (`kind`, `codec` of its payload, `payload`) into
+/// its index fields; the store owns the id and symbol resolution.
+pub type Resolver<'a> = dyn FnMut(Kind, u8, &[u8]) -> Result<IndexFields, String> + 'a;
 
 pub struct Stream {
     dir: PathBuf,
@@ -285,6 +287,12 @@ impl Stream {
     }
     pub fn codec(&self) -> u8 {
         self.codec
+    }
+
+    /// Codec the *next* active segments are created with. Sealed segments
+    /// keep theirs (the record header says); only compaction rewrites them.
+    pub fn set_codec(&mut self, codec: u8) {
+        self.codec = codec;
     }
     pub fn sealed(&self) -> &[Arc<SealedSegment>] {
         &self.sealed

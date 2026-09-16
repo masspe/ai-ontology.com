@@ -16,6 +16,12 @@ tracing = { workspace = true }
 async-trait = { workspace = true }
 memmap2 = { workspace = true }
 crc32c = { workspace = true }
+postcard = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
+criterion = { workspace = true }
+
+[[bench]]
+name = "codec"
+harness = false
