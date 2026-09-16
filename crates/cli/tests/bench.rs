@@ -112,10 +112,19 @@ fn bench_commands_run_end_to_end_on_a_small_store() {
     let h1 = run_json(&data, &["bench", "--json", "hydrate", "--ns", "d0"]);
     assert_eq!(h1["concepts"], 200, "{h1}");
     assert!(h1["relations"].as_u64().unwrap() < 1500);
-    assert!(
-        h1["apply_estimate_ms"].is_null(),
-        "no decode/apply split on a partial load"
-    );
+    for key in [
+        "apply_estimate_ms",
+        "records",
+        "records_per_s",
+        "payload_bytes",
+        "read_mib_per_s",
+        "bytes_in_ram_per_record",
+    ] {
+        assert!(
+            h1[key].is_null(),
+            "{key} must be null on a partial load: {h1}"
+        );
+    }
 
     let q = run_json(&data, &["bench", "--json", "query", "--iterations", "10"]);
     for key in ["page200_p50_us", "search_q_p50_us", "expand_d2_p50_us"] {
@@ -227,4 +236,69 @@ fn bench_needs_a_data_dir_and_valid_arguments() {
         ],
     );
     assert!(!ok && stderr.contains("unknown codec"), "{stderr}");
+}
+
+/// `ontology compact --codec` (the regular command, not the bench) switches
+/// the codec of an existing store and keeps every record; a non-JSON store
+/// declares format_version 2 in its manifest.
+#[test]
+fn compact_codec_switches_an_existing_store() {
+    let data = tempdir("compact-codec");
+    let gen = run_json(
+        &data,
+        &[
+            "bench",
+            "--json",
+            "gen",
+            "--concepts",
+            "300",
+            "--relations",
+            "600",
+            "--ns",
+            "2",
+            "--payload",
+            "200",
+            "--batch",
+            "100",
+        ],
+    );
+    assert_eq!(gen["codec"], "json");
+    let (ok, out, err) = run(&data, &["compact", "--codec", "postcard"]);
+    assert!(ok, "{out}\n{err}");
+    assert!(out.contains("json -> postcard"), "{out}");
+    let (ok, stats, _) = run(&data, &["stats"]);
+    assert!(
+        ok && stats.contains("concepts: 300") && stats.contains("relations: 600"),
+        "{stats}"
+    );
+    let h = run_json(&data, &["bench", "--json", "hydrate"]);
+    assert_eq!(h["codec"], "postcard");
+    let manifest: Value = serde_json::from_str(
+        &std::fs::read_to_string(data.join("store").join("MANIFEST.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(manifest["format_version"], 2);
+    assert_eq!(manifest["codec"], 1);
+    // Back to JSON: format_version 1 again, nothing lost.
+    let (ok, out, _) = run(&data, &["compact", "--codec", "json"]);
+    assert!(ok && out.contains("postcard -> json"), "{out}");
+    let manifest: Value = serde_json::from_str(
+        &std::fs::read_to_string(data.join("store").join("MANIFEST.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(manifest["format_version"], 1);
+    let (_, stats, _) = run(&data, &["stats"]);
+    assert!(
+        stats.contains("concepts: 300") && stats.contains("relations: 600"),
+        "{stats}"
+    );
+    let (ok, _, err) = run(&data, &["compact", "--codec", "bincode"]);
+    assert!(!ok && err.contains("unknown codec"), "{err}");
+    // Without --data the codec switch has no store to work on.
+    let out = Command::new(env!("CARGO_BIN_EXE_ontology"))
+        .args(["compact", "--codec", "postcard"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("--data"));
 }

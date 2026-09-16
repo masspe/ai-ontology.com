@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::segment::{Kind, SealedSegment, FORMAT_VERSION};
+use crate::segment::{Kind, SealedSegment};
 
 pub const MANIFEST_FILE: &str = "MANIFEST.json";
 pub const MANIFEST_VERSION: u32 = 1;
@@ -140,7 +140,7 @@ impl Manifest {
     pub fn new(codec: u8) -> Self {
         Self {
             version: MANIFEST_VERSION,
-            format_version: FORMAT_VERSION,
+            format_version: crate::codec::format_version_for(codec),
             codec,
             next_partition_id: 1,
             ns: vec![
@@ -358,7 +358,7 @@ mod tests {
         assert_eq!(m.stream(DEFAULT_NS_ID).unwrap().dir, "graph/default");
         assert_eq!(m.ns.len(), 2);
         assert_eq!(m.next_partition_id, 1);
-        assert_eq!(m.format_version, FORMAT_VERSION);
+        assert_eq!(m.format_version, crate::segment::FORMAT_VERSION);
     }
 
     #[test]

@@ -28,16 +28,18 @@ async fn a_manifest_with_a_foreign_format_version_is_refused_with_format_error()
         let store = SegmentStore::open(&root).await.unwrap();
         populate(&store).await;
     }
+    // 1 (JSON only) and 2 (non-JSON payload codec in use) are this build's
+    // versions; anything else comes from another layout.
     let mut m = Manifest::load(&root).unwrap().unwrap();
-    m.format_version = 2;
+    m.format_version = 9;
     m.save(&root).unwrap();
     let before = partitions(&root.join("graph/parties"));
 
     let err = SegmentStore::open(&root).await.unwrap_err();
     assert!(matches!(err, StoreError::Format(_)), "{err}");
-    assert!(err.to_string().contains("format version 2"), "{err}");
+    assert!(err.to_string().contains("format version 9"), "{err}");
     assert_eq!(partitions(&root.join("graph/parties")), before);
-    assert_eq!(Manifest::load(&root).unwrap().unwrap().format_version, 2);
+    assert_eq!(Manifest::load(&root).unwrap().unwrap().format_version, 9);
     std::fs::remove_dir_all(&root).ok();
 }
 

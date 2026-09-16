@@ -419,12 +419,22 @@ async fn gen(store_dir: &Path, p: GenParams) -> Result<serde_json::Value> {
 // hydrate
 // ---------------------------------------------------------------------------
 
+/// Resident set (working set on Windows): heap **plus** touched pages of
+/// memory-mapped segments.
 fn rss_mib() -> Option<f64> {
     memory_stats::memory_stats().map(|m| m.physical_mem as f64 / (1024.0 * 1024.0))
 }
 
+/// Committed private memory. On Windows this is `PagefileUsage`, i.e. the
+/// heap without file-backed mappings; on Linux it is the virtual size and
+/// only its delta is indicative.
+fn commit_mib() -> Option<f64> {
+    memory_stats::memory_stats().map(|m| m.virtual_mem as f64 / (1024.0 * 1024.0))
+}
+
 async fn hydrate(store_dir: &Path, ns: Option<Vec<String>>) -> Result<serde_json::Value> {
     let rss_start = rss_mib();
+    let commit_start = commit_mib();
     let t0 = Instant::now();
     let store = SegmentStore::open(store_dir).await?;
     let open = t0.elapsed();
@@ -438,8 +448,17 @@ async fn hydrate(store_dir: &Path, ns: Option<Vec<String>>) -> Result<serde_json
     }
     let load = t1.elapsed();
     let rss_loaded = rss_mib();
+    let commit_loaded = commit_mib();
     let concepts = graph.concept_count();
     let relations = graph.relation_count();
+
+    // The sealed segments are memory-mapped and the replay touched every
+    // page, so the working set counts file pages as well as the heap.
+    // Dropping the store unmaps them: what remains above the baseline is
+    // the graph's own memory, the figure the memory tiers are sized on.
+    drop(store);
+    let rss_unmapped = rss_mib();
+    let store = SegmentStore::open(store_dir).await?;
 
     // Decode-only pass over the same bytes: the read path minus `apply`.
     let t2 = Instant::now();
@@ -462,19 +481,27 @@ async fn hydrate(store_dir: &Path, ns: Option<Vec<String>>) -> Result<serde_json
         "decode_only_ms": round2(ms(scan)),
         "apply_estimate_ms": full_load.then(|| round2(ms(apply))),
         "decode_share_pct": full_load.then(|| round0(100.0 * scan.as_secs_f64() / load.as_secs_f64().max(1e-9))),
-        "records": records,
-        "records_per_s": round0(records as f64 / load.as_secs_f64().max(1e-9)),
+        // The scan always covers the whole store: on a partial load the
+        // whole-store figures would be computed on a different base than
+        // the load, so they are omitted rather than reported wrongly.
+        "records": full_load.then_some(records),
+        "records_per_s": full_load.then(|| round0(records as f64 / load.as_secs_f64().max(1e-9))),
         "concepts": concepts,
         "relations": relations,
-        "payload_bytes": payload_bytes,
+        "payload_bytes": full_load.then_some(payload_bytes),
         "disk_bytes": disk,
         "disk_mib": round2(disk as f64 / (1024.0 * 1024.0)),
-        "read_mib_per_s": round0(disk as f64 / (1024.0 * 1024.0) / scan.as_secs_f64().max(1e-9)),
+        "read_mib_per_s": full_load.then(|| round0(disk as f64 / (1024.0 * 1024.0) / scan.as_secs_f64().max(1e-9))),
         "rss_start_mib": rss_start.map(round0),
         "rss_loaded_mib": rss_loaded.map(round0),
+        "rss_after_unmap_mib": rss_unmapped.map(round0),
+        // Working set including the mapped segment pages (upper bound).
         "rss_delta_mib": match (rss_start, rss_loaded) { (Some(a), Some(b)) => Some(round0(b - a)), _ => None },
-        "bytes_in_ram_per_record": match (rss_start, rss_loaded) {
-            (Some(a), Some(b)) if records > 0 => Some(round0((b - a) * 1024.0 * 1024.0 / records as f64)),
+        // The graph alone, once the store's mappings are released.
+        "heap_delta_mib": match (rss_start, rss_unmapped) { (Some(a), Some(b)) => Some(round0(b - a)), _ => None },
+        "commit_delta_mib": match (commit_start, commit_loaded) { (Some(a), Some(b)) => Some(round0(b - a)), _ => None },
+        "bytes_in_ram_per_record": match (rss_start, rss_unmapped) {
+            (Some(a), Some(b)) if full_load && records > 0 => Some(round0((b - a) * 1024.0 * 1024.0 / records as f64)),
             _ => None,
         },
     }))
