@@ -18,6 +18,10 @@ use crate::record::Record;
 /// stdin — the source is opaque to consumers.
 pub struct JsonlSource {
     lines: LinesReader,
+    /// 1-based number of the last line read, so a malformed line is
+    /// reported by its position in the file (serde alone always says
+    /// "line 1", since it only sees the one line).
+    line_no: usize,
 }
 
 enum LinesReader {
@@ -30,6 +34,7 @@ impl JsonlSource {
         let file = File::open(path.as_ref()).await?;
         Ok(Self {
             lines: LinesReader::File(BufReader::new(file).lines()),
+            line_no: 0,
         })
     }
 
@@ -37,6 +42,7 @@ impl JsonlSource {
     pub fn stdin() -> Self {
         Self {
             lines: LinesReader::Stdin(BufReader::new(tokio::io::stdin()).lines()),
+            line_no: 0,
         }
     }
 }
@@ -53,12 +59,15 @@ impl Source for JsonlSource {
                 Some(l) => l,
                 None => return Ok(None),
             };
-            let trimmed = line.trim();
+            self.line_no += 1;
+            // A UTF-8 BOM (Windows editors, older PowerShell) is not
+            // whitespace for `trim`; tolerate it like the CSV decoder does.
+            let trimmed = line.trim_matches(|c: char| c.is_whitespace() || c == '\u{FEFF}');
             if trimmed.is_empty() || trimmed.starts_with('#') {
                 continue;
             }
             let rec: Record = serde_json::from_str(trimmed)
-                .map_err(|e| IngestError::Source(format!("jsonl: {e}")))?;
+                .map_err(|e| IngestError::Source(format!("jsonl: line {}: {e}", self.line_no)))?;
             return Ok(Some(rec));
         }
     }

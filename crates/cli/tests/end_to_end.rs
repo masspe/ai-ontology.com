@@ -97,7 +97,7 @@ async fn ingest_persist_retrieve_answer() {
     let pipe = RagPipeline::new(idx, Arc::new(EchoModel));
     let ans = pipe
         .answer_with(RetrievalRequest {
-            query: "retrieval augmented generation".into(),
+            query: "RAG".into(),
             ..Default::default()
         })
         .await

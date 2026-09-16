@@ -284,7 +284,12 @@ pub struct ActionPatch {
     #[serde(default)]
     pub subject: Option<ConceptId>,
     /// Replaces `object`. Use `Some(None)` to clear, `Some(Some(id))` to set.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// In JSON: an absent field leaves it untouched, `null` clears it.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_double_option"
+    )]
     pub object: Option<Option<ConceptId>>,
     #[serde(default)]
     pub parameters: Option<AHashMap<String, PropertyValue>>,
@@ -292,6 +297,18 @@ pub struct ActionPatch {
     pub effect: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
+}
+
+/// `Option<Option<T>>` field where a present JSON `null` means `Some(None)`
+/// (explicit clear) and an absent field stays `None` (via `default`).
+/// Serde's derived `Option` handling would map `null` to the outer `None`,
+/// making the clear unreachable over the wire.
+fn deserialize_double_option<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
 }
 
 /// Partial update to an existing relation. Only edge metadata is mutable;

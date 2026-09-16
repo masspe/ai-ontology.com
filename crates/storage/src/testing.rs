@@ -106,3 +106,72 @@ impl Store for FlakyStore {
         self.inner.reset().await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ontology_graph::{Concept, ConceptId};
+
+    fn concept(i: u64) -> LogRecord {
+        LogRecord::concept(Concept::new(ConceptId(i), "T", format!("c{i}")))
+    }
+
+    /// Every failure mode is counted as a call and records nothing; a
+    /// success records exactly what it was given; `reset` obeys the same
+    /// switch and keeps the records when it fails.
+    #[tokio::test]
+    async fn failures_are_counted_and_record_nothing_successes_record_everything() {
+        let store = FlakyStore::new();
+        assert_eq!(
+            (
+                store.append_calls(),
+                store.batch_calls(),
+                store.records_written()
+            ),
+            (0, 0, 0)
+        );
+
+        store.set_failing(true);
+        let err = store.append(&concept(1)).await.unwrap_err();
+        assert!(matches!(err, StoreError::Io(_)), "{err}");
+        let err = store
+            .append_batch(&[concept(2), concept(3), concept(4)])
+            .await
+            .unwrap_err();
+        assert!(matches!(err, StoreError::Io(_)), "{err}");
+        assert_eq!(store.append_calls(), 1);
+        assert_eq!(store.batch_calls(), 1);
+        assert_eq!(store.records_written(), 0);
+        assert!(store.records().is_empty());
+        // An empty batch while failing is still a failed call.
+        assert!(store.append_batch(&[]).await.is_err());
+        assert_eq!(store.batch_calls(), 2);
+
+        store.set_failing(false);
+        store.append(&concept(1)).await.unwrap();
+        store.append_batch(&[concept(2), concept(3)]).await.unwrap();
+        store.append_batch(&[]).await.unwrap();
+        assert_eq!(store.append_calls(), 2);
+        assert_eq!(store.batch_calls(), 4);
+        assert_eq!(store.records_written(), 3);
+        let recs = store.records();
+        assert_eq!(recs.len(), 3);
+        assert_eq!(
+            recs.iter().map(|r| r.seq).collect::<Vec<_>>(),
+            vec![1, 2, 3],
+            "seqs assigned by the inner store"
+        );
+
+        store.set_failing(true);
+        assert!(store.reset().await.is_err());
+        assert_eq!(store.records().len(), 3, "a failed reset keeps the records");
+        store.set_failing(false);
+        store.reset().await.unwrap();
+        assert!(store.records().is_empty());
+        assert_eq!(
+            store.records_written(),
+            3,
+            "the counter is cumulative, not the current size"
+        );
+    }
+}
