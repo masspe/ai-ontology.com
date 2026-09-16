@@ -613,26 +613,34 @@ Mesuré (détail dans `STORAGE.md` §7.7–7.8) :
 | Question de la phase | Réponse |
 |---|---|
 | Le parsing domine-t-il l'hydratation ? | **Non** : 9–27 %. `apply` (index mémoire) : 73–91 %. |
-| Gain du codec binaire | décodage 2–3×, disque −28 %, **hydratation 0,93–1,24×** |
+| Gain du codec binaire | décodage 3× par concept (micro-bench), 1,6–2,2× in situ, disque −24 %, **hydratation 0,93–1,24×** |
 | Seuil « activer par défaut si > 3× » | **Non atteint → NO-GO comme défaut** ; codec 1 disponible en option (`compact --codec postcard`), lisible et testé |
 | `bulk_load` justifié ? | **Oui** : `apply` domine ; c'est le levier de l'hydratation (item 4) |
-| Empreinte P0 | 3,46 Ko / concept (1,3 Ko de payload), ~560 o / relation → **~62 Go pour la cible**, 16 Go visés |
+| Empreinte P0 (tas, store refermé) | ~2,75 Ko / concept (1,3 Ko de payload), ~350–475 o / relation → **45 à 50 Go pour la cible**, 16 Go visés |
 | Compaction complète | 30–54 k enr./s → 20–30 min à la cible ; compaction par domaine et vérification sans rejeu à prévoir |
 | Page à offset | O(offset) : 13 ms à 500 k → T1 (curseur) avant la phase 5, comme prévu |
 
 Décisions à prendre (proposées, à valider) :
 
 1. **Codec** : garder JSON par défaut (lisible, aucun outil à adapter),
-   postcard en option documentée. Réévaluer après `bulk_load` : si `apply`
-   tombe à ~2 µs par enregistrement, le décodage (3,8 µs JSON vs 1,3 µs)
-   redevient le poste dominant et le codec 1 gagnera 1,5 à 2× sur
-   l'hydratation totale.
+   postcard en option documentée. Réévaluer après `bulk_load` : in situ le
+   décodage coûte 1,23 µs par enregistrement en JSON contre 0,57 en
+   postcard (3 M enr.) ; si `apply` tombe à ~2 µs par enregistrement, le
+   codec 1 gagnera ~1,25× sur l'hydratation totale, ~1,5× si `apply` tombe
+   à 1 µs. Le codec ne devient décisif qu'une fois `apply` optimisé.
+   Restriction retenue : le flux `meta` (schéma, règles, actions) reste en
+   JSON quel que soit le codec du store — les types du schéma ne sont pas un
+   contrat disque gelé ; un store non-JSON déclare `format_version = 2`, que
+   les builds antérieurs refusent à l'ouverture au lieu de tronquer.
 2. **`bulk_load`** : à faire maintenant (item 4), méthode publique de
    `OntologyGraph` (R1), un seul bump de génération (R2) ; cible 2–3× sur
    `apply`.
 3. **Phase 5** : la cible 10⁷ / 5×10⁷ sur 16 Go exige P1 **et** le CSR
    (P2–P4). Réordonner : P1 (payloads hors tas, −13 Go) puis CSR des
-   relations (−26 Go) avant les index de concepts. Ou revoir la cible.
+   relations (−16 à −23 Go) avant les index de concepts (~14 Go). Ou revoir
+   la cible. Les chiffres sont des mesures de tas sur un portable, une
+   exécution par point : à confirmer sur le nœud cible avant d'engager la
+   phase 5.
 
 ---
 

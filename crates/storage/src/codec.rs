@@ -76,14 +76,85 @@ pub fn is_known(codec: u8) -> bool {
     KNOWN_CODECS.contains(&codec)
 }
 
+/// `MANIFEST.format_version` a store must declare for its write codec: a
+/// JSON-only store stays readable by every build (`FORMAT_VERSION`); a
+/// store that writes binary payloads declares `FORMAT_VERSION_CODECS`, so a
+/// build that does not know the codec refuses it at open rather than
+/// truncating what it cannot decode as a torn tail.
+pub fn format_version_for(codec: u8) -> u16 {
+    if codec == CODEC_JSON {
+        crate::segment::FORMAT_VERSION
+    } else {
+        crate::segment::FORMAT_VERSION_CODECS
+    }
+}
+
+/// The codec a record of `kind` is written with when the store's write
+/// codec is `store_codec`: schema records (the `meta` stream — `Ontology`,
+/// rules, actions) always stay JSON. `Ontology` embeds the graph's schema
+/// types, whose serde shape (`#[serde(default)]`, `skip_serializing_if`) is
+/// not positional-safe and is not a frozen contract; keeping them in the
+/// self-describing codec avoids freezing them. Graph records use
+/// `store_codec`.
+pub fn codec_for(kind: &RecordKind, store_codec: u8) -> u8 {
+    if crate::segment::Kind::of(kind).is_meta() {
+        CODEC_JSON
+    } else {
+        store_codec
+    }
+}
+
+/// A non-finite number has no JSON representation (`serde_json` writes
+/// `null`, which an untagged `PropertyValue` cannot read back), so both
+/// codecs refuse it at encode time rather than persisting a record that
+/// would fail on replay (R17 on the write side).
+fn check_finite(kind: &RecordKind) -> Result<(), CodecError> {
+    fn walk(v: &PropertyValue, path: &str) -> Result<(), CodecError> {
+        match v {
+            PropertyValue::Number(n) if !n.is_finite() => Err(CodecError::Encode {
+                codec: "any",
+                msg: format!("property `{path}` is {n}: non-finite numbers cannot be stored"),
+            }),
+            PropertyValue::List(items) => items.iter().try_for_each(|i| walk(i, path)),
+            _ => Ok(()),
+        }
+    }
+    fn props(m: &AHashMap<String, PropertyValue>) -> Result<(), CodecError> {
+        m.iter().try_for_each(|(k, v)| walk(v, k))
+    }
+    match kind {
+        RecordKind::Concept(c) | RecordKind::UpdateConcept(c) => props(&c.properties),
+        RecordKind::Relation(r) | RecordKind::UpdateRelation(r) | RecordKind::RelationExact(r) => {
+            if !r.weight.is_finite() {
+                return Err(CodecError::Encode {
+                    codec: "any",
+                    msg: format!("relation {} weight is {}: non-finite", r.id.0, r.weight),
+                });
+            }
+            props(&r.properties)
+        }
+        RecordKind::Rule(r) => props(&r.properties),
+        RecordKind::Action(a) => props(&a.parameters),
+        _ => Ok(()),
+    }
+}
+
 /// Encode a record's payload with `codec`.
 pub fn encode(codec: u8, kind: &RecordKind) -> Result<Vec<u8>, CodecError> {
+    check_finite(kind)?;
     match codec {
         CODEC_JSON => serde_json::to_vec(kind).map_err(|e| CodecError::Encode {
             codec: "json",
             msg: e.to_string(),
         }),
         CODEC_POSTCARD => {
+            if matches!(kind, RecordKind::Ontology(_)) {
+                // See `codec_for`: the schema's serde shape is not frozen.
+                return Err(CodecError::Encode {
+                    codec: "postcard",
+                    msg: "schema (Ontology) records are stored in JSON only".into(),
+                });
+            }
             postcard::to_allocvec(&StoredRecord::from(kind)).map_err(|e| CodecError::Encode {
                 codec: "postcard",
                 msg: e.to_string(),
@@ -322,8 +393,9 @@ impl From<StoredAction> for Action {
     }
 }
 
-/// Twin of [`RecordKind`]. The `Ontology` schema carries no untagged type,
-/// so it is stored as is (postcard handles its maps and options).
+/// Twin of [`RecordKind`]. The `Ontology` variant exists so every kind can
+/// be decoded if it is ever met, but `encode` never produces it in
+/// postcard: schema records stay on codec 0 (see `codec_for`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum StoredRecord {
     Ontology(Ontology),
@@ -470,6 +542,55 @@ mod tests {
             let j2 = serde_json::to_value(RecordKind::Concept(back)).unwrap();
             assert_eq!(j1, j2, "json view of {v:e}");
         }
+    }
+
+    #[test]
+    fn schema_records_are_json_whatever_the_store_codec() {
+        let onto = RecordKind::Ontology(Ontology::new());
+        assert_eq!(codec_for(&onto, CODEC_POSTCARD), CODEC_JSON);
+        assert_eq!(
+            codec_for(&RecordKind::Concept(concept()), CODEC_POSTCARD),
+            CODEC_POSTCARD
+        );
+        assert_eq!(
+            codec_for(&RecordKind::DeleteRule(RuleId(1)), CODEC_POSTCARD),
+            CODEC_JSON
+        );
+        assert!(matches!(
+            encode(CODEC_POSTCARD, &onto),
+            Err(CodecError::Encode {
+                codec: "postcard",
+                ..
+            })
+        ));
+        assert!(encode(CODEC_JSON, &onto).is_ok());
+        assert_eq!(
+            format_version_for(CODEC_JSON),
+            crate::segment::FORMAT_VERSION
+        );
+        assert_eq!(
+            format_version_for(CODEC_POSTCARD),
+            crate::segment::FORMAT_VERSION_CODECS
+        );
+    }
+
+    #[test]
+    fn non_finite_numbers_are_refused_by_every_codec() {
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let mut c = Concept::new(ConceptId(1), "T", "n");
+            c.properties.insert(
+                "deep".into(),
+                PropertyValue::List(vec![PropertyValue::List(vec![PropertyValue::Number(bad)])]),
+            );
+            let kind = RecordKind::Concept(c);
+            for codec in KNOWN_CODECS {
+                let err = encode(*codec, &kind).unwrap_err();
+                assert!(err.to_string().contains("deep"), "{err}");
+            }
+        }
+        let mut r = Relation::new(RelationId(4), "t", ConceptId(1), ConceptId(2));
+        r.weight = f32::NAN;
+        assert!(encode(CODEC_JSON, &RecordKind::Relation(r)).is_err());
     }
 
     #[test]

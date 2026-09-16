@@ -430,8 +430,10 @@ d'enregistrements (500 k concepts, 2,5 M relations), l'hydratation prend
 23 s en JSON dont 3,7 s de décodage et **19,4 s d'`apply`** — 6,5 µs par
 enregistrement, soit l'ordre de grandeur estimé en §6 (~30 µs par concept
 avec ses relations). `apply` représente 73 à 91 % de l'hydratation selon le
-codec : la mesure justifie `bulk_load`. Coût mémoire mesuré en P0 : ~3,46 Ko
-par concept de 1,3 Ko et ~560 o par relation (structure + 4 index
+codec : la mesure justifie `bulk_load` — avec la réserve qu'une
+soustraction n'est pas un profil ; un profil de `apply` précédera sa
+conception. Coût mémoire mesuré en P0 (tas, store refermé) : ~2,75 Ko par
+concept de 1,3 Ko et ~350 à 475 o par relation (structure + 4 index
 d'adjacence + ensemble trié + chaîne du type).
 
 ### 7.9 Tout ce document décrit P0

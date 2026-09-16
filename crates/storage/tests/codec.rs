@@ -389,6 +389,187 @@ fn walk_bytes(dir: &std::path::Path) -> u64 {
     total
 }
 
+/// The repository's finance schema has a type without `ns` (`Subsidiary`
+/// inherits its parent's): a postcard store must journal it, reopen and
+/// hydrate it — schema records stay JSON whatever the store codec.
+#[tokio::test]
+async fn postcard_store_accepts_a_schema_type_without_ns() {
+    let dir = tempdir("finance-postcard");
+    let finance: Ontology =
+        serde_json::from_str(include_str!("../../../examples/finance/ontology.json")).unwrap();
+    assert!(
+        finance.concept_types["Subsidiary"].ns.is_none(),
+        "fixture drifted"
+    );
+    let live = OntologyGraph::with_arc(finance.clone());
+    {
+        let store = SegmentStore::open_with(&dir, with_codec(CODEC_POSTCARD))
+            .await
+            .unwrap();
+        store
+            .append(&LogRecord::ontology(finance.clone()))
+            .await
+            .unwrap();
+        let mut c = Concept::new(ConceptId(0), "Subsidiary", "Acme Labs SA");
+        live.prepare_concept(&mut c).unwrap();
+        store.append(&LogRecord::concept(c.clone())).await.unwrap();
+        live.apply_prepared_concept(c).unwrap();
+        let (n, _) = store.scan_records(|_| {}).unwrap();
+        assert_eq!(n, 2);
+        let meta_data = std::fs::read_dir(dir.join("meta"))
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .find(|p| p.extension().is_some_and(|e| e == "data"))
+            .unwrap();
+        assert_eq!(
+            std::fs::read(&meta_data).unwrap()[6],
+            CODEC_JSON,
+            "meta segment header stays JSON"
+        );
+        // A switch of codec (both ways) keeps working with such a schema.
+        store.compact_with_codec(&live, CODEC_JSON).await.unwrap();
+        store
+            .compact_with_codec(&live, CODEC_POSTCARD)
+            .await
+            .unwrap();
+    }
+    let store = SegmentStore::open(&dir).await.unwrap();
+    let loaded = OntologyGraph::with_arc(Ontology::new());
+    store.load_into(&loaded).await.unwrap();
+    assert_same_graph(&live, &loaded);
+    assert!(loaded.with_ontology(|o| o.concept_types["Subsidiary"].ns.is_none()));
+}
+
+/// A store that writes a non-JSON codec declares `format_version` 2, which a
+/// JSON-only build refuses at open; this build refuses an unknown codec or
+/// format version at open, before touching any segment (R17), and a JSON
+/// config on reopen never overrides the manifest's codec.
+#[tokio::test]
+async fn format_version_follows_the_codec_and_unknown_codecs_are_refused_at_open() {
+    let dir = tempdir("fv");
+    let live = OntologyGraph::with_arc(ontology());
+    {
+        let store = SegmentStore::open(&dir).await.unwrap();
+        populate(&live, &store).await;
+        assert_eq!(store.manifest().format_version, 1);
+        store
+            .compact_with_codec(&live, CODEC_POSTCARD)
+            .await
+            .unwrap();
+        assert_eq!(store.manifest().format_version, 2);
+        store.compact_with_codec(&live, CODEC_JSON).await.unwrap();
+        assert_eq!(store.manifest().format_version, 1);
+        store
+            .compact_with_codec(&live, CODEC_POSTCARD)
+            .await
+            .unwrap();
+    }
+    let manifest_path = dir.join("MANIFEST.json");
+    let original = std::fs::read_to_string(&manifest_path).unwrap();
+    let before = walk_bytes(&dir);
+
+    // Unknown codec in the manifest (a store from a newer build).
+    let tampered = original.replace("\"codec\": 1", "\"codec\": 7");
+    assert_ne!(tampered, original);
+    std::fs::write(&manifest_path, &tampered).unwrap();
+    let err = SegmentStore::open(&dir).await.unwrap_err();
+    assert!(err.to_string().contains("codec 7"), "{err}");
+    assert_eq!(walk_bytes(&dir), before, "nothing truncated or created");
+
+    // Unknown format version.
+    let tampered = original.replace("\"format_version\": 2", "\"format_version\": 9");
+    assert_ne!(tampered, original);
+    std::fs::write(&manifest_path, &tampered).unwrap();
+    let err = SegmentStore::open(&dir).await.unwrap_err();
+    assert!(err.to_string().contains("format version 9"), "{err}");
+    assert_eq!(walk_bytes(&dir), before);
+
+    // Restored: opens, and a JSON config on a postcard store keeps postcard.
+    std::fs::write(&manifest_path, &original).unwrap();
+    let store = SegmentStore::open_with(&dir, with_codec(CODEC_JSON))
+        .await
+        .unwrap();
+    assert_eq!(
+        store.codec(),
+        CODEC_POSTCARD,
+        "the manifest's codec wins on reopen"
+    );
+    let mut c = Concept::new(ConceptId(0), "Person", "after");
+    live.prepare_concept(&mut c).unwrap();
+    store.append(&LogRecord::concept(c.clone())).await.unwrap();
+    live.apply_prepared_concept(c).unwrap();
+    drop(store);
+    let store = SegmentStore::open(&dir).await.unwrap();
+    let loaded = OntologyGraph::with_arc(Ontology::new());
+    store.load_into(&loaded).await.unwrap();
+    assert_same_graph(&live, &loaded);
+}
+
+/// Every record header names the codec of its own payload: after a codec
+/// switch, graph records say postcard and meta records say JSON, whatever
+/// the segment they sit in.
+#[tokio::test]
+async fn record_headers_carry_their_own_codec() {
+    let dir = tempdir("headers");
+    let live = OntologyGraph::with_arc(ontology());
+    let store = SegmentStore::open(&dir).await.unwrap();
+    populate(&live, &store).await;
+    store
+        .compact_with_codec(&live, CODEC_POSTCARD)
+        .await
+        .unwrap();
+    let mut c = Concept::new(ConceptId(0), "Person", "mixed");
+    live.prepare_concept(&mut c).unwrap();
+    store.append(&LogRecord::concept(c.clone())).await.unwrap();
+    live.apply_prepared_concept(c).unwrap();
+    drop(store);
+
+    let mut graph_codecs = std::collections::BTreeSet::new();
+    let mut meta_codecs = std::collections::BTreeSet::new();
+    for (sub, set) in [("graph", &mut graph_codecs), ("meta", &mut meta_codecs)] {
+        for entry in walkdir(&dir.join(sub)) {
+            if entry.extension().is_some_and(|e| e == "data") {
+                set.extend(record_codecs(&std::fs::read(&entry).unwrap()));
+            }
+        }
+    }
+    assert_eq!(graph_codecs, [CODEC_POSTCARD].into_iter().collect());
+    assert_eq!(meta_codecs, [CODEC_JSON].into_iter().collect());
+}
+
+/// Codec byte of every record header in a `.data` file (format §4.2:
+/// 32-byte file header, then records of a 32-byte header + payload padded
+/// to 8 bytes; the header carries `payload_len` and the codec byte).
+fn record_codecs(bytes: &[u8]) -> Vec<u8> {
+    use ontology_storage::segment::{decode_record, FILE_HEADER_LEN};
+    let mut out = Vec::new();
+    let mut at = FILE_HEADER_LEN;
+    while at < bytes.len() {
+        let Ok(v) = decode_record(bytes, at, false) else {
+            break;
+        };
+        out.push(v.header.codec);
+        at = v.next;
+    }
+    out
+}
+
+fn walkdir(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(dir) {
+        for e in rd.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                out.extend(walkdir(&p));
+            } else {
+                out.push(p);
+            }
+        }
+    }
+    out
+}
+
 // ---------------------------------------------------------------- property tests
 
 fn arb_value() -> impl Strategy<Value = PropertyValue> {
@@ -459,12 +640,14 @@ fn arb_record() -> impl Strategy<Value = RecordKind> {
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 
-    /// For every record, postcard decode(encode(x)) is JSON-equivalent to x
-    /// (the JSON view is the reference representation of the graph types).
+    /// For every record, decode(encode(x)) under the codec the store would
+    /// use for it (postcard for graph records, JSON for schema records) is
+    /// JSON-equivalent to x (the JSON view is the reference representation).
     #[test]
-    fn postcard_round_trip_equals_json_view(kind in arb_record()) {
-        let bytes = ontology_storage::codec::encode(CODEC_POSTCARD, &kind).unwrap();
-        let back = ontology_storage::codec::decode(CODEC_POSTCARD, &bytes).unwrap();
+    fn store_codec_round_trip_equals_json_view(kind in arb_record()) {
+        let c = ontology_storage::codec::codec_for(&kind, CODEC_POSTCARD);
+        let bytes = ontology_storage::codec::encode(c, &kind).unwrap();
+        let back = ontology_storage::codec::decode(c, &bytes).unwrap();
         prop_assert_eq!(
             serde_json::to_value(&back).unwrap(),
             serde_json::to_value(&kind).unwrap()
@@ -473,20 +656,25 @@ proptest! {
         let j = ontology_storage::codec::encode(CODEC_JSON, &kind).unwrap();
         let jb = ontology_storage::codec::decode(CODEC_JSON, &j).unwrap();
         prop_assert_eq!(serde_json::to_value(&jb).unwrap(), serde_json::to_value(&kind).unwrap());
+        // Meta-stream records (schema, rules, actions) never go through
+        // postcard; graph records do.
+        prop_assert_eq!(c == CODEC_JSON, ontology_storage::segment::Kind::of(&kind).is_meta());
     }
 
     /// Postcard bytes of the same record are identical (sorted properties).
     #[test]
     fn postcard_encoding_is_deterministic(kind in arb_record()) {
-        let a = ontology_storage::codec::encode(CODEC_POSTCARD, &kind).unwrap();
-        let b = ontology_storage::codec::encode(CODEC_POSTCARD, &kind).unwrap();
+        let c = ontology_storage::codec::codec_for(&kind, CODEC_POSTCARD);
+        let a = ontology_storage::codec::encode(c, &kind).unwrap();
+        let b = ontology_storage::codec::encode(c, &kind).unwrap();
         prop_assert_eq!(a, b);
     }
 
     /// Truncated or garbage postcard bytes never panic.
     #[test]
     fn corrupt_postcard_bytes_fail_cleanly(kind in arb_record(), cut in 0usize..64, junk in prop::collection::vec(any::<u8>(), 0..32)) {
-        let bytes = ontology_storage::codec::encode(CODEC_POSTCARD, &kind).unwrap();
+        let c = ontology_storage::codec::codec_for(&kind, CODEC_POSTCARD);
+        let bytes = ontology_storage::codec::encode(c, &kind).unwrap();
         let cut = cut.min(bytes.len());
         let _ = ontology_storage::codec::decode(CODEC_POSTCARD, &bytes[..cut]);
         let _ = ontology_storage::codec::decode(CODEC_POSTCARD, &junk);

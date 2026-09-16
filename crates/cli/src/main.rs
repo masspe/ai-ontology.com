@@ -202,6 +202,9 @@ async fn main() -> Result<()> {
                 .unwrap_or_else(|_| EnvFilter::new("info,ontology=debug")),
         )
         .with_target(false)
+        // Logs go to stderr so stdout stays a clean data channel (`export`,
+        // `bench --json`) that can be piped into other tools.
+        .with_writer(std::io::stderr)
         .init();
 
     let cli = Cli::parse();

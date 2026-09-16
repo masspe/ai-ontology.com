@@ -351,6 +351,22 @@ impl Stream {
         Ok(())
     }
 
+    /// Append a payload encoded with `codec`, which may differ from the
+    /// stream's default (the record header carries it).
+    pub fn append_with_codec(
+        &mut self,
+        seq: u64,
+        ts_micros: u64,
+        kind: Kind,
+        codec: u8,
+        payload: &[u8],
+        fields: IndexFields,
+    ) -> io::Result<()> {
+        self.active
+            .append_with_codec(seq, ts_micros, kind, codec, payload, fields)?;
+        Ok(())
+    }
+
     pub fn has_pending(&self) -> bool {
         self.active.has_pending()
     }

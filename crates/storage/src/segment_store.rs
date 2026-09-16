@@ -58,15 +58,17 @@ use crate::segment::active::{move_segment_files, remove_segment_files};
 use crate::segment::xref::{read_xref, XrefEntry};
 use crate::segment::{
     unpack_endpoints, ActiveSegment, IndexFields, Kind, RecordMeta, RecordView, SealedSegment,
-    FORMAT_VERSION,
+    FORMAT_VERSION, FORMAT_VERSION_CODECS,
 };
 use crate::store::{Store, StoreError, StoreResult};
 use crate::stream::{RollPolicy, SnapshotCursor, Stream, StreamOpenReport, StreamSnapshot};
 
 pub const LOCK_FILE: &str = "LOCK";
 
-/// One record ready to append: `(ns_id, kind, payload, index fields)`.
-type Planned = (u16, Kind, Vec<u8>, IndexFields);
+/// One record ready to append: `(ns_id, kind, codec of the payload, payload,
+/// index fields)`. The codec travels with the payload so the record header
+/// can never disagree with the bytes it introduces.
+type Planned = (u16, Kind, u8, Vec<u8>, IndexFields);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SegmentStoreConfig {
@@ -204,11 +206,30 @@ impl SegmentStore {
         let existing = Manifest::load(root)?;
         let created = existing.is_none();
         let mut manifest = existing.unwrap_or_else(|| Manifest::new(cfg.codec));
-        if manifest.format_version != FORMAT_VERSION {
+        if !matches!(
+            manifest.format_version,
+            FORMAT_VERSION | FORMAT_VERSION_CODECS
+        ) {
             return Err(StoreError::Format(format!(
-                "store format version {} not readable by this build ({FORMAT_VERSION})",
+                "store format version {} not readable by this build ({FORMAT_VERSION} or {FORMAT_VERSION_CODECS})",
                 manifest.format_version
             )));
+        }
+        // R17: a write codec this build cannot decode is refused before any
+        // segment is touched — never taken for a torn tail by recovery.
+        if !codec::is_known(manifest.codec) {
+            return Err(StoreError::Format(format!(
+                "store codec {} not supported by this build (knows {:?})",
+                manifest.codec,
+                codec::KNOWN_CODECS
+            )));
+        }
+        if !created && cfg.codec != manifest.codec {
+            warn!(
+                requested = codec::codec_name(cfg.codec),
+                store = codec::codec_name(manifest.codec),
+                "SegmentStoreConfig.codec only applies to a new store; keeping the store's codec (use compact_with_codec to switch)"
+            );
         }
         // A compaction interrupted after its commit point is finished now,
         // before any stream is opened; one aborted before it is discarded.
@@ -238,7 +259,8 @@ impl SegmentStore {
             Stream::open(
                 &meta_dir,
                 META_NS_ID,
-                manifest.codec,
+                // Schema records are always JSON (`codec::codec_for`).
+                codec::CODEC_JSON,
                 cfg.roll,
                 &mut next_partition,
                 1,
@@ -413,25 +435,9 @@ impl SegmentStore {
             if g.poisoned {
                 return Err(StoreError::Poisoned(g.root.display().to_string()));
             }
-            let before = g.manifest.codec;
-            g.manifest.codec = codec;
-            match Self::compact_all(&mut g, &graph) {
-                Ok(report) => {
-                    info!(
-                        from = codec::codec_name(before),
-                        to = codec::codec_name(codec),
-                        "store codec switched"
-                    );
-                    Ok(report)
-                }
-                Err(e) => {
-                    // compact_all left the old segments in place; keep the
-                    // old codec so the next rolls stay consistent with them.
-                    g.manifest.codec = before;
-                    let _ = g.manifest.save(&g.root);
-                    Err(e)
-                }
-            }
+            // `compact_all` adopts the codec only at its commit point; a
+            // failure before that leaves manifest and segments untouched.
+            Self::compact_all(&mut g, &graph, codec)
         })
         .await
         .map_err(|e| StoreError::Io(std::io::Error::other(e)))?
@@ -669,8 +675,10 @@ impl SegmentStore {
     fn plan_batch(inner: &mut Inner, records: &[LogRecord]) -> StoreResult<Vec<Planned>> {
         let mut planned = Vec::with_capacity(records.len());
         for r in records {
-            let payload = codec::encode(inner.manifest.codec, &r.kind)
-                .map_err(|e| StoreError::Encode(e.to_string()))?;
+            // The header of each record names the codec of *its* payload.
+            let codec = codec::codec_for(&r.kind, inner.manifest.codec);
+            let payload =
+                codec::encode(codec, &r.kind).map_err(|e| StoreError::Encode(e.to_string()))?;
             let meta = RecordMeta::of(&r.kind);
             let rtype_sym = match meta.relation_type {
                 Some(rt) => {
@@ -688,6 +696,7 @@ impl SegmentStore {
             planned.push((
                 ns_id,
                 meta.kind,
+                codec,
                 payload,
                 IndexFields {
                     ns_id,
@@ -708,11 +717,11 @@ impl SegmentStore {
     fn write_planned(inner: &mut Inner, planned: Vec<Planned>) -> StoreResult<u64> {
         let ts = Self::now_micros();
         let mut touched: Vec<u16> = Vec::new();
-        for (ns_id, kind, payload, fields) in &planned {
+        for (ns_id, kind, codec, payload, fields) in &planned {
             let seq = inner.next_seq;
             inner
                 .stream_mut(*ns_id)
-                .append(seq, ts, *kind, payload, *fields)?;
+                .append_with_codec(seq, ts, *kind, *codec, payload, *fields)?;
             inner.next_seq += 1;
             if !touched.contains(ns_id) {
                 touched.push(*ns_id);
@@ -891,7 +900,11 @@ impl SegmentStore {
 
     /// Rewrite the whole store from `graph` into fresh partitions, verify by
     /// replay, swap, delete the old files, rebuild `.xref`s.
-    fn compact_all(inner: &mut Inner, graph: &Arc<OntologyGraph>) -> StoreResult<CompactionReport> {
+    fn compact_all(
+        inner: &mut Inner,
+        graph: &Arc<OntologyGraph>,
+        write_codec: u8,
+    ) -> StoreResult<CompactionReport> {
         // Same rule as `commit_batch`: after a failed write nothing is
         // written to this store until a restart has recovered its tail —
         // compaction (and `reset`, which is one) included.
@@ -912,7 +925,8 @@ impl SegmentStore {
         let ts = Self::now_micros();
         let mut staged: BTreeMap<u16, ActiveSegment> = BTreeMap::new();
         for r in &records {
-            let payload = codec::encode(inner.manifest.codec, &r.kind)
+            let record_codec = codec::codec_for(&r.kind, write_codec);
+            let payload = codec::encode(record_codec, &r.kind)
                 .map_err(|e| StoreError::Encode(e.to_string()))?;
             let meta = RecordMeta::of(&r.kind);
             let rtype_sym = match meta.relation_type {
@@ -926,18 +940,24 @@ impl SegmentStore {
                     let dir = staging_dir(&inner.stream_dir(ns_id));
                     let pid = inner.manifest.next_partition_id;
                     inner.manifest.next_partition_id += 1;
+                    let segment_codec = if ns_id == META_NS_ID {
+                        codec::CODEC_JSON
+                    } else {
+                        write_codec
+                    };
                     v.insert(ActiveSegment::create(
                         &dir,
                         pid,
                         inner.next_seq,
-                        inner.manifest.codec,
+                        segment_codec,
                     )?)
                 }
             };
-            seg.append(
+            seg.append_with_codec(
                 inner.next_seq,
                 ts,
                 meta.kind,
+                record_codec,
                 &payload,
                 IndexFields {
                     ns_id,
@@ -1001,6 +1021,17 @@ impl SegmentStore {
                 .map(|ns| (*ns, inner.stream_ref(*ns).partition_ids()))
                 .collect(),
         };
+        // The write codec switches here, at the commit point, never before:
+        // a crash earlier leaves the old manifest with the old segments.
+        if inner.manifest.codec != write_codec {
+            info!(
+                from = codec::codec_name(inner.manifest.codec),
+                to = codec::codec_name(write_codec),
+                "store codec switched"
+            );
+            inner.manifest.codec = write_codec;
+            inner.manifest.format_version = codec::format_version_for(write_codec);
+        }
         inner.manifest.compaction = Some(marker);
         inner.manifest.save(&inner.root)?;
 
@@ -1009,7 +1040,11 @@ impl SegmentStore {
         let mut removed = 0usize;
         for ns_id in all_ids {
             let dir = inner.stream_dir(ns_id);
-            let codec = inner.manifest.codec;
+            let codec = if ns_id == META_NS_ID {
+                codec::CODEC_JSON
+            } else {
+                inner.manifest.codec
+            };
             let mut sealed: Vec<Arc<SealedSegment>> = Vec::new();
             if let Some((_, pid)) = staged_ids.iter().find(|(ns, _)| *ns == ns_id) {
                 move_segment_files(&staging_dir(&dir), &dir, *pid)?;
@@ -1071,7 +1106,8 @@ impl SegmentStore {
         let graph = graph.clone();
         tokio::task::spawn_blocking(move || {
             let mut g = inner.lock();
-            Self::compact_all(&mut g, &graph)
+            let codec = g.manifest.codec;
+            Self::compact_all(&mut g, &graph, codec)
         })
         .await
         .map_err(|e| StoreError::Io(std::io::Error::other(e)))?
