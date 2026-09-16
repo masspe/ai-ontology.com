@@ -129,4 +129,11 @@ pub enum GraphError {
     /// `insert_relation_exact` was given an id that is already present.
     #[error("relation {0} already exists")]
     RelationExists(RelationId),
+
+    /// A concept type is its own ancestor through the `parent` chain. Such
+    /// a schema could never be replayed (`is_subtype`, `descendants` and
+    /// `ns_of_type` would have no fixed point), so it is refused before it
+    /// reaches the journal (`STORAGE.md` §10.10).
+    #[error("concept type `{concept_type}` is its own ancestor: the parent chain is a cycle")]
+    ParentCycle { concept_type: String },
 }

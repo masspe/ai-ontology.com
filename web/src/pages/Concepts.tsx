@@ -46,7 +46,7 @@ function fmtNum(n: number): string {
 // in `description`; rendering one untruncated — as a text node *and* a `title`
 // attribute — freezes the browser. CSS clipping doesn't help: the full string
 // still lives in the DOM. So we truncate the actual values we render.
-function truncate(s: string, max: number): string {
+export function truncate(s: string, max: number): string {
   return s.length > max ? s.slice(0, max) + "…" : s;
 }
 
@@ -59,7 +59,7 @@ function fmtDate(ts?: number | null): string {
   });
 }
 
-function conceptStatus(c: Concept): { label: string; cls: string } {
+export function conceptStatus(c: Concept): { label: string; cls: string } {
   const raw = (c.properties?.status as string | undefined)?.toLowerCase();
   if (raw === "reviewed") return { label: "Reviewed", cls: "badge-accent" };
   if (raw === "draft") return { label: "Draft", cls: "badge-warn" };
@@ -67,7 +67,7 @@ function conceptStatus(c: Concept): { label: string; cls: string } {
   return { label: "Active", cls: "badge-success" };
 }
 
-function conceptUpdatedAt(c: Concept): number | null {
+export function conceptUpdatedAt(c: Concept): number | null {
   const v = c.properties?.updated_at ?? c.properties?.created_at;
   if (typeof v === "number") return v;
   if (typeof v === "string") {
@@ -77,7 +77,7 @@ function conceptUpdatedAt(c: Concept): number | null {
   return null;
 }
 
-function conceptDomain(c: Concept, types: Record<string, ConceptTypeDef>): string {
+export function conceptDomain(c: Concept, types: Record<string, ConceptTypeDef>): string {
   // Walk up the parent chain to find the root concept type, fall back to the
   // direct type if there's no parent.
   const direct = c.concept_type;
@@ -92,7 +92,7 @@ function conceptDomain(c: Concept, types: Record<string, ConceptTypeDef>): strin
   return direct;
 }
 
-function conceptIconColor(name: string): string {
+export function conceptIconColor(name: string): string {
   // Deterministic pastel based on the name's char codes.
   const palette = ["#2563eb", "#7c3aed", "#16a34a", "#d97706", "#dc2626", "#0ea5e9", "#db2777"];
   let h = 0;
@@ -100,7 +100,7 @@ function conceptIconColor(name: string): string {
   return palette[h % palette.length];
 }
 
-function initials(name: string): string {
+export function initials(name: string): string {
   return name
     .split(/\s+/)
     .map((w) => w[0])
@@ -275,7 +275,7 @@ interface TreeNode {
   children: TreeNode[];
 }
 
-function buildHierarchy(types: Record<string, ConceptTypeDef>): TreeNode[] {
+export function buildHierarchy(types: Record<string, ConceptTypeDef>): TreeNode[] {
   const nodes: Record<string, TreeNode> = {};
   const names = Object.keys(types);
   for (const n of names) nodes[n] = { name: n, children: [] };

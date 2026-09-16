@@ -79,6 +79,14 @@ pub(crate) async fn analyze(
     // 1. Decode + normalize (BOM strip, NFC).
     let decoded = decode_to_utf8(&bytes);
 
+    // 1a'. Nothing to analyze. An empty upload must neither cost an LLM call
+    // nor come back as a proposal grounded in no text at all.
+    if decoded.text.trim().is_empty() {
+        return Err(ApiError::Unprocessable(
+            "file is empty; nothing to analyze".into(),
+        ));
+    }
+
     // 1b. Reject binary blobs up front. Formats like .xlsx/.zip/images decode
     // "successfully" into control-character garbage; feeding that to the LLM
     // wastes a call and risks persisting a multi-megabyte blob downstream.

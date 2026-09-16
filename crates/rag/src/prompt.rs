@@ -347,3 +347,358 @@ impl<'a> PromptBuilder<'a> {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ontology_graph::{
+        ActionType, Concept, ConceptId, ConceptType, Ontology, Relation, RelationType, RuleType,
+    };
+
+    fn ct(name: &str, description: &str) -> ConceptType {
+        ConceptType {
+            name: name.into(),
+            description: description.into(),
+            ..Default::default()
+        }
+    }
+
+    fn rt(name: &str, domain: &str, range: &str) -> RelationType {
+        RelationType {
+            name: name.into(),
+            domain: domain.into(),
+            range: range.into(),
+            ..Default::default()
+        }
+    }
+
+    fn rich_ontology(order: &[&str]) -> Ontology {
+        let mut o = Ontology::new();
+        for name in order {
+            match *name {
+                "Company" => o.add_concept_type(ct("Company", "a legal entity")),
+                "Person" => o.add_concept_type(ct("Person", "")),
+                "Contract" => o.add_concept_type(ct("Contract", "an agreement")),
+                other => panic!("unknown fixture {other}"),
+            }
+        }
+        o.add_relation_type(RelationType {
+            transitive: true,
+            ..rt("parent_company", "Company", "Company")
+        })
+        .unwrap();
+        o.add_relation_type(RelationType {
+            symmetric: true,
+            description: "works alongside".into(),
+            ..rt("WorksWith", "Person", "Person")
+        })
+        .unwrap();
+        o.add_relation_type(RelationType {
+            inverse_of: Some("signed".into()),
+            ..rt("signed_by", "Contract", "Person")
+        })
+        .unwrap();
+        o.add_relation_type(RelationType {
+            inverse_of: Some("signed_by".into()),
+            ..rt("signed", "Person", "Contract")
+        })
+        .unwrap();
+        o.add_rule_type(RuleType {
+            name: "must_have_party".into(),
+            when: "a Contract exists".into(),
+            then: "it names a Company".into(),
+            applies_to: vec!["Contract".into()],
+            strict: true,
+            description: String::new(),
+        })
+        .unwrap();
+        o.add_rule_type(RuleType {
+            name: "advisory".into(),
+            when: String::new(),
+            then: String::new(),
+            applies_to: vec![],
+            strict: false,
+            description: String::new(),
+        })
+        .unwrap();
+        o.add_action_type(ActionType {
+            name: "sign".into(),
+            subject: "Person".into(),
+            object: Some("Contract".into()),
+            parameters: vec!["date".into(), "place".into()],
+            effect: "adds signed_by".into(),
+            description: String::new(),
+        })
+        .unwrap();
+        o.add_action_type(ActionType {
+            name: "audit".into(),
+            subject: "Company".into(),
+            object: None,
+            parameters: vec![],
+            effect: String::new(),
+            description: String::new(),
+        })
+        .unwrap();
+        o
+    }
+
+    /// The cached system block must be byte-identical for the same schema
+    /// whatever the insertion order of the underlying hash maps.
+    #[test]
+    fn static_context_is_byte_stable_across_insertion_orders() {
+        let a = rich_ontology(&["Company", "Person", "Contract"]);
+        let b = rich_ontology(&["Contract", "Company", "Person"]);
+        let ra = PromptBuilder::new(&a).render_static_context();
+        let rb = PromptBuilder::new(&b).render_static_context();
+        assert_eq!(ra, rb);
+        // Rendered twice from the same ontology: identical too.
+        assert_eq!(ra, PromptBuilder::new(&a).render_static_context());
+        // And with_max_chars never affects the static half.
+        assert_eq!(
+            ra,
+            PromptBuilder::new(&a)
+                .with_max_chars(10)
+                .render_static_context()
+        );
+    }
+
+    /// Every schema family is rendered, sorted by name, with the documented
+    /// markers: `(no description)`, relation tags, MUST/SHOULD rules with
+    /// `*` scope and `-` placeholders, actions with params and effect.
+    #[test]
+    fn static_context_renders_every_schema_family_sorted() {
+        let o = rich_ontology(&["Person", "Contract", "Company"]);
+        let out = PromptBuilder::new(&o).render_static_context();
+        let expected = "\
+# Ontology
+- Company :: a legal entity
+- Contract :: an agreement
+- Person :: (no description)
+- (Person) -[WorksWith]-> (Person) [symmetric]
+- (Company) -[parent_company]-> (Company) [transitive]
+- (Person) -[signed]-> (Contract) [inverse: signed_by]
+- (Contract) -[signed_by]-> (Person) [inverse: signed]
+# Rules
+- [SHOULD] advisory (*): when - then -
+- [MUST] must_have_party (Contract): when a Contract exists then it names a Company
+# Actions
+- audit: (Company) -> (-)
+- sign: (Person) -> (Contract) [date, place] => adds signed_by
+";
+        assert_eq!(out, expected);
+    }
+
+    /// Without rules or actions those sections are absent entirely, so an
+    /// empty schema renders only the header.
+    #[test]
+    fn static_context_omits_empty_rule_and_action_sections() {
+        let o = Ontology::new();
+        assert_eq!(
+            PromptBuilder::new(&o).render_static_context(),
+            "# Ontology\n"
+        );
+    }
+
+    /// Relation identifiers become lowercase verb phrases for the prose
+    /// rendering of facts.
+    #[test]
+    fn humanize_relation_turns_identifiers_into_verb_phrases() {
+        assert_eq!(humanize_relation("WorksFor"), "works for");
+        assert_eq!(humanize_relation("employed_by"), "employed by");
+        assert_eq!(humanize_relation("issuedTo"), "issued to");
+        assert_eq!(humanize_relation("related_to"), "related to");
+        assert_eq!(humanize_relation("HTTPServer"), "httpserver");
+        assert_eq!(humanize_relation("has2Parts"), "has2 parts");
+        assert_eq!(humanize_relation(""), "");
+    }
+
+    fn subgraph_fixture() -> (Ontology, Vec<ScoredConcept>, Subgraph) {
+        let o = rich_ontology(&["Company", "Person", "Contract"]);
+        let alice = Concept::new(ConceptId(7), "Person", "Alice");
+        let bob = Concept::new(ConceptId(9), "Person", "Bob").with_description("signs things");
+        let c1 = Concept::new(ConceptId(11), "Contract", "C-1");
+        let mut subgraph = Subgraph {
+            seeds: vec![ConceptId(7)],
+            concepts: vec![alice, bob, c1],
+            relations: vec![
+                Relation::new(Default::default(), "WorksWith", ConceptId(7), ConceptId(9)),
+                Relation::new(Default::default(), "signed", ConceptId(9), ConceptId(11)),
+                // A dangling edge (endpoint not in the subgraph) is skipped.
+                Relation::new(Default::default(), "signed", ConceptId(9), ConceptId(404)),
+            ],
+            depth_of: Default::default(),
+        };
+        subgraph.depth_of.insert(ConceptId(7), 0);
+        subgraph.depth_of.insert(ConceptId(9), 1);
+        subgraph.depth_of.insert(ConceptId(11), 2);
+        let scored = vec![ScoredConcept {
+            id: ConceptId(7),
+            score: 0.75,
+            lexical: 0.5,
+            vector: 1.0,
+        }];
+        (o, scored, subgraph)
+    }
+
+    /// Facts use the relation description when present, else the humanized
+    /// name; each subgraph line carries the `#<id>` token and depth.
+    #[test]
+    fn query_context_renders_ids_depths_and_verbs() {
+        let (o, scored, subgraph) = subgraph_fixture();
+        let out = PromptBuilder::new(&o).render_query_context(&scored, &subgraph);
+        assert!(
+            out.contains("# Top concepts\n- (Person) Alice [score=0.750 lex=0.500 vec=1.000]\n")
+        );
+        assert!(out.contains("- #7 [0] (Person) Alice\n"), "{out}");
+        assert!(
+            out.contains("- #9 [1] (Person) Bob — signs things\n"),
+            "{out}"
+        );
+        assert!(out.contains("- #11 [2] (Contract) C-1\n"), "{out}");
+        assert!(
+            out.contains("- #7 Alice — works alongside Bob.   (raw: Alice -[WorksWith]-> Bob)\n"),
+            "description used as verb: {out}"
+        );
+        assert!(
+            out.contains("- #9 Bob — signed C-1.   (raw: Bob -[signed]-> C-1)\n"),
+            "humanized fallback: {out}"
+        );
+        assert_eq!(out.matches("(raw:").count(), 2, "dangling edge skipped");
+        assert!(!out.contains("[truncated]"));
+    }
+
+    /// With no seeds the `# Top concepts` header is omitted but the
+    /// subgraph and facts sections are always present.
+    #[test]
+    fn query_context_without_seeds_has_no_top_concepts_section() {
+        let (o, _, subgraph) = subgraph_fixture();
+        let out = PromptBuilder::new(&o).render_query_context(&[], &subgraph);
+        assert!(!out.contains("# Top concepts"));
+        assert!(out.starts_with("\n# Subgraph\n"));
+        assert!(out.contains("\n# Facts\n"));
+    }
+
+    /// Over the budget, the query half is cut on a char boundary (never
+    /// inside a multi-byte name) and ends with the truncation marker.
+    #[test]
+    fn query_context_truncates_on_a_char_boundary_with_a_marker() {
+        let o = rich_ontology(&["Company", "Person", "Contract"]);
+        let concepts: Vec<Concept> = (0..40)
+            .map(|i| {
+                Concept::new(
+                    ConceptId(i),
+                    "Company",
+                    "Société Générale 漢字 😀".repeat(3),
+                )
+            })
+            .collect();
+        let subgraph = Subgraph {
+            seeds: vec![],
+            concepts,
+            relations: vec![],
+            depth_of: Default::default(),
+        };
+        for max in 150..=260 {
+            let out = PromptBuilder::new(&o)
+                .with_max_chars(max)
+                .render_query_context(&[], &subgraph);
+            assert!(out.ends_with("\n…[truncated]\n"), "max={max}: {out:?}");
+            let body = out.trim_end_matches("\n…[truncated]\n");
+            assert!(body.len() <= max, "max={max}: {} bytes kept", body.len());
+        }
+        // Under budget: untouched.
+        let out = PromptBuilder::new(&o)
+            .with_max_chars(100_000)
+            .render_query_context(&[], &subgraph);
+        assert!(!out.contains("[truncated]"));
+        assert_eq!(out.matches("- #").count(), 40);
+    }
+
+    /// `render` is exactly the static half, a blank line, then the query half.
+    #[test]
+    fn render_concatenates_static_and_query_halves() {
+        let (o, scored, subgraph) = subgraph_fixture();
+        let b = PromptBuilder::new(&o);
+        assert_eq!(
+            b.render(&scored, &subgraph),
+            format!(
+                "{}\n{}",
+                b.render_static_context(),
+                b.render_query_context(&scored, &subgraph)
+            )
+        );
+    }
+
+    /// The JSON shape documented in the ontology-generation prompt is the
+    /// one `Ontology` actually deserializes — including the `null`
+    /// spellings the prompt allows and empty rule/action maps.
+    #[test]
+    fn ontology_generation_schema_example_deserializes_into_ontology() {
+        let msg = PromptBuilder::ontology_generation_system_message();
+        for key in [
+            "concept_types",
+            "relation_types",
+            "rule_types",
+            "action_types",
+        ] {
+            assert!(
+                msg.contains(&format!("\"{key}\"")),
+                "{key} missing from prompt"
+            );
+        }
+        let sample = r#"{
+            "concept_types": {
+                "Person":  { "name": "Person",  "parent": null,    "description": "a human", "properties": null },
+                "Manager": { "name": "Manager", "parent": "Person", "description": "leads",  "properties": ["team"] }
+            },
+            "relation_types": {
+                "ReportsTo": { "name": "ReportsTo", "domain": "Person", "range": "Manager",
+                               "cardinality": "ManyToOne", "symmetric": false, "description": "line management" }
+            },
+            "rule_types": {
+                "OneManager": { "name": "OneManager", "when": "a Person exists", "then": "at most one ReportsTo",
+                                "applies_to": ["Person"], "strict": true, "description": "…" }
+            },
+            "action_types": {
+                "Promote": { "name": "Promote", "subject": "Manager", "object": null,
+                             "parameters": ["date"], "effect": "makes a Manager", "description": "…" }
+            }
+        }"#;
+        let o: Ontology = serde_json::from_str(sample).expect("documented shape deserializes");
+        assert_eq!(o.concept_types["Manager"].parent.as_deref(), Some("Person"));
+        assert!(o.concept_types["Person"].properties.is_none());
+        assert_eq!(o.relation_types["ReportsTo"].range, "Manager");
+        assert!(o.rule_types["OneManager"].strict);
+        assert!(o.action_types["Promote"].object.is_none());
+        // Rule 7 of the prompt: empty maps are valid.
+        let minimal: Ontology = serde_json::from_str(
+            r#"{"concept_types": {}, "relation_types": {}, "rule_types": {}, "action_types": {}}"#,
+        )
+        .unwrap();
+        assert!(minimal.concept_types.is_empty());
+        // The rule-generation shape deserializes into GeneratedRule too.
+        let rule: crate::GeneratedRule = serde_json::from_str(
+            r#"{"name": "R", "when": "w", "then": "t", "description": "d", "strict": false}"#,
+        )
+        .unwrap();
+        assert_eq!(rule.name, "R");
+    }
+
+    /// User messages are deterministic: input is trimmed and an empty
+    /// concept scope is spelled `(none)`.
+    #[test]
+    fn generation_user_messages_are_trimmed_and_name_empty_scopes() {
+        assert_eq!(
+            PromptBuilder::ontology_generation_user_message("  a brief \n"),
+            "Brief:\na brief\n\nReturn the JSON ontology document now."
+        );
+        assert_eq!(
+            PromptBuilder::rule_generation_user_message(" p ", " constraint ", &[]),
+            "Rule type: constraint\nApplies to concepts: (none)\n\nPrompt:\np\n\nReturn the JSON rule object now."
+        );
+        assert_eq!(
+            PromptBuilder::rule_generation_user_message("p", "t", &["A".into(), "B".into()]),
+            "Rule type: t\nApplies to concepts: A, B\n\nPrompt:\np\n\nReturn the JSON rule object now."
+        );
+    }
+}
