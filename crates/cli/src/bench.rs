@@ -449,6 +449,9 @@ async fn hydrate(store_dir: &Path, ns: Option<Vec<String>>) -> Result<serde_json
     };
     let scan = t2.elapsed();
     let disk = dir_bytes(store_dir);
+    // The decode-only scan always reads the whole store, so the split
+    // between decoding and `apply` is only meaningful for a full load.
+    let full_load = ns.as_ref().is_none_or(|d| d.is_empty());
     let apply = load.saturating_sub(scan);
     Ok(json!({
         "bench": "hydrate",
@@ -457,8 +460,8 @@ async fn hydrate(store_dir: &Path, ns: Option<Vec<String>>) -> Result<serde_json
         "open_ms": round2(ms(open)),
         "hydrate_ms": round2(ms(load)),
         "decode_only_ms": round2(ms(scan)),
-        "apply_estimate_ms": round2(ms(apply)),
-        "decode_share_pct": round0(100.0 * scan.as_secs_f64() / load.as_secs_f64().max(1e-9)),
+        "apply_estimate_ms": full_load.then(|| round2(ms(apply))),
+        "decode_share_pct": full_load.then(|| round0(100.0 * scan.as_secs_f64() / load.as_secs_f64().max(1e-9))),
         "records": records,
         "records_per_s": round0(records as f64 / load.as_secs_f64().max(1e-9)),
         "concepts": concepts,
