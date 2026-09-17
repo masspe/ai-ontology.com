@@ -592,6 +592,21 @@ le store sans graphe (`scan_records`) ; `apply` = hydratation totale moins
 | idem | postcard | 842 Mio | 18,7 s (161 k enr./s) | 1,7 s (9 %) | 17,0 s | +3 295 Mio |
 | 1 domaine sur 5 (`--ns d0`), 500 k / 2,5 M | JSON | — | 2,7 s (100 k concepts, 400 k relations) | — | — | +710 Mio |
 
+**Avec le mode en masse** (`OntologyGraph::begin_bulk`, livré ensuite dans
+la même phase : les index dérivés sont reconstruits une fois après le rejeu
+au lieu d'être maintenus à chaque enregistrement) :
+
+| Store | Codec | Hydratation avant | Hydratation après | Reconstruction des index | Gain |
+|---|---|---|---|---|---|
+| 200 k concepts, 1 M relations | JSON | 10,7 s | **6,1–7,6 s** | 0,36–0,53 s | 1,4–1,75× |
+| 500 k concepts, 2,5 M relations | JSON | 23,1 s | **19,7–21,5 s** | 1,2–1,7 s | 1,1–1,2× |
+
+Le gain plafonne parce que la maintenance des index dérivés ne représentait
+que 10 à 25 % d'`apply` ; le reste est dans les structures primaires, et
+d'abord dans les quatre listes d'adjacence par relation (~5 µs par relation
+contre ~6 µs par concept). Voir `STORAGE-PLAN.md` §6.6 pour le profil et la
+suite (table de symboles §7.4, CSR §6.3).
+
 Trois faits en sortent. (1) **La désérialisation ne domine pas** : elle pèse
 9 à 27 % de l'hydratation ; 73 à 91 % du temps est dans `apply`, c'est-à-dire
 dans les index mémoire de `PERFORMANCE.md` §4 rejoués mutation par mutation

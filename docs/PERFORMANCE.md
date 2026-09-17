@@ -425,6 +425,22 @@ phase 4 de `STORAGE-PLAN.md`, **seulement si la mesure le justifie**. Il
 devra rester une méthode publique de `OntologyGraph` (R1) et bumper une fois
 la génération (R2).
 
+**Livré (phase 4)** : `OntologyGraph::begin_bulk()` rend une garde ; tant
+qu'elle vit, les mutations publiques maintiennent les cartes primaires, l'index
+des noms et l'adjacence (validation, upserts, suppressions et cascades
+inchangés) mais laissent de côté les index dérivés — ensembles triés, seaux
+par type, trigrammes, caches de pages, générations. `end_bulk()` (ou la chute
+de la garde, y compris sur une erreur de rejeu) les reconstruit d'un bloc
+depuis les cartes primaires et bumpe chaque génération une fois (R1, R2).
+Les trois stores l'utilisent pendant `load_into`. Pendant la garde, les
+lectures qui passent par les index dérivés (pages, `?q=`) sont périmées :
+l'hydratation a lieu avant que le graphe soit servi, et c'est documenté.
+Gain mesuré : 1,4–1,75× à 200 k / 1 M, 1,1–1,2× à 500 k / 2,5 M — la
+reconstruction ne coûte que 0,4 à 1,7 s, ce qui borne ce que la maintenance
+par mutation coûtait ; le reste d'`apply` est dans les structures primaires
+des relations (`STORAGE-PLAN.md` §6.6). Un effet de bord utile : les
+`BTreeSet` bâtis d'un bloc sont plus denses (−7 à −10 % de tas).
+
 **Mesuré (phase 4, 2026-09-16, `STORAGE.md` §7.8)** : sur 3 M
 d'enregistrements (500 k concepts, 2,5 M relations), l'hydratation prend
 23 s en JSON dont 3,7 s de décodage et **19,4 s d'`apply`** — 6,5 µs par

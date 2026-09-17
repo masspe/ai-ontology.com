@@ -189,6 +189,9 @@ impl Store for FileStore {
         // Hold the writer for the whole load: recovery may truncate the file,
         // and no append must interleave with the replay.
         let _writer = self.writer.lock().await;
+        // Derived indexes are rebuilt once at the end of the load (bulk
+        // mode); the guard also ends the mode if the replay fails.
+        let bulk = graph.begin_bulk();
 
         // 1. Snapshot, if any.
         let mut snap_water: u64 = 0;
@@ -282,6 +285,7 @@ impl Store for FileStore {
             apply(graph, rec)?;
         }
         drop(reader);
+        bulk.finish();
 
         if let Tail::Torn { offset, reason } = tail {
             warn!(

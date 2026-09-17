@@ -53,9 +53,11 @@ impl Store for MemoryStore {
 
     async fn load_into(&self, graph: &Arc<OntologyGraph>) -> StoreResult<()> {
         let records = self.inner.lock().clone();
+        let bulk = graph.begin_bulk();
         for r in records {
             apply(graph, r)?;
         }
+        bulk.finish();
         Ok(())
     }
 }
