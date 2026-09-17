@@ -748,3 +748,80 @@ async fn reset_empties_the_store_durably_and_accepts_new_data() {
     assert_eq!(again.concept_count(), 1);
     assert!(again.with_ontology(|o| o.concept_types.contains_key("Person")));
 }
+
+/// Hydration runs in bulk mode (derived indexes rebuilt once at the end):
+/// after `load_into`, the sorted listing, per-type listing, trigram search
+/// and relation listing must equal those of the graph that wrote the store
+/// — including renames and deletes replayed from the journal.
+#[tokio::test]
+async fn hydration_rebuilds_the_derived_indexes_like_the_live_graph() {
+    let dir = tempdir("derived");
+    let live = OntologyGraph::with_arc(ontology());
+    let store = SegmentStore::open(&dir).await.unwrap();
+    store
+        .append(&LogRecord::ontology(ontology()))
+        .await
+        .unwrap();
+    let mut ids = Vec::new();
+    for name in ["alice", "bob", "carol", "dave", "erin", "frank"] {
+        ids.push(add_concept(&live, &store, name).await);
+    }
+    add_relation(&live, &store, "knows", ids[0], ids[1]).await;
+    add_relation(&live, &store, "likes", ids[2], ids[3]).await;
+    // A rename and a delete go through the journal too.
+    let renamed = live
+        .update_concept(
+            ids[4],
+            ontology_graph::ConceptPatch {
+                name: Some("zed".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    store
+        .append(&LogRecord::update_concept(renamed))
+        .await
+        .unwrap();
+    let cascade = live.incident_relation_ids(ids[3]).unwrap();
+    store
+        .append(&LogRecord::delete_concept(ids[3], "Person".to_string()))
+        .await
+        .unwrap();
+    for rid in &cascade {
+        store
+            .append(&LogRecord::delete_relation(*rid, "likes".to_string()))
+            .await
+            .unwrap();
+    }
+    live.remove_concept(ids[3]).unwrap();
+    drop(store);
+
+    let loaded = OntologyGraph::with_arc(Ontology::new());
+    let store = SegmentStore::open(&dir).await.unwrap();
+    store.load_into(&loaded).await.unwrap();
+    assert!(!loaded.is_bulk(), "the guard ended bulk mode");
+
+    let view = |g: &OntologyGraph| {
+        let (total, page) = g.list_concepts_page(None, None, 0, 100, true, true);
+        let (_, by_type) = g.list_concepts_page(Some("Person"), None, 0, 100, true, false);
+        let (_, hits) = g.list_concepts_page(None, Some("zed"), 0, 100, true, true);
+        let (_, nohit) = g.list_concepts_page(None, Some("dav"), 0, 100, true, true);
+        let (_, rels) = g.list_relations_page(None, None, None, 0, 100, true);
+        (
+            total,
+            page.iter()
+                .map(|c| (c.id, c.name.clone()))
+                .collect::<Vec<_>>(),
+            by_type.iter().map(|c| c.id).collect::<Vec<_>>(),
+            hits.iter().map(|c| c.id).collect::<Vec<_>>(),
+            nohit.len(),
+            rels.iter()
+                .map(|r| (r.id, r.source, r.target, r.relation_type.clone()))
+                .collect::<Vec<_>>(),
+            g.concepts_generation() > 0 && g.relations_generation() > 0,
+        )
+    };
+    assert_eq!(view(&live), view(&loaded));
+    assert_eq!(view(&loaded).4, 0, "the deleted `dave` is not searchable");
+    assert_eq!(view(&loaded).3.len(), 1, "the renamed `zed` is searchable");
+}

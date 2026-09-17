@@ -865,7 +865,13 @@ impl SegmentStore {
             }
         }
         let partial = selected.is_some();
+        // Bulk mode: derived indexes are rebuilt once after the replay
+        // instead of per record (`OntologyGraph::begin_bulk`); the guard
+        // also ends the mode if the replay fails part-way.
+        let bulk = graph.begin_bulk();
         let (applied, skipped) = Self::replay(&snapshots, graph, partial)?;
+        let index_build = bulk.finish();
+        info!(?index_build, "derived indexes rebuilt after replay");
         Ok(HydrationReport {
             applied,
             domains: domains.map(|d| d.to_vec()),
