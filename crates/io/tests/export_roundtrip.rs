@@ -13,10 +13,14 @@ use ontology_graph::{Concept, ConceptType, Ontology, OntologyGraph, Relation, Re
 use ontology_io::{export_graph, ingest_records, JsonlSink, JsonlSource};
 
 fn tempdir() -> std::path::PathBuf {
+    // pid + clock is not unique on Windows: two tests of this binary can
+    // start within the same clock tick and would share (and delete) a dir.
+    static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let mut p = std::env::temp_dir();
     p.push(format!(
-        "ontology-export-{}-{}",
+        "ontology-export-{}-{}-{}",
         std::process::id(),
+        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
