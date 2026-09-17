@@ -615,10 +615,37 @@ Mesuré (détail dans `STORAGE.md` §7.7–7.8) :
 | Le parsing domine-t-il l'hydratation ? | **Non** : 9–27 %. `apply` (index mémoire) : 73–91 %. |
 | Gain du codec binaire | décodage 3× par concept (micro-bench), 1,6–2,2× in situ, disque −24 %, **hydratation 0,93–1,24×** |
 | Seuil « activer par défaut si > 3× » | **Non atteint → NO-GO comme défaut** ; codec 1 disponible en option (`compact --codec postcard`), lisible et testé |
-| `bulk_load` justifié ? | **Oui** : `apply` domine ; c'est le levier de l'hydratation (item 4) |
+| `bulk_load` justifié ? | **Oui** : `apply` domine. **Livré** (`OntologyGraph::begin_bulk` / `end_bulk`, mode « en masse » de l'hydratation) : hydratation **1,4 à 1,75× plus rapide à 200 k / 1 M** (10,7 s → 6,1–7,6 s), **1,1 à 1,2× à 500 k / 2,5 M** (23,1 s → 19,7–21,5 s). En dessous de la cible 2–3× : voir le profil ci-dessous |
 | Empreinte P0 (tas, store refermé) | ~2,75 Ko / concept (1,3 Ko de payload), ~350–475 o / relation → **45 à 50 Go pour la cible**, 16 Go visés |
 | Compaction complète | 30–54 k enr./s → 20–30 min à la cible ; compaction par domaine et vérification sans rejeu à prévoir |
 | Page à offset | O(offset) : 13 ms à 500 k → T1 (curseur) avant la phase 5, comme prévu |
+
+**Profil d'`apply` (item 4, mesuré par la reconstruction des index).** Le
+mode en masse laisse les index dérivés (ensembles triés, seaux par type,
+trigrammes, caches, générations) de côté pendant le rejeu et les reconstruit
+une fois. Cette reconstruction coûte **0,36–0,53 s à 200 k / 1 M et 1,2–1,7 s
+à 500 k / 2,5 M** (ensemble trié des concepts 0,8–1,0 s, relations 0,2–0,3 s,
+seaux par type 0,1–0,2 s, trigrammes 0,1 s) — c'est donc tout ce que la
+maintenance par mutation de ces index coûtait : **10 à 25 % d'`apply`**, pas
+la majorité. Le reste, ~15 s à 500 k, est dans les structures **primaires**,
+et surtout dans les relations : ~3 s pour 500 k concepts (6 µs chacun :
+validation du schéma, clé du nom en minuscules, insertion `DashMap`) contre
+~12 s pour 2,5 M relations (**~5 µs chacune** : deux `contains_key`, quatre
+entrées d'adjacence dans des `DashMap` — sortante, entrante, et leurs
+variantes typées par nom de relation avec deux clones de `String` —, une
+insertion dans la table des relations, plus les redimensionnements des
+tables). La prochaine marche n'est plus dans l'hydratation elle-même mais
+dans la représentation des relations : table de symboles pour les noms de
+types (§7.4 de STORAGE.md, différée) et adjacence CSR (§6.3) — les mêmes
+chantiers que ceux qu'exige la mémoire. Réserve : cette imputation est une
+soustraction entre deux mesures (hydratation moins parcours décodé, moins
+reconstruction), pas un échantillonnage ; un profil `WPA`/`perf` reste à
+faire avant d'engager ces chantiers.
+
+Effet collatéral mesuré : les `BTreeSet` construits d'un bloc à partir de
+vecteurs triés sont plus denses que ceux remplis mutation par mutation ; le
+tas après hydratation à 500 k / 2,5 M passe de ~2,6 Go (extrapolé) à 2,38 Go
+mesurés, et 950 Mio à 200 k / 1 M (978 avant).
 
 Décisions à prendre (proposées, à valider) :
 
@@ -632,9 +659,13 @@ Décisions à prendre (proposées, à valider) :
    JSON quel que soit le codec du store — les types du schéma ne sont pas un
    contrat disque gelé ; un store non-JSON déclare `format_version = 2`, que
    les builds antérieurs refusent à l'ouverture au lieu de tronquer.
-2. **`bulk_load`** : à faire maintenant (item 4), méthode publique de
-   `OntologyGraph` (R1), un seul bump de génération (R2) ; cible 2–3× sur
-   `apply`.
+2. **`bulk_load`** : **fait** (item 4). Méthode publique de `OntologyGraph`
+   (R1), un seul bump de génération par famille (R2), garde qui rebâtit les
+   index même si le rejeu échoue ; mêmes vues observables qu'en mode normal
+   (test d'égalité sur des scripts aléatoires : listes triées, par type,
+   trigrammes, relations, règles, actions, traversées). Gain 1,1 à 1,75×,
+   sous la cible 2–3× : le coût restant est dans les structures primaires des
+   relations, pas dans les index dérivés.
 3. **Phase 5** : la cible 10⁷ / 5×10⁷ sur 16 Go exige P1 **et** le CSR
    (P2–P4). Réordonner : P1 (payloads hors tas, −13 Go) puis CSR des
    relations (−16 à −23 Go) avant les index de concepts (~14 Go). Ou revoir
@@ -767,7 +798,7 @@ Jalons vérifiables :
 | J1 (fin phase 1) | **Atteint** : test « append échoué → mémoire inchangée » vert sur les 13 endpoints ; `sync_data` présent ; 136 tests, CI 2 OS |
 | J2 (fin phase 2) | **Atteint** sur la branche : migration automatique de `graph.log` au démarrage, redémarrage HTTP sur `SegmentStore` testé, CI 2 OS à confirmer par la PR |
 | J3 (fin phase 3) | **Atteint** : trois domaines dans `examples/finance` (`parties`, `contrats`, `facturation`), hydratation sélective testée, 2 syncs par lot de 100 sur 2 domaines |
-| J4 (fin phase 4) | **Partiellement atteint** : §7.7–7.8 de STORAGE.md remplis de chiffres mesurés à 2×10⁵ / 10⁶ et 5×10⁵ / 2,5×10⁶ ; la cible 10⁷ / 5×10⁷ (~62 Go en P0) n'est pas hydratable sur 16 Go — c'est la mesure elle-même qui le montre ; extrapolation linéaire documentée |
+| J4 (fin phase 4) | **Atteint pour ce qui est mesurable ici** : §7.7–7.8 de STORAGE.md remplis de chiffres mesurés à 2×10⁵ / 10⁶ et 5×10⁵ / 2,5×10⁶, codec tranché (JSON par défaut, postcard en option), `bulk_load` livré et mesuré ; la cible 10⁷ / 5×10⁷ (45 à 50 Go en P0) n'est pas hydratable sur 16 Go — c'est la mesure elle-même qui le montre ; extrapolation linéaire documentée |
 | J5 (P1) | Le store cible tient sur un nœud de 16 Go : RSS divisée par ≥ 5 par rapport à P0, P95 `GET /concepts/{id}` < 2× P0 |
 | JR (retrieval) | `reindex_all` supprimé du démarrage ; recherche vectorielle en O(log N) mesurée à 10⁷ |
 
