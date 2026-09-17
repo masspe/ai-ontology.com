@@ -10,14 +10,14 @@
 //! `STORAGE-PLAN.md` phase 4 item 4): the same sequence of mutations, run
 //! once in normal mode and once in bulk mode, must leave two graphs whose
 //! every observable view is identical — primary lookups, sorted listings,
-//! per-type listings, trigram search, relation listings, rules, actions,
-//! traversal — and the generations must have moved (R2) so no cached page
-//! survives the load.
+//! per-type listings, trigram search, the sorted relation / rule / action
+//! pages, traversal — and the generations must have moved (R2) so no
+//! cached page survives the load.
 
 use ontology_graph::{
-    Action, ActionId, ActionType, Cardinality, Concept, ConceptId, ConceptType, Ontology,
-    OntologyGraph, PropertyValue, Relation, RelationId, RelationType, Rule, RuleId, RuleType,
-    TraversalSpec,
+    Action, ActionId, ActionPatch, ActionType, Cardinality, Concept, ConceptId, ConceptPatch,
+    ConceptType, GraphError, Ontology, OntologyGraph, PropertyValue, Relation, RelationId,
+    RelationType, Rule, RuleId, RulePatch, RuleType, TraversalSpec,
 };
 use std::sync::Arc;
 
@@ -98,18 +98,24 @@ const NAMES: &[&str] = &[
 enum Op {
     Upsert(Concept),
     Rename(ConceptId, String),
+    /// Rename onto the name of another live concept: must fail identically.
+    RenameCollide(ConceptId, ConceptId),
     RemoveConcept(ConceptId),
     Relation(Relation),
     RelationExact(Relation),
     RemoveRelation(RelationId),
     Rule(Rule),
-    Action(Action),
+    RenameRule(RuleId, String),
     RemoveRule(RuleId),
+    Action(Action),
+    RenameAction(ActionId, String),
+    RemoveAction(ActionId),
 }
 
 /// A deterministic script exercising every mutation kind: explicit ids,
-/// upserts that rename, deletes with cascades, symmetric pairs, exact
-/// relations, rules and actions, interleaved.
+/// upserts that rename, colliding renames, deletes with cascades, symmetric
+/// pairs, exact relations, rules and actions with renames and removals,
+/// interleaved.
 fn script(seed: u64, n: usize) -> Vec<Op> {
     let mut rng = Rng(seed ^ 0x9E37_79B9_7F4A_7C15);
     let mut ops = Vec::new();
@@ -146,14 +152,19 @@ fn script(seed: u64, n: usize) -> Vec<Op> {
             }
             4 if !live.is_empty() => {
                 let id = live[rng.below(live.len() as u64) as usize];
-                ops.push(Op::Rename(
-                    id,
-                    format!(
-                        "{} renamed-{}",
-                        NAMES[rng.below(NAMES.len() as u64) as usize],
-                        i
-                    ),
-                ));
+                if rng.below(3) == 0 && live.len() > 1 {
+                    let other = live[rng.below(live.len() as u64) as usize];
+                    ops.push(Op::RenameCollide(id, other));
+                } else {
+                    ops.push(Op::Rename(
+                        id,
+                        format!(
+                            "{} renamed-{}",
+                            NAMES[rng.below(NAMES.len() as u64) as usize],
+                            i
+                        ),
+                    ));
+                }
             }
             5 if live.len() > 2 => {
                 let idx = rng.below(live.len() as u64) as usize;
@@ -192,8 +203,13 @@ fn script(seed: u64, n: usize) -> Vec<Op> {
                     description: String::new(),
                     properties: Default::default(),
                 }));
-                if rng.below(3) == 0 {
-                    ops.push(Op::RemoveRule(RuleId(next_rule)));
+                match rng.below(4) {
+                    0 => ops.push(Op::RemoveRule(RuleId(next_rule))),
+                    1 => ops.push(Op::RenameRule(
+                        RuleId(next_rule),
+                        format!("audit renamed {i}"),
+                    )),
+                    _ => {}
                 }
                 next_rule += 1;
                 let p = live[rng.below(live.len() as u64) as usize];
@@ -207,6 +223,14 @@ fn script(seed: u64, n: usize) -> Vec<Op> {
                     effect: String::new(),
                     description: String::new(),
                 }));
+                match rng.below(4) {
+                    0 => ops.push(Op::RemoveAction(ActionId(next_action))),
+                    1 => ops.push(Op::RenameAction(
+                        ActionId(next_action),
+                        format!("notify renamed {i}"),
+                    )),
+                    _ => {}
+                }
                 next_action += 1;
             }
             _ => {
@@ -221,62 +245,77 @@ fn script(seed: u64, n: usize) -> Vec<Op> {
     ops
 }
 
+fn s<T: std::fmt::Display, E: std::fmt::Display>(r: Result<T, E>) -> String {
+    match r {
+        Ok(v) => format!("Ok({v})"),
+        Err(e) => format!("Err({e})"),
+    }
+}
+
 /// Apply the script through the public API; errors are expected for some
-/// ops (a relation whose endpoint was deleted, a removed relation id) and
-/// must be *the same* on both graphs.
+/// ops (a relation whose endpoint was deleted, a removed relation id, a
+/// colliding rename) and must be *the same* on both graphs.
 fn run(graph: &OntologyGraph, ops: &[Op]) -> Vec<String> {
     let mut outcomes = Vec::with_capacity(ops.len());
     for op in ops {
-        let r: Result<String, String> = match op.clone() {
-            Op::Upsert(c) => graph
-                .upsert_concept(c)
-                .map(|id| id.to_string())
-                .map_err(|e| e.to_string()),
-            Op::Rename(id, name) => graph
+        let outcome = match op.clone() {
+            Op::Upsert(c) => s(graph.upsert_concept(c)),
+            Op::Rename(id, name) => s(graph
                 .update_concept(
                     id,
-                    ontology_graph::ConceptPatch {
+                    ConceptPatch {
                         name: Some(name),
                         ..Default::default()
                     },
                 )
-                .map(|c| c.name)
-                .map_err(|e| e.to_string()),
-            Op::RemoveConcept(id) => graph
-                .remove_concept(id)
-                .map(|v| format!("{v:?}"))
-                .map_err(|e| e.to_string()),
-            Op::Relation(r) => graph
-                .add_relation(r)
-                .map(|id| id.to_string())
-                .map_err(|e| e.to_string()),
-            Op::RelationExact(r) => graph
-                .insert_relation_exact(r)
-                .map(|id| id.to_string())
-                .map_err(|e| e.to_string()),
-            Op::RemoveRelation(id) => graph
-                .remove_relation(id)
-                .map(|_| "ok".into())
-                .map_err(|e| e.to_string()),
-            Op::Rule(rule) => graph
-                .upsert_rule(rule)
-                .map(|id| id.to_string())
-                .map_err(|e| e.to_string()),
-            Op::Action(a) => graph
-                .upsert_action(a)
-                .map(|id| id.to_string())
-                .map_err(|e| e.to_string()),
-            Op::RemoveRule(id) => graph
-                .remove_rule(id)
-                .map(|_| "ok".into())
-                .map_err(|e| e.to_string()),
+                .map(|c| c.name)),
+            Op::RenameCollide(a, b) => match graph.get_concept(b) {
+                Ok(taken) => s(graph
+                    .update_concept(
+                        a,
+                        ConceptPatch {
+                            name: Some(taken.name),
+                            ..Default::default()
+                        },
+                    )
+                    .map(|c| c.name)),
+                Err(e) => format!("Err({e})"),
+            },
+            Op::RemoveConcept(id) => s(graph.remove_concept(id).map(|v| format!("{v:?}"))),
+            Op::Relation(r) => s(graph.add_relation(r)),
+            Op::RelationExact(r) => s(graph.insert_relation_exact(r)),
+            Op::RemoveRelation(id) => s(graph.remove_relation(id).map(|_| "ok")),
+            Op::Rule(rule) => s(graph.upsert_rule(rule)),
+            Op::RenameRule(id, name) => s(graph
+                .update_rule(
+                    id,
+                    RulePatch {
+                        name: Some(name),
+                        ..Default::default()
+                    },
+                )
+                .map(|r| r.name)),
+            Op::RemoveRule(id) => s(graph.remove_rule(id).map(|_| "ok")),
+            Op::Action(a) => s(graph.upsert_action(a)),
+            Op::RenameAction(id, name) => s(graph
+                .update_action(
+                    id,
+                    ActionPatch {
+                        name: Some(name),
+                        ..Default::default()
+                    },
+                )
+                .map(|a| a.name)),
+            Op::RemoveAction(id) => s(graph.remove_action(id).map(|_| "ok")),
         };
-        outcomes.push(format!("{r:?}"));
+        outcomes.push(outcome);
     }
     outcomes
 }
 
-/// Every observable view of a graph, as comparable text.
+/// Every observable view of a graph, as comparable text — including the
+/// three sorted views (`relations_sorted`, `rules_sorted`, `actions_sorted`)
+/// through their own paged read paths.
 fn views(graph: &OntologyGraph) -> Vec<(&'static str, String)> {
     let mut v = Vec::new();
     let (total, all) = graph.list_concepts_page(None, None, 0, 10_000, true, true);
@@ -339,21 +378,33 @@ fn views(graph: &OntologyGraph) -> Vec<(&'static str, String)> {
         off += 7;
     }
     v.push(("stitched", format!("{stitched:?}")));
-    let mut rels = graph.all_relations();
-    rels.sort_by_key(|r| r.id);
+
+    let (rt, rels) = graph.list_relations_page(None, None, None, 0, 10_000, true);
     v.push((
-        "relations",
-        rels.iter()
-            .map(|r| {
-                format!(
+        "relations_sorted",
+        format!(
+            "{rt}\n{}",
+            rels.iter()
+                .map(|r| format!(
                     "{}|{}|{}|{}|{}",
                     r.id, r.relation_type, r.source, r.target, r.weight
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n"),
+                ))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ),
+    ));
+    let (_, rels) = graph.list_relations_page(None, None, None, 5, 9, false);
+    v.push((
+        "relations_paged",
+        format!("{:?}", rels.iter().map(|r| r.id).collect::<Vec<_>>()),
+    ));
+    let (_, rels) = graph.list_relations_page(None, None, Some("knows"), 0, 10_000, true);
+    v.push((
+        "relations_by_type",
+        format!("{:?}", rels.iter().map(|r| r.id).collect::<Vec<_>>()),
     ));
     v.push(("relation_count", graph.relation_count().to_string()));
+
     for c in all.iter().take(12) {
         v.push((
             "incident",
@@ -378,25 +429,28 @@ fn views(graph: &OntologyGraph) -> Vec<(&'static str, String)> {
         ids.sort_unstable();
         v.push(("expand", format!("{}: {ids:?}", c.id)));
     }
-    let mut rules = graph.all_rules();
-    rules.sort_by_key(|r| r.id);
+
+    let (rut, rules) = graph.list_rules_page(0, 10_000);
     v.push((
-        "rules",
-        rules
-            .iter()
-            .map(|r| format!("{}|{}|{:?}", r.id, r.name, r.applies_to))
-            .collect::<Vec<_>>()
-            .join("\n"),
+        "rules_sorted",
+        format!(
+            "{rut} {:?}",
+            rules
+                .iter()
+                .map(|r| (r.id, r.name.clone(), r.applies_to.clone()))
+                .collect::<Vec<_>>()
+        ),
     ));
-    let mut actions = graph.all_actions();
-    actions.sort_by_key(|a| a.id);
+    let (aut, actions) = graph.list_actions_page(1, 10_000);
     v.push((
-        "actions",
-        actions
-            .iter()
-            .map(|a| format!("{}|{}|{}|{:?}", a.id, a.name, a.subject, a.object))
-            .collect::<Vec<_>>()
-            .join("\n"),
+        "actions_sorted",
+        format!(
+            "{aut} {:?}",
+            actions
+                .iter()
+                .map(|a| (a.id, a.name.clone(), a.subject, a.object))
+                .collect::<Vec<_>>()
+        ),
     ));
     v
 }
@@ -410,9 +464,11 @@ fn assert_same_views(normal: &OntologyGraph, bulk: &OntologyGraph) {
     }
 }
 
-/// The core contract: same script, same outcomes, identical views.
+/// The core contract: same script, same outcomes (successes and failures
+/// alike), identical views afterwards.
 #[test]
 fn bulk_mode_yields_exactly_the_same_graph_as_normal_mode() {
+    let mut collision_seen = false;
     for seed in [1u64, 7, 42, 2026] {
         let ops = script(seed, 600);
         let normal = OntologyGraph::new(ontology());
@@ -433,7 +489,18 @@ fn bulk_mode_yields_exactly_the_same_graph_as_normal_mode() {
         assert_eq!(report.actions, bulk.all_actions().len());
         assert!(report.trigrams > 0);
         assert!(report.total_ms >= 0.0);
+        // The script hit failure paths, including a name collision.
+        assert!(
+            out_bulk.iter().any(|o| o.starts_with("Err(")),
+            "seed {seed}: no error path hit"
+        );
+        collision_seen |= out_bulk
+            .iter()
+            .any(|o| o.to_lowercase().contains("duplicate"));
     }
+    // A colliding rename only fails within one type, so not every seed
+    // produces one; across the four seeds at least one must.
+    assert!(collision_seen, "no name collision hit across the seeds");
 }
 
 /// While the guard is alive the derived indexes are stale by design; the
@@ -480,6 +547,8 @@ fn derived_indexes_are_rebuilt_once_and_generations_bump_once() {
     );
     let (_, hits) = g.list_concepts_page(None, Some("ali"), 0, 10, true, true);
     assert_eq!(hits.iter().map(|c| c.id).collect::<Vec<_>>(), vec![a]);
+    let (rt, _) = g.list_relations_page(None, None, None, 0, 10, true);
+    assert_eq!(rt, 1);
     assert_eq!(g.concepts_generation(), cg0 + 1, "exactly one bump");
     assert_eq!(g.relations_generation(), rg0 + 1);
 
@@ -489,6 +558,96 @@ fn derived_indexes_are_rebuilt_once_and_generations_bump_once() {
     let (total, _) = g.list_concepts_page(None, None, 0, 10, true, true);
     assert_eq!(total, 3);
     assert_eq!(g.concepts_generation(), cg0 + 2);
+}
+
+/// Reading through the derived indexes during a bulk load is stale, never
+/// a panic: pages, searches, type buckets and sorted views all answer.
+#[test]
+fn reads_during_bulk_mode_are_stale_but_never_panic() {
+    let g = OntologyGraph::new(ontology());
+    let a = g
+        .upsert_concept(Concept::new(ConceptId(0), "Person", "Alice"))
+        .unwrap();
+    let guard = g.begin_bulk();
+    g.remove_concept(a).unwrap();
+    let b = g
+        .upsert_concept(Concept::new(ConceptId(0), "Person", "Bob"))
+        .unwrap();
+    let c = g
+        .upsert_concept(Concept::new(ConceptId(0), "Company", "Acme"))
+        .unwrap();
+    g.add_relation(Relation::new(RelationId(0), "works_for", b, c))
+        .unwrap();
+    // Stale: the sorted index still names the removed `a` and ignores `b`,
+    // `c`; the page skips the vanished id instead of panicking.
+    let (total, page) = g.list_concepts_page(None, None, 0, 10, true, true);
+    assert_eq!(total, 1);
+    assert!(
+        page.is_empty(),
+        "removed concept skipped, new ones not indexed yet"
+    );
+    let (_, hits) = g.list_concepts_page(None, Some("ali"), 0, 10, true, true);
+    assert!(hits.is_empty());
+    let (_, typed) = g.list_concepts_page(Some("Company"), None, 0, 10, true, true);
+    assert!(typed.is_empty());
+    let (rt, rels) = g.list_relations_page(None, None, None, 0, 10, true);
+    assert_eq!((rt, rels.len()), (0, 0));
+    assert_eq!(g.list_rules_page(0, 10).0, 0);
+    // Primary reads are live.
+    assert_eq!(g.concept_count(), 2);
+    assert_eq!(g.find_by_name("Person", "bob"), Some(b));
+    guard.finish();
+    let (total, page) = g.list_concepts_page(None, None, 0, 10, true, true);
+    assert_eq!(total, 2);
+    assert_eq!(page.len(), 2);
+    let (rt, _) = g.list_relations_page(None, None, None, 0, 10, true);
+    assert_eq!(rt, 1);
+}
+
+/// The schema guards count instances from the primary map during a bulk
+/// load: a replayed schema that would orphan concepts is refused exactly
+/// as it is live (finding S1 of the independent review).
+#[test]
+fn schema_guards_hold_during_bulk_mode() {
+    let g = OntologyGraph::new(ontology());
+    let guard = g.begin_bulk();
+    g.upsert_concept(Concept::new(ConceptId(0), "Company", "Acme"))
+        .unwrap();
+    let mut without_company = ontology();
+    without_company.concept_types.remove("Company");
+    without_company.relation_types.remove("works_for");
+    without_company.rule_types.remove("audit");
+    without_company.action_types.remove("notify");
+    let err = g
+        .extend_ontology(|o| {
+            *o = without_company.clone();
+            Ok(())
+        })
+        .unwrap_err();
+    assert!(matches!(err, GraphError::TypeInUse { .. }), "{err:?}");
+    // Moving a type with instances to another domain is refused too.
+    let mut moved = ontology();
+    moved.concept_types.get_mut("Company").unwrap().ns = Some("elsewhere".into());
+    let err = g
+        .extend_ontology(|o| {
+            *o = moved.clone();
+            Ok(())
+        })
+        .unwrap_err();
+    assert!(
+        matches!(err, GraphError::NamespaceChangeWithInstances { .. }),
+        "{err:?}"
+    );
+    // An unused type can still be removed during the load.
+    let mut without_employee = ontology();
+    without_employee.concept_types.remove("Employee");
+    g.extend_ontology(|o| {
+        *o = without_employee.clone();
+        Ok(())
+    })
+    .unwrap();
+    guard.finish();
+    assert!(g.with_ontology(|o| o.concept_types.contains_key("Company")));
 }
 
 /// Dropping the guard (an early return, a `?` in the loader) ends the mode

@@ -601,11 +601,13 @@ au lieu d'être maintenus à chaque enregistrement) :
 | 200 k concepts, 1 M relations | JSON | 10,7 s | **6,1–7,6 s** | 0,36–0,53 s | 1,4–1,75× |
 | 500 k concepts, 2,5 M relations | JSON | 23,1 s | **19,7–21,5 s** | 1,2–1,7 s | 1,1–1,2× |
 
-Le gain plafonne parce que la maintenance des index dérivés ne représentait
-que 10 à 25 % d'`apply` ; le reste est dans les structures primaires, et
-d'abord dans les quatre listes d'adjacence par relation (~5 µs par relation
-contre ~6 µs par concept). Voir `STORAGE-PLAN.md` §6.6 pour le profil et la
-suite (table de symboles §7.4, CSR §6.3).
+Le gain plafonne avec l'échelle : la maintenance des index dérivés pesait
+45 à 65 % d'`apply` à 200 k mais 15 à 26 % à 500 k ; le reste est dans les
+structures primaires, et d'abord dans les quatre listes d'adjacence par
+relation (~5 µs par relation contre ~6 µs par concept). Deux exécutions par
+point pour la colonne « après », une pour la colonne « avant ». Voir
+`STORAGE-PLAN.md` §6.6 pour l'imputation détaillée et la suite (table de
+symboles §7.4, CSR §6.3).
 
 Trois faits en sortent. (1) **La désérialisation ne domine pas** : elle pèse
 9 à 27 % de l'hydratation ; 73 à 91 % du temps est dans `apply`, c'est-à-dire
