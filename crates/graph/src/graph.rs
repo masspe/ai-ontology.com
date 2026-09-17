@@ -54,8 +54,8 @@ fn ms(d: std::time::Duration) -> f64 {
 }
 
 /// What [`OntologyGraph::end_bulk`] rebuilt, and how long each derived
-/// index took — the per-index profile `STORAGE-PLAN.md` §6 asked for
-/// before optimising further.
+/// index took to rebuild. This bounds the cost of maintaining each index
+/// per mutation; it is not a sampling profile of `apply`.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct BulkLoadReport {
     pub concepts: usize,
@@ -67,7 +67,8 @@ pub struct BulkLoadReport {
     pub concepts_sorted_ms: f64,
     pub concepts_by_type_ms: f64,
     pub trigrams_ms: f64,
-    pub relations_sorted_ms: f64,
+    /// Sorted views of relations, rules and actions together.
+    pub others_sorted_ms: f64,
     pub total_ms: f64,
 }
 
@@ -96,9 +97,16 @@ impl BulkLoad<'_> {
 
 impl Drop for BulkLoad<'_> {
     fn drop(&mut self) {
-        if !self.finished && self.owner {
-            self.graph.end_bulk();
+        if self.finished || !self.owner {
+            return;
         }
+        // Unwinding through a failed load: rebuilding here could panic
+        // again (allocation) and abort the process; the graph is being
+        // abandoned anyway, leave the mode set and the indexes stale.
+        if std::thread::panicking() {
+            return;
+        }
+        self.graph.end_bulk();
     }
 }
 
@@ -252,9 +260,30 @@ impl OntologyGraph {
 
     /// `true` when derived indexes are maintained per mutation (normal
     /// mode); `false` inside a bulk load, where `end_bulk` rebuilds them.
+    /// `Acquire` pairs with the `AcqRel` swaps of `begin_bulk`/`end_bulk`
+    /// so a loader resumed on another thread sees the mode.
     #[inline]
     fn derived(&self) -> bool {
-        !self.bulk.load(Ordering::Relaxed)
+        !self.bulk.load(Ordering::Acquire)
+    }
+
+    /// Number of live concepts of exactly `concept_type`. Served by the
+    /// per-type bucket in normal mode; during a bulk load that bucket is
+    /// stale, so the primary map is scanned instead — the schema guards
+    /// (`TypeInUse`, `NamespaceChangeWithInstances`) must hold during a
+    /// replay exactly as they do live.
+    fn instances_of_type(&self, concept_type: &str) -> usize {
+        if self.derived() {
+            self.concepts_by_type
+                .get(concept_type)
+                .map(|b| b.len())
+                .unwrap_or(0)
+        } else {
+            self.concepts
+                .iter()
+                .filter(|c| c.concept_type == concept_type)
+                .count()
+        }
     }
 
     fn bump_concepts_gen(&self) {
@@ -317,8 +346,12 @@ impl OntologyGraph {
     ///
     /// Intended for hydration, before the graph is served: **readers that
     /// go through the derived indexes (list pages, `?q=`, type buckets)
-    /// see stale results while the guard is alive.** Nested calls are
-    /// harmless — only the outermost guard rebuilds.
+    /// see stale results while the guard is alive** (they never panic:
+    /// stale ids are skipped), and **no other thread may mutate the graph
+    /// while `end_bulk` rebuilds**. The schema guards that count instances
+    /// scan the primary map in this mode, so `extend_ontology` behaves as
+    /// it does live. Nested calls are harmless — only the outermost guard
+    /// rebuilds; a second loader on the same graph gets an inert guard.
     pub fn begin_bulk(&self) -> BulkLoad<'_> {
         let owner = !self.bulk.swap(true, Ordering::AcqRel);
         BulkLoad {
@@ -337,7 +370,7 @@ impl OntologyGraph {
     /// maps and bump both generations once. A no-op when not in bulk mode.
     /// Prefer the guard returned by [`begin_bulk`](Self::begin_bulk).
     pub fn end_bulk(&self) -> BulkLoadReport {
-        if !self.bulk.swap(false, Ordering::AcqRel) {
+        if !self.bulk.load(Ordering::Acquire) {
             return BulkLoadReport::default();
         }
         let started = Instant::now();
@@ -359,15 +392,15 @@ impl OntologyGraph {
                 grams.entry(g).or_default().push(id);
             }
         }
+        // `BTreeSet::from_iter` sorts and deduplicates (bulk build), so no
+        // explicit sort is needed here or below.
         report.concepts = keys.len();
-        keys.sort_unstable();
         *self.concepts_sorted.write() = keys.into_iter().collect();
         report.concepts_sorted_ms = ms(t.elapsed());
 
         let t = Instant::now();
         self.concepts_by_type.clear();
-        for (ty, mut names) in by_type {
-            names.sort_unstable();
+        for (ty, names) in by_type {
             self.concepts_by_type
                 .insert(ty, names.into_iter().collect());
         }
@@ -376,9 +409,7 @@ impl OntologyGraph {
         let t = Instant::now();
         let mut idx: AHashMap<[char; 3], BTreeSet<ConceptId>> =
             AHashMap::with_capacity(grams.len());
-        for (g, mut ids) in grams {
-            ids.sort_unstable();
-            ids.dedup();
+        for (g, ids) in grams {
             idx.insert(g, ids.into_iter().collect());
         }
         report.trigrams = idx.len();
@@ -387,31 +418,34 @@ impl OntologyGraph {
 
         // Relations, rules, actions: sorted views from the primary maps.
         let t = Instant::now();
-        let mut rel_ids: Vec<RelationId> = self.relations.iter().map(|r| *r.key()).collect();
+        let rel_ids: Vec<RelationId> = self.relations.iter().map(|r| *r.key()).collect();
         report.relations = rel_ids.len();
-        rel_ids.sort_unstable();
         *self.relations_sorted.write() = rel_ids.into_iter().collect();
-        let mut rule_keys: Vec<RuleKey> = self
+        let rule_keys: Vec<RuleKey> = self
             .rules
             .iter()
             .map(|r| (r.rule_type.clone(), r.name.clone(), *r.key()))
             .collect();
         report.rules = rule_keys.len();
-        rule_keys.sort_unstable();
         *self.rules_sorted.write() = rule_keys.into_iter().collect();
-        let mut action_keys: Vec<ActionKey> = self
+        let action_keys: Vec<ActionKey> = self
             .actions
             .iter()
             .map(|a| (a.action_type.clone(), a.name.clone(), *a.key()))
             .collect();
         report.actions = action_keys.len();
-        action_keys.sort_unstable();
         *self.actions_sorted.write() = action_keys.into_iter().collect();
-        report.relations_sorted_ms = ms(t.elapsed());
+        report.others_sorted_ms = ms(t.elapsed());
 
+        // Leave bulk mode only now: a mutation racing the rebuild (which the
+        // contract forbids, but which must not corrupt) is either applied
+        // incrementally after this point or was caught by the rebuild.
+        self.bulk.store(false, Ordering::Release);
         // One generation bump per family (R2): every cached page is stale.
-        self.bump_concepts_gen();
-        self.bump_relations_gen();
+        self.concepts_gen.fetch_add(1, Ordering::Release);
+        self.list_concepts_cache.lock().clear();
+        self.relations_gen.fetch_add(1, Ordering::Release);
+        self.list_relations_cache.lock().clear();
         report.total_ms = ms(started.elapsed());
         report
     }
@@ -465,11 +499,7 @@ impl OntologyGraph {
         candidate.validate_namespaces()?;
         // Concept types: no domain move, no removal, while instances exist.
         for name in old.concept_types.keys() {
-            let instances = self
-                .concepts_by_type
-                .get(name)
-                .map(|b| b.len())
-                .unwrap_or(0);
+            let instances = self.instances_of_type(name);
             if instances == 0 {
                 continue;
             }

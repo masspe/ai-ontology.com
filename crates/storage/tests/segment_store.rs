@@ -806,8 +806,7 @@ async fn hydration_rebuilds_the_derived_indexes_like_the_live_graph() {
         let (_, by_type) = g.list_concepts_page(Some("Person"), None, 0, 100, true, false);
         let (_, hits) = g.list_concepts_page(None, Some("zed"), 0, 100, true, true);
         let (_, nohit) = g.list_concepts_page(None, Some("dav"), 0, 100, true, true);
-        let mut rels = g.all_relations();
-        rels.sort_by_key(|r| r.id);
+        let (_, rels) = g.list_relations_page(None, None, None, 0, 100, true);
         (
             total,
             page.iter()

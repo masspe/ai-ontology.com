@@ -435,11 +435,14 @@ depuis les cartes primaires et bumpe chaque génération une fois (R1, R2).
 Les trois stores l'utilisent pendant `load_into`. Pendant la garde, les
 lectures qui passent par les index dérivés (pages, `?q=`) sont périmées :
 l'hydratation a lieu avant que le graphe soit servi, et c'est documenté.
-Gain mesuré : 1,4–1,75× à 200 k / 1 M, 1,1–1,2× à 500 k / 2,5 M — la
-reconstruction ne coûte que 0,4 à 1,7 s, ce qui borne ce que la maintenance
-par mutation coûtait ; le reste d'`apply` est dans les structures primaires
-des relations (`STORAGE-PLAN.md` §6.6). Un effet de bord utile : les
-`BTreeSet` bâtis d'un bloc sont plus denses (−7 à −10 % de tas).
+Gain mesuré : 1,4–1,75× à 200 k / 1 M, 1,1–1,2× à 500 k / 2,5 M. La
+reconstruction coûte 0,4 à 1,7 s ; la maintenance par mutation des index
+dérivés coûtait donc (temps gagné + reconstruction) 45 à 65 % d'`apply` à
+200 k et 15 à 26 % à 500 k ; le reste est dans les structures primaires des
+relations (`STORAGE-PLAN.md` §6.6). Le profil par échantillonnage annoncé
+ci-dessus n'a pas été fait ; l'imputation est une soustraction. Effet de
+bord : les `BTreeSet` bâtis d'un bloc sont plus denses (−3 % de tas mesuré à
+200 k).
 
 **Mesuré (phase 4, 2026-09-16, `STORAGE.md` §7.8)** : sur 3 M
 d'enregistrements (500 k concepts, 2,5 M relations), l'hydratation prend

@@ -620,32 +620,40 @@ Mesuré (détail dans `STORAGE.md` §7.7–7.8) :
 | Compaction complète | 30–54 k enr./s → 20–30 min à la cible ; compaction par domaine et vérification sans rejeu à prévoir |
 | Page à offset | O(offset) : 13 ms à 500 k → T1 (curseur) avant la phase 5, comme prévu |
 
-**Profil d'`apply` (item 4, mesuré par la reconstruction des index).** Le
-mode en masse laisse les index dérivés (ensembles triés, seaux par type,
-trigrammes, caches, générations) de côté pendant le rejeu et les reconstruit
-une fois. Cette reconstruction coûte **0,36–0,53 s à 200 k / 1 M et 1,2–1,7 s
-à 500 k / 2,5 M** (ensemble trié des concepts 0,8–1,0 s, relations 0,2–0,3 s,
-seaux par type 0,1–0,2 s, trigrammes 0,1 s) — c'est donc tout ce que la
-maintenance par mutation de ces index coûtait : **10 à 25 % d'`apply`**, pas
-la majorité. Le reste, ~15 s à 500 k, est dans les structures **primaires**,
-et surtout dans les relations : ~3 s pour 500 k concepts (6 µs chacun :
-validation du schéma, clé du nom en minuscules, insertion `DashMap`) contre
-~12 s pour 2,5 M relations (**~5 µs chacune** : deux `contains_key`, quatre
-entrées d'adjacence dans des `DashMap` — sortante, entrante, et leurs
-variantes typées par nom de relation avec deux clones de `String` —, une
-insertion dans la table des relations, plus les redimensionnements des
+**Ce que la mesure dit du coût d'`apply` (item 4).** Le mode en masse
+laisse les index dérivés (ensembles triés, seaux par type, trigrammes,
+caches, générations) de côté pendant le rejeu et les reconstruit une fois.
+La reconstruction coûte **0,36–0,53 s à 200 k / 1 M et 1,2–1,7 s à 500 k /
+2,5 M** (ensemble trié des concepts 0,8–1,0 s, relations + règles + actions
+0,2–0,3 s, seaux par type 0,1–0,2 s, trigrammes 0,1 s ; deux exécutions par
+point, base « avant » à une exécution). Le coût de leur maintenance mutation
+par mutation est le temps gagné plus la reconstruction : **3,5 à 5,1 s à
+200 k, soit 45 à 65 % d'`apply` (7,8 s)** ; **2,8 à 5,1 s à 500 k, soit 15 à
+26 % d'`apply` (19,4 s)**. Le poids des index dérivés décroît donc avec
+l'échelle, et à 500 k le gros d'`apply` (~15 s) est ailleurs : dans les
+structures **primaires**, et d'abord dans les relations — ~3 s pour 500 k
+concepts (~6 µs chacun : validation du schéma, clé du nom en minuscules,
+insertion `DashMap`) contre ~12 s pour 2,5 M relations (**~5 µs chacune** :
+deux `contains_key`, quatre entrées d'adjacence dans des `DashMap` —
+sortante, entrante et leurs variantes typées, avec deux clones de `String` —,
+une insertion dans la table des relations, plus les redimensionnements des
 tables). La prochaine marche n'est plus dans l'hydratation elle-même mais
 dans la représentation des relations : table de symboles pour les noms de
 types (§7.4 de STORAGE.md, différée) et adjacence CSR (§6.3) — les mêmes
-chantiers que ceux qu'exige la mémoire. Réserve : cette imputation est une
-soustraction entre deux mesures (hydratation moins parcours décodé, moins
-reconstruction), pas un échantillonnage ; un profil `WPA`/`perf` reste à
-faire avant d'engager ces chantiers.
+chantiers que ceux qu'exige la mémoire. **Réserve** : ceci est une
+imputation par soustraction entre mesures (hydratation moins parcours
+décodé, moins reconstruction), pas un échantillonnage ; le profil
+`WPA`/`perf` promis avant `bulk_load` n'a pas été fait (pas d'outil
+disponible sur la machine de mesure) et reste dû avant d'engager ces
+chantiers.
 
-Effet collatéral mesuré : les `BTreeSet` construits d'un bloc à partir de
-vecteurs triés sont plus denses que ceux remplis mutation par mutation ; le
-tas après hydratation à 500 k / 2,5 M passe de ~2,6 Go (extrapolé) à 2,38 Go
-mesurés, et 950 Mio à 200 k / 1 M (978 avant).
+Effets collatéraux : les `BTreeSet` construits d'un bloc sont plus denses
+que ceux remplis mutation par mutation — tas après hydratation **−3 %
+mesuré à 200 k / 1 M** (978 → 950 Mio) et 2,38 Go à 500 k / 2,5 M contre
+~2,6 Go extrapolés (non mesurés avant). La reconstruction a un pic
+transitoire : les paires (trigramme, id), les clés triées et les seaux par
+type coexistent avec les index fraîchement bâtis — ~60 Mo à 500 k, de
+l'ordre de 1,2 Go à 10⁷ concepts, à compter dans le budget de la phase 5.
 
 Décisions à prendre (proposées, à valider) :
 
