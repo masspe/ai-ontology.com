@@ -235,7 +235,10 @@ async function extractPdf(
   const pdfjs = await loadPdfjs();
   onProgress?.({ status: `Parsing ${file.name}…` });
   const buf = await file.arrayBuffer();
-  const doc = await pdfjs.getDocument({ data: buf }).promise;
+  // pdf.js 6 releases resources through the loading task (the document
+  // proxy lost its `destroy`); the task API is the same in 5 and 6.
+  const task = pdfjs.getDocument({ data: buf });
+  const doc = await task.promise;
   const pages: string[] = [];
   for (let pageNum = 1; pageNum <= doc.numPages; pageNum++) {
     onProgress?.({
@@ -281,7 +284,7 @@ async function extractPdf(
     if (merged) pages.push(`\n--- Page ${pageNum} ---\n${merged}`);
     page.cleanup();
   }
-  await doc.destroy();
+  await task.destroy();
   return pages.join("\n").trim();
 }
 

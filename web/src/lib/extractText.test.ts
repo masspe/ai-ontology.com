@@ -42,8 +42,9 @@ const getDocument = vi.fn((_args: unknown) => ({
         cleanup: p.cleanup,
       };
     },
-    destroy: fakeDoc.destroy,
   }),
+  // pdf.js 6: resources are released through the loading task.
+  destroy: fakeDoc.destroy,
 }));
 const GlobalWorkerOptions: { workerSrc: string } = { workerSrc: "" };
 vi.mock("pdfjs-dist", () => ({ getDocument, GlobalWorkerOptions }));
