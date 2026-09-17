@@ -11,8 +11,9 @@ use dashmap::DashMap;
 use parking_lot::{Mutex, RwLock};
 use smallvec::SmallVec;
 use std::collections::BTreeSet;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
 use crate::error::{GraphError, GraphResult};
 use crate::id::{ActionId, ConceptId, IdAllocator, RelationId, RuleId};
@@ -47,6 +48,67 @@ fn trigrams(s: &str) -> Vec<[char; 3]> {
 type ConceptKey = (String, String, ConceptId);
 type RuleKey = (String, String, RuleId);
 type ActionKey = (String, String, ActionId);
+
+fn ms(d: std::time::Duration) -> f64 {
+    (d.as_secs_f64() * 1e5).round() / 100.0
+}
+
+/// What [`OntologyGraph::end_bulk`] rebuilt, and how long each derived
+/// index took to rebuild. This bounds the cost of maintaining each index
+/// per mutation; it is not a sampling profile of `apply`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct BulkLoadReport {
+    pub concepts: usize,
+    pub relations: usize,
+    pub rules: usize,
+    pub actions: usize,
+    /// Distinct name trigrams indexed.
+    pub trigrams: usize,
+    pub concepts_sorted_ms: f64,
+    pub concepts_by_type_ms: f64,
+    pub trigrams_ms: f64,
+    /// Sorted views of relations, rules and actions together.
+    pub others_sorted_ms: f64,
+    pub total_ms: f64,
+}
+
+/// Guard of a bulk load (see [`OntologyGraph::begin_bulk`]). Dropping it
+/// rebuilds the derived indexes; [`finish`](Self::finish) does the same and
+/// hands back the report.
+#[must_use = "dropping the guard ends the bulk load immediately"]
+pub struct BulkLoad<'a> {
+    graph: &'a OntologyGraph,
+    /// Only the guard that switched the mode on switches it off.
+    owner: bool,
+    finished: bool,
+}
+
+impl BulkLoad<'_> {
+    /// Rebuild the derived indexes now and return what was rebuilt.
+    pub fn finish(mut self) -> BulkLoadReport {
+        self.finished = true;
+        if self.owner {
+            self.graph.end_bulk()
+        } else {
+            BulkLoadReport::default()
+        }
+    }
+}
+
+impl Drop for BulkLoad<'_> {
+    fn drop(&mut self) {
+        if self.finished || !self.owner {
+            return;
+        }
+        // Unwinding through a failed load: rebuilding here could panic
+        // again (allocation) and abort the process; the graph is being
+        // abandoned anyway, leave the mode set and the indexes stale.
+        if std::thread::panicking() {
+            return;
+        }
+        self.graph.end_bulk();
+    }
+}
 
 /// Cache entry for [`OntologyGraph::list_concepts_page`].
 /// Stored under the same `concepts_gen` snapshot that was current when the
@@ -141,6 +203,12 @@ pub struct OntologyGraph {
     rules_sorted: RwLock<BTreeSet<RuleKey>>,
     actions_sorted: RwLock<BTreeSet<ActionKey>>,
     ids: IdAllocator,
+    /// Bulk-load mode (`begin_bulk`): the derived indexes above — sorted
+    /// sets, per-type buckets, trigrams, list caches, generations — are not
+    /// maintained per mutation; `end_bulk` rebuilds them once from the
+    /// primary maps. Primary maps, the name index and adjacency stay live,
+    /// so validation and cascades keep working during the load.
+    bulk: AtomicBool,
 }
 
 impl OntologyGraph {
@@ -167,6 +235,7 @@ impl OntologyGraph {
             rules_sorted: RwLock::new(BTreeSet::new()),
             actions_sorted: RwLock::new(BTreeSet::new()),
             ids: IdAllocator::new(1),
+            bulk: AtomicBool::new(false),
         }
     }
 
@@ -189,17 +258,54 @@ impl OntologyGraph {
         self.relations_gen.load(Ordering::Acquire)
     }
 
+    /// `true` when derived indexes are maintained per mutation (normal
+    /// mode); `false` inside a bulk load, where `end_bulk` rebuilds them.
+    /// `Acquire` pairs with the `AcqRel` swaps of `begin_bulk`/`end_bulk`
+    /// so a loader resumed on another thread sees the mode.
+    #[inline]
+    fn derived(&self) -> bool {
+        !self.bulk.load(Ordering::Acquire)
+    }
+
+    /// Number of live concepts of exactly `concept_type`. Served by the
+    /// per-type bucket in normal mode; during a bulk load that bucket is
+    /// stale, so the primary map is scanned instead — the schema guards
+    /// (`TypeInUse`, `NamespaceChangeWithInstances`) must hold during a
+    /// replay exactly as they do live.
+    fn instances_of_type(&self, concept_type: &str) -> usize {
+        if self.derived() {
+            self.concepts_by_type
+                .get(concept_type)
+                .map(|b| b.len())
+                .unwrap_or(0)
+        } else {
+            self.concepts
+                .iter()
+                .filter(|c| c.concept_type == concept_type)
+                .count()
+        }
+    }
+
     fn bump_concepts_gen(&self) {
+        if !self.derived() {
+            return;
+        }
         self.concepts_gen.fetch_add(1, Ordering::Release);
         self.list_concepts_cache.lock().clear();
     }
 
     fn bump_relations_gen(&self) {
+        if !self.derived() {
+            return;
+        }
         self.relations_gen.fetch_add(1, Ordering::Release);
         self.list_relations_cache.lock().clear();
     }
 
     fn index_name_trigrams(&self, name: &str, id: ConceptId) {
+        if !self.derived() {
+            return;
+        }
         let grams = trigrams(name);
         if grams.is_empty() {
             return;
@@ -211,6 +317,9 @@ impl OntologyGraph {
     }
 
     fn deindex_name_trigrams(&self, name: &str, id: ConceptId) {
+        if !self.derived() {
+            return;
+        }
         let grams = trigrams(name);
         if grams.is_empty() {
             return;
@@ -224,6 +333,121 @@ impl OntologyGraph {
                 }
             }
         }
+    }
+
+    /// Enter bulk-load mode (`STORAGE-PLAN.md` phase 4, item 4;
+    /// `PERFORMANCE.md` §7.8). Every public mutation keeps working — primary
+    /// maps, the name index and adjacency are maintained, so validation,
+    /// upserts, deletes and cascades behave exactly as in normal mode — but
+    /// the derived indexes (sorted sets, per-type buckets, name trigrams,
+    /// list caches, generations) are left alone until the returned guard is
+    /// finished or dropped, when [`end_bulk`](Self::end_bulk) rebuilds them
+    /// in one pass and bumps each generation once (R1, R2).
+    ///
+    /// Intended for hydration, before the graph is served: **readers that
+    /// go through the derived indexes (list pages, `?q=`, type buckets)
+    /// see stale results while the guard is alive** (they never panic:
+    /// stale ids are skipped), and **no other thread may mutate the graph
+    /// while `end_bulk` rebuilds**. The schema guards that count instances
+    /// scan the primary map in this mode, so `extend_ontology` behaves as
+    /// it does live. Nested calls are harmless — only the outermost guard
+    /// rebuilds; a second loader on the same graph gets an inert guard.
+    pub fn begin_bulk(&self) -> BulkLoad<'_> {
+        let owner = !self.bulk.swap(true, Ordering::AcqRel);
+        BulkLoad {
+            graph: self,
+            owner,
+            finished: false,
+        }
+    }
+
+    /// `true` while a bulk load is in progress.
+    pub fn is_bulk(&self) -> bool {
+        !self.derived()
+    }
+
+    /// Leave bulk-load mode: rebuild every derived index from the primary
+    /// maps and bump both generations once. A no-op when not in bulk mode.
+    /// Prefer the guard returned by [`begin_bulk`](Self::begin_bulk).
+    pub fn end_bulk(&self) -> BulkLoadReport {
+        if !self.bulk.load(Ordering::Acquire) {
+            return BulkLoadReport::default();
+        }
+        let started = Instant::now();
+        let mut report = BulkLoadReport::default();
+
+        // Concepts: one pass collects the three derived views.
+        let t = Instant::now();
+        let mut keys: Vec<ConceptKey> = Vec::with_capacity(self.concepts.len());
+        let mut by_type: AHashMap<String, Vec<(String, ConceptId)>> = AHashMap::new();
+        let mut grams: AHashMap<[char; 3], Vec<ConceptId>> = AHashMap::new();
+        for c in self.concepts.iter() {
+            let id = *c.key();
+            keys.push((c.concept_type.clone(), c.name.clone(), id));
+            by_type
+                .entry(c.concept_type.clone())
+                .or_default()
+                .push((c.name.clone(), id));
+            for g in trigrams(&c.name) {
+                grams.entry(g).or_default().push(id);
+            }
+        }
+        // `BTreeSet::from_iter` sorts and deduplicates (bulk build), so no
+        // explicit sort is needed here or below.
+        report.concepts = keys.len();
+        *self.concepts_sorted.write() = keys.into_iter().collect();
+        report.concepts_sorted_ms = ms(t.elapsed());
+
+        let t = Instant::now();
+        self.concepts_by_type.clear();
+        for (ty, names) in by_type {
+            self.concepts_by_type
+                .insert(ty, names.into_iter().collect());
+        }
+        report.concepts_by_type_ms = ms(t.elapsed());
+
+        let t = Instant::now();
+        let mut idx: AHashMap<[char; 3], BTreeSet<ConceptId>> =
+            AHashMap::with_capacity(grams.len());
+        for (g, ids) in grams {
+            idx.insert(g, ids.into_iter().collect());
+        }
+        report.trigrams = idx.len();
+        *self.name_trigrams.write() = idx;
+        report.trigrams_ms = ms(t.elapsed());
+
+        // Relations, rules, actions: sorted views from the primary maps.
+        let t = Instant::now();
+        let rel_ids: Vec<RelationId> = self.relations.iter().map(|r| *r.key()).collect();
+        report.relations = rel_ids.len();
+        *self.relations_sorted.write() = rel_ids.into_iter().collect();
+        let rule_keys: Vec<RuleKey> = self
+            .rules
+            .iter()
+            .map(|r| (r.rule_type.clone(), r.name.clone(), *r.key()))
+            .collect();
+        report.rules = rule_keys.len();
+        *self.rules_sorted.write() = rule_keys.into_iter().collect();
+        let action_keys: Vec<ActionKey> = self
+            .actions
+            .iter()
+            .map(|a| (a.action_type.clone(), a.name.clone(), *a.key()))
+            .collect();
+        report.actions = action_keys.len();
+        *self.actions_sorted.write() = action_keys.into_iter().collect();
+        report.others_sorted_ms = ms(t.elapsed());
+
+        // Leave bulk mode only now: a mutation racing the rebuild (which the
+        // contract forbids, but which must not corrupt) is either applied
+        // incrementally after this point or was caught by the rebuild.
+        self.bulk.store(false, Ordering::Release);
+        // One generation bump per family (R2): every cached page is stale.
+        self.concepts_gen.fetch_add(1, Ordering::Release);
+        self.list_concepts_cache.lock().clear();
+        self.relations_gen.fetch_add(1, Ordering::Release);
+        self.list_relations_cache.lock().clear();
+        report.total_ms = ms(started.elapsed());
+        report
     }
 
     pub fn ontology(&self) -> Ontology {
@@ -275,11 +499,7 @@ impl OntologyGraph {
         candidate.validate_namespaces()?;
         // Concept types: no domain move, no removal, while instances exist.
         for name in old.concept_types.keys() {
-            let instances = self
-                .concepts_by_type
-                .get(name)
-                .map(|b| b.len())
-                .unwrap_or(0);
+            let instances = self.instances_of_type(name);
             if instances == 0 {
                 continue;
             }
@@ -531,23 +751,26 @@ impl OntologyGraph {
         let id = concept.id;
         let sort_key = (concept.concept_type.clone(), concept.name.clone(), id);
         let new_name = concept.name.clone();
-        if let Some(prev) = self.concepts.insert(id, concept) {
-            let old = (prev.concept_type.clone(), prev.name.clone(), id);
-            if old != sort_key {
-                self.concepts_sorted.write().remove(&old);
-                if let Some(mut bucket) = self.concepts_by_type.get_mut(&prev.concept_type) {
-                    bucket.remove(&(prev.name.clone(), id));
+        let prev = self.concepts.insert(id, concept);
+        if self.derived() {
+            if let Some(prev) = prev {
+                let old = (prev.concept_type.clone(), prev.name.clone(), id);
+                if old != sort_key {
+                    self.concepts_sorted.write().remove(&old);
+                    if let Some(mut bucket) = self.concepts_by_type.get_mut(&prev.concept_type) {
+                        bucket.remove(&(prev.name.clone(), id));
+                    }
+                    self.deindex_name_trigrams(&prev.name, id);
                 }
-                self.deindex_name_trigrams(&prev.name, id);
             }
+            self.concepts_sorted.write().insert(sort_key.clone());
+            self.concepts_by_type
+                .entry(sort_key.0)
+                .or_default()
+                .insert((sort_key.1, id));
+            self.index_name_trigrams(&new_name, id);
+            self.bump_concepts_gen();
         }
-        self.concepts_sorted.write().insert(sort_key.clone());
-        self.concepts_by_type
-            .entry(sort_key.0)
-            .or_default()
-            .insert((sort_key.1, id));
-        self.index_name_trigrams(&new_name, id);
-        self.bump_concepts_gen();
         Ok(id)
     }
 
@@ -715,7 +938,9 @@ impl OntologyGraph {
             .or_default()
             .push(id);
         self.relations.insert(id, rel);
-        self.relations_sorted.write().insert(id);
+        if self.derived() {
+            self.relations_sorted.write().insert(id);
+        }
 
         if symmetric && s != t {
             // Materialize the inverse so traversals are direction-agnostic.
@@ -744,7 +969,9 @@ impl OntologyGraph {
                 .or_default()
                 .push(inv_id);
             self.relations.insert(inv_id, inverse);
-            self.relations_sorted.write().insert(inv_id);
+            if self.derived() {
+                self.relations_sorted.write().insert(inv_id);
+            }
         }
         self.bump_relations_gen();
         Ok(id)
@@ -797,7 +1024,9 @@ impl OntologyGraph {
             .or_default()
             .push(id);
         self.relations.insert(id, rel);
-        self.relations_sorted.write().insert(id);
+        if self.derived() {
+            self.relations_sorted.write().insert(id);
+        }
         self.bump_relations_gen();
         Ok(id)
     }
@@ -918,19 +1147,21 @@ impl OntologyGraph {
                 self.name_index.remove(&old_key);
                 self.name_index.insert(new_key, id);
             }
-            let old_sort = (entry.concept_type.clone(), entry.name.clone(), id);
-            let new_sort = (entry.concept_type.clone(), updated.name.clone(), id);
-            {
-                let mut idx = self.concepts_sorted.write();
-                idx.remove(&old_sort);
-                idx.insert(new_sort);
+            if self.derived() {
+                let old_sort = (entry.concept_type.clone(), entry.name.clone(), id);
+                let new_sort = (entry.concept_type.clone(), updated.name.clone(), id);
+                {
+                    let mut idx = self.concepts_sorted.write();
+                    idx.remove(&old_sort);
+                    idx.insert(new_sort);
+                }
+                if let Some(mut bucket) = self.concepts_by_type.get_mut(&entry.concept_type) {
+                    bucket.remove(&(entry.name.clone(), id));
+                    bucket.insert((updated.name.clone(), id));
+                }
+                self.deindex_name_trigrams(&entry.name, id);
+                self.index_name_trigrams(&updated.name, id);
             }
-            if let Some(mut bucket) = self.concepts_by_type.get_mut(&entry.concept_type) {
-                bucket.remove(&(entry.name.clone(), id));
-                bucket.insert((updated.name.clone(), id));
-            }
-            self.deindex_name_trigrams(&entry.name, id);
-            self.index_name_trigrams(&updated.name, id);
         }
         entry.name = updated.name;
         entry.description = updated.description;
@@ -986,15 +1217,17 @@ impl OntologyGraph {
             .1;
         let key = (concept.concept_type.clone(), concept.name.to_lowercase());
         self.name_index.remove(&key);
-        self.concepts_sorted.write().remove(&(
-            concept.concept_type.clone(),
-            concept.name.clone(),
-            id,
-        ));
-        if let Some(mut bucket) = self.concepts_by_type.get_mut(&concept.concept_type) {
-            bucket.remove(&(concept.name.clone(), id));
+        if self.derived() {
+            self.concepts_sorted.write().remove(&(
+                concept.concept_type.clone(),
+                concept.name.clone(),
+                id,
+            ));
+            if let Some(mut bucket) = self.concepts_by_type.get_mut(&concept.concept_type) {
+                bucket.remove(&(concept.name.clone(), id));
+            }
+            self.deindex_name_trigrams(&concept.name, id);
         }
-        self.deindex_name_trigrams(&concept.name, id);
 
         let mut removed: Vec<RelationId> = Vec::new();
         if let Some((_, adj)) = self.out_edges.remove(&id) {
@@ -1014,7 +1247,9 @@ impl OntologyGraph {
 
         for rid in &removed {
             if let Some((_, rel)) = self.relations.remove(rid) {
-                self.relations_sorted.write().remove(rid);
+                if self.derived() {
+                    self.relations_sorted.write().remove(rid);
+                }
                 // Scrub the surviving endpoint's adjacency list.
                 let other = if rel.source == id {
                     rel.target
@@ -1051,7 +1286,9 @@ impl OntologyGraph {
             .remove(&id)
             .ok_or(GraphError::UnknownRelation(id))?
             .1;
-        self.relations_sorted.write().remove(&id);
+        if self.derived() {
+            self.relations_sorted.write().remove(&id);
+        }
         if let Some(mut adj) = self.out_edges.get_mut(&rel.source) {
             adj.retain(|x| *x != id);
         }
@@ -1239,13 +1476,16 @@ impl OntologyGraph {
         self.ids.observe_rule(rule.id);
         let id = rule.id;
         let sort_key = (rule.rule_type.clone(), rule.name.clone(), id);
-        if let Some(prev) = self.rules.insert(id, rule) {
-            let old = (prev.rule_type, prev.name, id);
-            if old != sort_key {
-                self.rules_sorted.write().remove(&old);
+        let prev = self.rules.insert(id, rule);
+        if self.derived() {
+            if let Some(prev) = prev {
+                let old = (prev.rule_type, prev.name, id);
+                if old != sort_key {
+                    self.rules_sorted.write().remove(&old);
+                }
             }
+            self.rules_sorted.write().insert(sort_key);
         }
-        self.rules_sorted.write().insert(sort_key);
         Ok(id)
     }
 
@@ -1278,9 +1518,11 @@ impl OntologyGraph {
             .remove(&id)
             .ok_or(GraphError::UnknownRelationType(format!("rule {id}")))?
             .1;
-        self.rules_sorted
-            .write()
-            .remove(&(removed.rule_type, removed.name, id));
+        if self.derived() {
+            self.rules_sorted
+                .write()
+                .remove(&(removed.rule_type, removed.name, id));
+        }
         Ok(())
     }
 
@@ -1327,7 +1569,7 @@ impl OntologyGraph {
             .rules
             .get_mut(&id)
             .ok_or(GraphError::UnknownRelationType(format!("rule {id}")))?;
-        if entry.name != updated.name {
+        if entry.name != updated.name && self.derived() {
             let old_sort = (entry.rule_type.clone(), entry.name.clone(), id);
             let new_sort = (entry.rule_type.clone(), updated.name.clone(), id);
             let mut idx = self.rules_sorted.write();
@@ -1390,13 +1632,16 @@ impl OntologyGraph {
         self.ids.observe_action(action.id);
         let id = action.id;
         let sort_key = (action.action_type.clone(), action.name.clone(), id);
-        if let Some(prev) = self.actions.insert(id, action) {
-            let old = (prev.action_type, prev.name, id);
-            if old != sort_key {
-                self.actions_sorted.write().remove(&old);
+        let prev = self.actions.insert(id, action);
+        if self.derived() {
+            if let Some(prev) = prev {
+                let old = (prev.action_type, prev.name, id);
+                if old != sort_key {
+                    self.actions_sorted.write().remove(&old);
+                }
             }
+            self.actions_sorted.write().insert(sort_key);
         }
-        self.actions_sorted.write().insert(sort_key);
         Ok(id)
     }
 
@@ -1866,9 +2111,11 @@ impl OntologyGraph {
             .remove(&id)
             .ok_or(GraphError::UnknownRelationType(format!("action {id}")))?
             .1;
-        self.actions_sorted
-            .write()
-            .remove(&(removed.action_type, removed.name, id));
+        if self.derived() {
+            self.actions_sorted
+                .write()
+                .remove(&(removed.action_type, removed.name, id));
+        }
         Ok(())
     }
 
@@ -1916,7 +2163,7 @@ impl OntologyGraph {
             .actions
             .get_mut(&id)
             .ok_or(GraphError::UnknownRelationType(format!("action {id}")))?;
-        if entry.name != updated.name {
+        if entry.name != updated.name && self.derived() {
             let old_sort = (entry.action_type.clone(), entry.name.clone(), id);
             let new_sort = (entry.action_type.clone(), updated.name.clone(), id);
             let mut idx = self.actions_sorted.write();
