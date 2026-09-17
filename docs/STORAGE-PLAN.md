@@ -588,7 +588,7 @@ enregistrements, aucune mesure n'a de sens »).
    **différés** jusqu'à mesure de contention. Ouvrir un ticket, pas une
    branche.
 
-### 6.6 État — mesuré le 2026-09-16 (branche `feat/storage-phase4`)
+### 6.6 État — phase close le 2026-09-17 (branches `feat/storage-phase4`, `feat/bulk-load`, fusionnées dans `main`)
 
 Livré :
 
@@ -655,9 +655,9 @@ transitoire : les paires (trigramme, id), les clés triées et les seaux par
 type coexistent avec les index fraîchement bâtis — ~60 Mo à 500 k, de
 l'ordre de 1,2 Go à 10⁷ concepts, à compter dans le budget de la phase 5.
 
-Décisions à prendre (proposées, à valider) :
+Décisions prises le 2026-09-17 (validées par le propriétaire du produit) :
 
-1. **Codec** : garder JSON par défaut (lisible, aucun outil à adapter),
+1. **Codec — tranché : JSON par défaut**, postcard en option (lisible, aucun outil à adapter),
    postcard en option documentée. Réévaluer après `bulk_load` : in situ le
    décodage coûte 1,23 µs par enregistrement en JSON contre 0,57 en
    postcard (3 M enr.) ; si `apply` tombe à ~2 µs par enregistrement, le
@@ -674,19 +674,31 @@ Décisions à prendre (proposées, à valider) :
    trigrammes, relations, règles, actions, traversées). Gain 1,1 à 1,75×,
    sous la cible 2–3× : le coût restant est dans les structures primaires des
    relations, pas dans les index dérivés.
-3. **Phase 5** : la cible 10⁷ / 5×10⁷ sur 16 Go exige P1 **et** le CSR
-   (P2–P4). Réordonner : P1 (payloads hors tas, −13 Go) puis CSR des
-   relations (−16 à −23 Go) avant les index de concepts (~14 Go). Ou revoir
-   la cible. Les chiffres sont des mesures de tas sur un portable, une
-   exécution par point : à confirmer sur le nœud cible avant d'engager la
-   phase 5.
+3. **Phase 5 — à trancher à son ouverture, pas dans cette phase** : la
+   cible 10⁷ / 5×10⁷ sur 16 Go exige P1 **et** le CSR (P2–P4). Proposition
+   pour l'ouverture : socle mémoire d'abord (§7.1 : budget, estimation R14,
+   refus explicite ou chargement partiel R17), puis T1 (curseur), puis P1
+   (payloads hors tas, −13 Go), puis CSR des relations (−16 à −23 Go) avant
+   les index de concepts (~14 Go) ; ou revoir la cible (≈ 3×10⁶ concepts et
+   1,5×10⁷ relations tiennent après P1 seul). Les chiffres sont des mesures
+   de tas sur un portable, une exécution par point : à confirmer sur le nœud
+   cible avant d'engager la phase 5. Cette question est un choix produit
+   (coût de deux paliers supplémentaires contre RAM du nœud ou cible plus
+   modeste), consigné ici pour l'ouverture de la phase 5.
+
+**Sortie de phase.** Générateur et benchs livrés, chiffres mesurés
+(STORAGE.md §7.7–7.8), codec tranché, `bulk_load` livré, mesuré et relu ;
+jalon J4 atteint pour ce qui est mesurable sur 16 Go (§9).
 
 ---
 
 ## 7. Phase 5 — Mémoire contrainte (P1 → P5)
 
-Conditionnée à un besoin client réel. Ordre imposé par le gain par palier
-(§8.1) : P1 supprime ~90 % de l'empreinte, le reste est marginal.
+Conditionnée à un besoin client réel. **Ordre à revoir à l'ouverture** :
+le plan supposait que P1 supprimait ~90 % de l'empreinte ; la phase 4 a
+mesuré 25 à 30 % pour un ratio de 5 relations par concept et des payloads de
+1,3 Ko (§6.6, STORAGE.md §8.1). Le socle §7.1 reste le premier livrable
+quel que soit l'ordre retenu ensuite.
 
 ### 7.1 Socle (avant P1)
 
