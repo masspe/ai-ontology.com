@@ -527,6 +527,28 @@ The CLI flag reads from a named environment variable rather than taking
 the literal value, so the token never appears in process listings or
 shell history. Comparison is constant-time.
 
+## Memory budget (`--memory-mode`)
+
+The graph lives in memory (P0). Before loading anything the binary estimates
+each domain's cost from the store's MANIFEST and compares the sum with a
+budget read from the execution environment (cgroup v2/v1 limit, else free
+memory, else Windows available memory), times a fraction. Nothing is read
+from `MemTotal`, so a container limit is respected.
+
+```bash
+ontology --data $DATA serve                                  # adaptive: under a cgroup/explicit limit, load what fits (smallest first); else load all and warn
+ontology --data $DATA --memory-mode strict serve             # refuse to start if the estimate exceeds the budget
+ontology --data $DATA --heap-fraction 0.5 serve              # share of available memory (default 0.6)
+ontology --data $DATA --memory-budget-mb 2048 serve          # explicit budget, detection and fraction ignored
+ontology --data $DATA serve --ns parties,contrats            # an explicit list always wins over the plan
+ONTOLOGY_MEMORY_MODE=strict ONTOLOGY_MEMORY_BUDGET_MB=2048 ontology --data $DATA serve   # same, for Docker
+```
+
+The plan taken is logged at startup and visible in `GET /stats` (`memory`) and
+`GET /metrics` (`ontology_memory_*`, `ontology_domains_*`). A partial load is
+a `warn` naming the domains left out. Details in
+[docs/STORAGE.md §8.1](docs/STORAGE.md#81-le-budget-pas-la-ram-totale).
+
 ## Benchmarks (`ontology bench`)
 
 The measurements of `docs/STORAGE-PLAN.md` phase 4 are reproducible with a

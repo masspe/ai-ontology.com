@@ -12,6 +12,7 @@ ontology-io = { workspace = true }
 ontology-storage = { workspace = true }
 tower-http = { version = "0.6", features = ["cors"] }
 tempfile = "3"
+memory-stats = { workspace = true }
 
 axum = { workspace = true }
 tokio = { workspace = true }

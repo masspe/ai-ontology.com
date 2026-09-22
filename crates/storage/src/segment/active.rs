@@ -259,6 +259,24 @@ impl ActiveSegment {
         Ok(out)
     }
 
+    /// Record, edge and payload-byte counters of this segment — committed
+    /// entries read back from `.idx` plus the pending ones — for the
+    /// startup memory estimate (R14).
+    pub fn counters(&mut self) -> io::Result<(u64, u64, u64)> {
+        let mut records = 0u64;
+        let mut edges = 0u64;
+        let mut payload = 0u64;
+        let committed = self.committed_entries()?;
+        for e in committed.iter().chain(self.pending_idx.iter()) {
+            records += 1;
+            payload += e.payload_len as u64;
+            if matches!(e.kind, Kind::Relation | Kind::RelationExact) {
+                edges += 1;
+            }
+        }
+        Ok((records, edges, payload))
+    }
+
     /// Committed bytes of `.data` past the file header, for a sequential
     /// scan of the active segment (hydration, D4).
     pub fn committed_data(&mut self) -> io::Result<Vec<u8>> {
