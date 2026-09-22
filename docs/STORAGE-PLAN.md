@@ -704,12 +704,14 @@ jalon J4 atteint pour ce qui est mesurable sur 16 Go (§9).
 
 ## 7. Phase 5 — Mémoire contrainte (P1 → P5)
 
-Ordre arrêté le 2026-09-22 (§6.6) : **socle (livré) → T1 → T6 (profil
-d'`apply`) → P1 → contrôleur** ; **P2–P4 (CSR) sur besoin client
-uniquement**. Le plan supposait que P1 supprimait ~90 % de l'empreinte ; la
-phase 4 a mesuré 25 à 30 % pour un ratio de 5 relations par concept et des
-payloads de 1,3 Ko (§6.6, STORAGE.md §8.1) : c'est pourquoi la cible 10⁷ est
-désormais portée par un nœud de 64 Go et non par le CSR.
+Ordre, celui du tableau §0 et de §8 : **socle (§7.1, livré) → T1
+(curseur, avant toute suite de la phase 5) → 5a = P1 (§7.2) → 5b sur
+besoin client = T6 (profil d'`apply`, §8) puis P2–P4 (CSR, §7.3) puis
+contrôleur (§7.4)**. Le plan supposait que P1 supprimait ~90 % de
+l'empreinte ; la phase 4 a mesuré 25 à 30 % pour un ratio de 5 relations
+par concept et des payloads de 1,3 Ko (§6.6, STORAGE.md §8.1) : c'est
+pourquoi la cible 10⁷ est désormais portée par un nœud de 64 Go et non par
+le CSR (§6.6, décision 3 du 2026-09-22).
 
 ### 7.1 Socle (avant P1) — **livré (2026-09-22, branche `feat/phase5-socle`)**
 
@@ -900,10 +902,9 @@ S5      G (gros documents) + T1 curseur
 S6-S8   Phase 3  ─────────────┘
 S9      Phase 4 : générateur 10⁷ + benchs → GO / NO-GO codec, bulk_load
 S10     Phase 5a : socle (budget, R14, strict/adaptive) ─ livré 2026-09-22
-S10     Couverture Rust ≥ 90 % par crate (server, cli) puis seuil CI ; T1 curseur
-S11     Preuve 5×10⁶ sur 64 Go ; T6 profil d'apply
-S11-S13 Phase 5a : P1 (slot + Loc, payloads relus hors verrou) ; contrôleur
-S14+    Phase 5b : P2-P4 (CSR) uniquement sur besoin client
+S10     T1 curseur (prérequis de 5a, §0) ; T en parallèle : couverture Rust ≥ 90 % par crate puis seuil CI
+S11-S13 Phase 5a : P1 (slot + Loc, payloads relus hors verrou) ; J5 prouvé à 5×10⁶ sur 64 Go
+S14+    Phase 5b, uniquement sur besoin client : T6 profil d'apply → P2-P4 (CSR) → contrôleur ; R en parallèle
 ```
 
 Jalons vérifiables :

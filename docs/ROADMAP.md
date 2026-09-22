@@ -1,12 +1,15 @@
 # Feuille de route — où on en est, ce qui vient
 
-**Ce document est le point d'entrée d'une session de travail.** Il dit
-l'état exact du projet, les décisions prises et leur motif, les prochaines
-étapes dans l'ordre avec leurs critères d'acceptation, et le procédé à
-suivre. Il est mis à jour à chaque fusion dans `main`. Le détail technique
-vit dans [`STORAGE.md`](./STORAGE.md) (format, règles R7–R17),
-[`STORAGE-PLAN.md`](./STORAGE-PLAN.md) (phases, mesures, décisions
-datées) et [`PERFORMANCE.md`](./PERFORMANCE.md) (H1–H10, R1–R6).
+**Ce document est le point d'entrée d'une session de travail**, et rien de
+plus : l'état exact du projet, les décisions prises et leur motif, les
+prochaines étapes **dans l'ordre du plan** avec leurs critères, le procédé.
+**La référence est [`STORAGE-PLAN.md`](./STORAGE-PLAN.md)** (phases,
+dépendances, mesures, décisions datées), adossé à
+[`STORAGE.md`](./STORAGE.md) (format, règles R7–R17) et
+[`PERFORMANCE.md`](./PERFORMANCE.md) (H1–H10, R1–R6). Cette feuille de
+route s'ajuste au plan, jamais l'inverse : toute évolution se décide et se
+date dans le plan, puis se reflète ici. Mise à jour à chaque fusion dans
+`main`.
 
 Dernière mise à jour : **2026-09-22**.
 
@@ -38,82 +41,92 @@ Chiffres à garder en tête (mesurés phase 4, portable 16 Go) : un concept de
 | 2026-09-22 | Cible portée par le nœud : **64 Go + P1** pour 10⁷ / 5×10⁷ ; **CSR reporté** à un client au-delà de 5×10⁶ concepts sur un nœud contraint | Le matériel est le levier le moins cher ; P1 a une valeur garantie et ne change pas le format ; le socle rend la garantie vérifiable | STORAGE-PLAN §6.6 décision 3 |
 | 2026-09-22 | Couverture **≥ 90 % minimum partout**, imposée par la CI (web fait ; Rust dès que `server` et `cli` y sont) | Règle du propriétaire du projet | README « Test coverage » |
 
-## 3. Prochaines étapes, dans l'ordre
+## 3. Prochaines étapes, dans l'ordre du plan
+
+**`STORAGE-PLAN.md` est la référence ; ce document en est l'index
+d'exécution.** L'ordre ci-dessous est celui du tableau §0 et du calendrier
+§9 du plan. En cas de divergence, le plan prime ; une évolution de l'ordre
+ou d'une phase se décide et se date **dans le plan** (comme la décision 3 de
+§6.6), puis se reflète ici, jamais l'inverse. Seule exception admise : un
+ajustement qui améliore le plan à la lumière de ce qui a été construit, lui
+aussi consigné dans le plan d'abord.
 
 Chaque étape est une branche, revue indépendante, suite complète verte avec
 les seuils, fusion `--no-ff` dans `main`, CI verte, puis mise à jour de ce
-document.
+document et des sections datées du plan.
 
-### 3.1 Rust ≥ 90 % par crate, puis seuil en CI
+### 3.1 T1 — pagination par curseur (plan §0, §8 T1 : « avant toute phase 5 »)
 
-- `server` est à 78,5 % : `ingest_review.rs` (relecture d'ingestion par LLM)
-  à 53 %. Tester avec un modèle simulé : JSON tronqué, `null` à la place
-  d'une chaîne, variantes inconnues, erreurs fournisseur, réparation.
-- `cli` est à 76,9 % : `ask` et `retrieve` sur `EchoModel`, `migrate` sur un
-  `graph.log` de fixture, `serve` lancé puis arrêté dans un test avec
-  quelques appels HTTP réels, `--ns` bout en bout.
-- Puis `--fail-under-lines 90` dans le job `coverage` de `ci.yml`.
-- Critère : chaque crate ≥ 90 % de lignes sur Linux (`cargo llvm-cov`), CI
-  verte avec le seuil.
-
-### 3.2 T1 — pagination par curseur
-
-- `GET /concepts|/relations|/rules|/actions?after=<curseur opaque>&limit=`
-  avec `next_cursor` ; `offset` toléré pendant une transition, documenté
-  comme déprécié ; web (listes, « page suivante ») et CLI adaptés.
-- Prérequis de P2–P4 (index triés sur disque : `offset` deviendrait
-  O(offset)). Spécification : STORAGE-PLAN §8 T1.
+- Tel que spécifié au plan : `GET /concepts?cursor=<base64(ctype, name, id)>&limit=`
+  avec `next_cursor` (R6 : `concepts_sorted` supporte déjà `range(..)` sur
+  cette clé), idem `GET /relations` sur `RelationId` ; `offset` conservé
+  mais documenté déprécié ; web et OpenAPI à jour. Règles et actions par
+  extension si le coût est trivial, sinon plus tard.
+- Dépendance déclarée de 5a dans le tableau §0 ; indispensable à P3 (index
+  triés sur disque, `offset` deviendrait O(offset)).
 - Critère : équivalence offset/curseur testée ; curseur stable sous
   insertions et suppressions concurrentes ; P95 du listing inchangé.
 
-### 3.3 Preuve de capacité à 5×10⁶ sur 64 Go
-
-- Sur une machine de 64 Go (à prévoir, pas disponible ici) :
-  `bench gen --concepts 5000000 --relations 25000000 --ns 5 --payload 1300`
-  puis `bench hydrate --json` avec `--memory-mode strict`.
-- Critère : hydratation acceptée en `strict`, écart estimation / tas
-  consigné dans STORAGE.md §7.8. C'est la seule preuve qui autorise à
-  promettre 10⁷ à un client.
-
-### 3.4 T6 — profil d'`apply` par échantillonnage
-
-- Avant de toucher aux structures : où passent les 73 à 91 % du temps
-  d'hydratation. Méthode et sortie attendue : STORAGE-PLAN §8 T6.
-
-### 3.5 P1 — payloads sur disque
+### 3.2 Phase 5a — P1, payloads sur disque (plan §7.2 ; « suit la phase 4 sans attendre un incident client »)
 
 - `DashMap<ConceptId, Concept>` devient `DashMap<ConceptId, Slot>` (32 o +
   `Loc`) ; `get_concept` relit le payload hors verrou (R12) depuis le
   segment scellé (`mmap`) ou actif (`pread`) ; payload du segment actif
-  gardé en tas jusqu'au scellement. Spécification : STORAGE.md §6.2,
-  STORAGE-PLAN §7.2.
-- Critère J5 : sur le store 5×10⁵ / 2,5×10⁶, tas divisé par ≥ 1,4, P95
-  `GET /concepts/{id}` < 2× P0, hydratation ≤ 1,2× P0 ; capacité vérifiée
-  par 3.3.
+  gardé en tas jusqu'au scellement. H7/R1 restent vrais (tests d'invariance
+  de PERFORMANCE.md §8.5, risque listé au plan §10).
+- Critère J5 (plan §9) : sur le store 5×10⁵ / 2,5×10⁶, tas divisé par
+  ≥ 1,4, P95 `GET /concepts/{id}` < 2× P0, hydratation ≤ 1,2× P0 ;
+  **capacité prouvée** par `bench gen 5×10⁶ / 2,5×10⁷` hydraté en
+  `--memory-mode strict` sur une machine de 64 Go (à prévoir : pas
+  disponible sur le poste de développement). Cette preuve est la seule qui
+  autorise à promettre 10⁷ à un client (plan §6.6, décision 3).
 
-### 3.6 Contrôleur
+### 3.3 Phase 5b — uniquement sur besoin client (plan §0, §7.3, §7.4, §8 T6)
 
-- Seuils 70/85/55 % avec hystérésis 60 s, transitions journalisées en
-  `warn`, test par budget artificiel sans oscillation. STORAGE.md §8.5,
-  STORAGE-PLAN §7.4.
+Déclencheur : un tenant au-delà de 5×10⁶ concepts sur un nœud contraint, ou
+une latence d'expansion de graphe que seul le CSR résout. Dans l'ordre du
+plan :
 
-### 3.7 Sur besoin client uniquement
+1. **T6**, profil d'`apply` par échantillonnage, avant de toucher aux
+   structures des relations (plan §8 T6 : méthode, sortie attendue).
+2. **P2–P4**, `.srt` et `.adj` construits au scellement, CSR des relations,
+   fusion k-way pour le listing (plan §7.3, STORAGE.md §6.3, §8.3).
+3. **Contrôleur**, seuils 70/85/55 % avec hystérésis 60 s, transitions en
+   `warn`, test par budget artificiel sans oscillation (plan §7.4,
+   STORAGE.md §8.5). Critère J5b : 10⁷ / 5×10⁷ hydraté sur 16 Go en
+   `strict`, ~16 o par arête mesurés.
 
-- **P2–P4, CSR des relations** : déclencheur = un tenant au-delà de 5×10⁶
-  concepts sur un nœud contraint, ou une latence d'expansion que seul le CSR
-  résout. STORAGE-PLAN §7.3.
-- Compaction par domaine, group commit inter-requêtes, maintenance à chaud
-  des `.xref`, `ns` dans l'interface web, limite Job Object Windows,
-  métrique `majflt/s`.
+### 3.4 Chantiers du plan menés en parallèle
 
-### 3.8 Dette, en parallèle quand une session le permet
+- **R — index de retrieval** (plan §1 : « deux murs arrivent avant ceux du
+  stockage », §8 R) : `reindex_all` au démarrage et cosinus en O(N). Pas
+  commencé. Première action, une mesure : temps de réindexation et P95
+  d'une recherche à 5×10⁵ et 2×10⁶ concepts avec `bench`, pour dater le
+  mur par rapport à la garantie 16 Go affichée (2×10⁶). Puis persistance
+  des vecteurs et index approximatif ; jalon JR.
+- **T — transverse** (plan §0 ligne T : CI, métriques, docs) : couverture
+  Rust ≥ 90 % par crate (`server` 78,5 %, `cli` 76,9 % : relecture
+  d'ingestion avec LLM simulé ; `ask`/`retrieve` sur `EchoModel`,
+  `migrate`, `serve` lancé et arrêté dans un test), puis
+  `--fail-under-lines 90` dans le job `coverage` ; migration
+  `react-router` 7 ; modules d'authentification `.jsx` en TypeScript.
+  Ces travaux ne bloquent pas T1 ni P1 et ne les précèdent pas.
 
-- Migration `react-router` 7 (deux vulnérabilités npm modérées).
-- Modules d'authentification `.jsx` (`Login`, `Signup`, `OAuthCallback`,
-  `ProtectedRoute`, `msBE`, `Toast`, `ConfirmDialog`) en TypeScript ; ils
-  sont testés à 97–100 % depuis le 2026-09-22.
-- Retrieval (STORAGE-PLAN §8 R) : `reindex_all` au démarrage et cosinus en
-  O(N) sont les vrais murs avant 10⁷, indépendants du stockage.
+### 3.5 Reports connus (plan §5.6, §7.1)
+
+Compaction par domaine, group commit inter-requêtes, maintenance à chaud
+des `.xref`, `ns` dans l'interface web, limite Job Object Windows, métrique
+`majflt/s`, palier par domaine dans `/metrics` (n'existe qu'à partir de P1).
+
+### 3.6 Écarts constatés entre l'exécution et le plan (à garder visibles)
+
+| Écart | Nature | Où c'est consigné |
+|---|---|---|
+| Le socle (§7.1) a été livré avant T1, que le tableau §0 donne comme dépendance de 5a | De lettre : le socle ne pagine rien ; T1 reste devant P1 | plan §7 (ordre), ici §3.1 |
+| Les chiffres de la phase 4 sont mesurés à 2×10⁵ / 5×10⁵ et extrapolés, pas « sur la cible » | Contrainte matérielle (16 Go) ; fermé par la preuve à 5×10⁶ de §3.2 | plan §9 J4 |
+| Le socle laisse de côté Job Object Windows, `majflt/s`, palier par domaine | Sans objet avant P1 | plan §7.1 |
+| `adaptive` charge ou non un domaine ; les paliers §8.2 n'existent pas encore | Attendu avant P1 | STORAGE.md §8.1 |
+| Le chantier R n'est pas commencé alors que le plan le place avant les murs du stockage | Priorité à mesurer (§3.4) | plan §1, §8 R |
 
 ## 4. Procédé
 
