@@ -55,10 +55,17 @@ devient nécessaire : tout ce qu'un palier relâche en mémoire doit déjà avoi
 sa forme disque (R15).
 
 Cible de dimensionnement retenue le 2026-09-08 : **un store = un tenant**,
-et un store doit servir **10⁷ concepts et 5×10⁷ relations sur un nœud de
-16 Go** — en P0 tant que les payloads le permettent, en P1 sinon. C'est le
-jeu de données du banc de la phase 4 de `STORAGE-PLAN.md`. Le plafond dur
-du format est 2³² concepts par store (§10.4).
+et un store doit servir **10⁷ concepts et 5×10⁷ relations**. **Révisée le
+2026-09-22** après les mesures de la phase 4 (§7.8) : cette cible se tient
+**sur un nœud de 64 Go avec P1** (payloads sur disque, `--heap-fraction
+0.8` sur un nœud dédié) ; sur un nœud de **16 Go**, la garantie est de
+**2×10⁶ concepts et 10⁷ relations** (P0 aujourd'hui, ~2,4×10⁶ avec P1). Le
+CSR des relations (P2–P4), seul moyen de loger 10⁷ sur 16 Go, est reporté à
+un besoin client avéré au-delà de 5×10⁶ concepts sur un nœud contraint : le
+matériel est le levier le moins cher, et le socle mémoire (§8.1) refuse ou
+réduit explicitement un chargement qui ne tient pas. Tableau de capacité en
+§8.1. C'est le jeu de données du banc de la phase 4 de `STORAGE-PLAN.md`.
+Le plafond dur du format est 2³² concepts par store (§10.4).
 
 Deux murs arrivent avant ceux du stockage et sont traités hors de ce
 document : l'index de retrieval (`crates/index`, reconstruit à chaque
@@ -655,14 +662,16 @@ sont à resserrer quand le CSR (§6.3) changera le coût des relations.
 
 La cible « 10⁷ concepts et 5×10⁷ relations sur un nœud de 16 Go » n'est
 donc pas atteignable en P0, ce que la stratégie prévoyait (« en P1 sinon »),
-mais **P1 seul ne suffit pas non plus** : sortir les payloads de la RAM
-(P1) retire ~1,3 Ko par concept, soit ~13 Go sur 45 à 50 ; il reste 32 à
-37 Go, dont 17 à 24 Go de relations et ~14 Go d'index de concepts. Les
-paliers qui comptent pour la cible sont le CSR de §6.3 (P2–P4 : ~16 o par
-arête au lieu de ~350 à 475) et le slot de §6.2 pour les index de concepts.
-Voir §8.1 et `STORAGE-PLAN.md` §6.6 pour la décision. Réserve : une
-exécution par point, portable avec 4 à 5 Go libres (les runs à 500 k ont pu
-paginer), extrapolation linéaire.
+mais **P1 seul ne suffit pas non plus sur 16 Go** : sortir les payloads de
+la RAM (P1) retire ~1,3 Ko par concept, soit ~13 Go sur 45 à 50 ; il reste
+32 à 37 Go, dont 17 à 24 Go de relations et ~14 Go d'index de concepts. Sur
+16 Go, seuls le CSR de §6.3 (P2–P4 : ~16 o par arête au lieu de ~350 à 475)
+et le slot de §6.2 pour les index de concepts y mèneraient. **Décision du
+2026-09-22** (`STORAGE-PLAN.md` §6.6) : la cible est portée par le nœud,
+64 Go avec P1, et le CSR est reporté à un besoin client ; le tableau de
+capacité de §8.1 donne ce que chaque nœud loge à chaque palier. Réserve :
+une exécution par point, portable avec 4 à 5 Go libres (les runs à 500 k
+ont pu paginer), extrapolation linéaire.
 
 Deux précisions de méthode. `apply` est une soustraction, pas un profil :
 la première passe paie les défauts de page et l'E/S, la seconde lit un cache
@@ -745,8 +754,25 @@ bug.
 > de tas et une relation ~350 à 475 o. La cible 10⁷ / 5×10⁷ pèse 45 à 50 Go
 > en P0 ; P1 en retire ~13 Go, le CSR (P2–P4) 16 à 23 Go. Pour un ratio 1:5
 > avec des payloads de 1,3 Ko, **les relations et les index de concepts
-> pèsent plus que les payloads**. L'ordre des paliers est à retrancher
-> (`STORAGE-PLAN.md` §6.6).
+> pèsent plus que les payloads**. Décision du 2026-09-22 (`STORAGE-PLAN.md`
+> §6.6) : cible 10⁷ / 5×10⁷ sur 64 Go avec P1 ; 2×10⁶ / 10⁷ garantis sur
+> 16 Go ; CSR sur besoin client.
+
+**Capacité par nœud et par palier** (ce que le budget de §8.1 laisse
+charger, en concepts / relations) :
+
+| Nœud, fraction → budget | P0 (aujourd'hui) | P1 (payloads sur disque) | P1 + CSR (P2–P4) |
+|---|---|---|---|
+| 16 Go × 0,6 → 9,6 Go | ~1,8×10⁶ / 9×10⁶ | ~2,4×10⁶ / 1,2×10⁷ | ~1,7×10⁷ / 8,5×10⁷ |
+| 64 Go × 0,6 → 38 Go | ~7×10⁶ / 3,5×10⁷ | ~9,5×10⁶ / 4,7×10⁷ | au-delà de la cible |
+| 64 Go × 0,8 → 51 Go | ~9,6×10⁶ / 4,8×10⁷ | **~1,3×10⁷ / 6,3×10⁷** | au-delà de la cible |
+
+Hypothèses : payload 1,3 Ko, 5 relations par concept, coefficients de §8.1
+(1 630 o d'index et de pic par concept, 480 o par relation) ; en P1 le
+payload sort du tas ; en P1 + CSR une relation coûte ~50 o avec son index et
+un concept ~300 o (slot, symboles, trigrammes). Extrapolation linéaire de
+mesures à 2×10⁵ et 5×10⁵, à confirmer par un `bench gen` à 5×10⁶ sur une
+machine de 64 Go avant toute promesse contractuelle.
 
 **Livré (phase 5, socle, 2026-09-22)** — `crates/storage/src/budget.rs`.
 
