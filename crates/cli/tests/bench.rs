@@ -16,10 +16,14 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn tempdir(tag: &str) -> PathBuf {
+    // pid + counter + clock: the clock alone repeats on Windows (coarse
+    // ticks) when two tests create their directory in the same instant.
+    static SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let mut p = std::env::temp_dir();
     p.push(format!(
-        "ontology-bench-{tag}-{}-{}",
+        "ontology-bench-{tag}-{}-{}-{}",
         std::process::id(),
+        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
