@@ -694,7 +694,9 @@ Décisions prises le 2026-09-17 (validées par le propriétaire du produit) :
    contredit un CSR ultérieur. Tableau de capacité : STORAGE.md §8.1.
    **Preuve exigée avant toute promesse contractuelle à 10⁷** : `bench gen`
    à 5×10⁶ / 2,5×10⁷ puis `bench hydrate` sur une machine de 64 Go, écart
-   estimation / tas consigné en §7.8 (une heure, machine à prévoir).
+   estimation / tas consigné en §7.8 (une heure, VM louée si besoin).
+   Décision du 2026-09-22 : pas faite tant que personne ne demande 10⁷ ;
+   elle ne conditionne pas P1 (J5 se mesure sur le store 5×10⁵).
 
 **Sortie de phase.** Générateur et benchs livrés, chiffres mesurés
 (STORAGE.md §7.7–7.8), codec tranché, `bulk_load` livré, mesuré et relu ;
