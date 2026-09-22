@@ -65,7 +65,8 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci
-      - run: npm run test
+      # With coverage: vitest.config.ts enforces the 90 % thresholds.
+      - run: npm run test:coverage
       - run: npx tsc --noEmit
       - run: npx vite build
 

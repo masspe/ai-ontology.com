@@ -45,7 +45,9 @@ export default function OAuthCallback() {
       return;
     }
     if (msBE.auth.consumeOAuthToken(token)) {
-      msBE.auth.me().finally(() => nav(next, { replace: true }));
+      // The profile is best-effort here (ProtectedRoute re-checks it): swallow
+      // a failure so `.finally` does not leave an unhandled rejection behind.
+      msBE.auth.me().catch(() => null).finally(() => nav(next, { replace: true }));
     } else {
       toast.error("Jeton OAuth manquant");
       nav("/login", { replace: true });

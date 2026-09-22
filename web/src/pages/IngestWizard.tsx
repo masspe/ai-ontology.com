@@ -1,17 +1,17 @@
-﻿// SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Winven-Commercial
+// SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Winven-Commercial
 // Copyright (C) 2026 Winven AI Sarl
 //
 // LLM-assisted ingest wizard.
 //
 // Flow:
-//   1. Upload â€” pick a document + provider/model/language hint.
-//   2. Analyze â€” call `/ingest/analyze`; show progress.
-//   3. Review â€” walk every item (types â†’ concepts â†’ relations â†’ rules
-//      â†’ actions), edit fields inline, pick a per-item decision.
-//   4. Apply â€” POST proposal + decisions to `/ingest/apply`, render the
+//   1. Upload — pick a document + provider/model/language hint.
+//   2. Analyze — call `/ingest/analyze`; show progress.
+//   3. Review — walk every item (types → concepts → relations → rules
+//      → actions), edit fields inline, pick a per-item decision.
+//   4. Apply — POST proposal + decisions to `/ingest/apply`, render the
 //      outcome report.
 //
-// The proposal is held entirely in client state â€” the server is
+// The proposal is held entirely in client state — the server is
 // stateless between analyze and apply. To survive a tab reload while
 // reviewing, every change is mirrored to `sessionStorage` under
 // `ingest.draft`.
@@ -59,7 +59,7 @@ function saveDraft(state: DraftState): void {
   try {
     window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   } catch {
-    /* quota â€” ignore */
+    /* quota — ignore */
   }
 }
 
@@ -133,7 +133,7 @@ export default function IngestWizard() {
 
   async function onAnalyze() {
     if (!file) {
-      toast.show?.("Pick a document first");
+      toast.info("Pick a document first");
       return;
     }
     setStep("analyzing");
@@ -142,7 +142,7 @@ export default function IngestWizard() {
       const prepared = await prepareForIngest(file, {
         onProgress: (p) => {
           setError(null);
-          toast.show?.(p.status);
+          toast.info(p.status);
         },
       });
       const p = await analyzeIngest({
@@ -225,7 +225,7 @@ export default function IngestWizard() {
 
       {step === "analyzing" && (
         <Card>
-          <p>Calling the LLM and detecting languageâ€¦ this can take a few seconds.</p>
+          <p>Calling the LLM and detecting language… this can take a few seconds.</p>
         </Card>
       )}
 
@@ -272,7 +272,7 @@ export default function IngestWizard() {
 
       {step === "applying" && (
         <Card>
-          <p>Writing accepted items to the graphâ€¦</p>
+          <p>Writing accepted items to the graph…</p>
         </Card>
       )}
 
@@ -350,7 +350,7 @@ function UploadStep(props: {
             <span style={{ fontSize: 12, color: "#475569" }}>Language hint (ISO-639-1)</span>
             <input
               type="text"
-              placeholder="en, fr, it, â€¦ (auto-detect if blank)"
+              placeholder="en, fr, it, … (auto-detect if blank)"
               value={props.languageHint}
               onChange={(e) => props.onLanguageHint(e.target.value)}
               maxLength={5}

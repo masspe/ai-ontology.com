@@ -11,7 +11,8 @@ answers in retrieved subgraphs.
 The coverage badges are **live**: after every push to `main` the CI measures
 line coverage of the whole Rust suite and of the web UI and publishes the
 figures (see [Test coverage](#test-coverage)). Green is ≥ 80 %, bright green
-≥ 90 %, red < 30 %.
+≥ 90 %, red < 30 %. The bar is **90 % minimum**, enforced on the web suite
+by `vitest.config.ts` thresholds.
 
 ## Crates
 
@@ -601,7 +602,7 @@ Snapshot of 2026-09-22 (the badges above are the live figures):
 | `ontology-server` | 78.5 % | 2 688 / 3 425 |
 | `ontology-cli` | 76.8 % | 1 141 / 1 486 |
 | **Rust total** | **90.2 %** | 16 399 / 18 182 |
-| **Web (`web/src`)** | **17.3 %** | 517 / 2 994 |
+| **Web (`web/src`, JS and TS)** | **99.7 %** | 3 210 / 3 221 |
 
 What the gaps are, so the numbers are read for what they mean:
 
@@ -618,13 +619,19 @@ What the gaps are, so the numbers are read for what they mean:
   platform-specific budget detection: cgroup reading only runs on Linux and
   `GlobalMemoryStatusEx` only on Windows, so each platform reports the
   other half as uncovered.
-- **Web** — the 183 vitest tests cover the pure logic at 90 to 100 %
-  (`extractText`, `ingestApi`, `logBuffer`, `mergeProposals`,
-  `providerConfig`) and `api.ts` at 57 %, but **no React page is rendered
-  in a test**: `Settings`, `Concepts`, `Rules`, `Files`, `GraphView`,
-  `Actions` and `Dashboard` are at 0 %. Raising the web figure means
-  rendering tests with Testing Library and a mocked `api.ts`; the logic
-  layer is already covered.
+- **Web** — 687 vitest tests: the pure logic (`extractText`, `ingestApi`,
+  `logBuffer`, `mergeProposals`, `providerConfig`) and, since 2026-09-22,
+  every React page and component rendered with Testing Library in jsdom
+  (`*.render.test.tsx` next to each file; `api.ts` is mocked per test,
+  `fetch` is stubbed to reject so nothing can reach the network), the
+  JavaScript auth modules included (`Login`, `Signup`, `OAuthCallback`,
+  `ProtectedRoute`, `msBE`, at 97 to 100 %). The eleven
+  uncovered lines are unreachable through the UI (a button disabled while
+  the guard would fire, a dead branch behind a constant state). Branches
+  are at 93 %; what is left is SSR guards, `instanceof Error` fallbacks and
+  transient busy labels. `vitest.config.ts` enforces 90 % on lines,
+  statements, functions and branches: `npm run test:coverage`, which the CI
+  `web` job runs, fails below that bar.
 
 Reproduce locally (Rust needs `rustup component add llvm-tools-preview`
 and `cargo install cargo-llvm-cov` once):
@@ -660,7 +667,8 @@ Linux one.
 
 ```bash
 cargo test --workspace          # 576 Rust tests (2026-09-22): unit, integration, end-to-end (binary spawned)
-cd web && npm run test          # 183 vitest tests
+cd web && npm run test          # 687 vitest tests: logic + every page rendered (Testing Library, jsdom)
+cd web && npm run test:coverage # same, with the 90 % coverage thresholds enforced
 ```
 
 Coverage of that suite is in [Test coverage](#test-coverage) and on the
