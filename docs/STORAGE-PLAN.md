@@ -645,7 +645,7 @@ imputation par soustraction entre mesures (hydratation moins parcours
 décodé, moins reconstruction), pas un échantillonnage ; le profil
 `WPA`/`perf` promis avant `bulk_load` n'a pas été fait (pas d'outil
 disponible sur la machine de mesure) et reste dû avant d'engager ces
-chantiers.
+chantiers — mode opératoire et remèdes possibles en **T6** (§8).
 
 Effets collatéraux : les `BTreeSet` construits d'un bloc sont plus denses
 que ceux remplis mutation par mutation — tas après hydratation **−3 %
@@ -786,6 +786,53 @@ Position à écrire dans le README et à honorer dans le code : le `ns` n'est
 pas une clé de répartition horizontale ; le multi-tenant est un store par
 tenant (STORAGE.md §10.8). Décider processus par tenant ou processus
 multi-store avant la phase 3 (impact : fichiers ouverts, plancher §8.7).
+
+### T6 — Profil d'`apply` par échantillonnage (à faire **avant** le chantier relations de la phase 5)
+
+**Pourquoi.** Toutes les imputations de coût de la phase 4 (§6.6, STORAGE.md
+§7.8) sont des **soustractions** : hydratation totale moins parcours décodé,
+moins reconstruction des index dérivés. Ce qui reste (~15 s sur 20 à 500 k /
+2,5 M) est attribué **par élimination** aux structures primaires des
+relations (~5 µs par relation : quatre entrées d'adjacence dans des
+`DashMap`, deux clones de `String` du nom de type, une insertion dans la
+table des relations, les redimensionnements des tables). C'est plausible,
+pas observé. Or le remède dépend de la vraie cause :
+
+| Si le temps est surtout dans… | Remède | Effort |
+|---|---|---|
+| les redimensionnements des tables de hachage au fil des insertions | pré-dimensionner les `DashMap` depuis les compteurs du MANIFEST (R14) au début du `bulk_load` | ~1 jour |
+| les clones de `String` des noms de types de relation | table de symboles (STORAGE.md §7.4), `Sym` à la place de `String` dans l'adjacence typée | quelques jours |
+| les quatre insertions d'adjacence elles-mêmes | adjacence CSR (STORAGE.md §6.3), c'est-à-dire le palier P2–P4 | plusieurs semaines |
+
+Engager le CSR sur une déduction alors qu'une demi-journée de mesure peut
+la confirmer ou l'infirmer contredirait la règle « mesurer, puis décider ».
+
+**Quoi mesurer.** `ontology bench hydrate` (release) sur le store `bench gen
+--concepts 500000 --relations 2500000 --ns 5 --payload 1300`, profil par
+échantillonnage sur toute la durée, répartition par fonction et par pile
+d'appels (flame graph) ; en particulier la part de `insert_relation_exact`,
+`upsert_concept` / `prepare_concept`, `DashMap::entry` / rehash, allocations
+(`String::clone`), `end_bulk`. Une seconde capture sur `bench append --n
+2000 --batch 100` donne le même profil pour le chemin d'écriture live.
+
+**Comment, au choix.**
+1. Linux : `perf record -g` + `cargo flamegraph` (`cargo install flamegraph`),
+   `[profile.release] debug = 1` le temps de la capture pour avoir les
+   symboles. À faire sur le nœud cible : cela répond en même temps à la
+   question de la machine représentative (§6.6, décision 3).
+2. Windows : Windows Performance Toolkit (WPR pour capturer avec pile
+   d'appels en mode administrateur, WPA pour analyser), symboles via
+   `debug = 1` également. Non installé sur la machine de développement.
+3. À défaut d'outil externe : instrumentation interne derrière une
+   fonctionnalité de compilation (`--features profile-apply`) — compteurs
+   `Instant` cumulés autour de chaque étape de `apply_prepared_concept` et
+   `insert_relation_exact` (validation, index des noms, adjacence, table
+   primaire), remontés dans `BulkLoadReport`. Moins précis (le chronométrage
+   perturbe des étapes de la microseconde), mais sans dépendance.
+
+**Sortie attendue.** Un tableau « fonction → % du temps d'`apply` » dans
+STORAGE.md §7.8, et le choix motivé entre les trois remèdes ci-dessus,
+consigné en §6.6 / §7 avant d'ouvrir le chantier relations.
 
 ### T4 — Documentation
 
