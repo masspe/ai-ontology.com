@@ -39,9 +39,9 @@ use axum::{
 };
 use futures::stream::StreamExt;
 use ontology_graph::{
-    Action, ActionId, ActionPatch, Concept, ConceptId, ConceptPatch, Ontology, OntologyGraph,
-    Path as GraphPath, Relation, RelationId, RelationPatch, Rule, RuleId, RulePatch, Subgraph,
-    TraversalSpec,
+    Action, ActionId, ActionPatch, Concept, ConceptId, ConceptKey, ConceptPatch, Ontology,
+    OntologyGraph, Path as GraphPath, Relation, RelationId, RelationPatch, Rule, RuleId, RulePatch,
+    Subgraph, TraversalSpec,
 };
 use ontology_index::{HybridIndex, RetrievalRequest, ScoredConcept};
 use ontology_io::{
@@ -1706,6 +1706,13 @@ struct ListConceptsQuery {
     /// When true, a `type=X` filter also returns instances of subtypes of `X`.
     #[serde(default = "default_true")]
     include_subtypes: bool,
+    /// Opaque cursor copied from a previous response's `next_cursor`
+    /// (T1): the page starts strictly after it, in the same order and with
+    /// the same filters. `offset` and `track_total` are then ignored and
+    /// `total` is `null` — a cursor page costs O(log N + page) whatever
+    /// its position, which is the point. `offset` is kept for
+    /// compatibility and deprecated.
+    cursor: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -1714,19 +1721,40 @@ fn default_true() -> bool {
 
 #[derive(Serialize)]
 struct ListConceptsResponse {
-    /// Total number of concepts matching the filter (before `limit`/`offset`).
-    total: usize,
+    /// Total number of concepts matching the filter (before `limit`/`offset`);
+    /// `null` on a cursor page.
+    total: Option<usize>,
     concepts: Vec<Concept>,
+    /// Cursor of the next page, `null` when this page is the last. Present
+    /// on offset pages too, so a client can start at `offset=0` and walk on.
+    next_cursor: Option<String>,
 }
 
-/// `GET /concepts?type=&q=&limit=&offset=` — paginated browse of every node
-/// in the graph. Sorted by `(concept_type, name)` so the response is stable
-/// across calls.
+/// Cursors are the listing's sort key, JSON-encoded then base64url without
+/// padding: opaque to clients, self-contained for the server (a deleted
+/// concept does not invalidate the cursor that named it), safe in a URL.
+fn encode_cursor<T: Serialize>(key: &T) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(serde_json::to_vec(key).unwrap_or_default())
+}
+
+fn decode_cursor<T: serde::de::DeserializeOwned>(s: &str) -> Result<T, ApiError> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(s.trim())
+        .map_err(|e| ApiError::BadRequest(format!("invalid cursor: {e}")))?;
+    serde_json::from_slice(&bytes).map_err(|e| ApiError::BadRequest(format!("invalid cursor: {e}")))
+}
+
+/// `GET /concepts?type=&q=&limit=&cursor=` (or the deprecated `offset=`) —
+/// paginated browse of every node in the graph. Sorted by
+/// `(concept_type, name)` so the response is stable across calls.
 async fn list_concepts(
     State(s): State<AppState>,
     headers: HeaderMap,
     Query(q): Query<ListConceptsQuery>,
-) -> Response {
+) -> Result<Response, ApiError> {
     // ETag = generation tag. The cache key for the client is the full URL
     // (query string included), so the ETag only needs to vary on the
     // underlying data version: as long as no concept has been written, the
@@ -1739,25 +1767,51 @@ async fn list_concepts(
         .and_then(|v| v.to_str().ok())
     {
         if if_match == etag {
-            return StatusCode::NOT_MODIFIED.into_response();
+            return Ok(StatusCode::NOT_MODIFIED.into_response());
         }
     }
 
     let needle = q.q.as_ref().map(|s| s.to_lowercase());
     let limit = q.limit.unwrap_or(200).min(5_000);
-    let (total, concepts) = s.graph.list_concepts_page(
-        q.concept_type.as_deref(),
-        needle.as_deref(),
-        q.offset,
-        limit,
-        q.track_total,
-        q.include_subtypes,
-    );
-    let mut resp = Json(ListConceptsResponse { total, concepts }).into_response();
+    let cursor = q.cursor.as_deref().map(str::trim).filter(|c| !c.is_empty());
+    let (total, concepts, next) = match cursor {
+        Some(c) => {
+            let after: ConceptKey = decode_cursor(c)?;
+            let (page, next) = s.graph.list_concepts_after(
+                q.concept_type.as_deref(),
+                needle.as_deref(),
+                Some(&after),
+                limit,
+                q.include_subtypes,
+            );
+            (None, page, next)
+        }
+        None => {
+            let (total, page) = s.graph.list_concepts_page(
+                q.concept_type.as_deref(),
+                needle.as_deref(),
+                q.offset,
+                limit,
+                q.track_total,
+                q.include_subtypes,
+            );
+            let next = page
+                .last()
+                .filter(|_| page.len() == limit)
+                .map(|c| (c.concept_type.clone(), c.name.clone(), c.id));
+            (Some(total), page, next)
+        }
+    };
+    let mut resp = Json(ListConceptsResponse {
+        total,
+        concepts,
+        next_cursor: next.map(|k| encode_cursor(&k)),
+    })
+    .into_response();
     if let Ok(v) = HeaderValue::from_str(&etag) {
         resp.headers_mut().insert(header::ETAG, v);
     }
-    resp
+    Ok(resp)
 }
 
 /// `GET /ontology` — the concept-type and relation-type schema, served
@@ -1922,23 +1976,28 @@ struct ListRelationsQuery {
     relation_type: Option<String>,
     #[serde(default)]
     limit: Option<usize>,
+    /// Deprecated in favour of `cursor` (T1).
     #[serde(default)]
     offset: Option<usize>,
     #[serde(default = "default_true")]
     track_total: bool,
+    /// Opaque cursor from a previous `next_cursor`; see `ListConceptsQuery`.
+    cursor: Option<String>,
 }
 
 #[derive(Serialize)]
 struct ListRelationsResponse {
-    total: usize,
+    /// `null` on a cursor page.
+    total: Option<usize>,
     relations: Vec<Relation>,
+    next_cursor: Option<String>,
 }
 
 async fn list_relations(
     State(s): State<AppState>,
     headers: HeaderMap,
     Query(q): Query<ListRelationsQuery>,
-) -> Response {
+) -> Result<Response, ApiError> {
     let gen = s.graph.relations_generation();
     let etag = format!("W/\"r{gen}\"");
     if let Some(if_match) = headers
@@ -1946,25 +2005,48 @@ async fn list_relations(
         .and_then(|v| v.to_str().ok())
     {
         if if_match == etag {
-            return StatusCode::NOT_MODIFIED.into_response();
+            return Ok(StatusCode::NOT_MODIFIED.into_response());
         }
     }
 
-    let offset = q.offset.unwrap_or(0);
     let limit = q.limit.unwrap_or(100).min(1000);
-    let (total, relations) = s.graph.list_relations_page(
-        q.source.map(ConceptId),
-        q.target.map(ConceptId),
-        q.relation_type.as_deref(),
-        offset,
-        limit,
-        q.track_total,
-    );
-    let mut resp = Json(ListRelationsResponse { total, relations }).into_response();
+    let (source, target) = (q.source.map(ConceptId), q.target.map(ConceptId));
+    let cursor = q.cursor.as_deref().map(str::trim).filter(|c| !c.is_empty());
+    let (total, relations, next) = match cursor {
+        Some(c) => {
+            let after: RelationId = decode_cursor(c)?;
+            let (page, next) = s.graph.list_relations_after(
+                source,
+                target,
+                q.relation_type.as_deref(),
+                Some(after),
+                limit,
+            );
+            (None, page, next)
+        }
+        None => {
+            let (total, page) = s.graph.list_relations_page(
+                source,
+                target,
+                q.relation_type.as_deref(),
+                q.offset.unwrap_or(0),
+                limit,
+                q.track_total,
+            );
+            let next = page.last().filter(|_| page.len() == limit).map(|r| r.id);
+            (Some(total), page, next)
+        }
+    };
+    let mut resp = Json(ListRelationsResponse {
+        total,
+        relations,
+        next_cursor: next.map(|k| encode_cursor(&k)),
+    })
+    .into_response();
     if let Ok(v) = HeaderValue::from_str(&etag) {
         resp.headers_mut().insert(header::ETAG, v);
     }
-    resp
+    Ok(resp)
 }
 
 async fn get_relation_handler(

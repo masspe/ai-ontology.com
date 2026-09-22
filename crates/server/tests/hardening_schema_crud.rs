@@ -539,3 +539,170 @@ async fn concurrent_creates_of_the_same_name_yield_exactly_one_success() {
     assert_eq!(graph.concept_count(), 4);
     assert_eq!(store.records_written(), 4);
 }
+
+/// T1: `cursor` pages walk the same listing as `offset` pages, cost
+/// O(log N + page), report `total: null`, end with `next_cursor: null`,
+/// and an offset page hands out the cursor so a client can switch over.
+/// Garbage cursors are a 400, never a 500.
+#[tokio::test]
+async fn list_concepts_cursor_contract() {
+    let (app, graph, _store) = flaky_app();
+    seed(&graph, "Topic", &["t1", "t2", "t3", "t4", "t5", "t6", "t7"]);
+    seed(&graph, "Tag", &["alpha", "beta", "gamma"]);
+    let names = |v: &Value| -> Vec<String> {
+        v["concepts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["name"].as_str().unwrap().to_string())
+            .collect()
+    };
+
+    // First page by offset: exact total and a cursor to continue with.
+    let (st, v) = get(&app, "/concepts?limit=4").await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(v["total"], 10);
+    assert_eq!(names(&v), ["alpha", "beta", "gamma", "t1"]);
+    let c1 = v["next_cursor"]
+        .as_str()
+        .expect("cursor on a full page")
+        .to_string();
+
+    let (st, v) = get(&app, &format!("/concepts?limit=4&cursor={c1}")).await;
+    assert_eq!(st, StatusCode::OK);
+    assert!(v["total"].is_null(), "no count on a cursor page: {v}");
+    assert_eq!(names(&v), ["t2", "t3", "t4", "t5"]);
+    let c2 = v["next_cursor"].as_str().unwrap().to_string();
+    assert_ne!(c1, c2);
+
+    // `offset` is ignored once a cursor is given.
+    let (_, v) = get(&app, &format!("/concepts?limit=4&offset=999&cursor={c2}")).await;
+    assert_eq!(names(&v), ["t6", "t7"]);
+    assert!(v["next_cursor"].is_null(), "short page = last page: {v}");
+
+    // Filters travel with the cursor: same order inside `type=Topic`.
+    let (_, v) = get(&app, "/concepts?type=Topic&limit=3").await;
+    assert_eq!(names(&v), ["t1", "t2", "t3"]);
+    let c = v["next_cursor"].as_str().unwrap();
+    let (_, v) = get(&app, &format!("/concepts?type=Topic&limit=3&cursor={c}")).await;
+    assert_eq!(names(&v), ["t4", "t5", "t6"]);
+    let (_, v) = get(&app, "/concepts?q=t&limit=2").await;
+    let c = v["next_cursor"].as_str().unwrap();
+    let (_, v) = get(&app, &format!("/concepts?q=t&limit=2&cursor={c}")).await;
+    assert_eq!(names(&v), ["t2", "t3"]);
+
+    // An exactly full last page yields one empty page, then stops.
+    let (_, v) = get(&app, "/concepts?limit=5&offset=5").await;
+    assert_eq!(names(&v).len(), 5);
+    let c = v["next_cursor"].as_str().unwrap();
+    let (_, v) = get(&app, &format!("/concepts?limit=5&cursor={c}")).await;
+    assert_eq!(names(&v), Vec::<String>::new());
+    assert!(v["next_cursor"].is_null());
+
+    // The ETag is the data generation, cursor or not.
+    let (_, h1, _) = send(
+        &app,
+        Request::builder()
+            .uri("/concepts?limit=2")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    let (_, h2, _) = send(
+        &app,
+        Request::builder()
+            .uri(format!("/concepts?limit=2&cursor={c1}"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(h1.get(header::ETAG), h2.get(header::ETAG));
+
+    // Garbage: 400 with a message, not a 500.
+    for bad in ["zzz", "AAAA", "not-base64!", ""] {
+        let (st, v) = get(&app, &format!("/concepts?cursor={bad}")).await;
+        if bad.is_empty() {
+            // An empty cursor is an absent cursor.
+            assert_eq!(st, StatusCode::OK, "{v}");
+        } else {
+            assert_eq!(st, StatusCode::BAD_REQUEST, "{bad}: {v}");
+            assert!(v["error"].as_str().unwrap_or("").contains("cursor"), "{v}");
+        }
+    }
+}
+
+/// T1 on relations: id-ordered cursor, filters travel with it.
+#[tokio::test]
+async fn list_relations_cursor_contract() {
+    let (app, graph, _store) = flaky_app();
+    let ids: Vec<u64> = ["a", "b", "c", "d"]
+        .iter()
+        .map(|n| {
+            graph
+                .upsert_concept(Concept::new(ConceptId(0), "Topic", *n))
+                .unwrap()
+                .0
+        })
+        .collect();
+    // `related_to` is symmetric (each add materializes its inverse),
+    // `owned_by` is many-to-one (one per source): a ring of ownership plus
+    // every unordered pair related.
+    for i in 0..4 {
+        graph
+            .add_relation(ontology_graph::Relation::new(
+                ontology_graph::RelationId(0),
+                "owned_by",
+                ConceptId(ids[i]),
+                ConceptId(ids[(i + 1) % 4]),
+            ))
+            .unwrap();
+        for j in (i + 1)..4 {
+            graph
+                .add_relation(ontology_graph::Relation::new(
+                    ontology_graph::RelationId(0),
+                    "related_to",
+                    ConceptId(ids[i]),
+                    ConceptId(ids[j]),
+                ))
+                .unwrap();
+        }
+    }
+    let rel_ids = |v: &Value| -> Vec<u64> {
+        v["relations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["id"].as_u64().unwrap())
+            .collect()
+    };
+    // Global, by source (adjacency path) and by type, each walked by cursor
+    // and compared with the one-shot offset listing.
+    let src = ids[0];
+    for filter in [
+        "".to_string(),
+        format!("source={src}&"),
+        "type=owned_by&".to_string(),
+    ] {
+        let (_, all) = get(&app, &format!("/relations?{filter}limit=100")).await;
+        let expected = rel_ids(&all);
+        assert_eq!(all["total"], expected.len(), "{filter}");
+        assert!(expected.len() >= 3, "{filter}: {all}");
+        let mut walked = Vec::new();
+        let mut url = format!("/relations?{filter}limit=2");
+        let mut saw_null_total = false;
+        loop {
+            let (st, v) = get(&app, &url).await;
+            assert_eq!(st, StatusCode::OK, "{v}");
+            saw_null_total |= v["total"].is_null();
+            walked.extend(rel_ids(&v));
+            match v["next_cursor"].as_str() {
+                Some(c) => url = format!("/relations?{filter}limit=2&cursor={c}"),
+                None => break,
+            }
+        }
+        assert_eq!(walked, expected, "{filter}");
+        assert!(saw_null_total, "cursor pages carry no total: {filter}");
+    }
+    let (st, _) = get(&app, "/relations?cursor=%2A%2A").await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+}
