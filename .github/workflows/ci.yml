@@ -68,3 +68,55 @@ jobs:
       - run: npm run test
       - run: npx tsc --noEmit
       - run: npx vite build
+
+  coverage:
+    # Line coverage of the Rust workspace (cargo-llvm-cov, whole suite
+    # including the end-to-end tests that spawn the binary) and of the web
+    # UI (vitest, V8). scripts/coverage_badges.py turns both reports into
+    # shields.io endpoint documents, force-pushed to the orphan branch
+    # `coverage-badges`; the README badges read them from there, so they
+    # always show the last measurement on main. Runs only on main: it
+    # recompiles everything instrumented, which is slow.
+    name: coverage (badges)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - uses: taiki-e/install-action@cargo-llvm-cov
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: llvm-cov
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Rust coverage (cargo llvm-cov)
+        run: cargo llvm-cov --workspace --locked --json --output-path target/llvm-cov/cov.json
+      - name: Web coverage (vitest, V8)
+        working-directory: web
+        run: |
+          npm ci
+          npx vitest run --coverage --coverage.reporter=json-summary --coverage.reporter=text-summary
+      - name: Badges and table
+        run: python3 scripts/coverage_badges.py --rust target/llvm-cov/cov.json --web web/coverage/coverage-summary.json --out badges
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-badges
+          path: badges
+      - name: Publish badges on the coverage-badges branch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd badges
+          git init -q -b coverage-badges
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .
+          git commit -q -m "coverage badges for ${GITHUB_SHA}"
+          git push -q --force "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" coverage-badges

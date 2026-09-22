@@ -1,21 +1,30 @@
 # ai-ontology.com
 
+[![CI](https://github.com/masspe/ai-ontology.com/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/masspe/ai-ontology.com/actions/workflows/ci.yml)
+[![Rust line coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmasspe%2Fai-ontology.com%2Fcoverage-badges%2Frust.json)](#test-coverage)
+[![Web line coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmasspe%2Fai-ontology.com%2Fcoverage-badges%2Fweb.json)](#test-coverage)
+
 A Rust workspace implementing an ontology-structured graph database with a
 hybrid retrieval layer and a RAG pipeline that grounds language-model
 answers in retrieved subgraphs.
 
+The coverage badges are **live**: after every push to `main` the CI measures
+line coverage of the whole Rust suite and of the web UI and publishes the
+figures (see [Test coverage](#test-coverage)). Green is ≥ 80 %, bright green
+≥ 90 %, red < 30 %.
+
 ## Crates
 
-| Crate              | Role |
-| ------------------ | ---- |
-| `ontology-graph`   | Concepts, typed relations, schema validation, traversals. |
-| `ontology-storage` | Binary segmented store (`<data>/store/`): framed records with CRC, positional index, per-batch fsync, torn-tail recovery, memory-mapped sealed segments; automatic migration from the legacy `graph.log`. Pluggable `Store` trait. Format in [docs/STORAGE.md](docs/STORAGE.md), plan in [docs/STORAGE-PLAN.md](docs/STORAGE-PLAN.md). |
-| `ontology-index`   | Lexical (TF-IDF) + vector (cosine) + graph-expansion retrieval. |
-| `ontology-io`      | `Source` / `Sink` traits with JSONL and triples adapters. |
-| `ontology-rag`     | Prompt builder + `LanguageModel` trait (echo, Anthropic, OpenAI, DeepSeek; with prompt caching). |
-| `ontology-server`  | axum HTTP server exposing `/concepts`, `/relations`, `/retrieve`, `/ask`, `/ontology`. |
-| `ontology-cli`     | `ontology` binary tying it all together. |
-| `web/`             | Vite + React UI (Ask · Browse · Upload tabs).                          |
+| Crate              | Lines covered | Role |
+| ------------------ | ------------- | ---- |
+| `ontology-graph`   | ![graph line coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmasspe%2Fai-ontology.com%2Fcoverage-badges%2Fcrate-graph.json&label=lines&style=flat-square) | Concepts, typed relations, schema validation, traversals. |
+| `ontology-storage` | ![storage line coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmasspe%2Fai-ontology.com%2Fcoverage-badges%2Fcrate-storage.json&label=lines&style=flat-square) | Binary segmented store (`<data>/store/`): framed records with CRC, positional index, per-batch fsync, torn-tail recovery, memory-mapped sealed segments; automatic migration from the legacy `graph.log`. Pluggable `Store` trait. Format in [docs/STORAGE.md](docs/STORAGE.md), plan in [docs/STORAGE-PLAN.md](docs/STORAGE-PLAN.md). |
+| `ontology-index`   | ![index line coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmasspe%2Fai-ontology.com%2Fcoverage-badges%2Fcrate-index.json&label=lines&style=flat-square) | Lexical (TF-IDF) + vector (cosine) + graph-expansion retrieval. |
+| `ontology-io`      | ![io line coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmasspe%2Fai-ontology.com%2Fcoverage-badges%2Fcrate-io.json&label=lines&style=flat-square) | `Source` / `Sink` traits with JSONL and triples adapters. |
+| `ontology-rag`     | ![rag line coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmasspe%2Fai-ontology.com%2Fcoverage-badges%2Fcrate-rag.json&label=lines&style=flat-square) | Prompt builder + `LanguageModel` trait (echo, Anthropic, OpenAI, DeepSeek; with prompt caching). |
+| `ontology-server`  | ![server line coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmasspe%2Fai-ontology.com%2Fcoverage-badges%2Fcrate-server.json&label=lines&style=flat-square) | axum HTTP server exposing `/concepts`, `/relations`, `/retrieve`, `/ask`, `/ontology`. |
+| `ontology-cli`     | ![cli line coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmasspe%2Fai-ontology.com%2Fcoverage-badges%2Fcrate-cli.json&label=lines&style=flat-square) | `ontology` binary tying it all together. |
+| `web/`             | ![web line coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmasspe%2Fai-ontology.com%2Fcoverage-badges%2Fweb.json&label=lines&style=flat-square) | Vite + React UI (Ask · Browse · Upload tabs). |
 
 ## Architecture
 
@@ -570,11 +579,90 @@ switches an existing store to the binary codec (whole-store compaction; every
 record header carries its codec, so JSON and postcard segments coexist until
 then).
 
+## Test coverage
+
+[![Rust line coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmasspe%2Fai-ontology.com%2Fcoverage-badges%2Frust.json)](#test-coverage)
+[![Web line coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmasspe%2Fai-ontology.com%2Fcoverage-badges%2Fweb.json)](#test-coverage)
+
+Line coverage, measured by the CI on Linux after every push to `main` with
+the full suite (unit, integration and end-to-end tests that spawn the
+`ontology` binary). `cargo llvm-cov` for Rust, V8 through vitest for the
+web. Source files only: test code is not in the denominator.
+
+Snapshot of 2026-09-22 (the badges above are the live figures):
+
+| Crate | Line coverage | Lines |
+|---|---|---|
+| `ontology-index` | 99.7 % | 387 / 388 |
+| `ontology-graph` | 97.0 % | 3 171 / 3 269 |
+| `ontology-rag` | 96.7 % | 3 217 / 3 326 |
+| `ontology-io` | 93.4 % | 1 924 / 2 060 |
+| `ontology-storage` | 91.6 % | 3 871 / 4 228 |
+| `ontology-server` | 78.5 % | 2 688 / 3 425 |
+| `ontology-cli` | 76.8 % | 1 141 / 1 486 |
+| **Rust total** | **90.2 %** | 16 399 / 18 182 |
+| **Web (`web/src`)** | **17.3 %** | 517 / 2 994 |
+
+What the gaps are, so the numbers are read for what they mean:
+
+- **`server`** — `ingest_review.rs` (LLM-assisted ingest review) is at
+  53 %: the repair paths for truncated or malformed model output and the
+  provider error branches are only exercised by parsing tests. Everything
+  reachable without a language model in `lib.rs` is at 84 %.
+- **`cli`** — `main.rs` is at 64 %: `ask` / `retrieve` against a real
+  provider, `migrate` and an actual `serve` are not run by the tests, by
+  design (no network and no long-lived server in CI). The memory flags,
+  `stats`, `compact`, `reset`, `export`, `ingest` and every `bench`
+  subcommand are.
+- **`storage`** — the codec error branches (`codec.rs`, 79 %) and the
+  platform-specific budget detection: cgroup reading only runs on Linux and
+  `GlobalMemoryStatusEx` only on Windows, so each platform reports the
+  other half as uncovered.
+- **Web** — the 183 vitest tests cover the pure logic at 90 to 100 %
+  (`extractText`, `ingestApi`, `logBuffer`, `mergeProposals`,
+  `providerConfig`) and `api.ts` at 57 %, but **no React page is rendered
+  in a test**: `Settings`, `Concepts`, `Rules`, `Files`, `GraphView`,
+  `Actions` and `Dashboard` are at 0 %. Raising the web figure means
+  rendering tests with Testing Library and a mocked `api.ts`; the logic
+  layer is already covered.
+
+Reproduce locally (Rust needs `rustup component add llvm-tools-preview`
+and `cargo install cargo-llvm-cov` once):
+
+```bash
+cargo llvm-cov --workspace --summary-only          # per-file table, TOTAL at the bottom
+cargo llvm-cov --workspace --html                  # browsable report in target/llvm-cov/html/
+cargo llvm-cov --workspace --json --output-path target/llvm-cov/cov.json
+cd web && npm run test:coverage                    # vitest + V8, table in the terminal
+cd .. && python3 scripts/coverage_badges.py --rust target/llvm-cov/cov.json \
+    --web web/coverage/coverage-summary.json --out badges   # same badges/table as the CI
+```
+
+```powershell
+cargo llvm-cov --workspace --summary-only
+Set-Location web; npm run test:coverage; Set-Location ..
+python scripts/coverage_badges.py --rust target/llvm-cov/cov.json --web web/coverage/coverage-summary.json --out badges
+```
+
+How the badges work: the `coverage` job of [ci.yml](.github/workflows/ci.yml)
+runs both measurements, `scripts/coverage_badges.py` writes one
+[shields.io endpoint](https://shields.io/badges/endpoint) document per figure
+(`rust.json`, `web.json`, `crate-<name>.json`) and the job force-pushes them
+to the orphan branch `coverage-badges`. The README embeds
+`img.shields.io/endpoint?url=<raw file>`, so no third-party coverage service
+and no secret is involved. The figures on Windows differ by a few tenths
+(platform-specific code), which is why the published measurement is the
+Linux one.
+
 ## Testing
 
 ```bash
-cargo test --workspace
+cargo test --workspace          # 576 Rust tests (2026-09-22): unit, integration, end-to-end (binary spawned)
+cd web && npm run test          # 183 vitest tests
 ```
+
+Coverage of that suite is in [Test coverage](#test-coverage) and on the
+badges at the top of this file.
 
 ## License
 
