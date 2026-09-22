@@ -7,7 +7,7 @@
 // from Winven AI Sarl. See LICENSE and LICENSE-COMMERCIAL.md.
 
 use anyhow::{anyhow, Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use ontology_graph::{Ontology, OntologyGraph};
 use ontology_index::{HybridIndex, RetrievalRequest};
 use ontology_io::{
@@ -40,8 +40,67 @@ struct Cli {
     #[arg(long, global = true)]
     settings: Option<PathBuf>,
 
+    /// What to do when the store's estimated memory exceeds the budget
+    /// (STORAGE.md §8.1): `strict` refuses to start, naming the required
+    /// and available figures; `adaptive` loads the domains that fit and
+    /// reports the rest. `--ns` on `serve` always wins over the choice.
+    #[arg(
+        long,
+        global = true,
+        env = "ONTOLOGY_MEMORY_MODE",
+        value_enum,
+        default_value_t = MemoryModeArg::Adaptive
+    )]
+    memory_mode: MemoryModeArg,
+
+    /// Share of the available memory (cgroup limit, else free memory) the
+    /// graph may use in P0; a finite number in (0, 1].
+    #[arg(
+        long,
+        global = true,
+        env = "ONTOLOGY_HEAP_FRACTION",
+        default_value_t = 0.6,
+        value_parser = parse_heap_fraction
+    )]
+    heap_fraction: f64,
+
+    /// Explicit memory budget in MiB; overrides detection and the fraction.
+    #[arg(long, global = true, env = "ONTOLOGY_MEMORY_BUDGET_MB")]
+    memory_budget_mb: Option<u64>,
+
     #[command(subcommand)]
     cmd: Cmd,
+}
+
+/// `--memory-mode`, validated by clap before any file is opened.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum MemoryModeArg {
+    /// Refuse to start when the estimate exceeds the budget (R17).
+    Strict,
+    /// Load the domains that fit under a hard limit; report the rest.
+    Adaptive,
+}
+
+impl From<MemoryModeArg> for ontology_storage::MemoryMode {
+    fn from(m: MemoryModeArg) -> Self {
+        match m {
+            MemoryModeArg::Strict => Self::Strict,
+            MemoryModeArg::Adaptive => Self::Adaptive,
+        }
+    }
+}
+
+/// `--heap-fraction`: a finite number in (0, 1]. Anything else is refused
+/// at parse time rather than silently clamped (R17).
+fn parse_heap_fraction(s: &str) -> std::result::Result<f64, String> {
+    let f: f64 = s
+        .trim()
+        .parse()
+        .map_err(|_| format!("`{s}` is not a number"))?;
+    if !f.is_finite() || f <= 0.0 || f > 1.0 {
+        return Err(format!("`{s}` is not in (0, 1]"));
+    }
+    Ok(f)
 }
 
 #[derive(Subcommand, Debug)]
@@ -270,7 +329,24 @@ async fn main() -> Result<()> {
         Cmd::Serve { ns: Some(ns), .. } if !ns.is_empty() => Some(ns.clone()),
         _ => None,
     };
-    match &selected_ns {
+    // Memory socle (STORAGE-PLAN.md §7.1): estimate before loading (R14),
+    // refuse or load partially instead of being killed (R17).
+    let memory_mode: ontology_storage::MemoryMode = cli.memory_mode.into();
+    let budget = match cli.memory_budget_mb {
+        Some(mb) => ontology_storage::MemoryBudget::fixed(mb.saturating_mul(1024 * 1024)),
+        None => ontology_storage::MemoryBudget::detect(cli.heap_fraction),
+    };
+    let to_load: Option<Vec<String>> = match &segment_store {
+        Some(seg) => {
+            let plan = seg
+                .plan_load(budget, memory_mode, selected_ns.as_deref())
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            log_load_plan(&plan);
+            plan.domains
+        }
+        None => selected_ns.clone(),
+    };
+    match &to_load {
         Some(ns) => {
             tracing::info!(domains = ?ns, "selective hydration");
             store
@@ -591,6 +667,7 @@ async fn main() -> Result<()> {
             // The LLM is resolved per request from the settings store, so
             // picking a provider/model in the UI applies immediately instead
             // of at the next restart. EchoModel answers until one is set.
+            let memory_plan = segment_store.as_ref().and_then(|s| s.last_plan());
             let index_for_pipeline = index.clone();
             let state = AppState::assemble(
                 graph.clone(),
@@ -602,7 +679,8 @@ async fn main() -> Result<()> {
                         Arc::new(SettingsRoutedModel::new(settings, Arc::new(EchoModel)));
                     Arc::new(RagPipeline::new(index_for_pipeline, llm))
                 },
-            );
+            )
+            .with_memory_plan(memory_plan);
             let bearer = match auth_env {
                 Some(env_name) => Some(
                     std::env::var(&env_name)
@@ -641,6 +719,52 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// One log line per startup memory decision, plus a warning per outcome
+/// an operator must know about (unknown budget, domains left out).
+fn log_load_plan(plan: &ontology_storage::LoadPlan) {
+    let mib = |b: u64| b / (1024 * 1024);
+    tracing::info!(
+        mode = %plan.mode,
+        budget_mib = plan.budget.budget_bytes.map(mib),
+        available_mib = plan.budget.available_bytes.map(mib),
+        source = %plan.budget.source,
+        estimate_mib = mib(plan.estimated_total_bytes),
+        loaded_mib = mib(plan.estimated_loaded_bytes),
+        domains = plan.estimates.len(),
+        "memory plan"
+    );
+    if plan.budget.budget_bytes.is_none() {
+        tracing::warn!(
+            "memory budget unknown on this platform: loading everything; set --memory-budget-mb to enforce a limit"
+        );
+    }
+    for d in &plan.estimates {
+        tracing::debug!(ns = %d.ns, records = d.records, edges = d.edges, payload_mib = mib(d.payload_bytes), estimate_mib = mib(d.estimated_bytes), "domain estimate");
+    }
+    if plan.over_budget {
+        tracing::warn!(
+            estimate_mib = mib(plan.estimated_total_bytes),
+            budget_mib = plan.budget.budget_bytes.map(mib),
+            source = %plan.budget.source,
+            "the estimate exceeds the budget derived from FREE memory, which is a reading and not a \
+             limit: loading everything; use --memory-mode strict to refuse, or --memory-budget-mb to \
+             trim adaptively against a fixed figure"
+        );
+    }
+    if plan.is_partial() {
+        let skipped: Vec<String> = plan
+            .skipped
+            .iter()
+            .map(|s| format!("{} ({} MiB)", s.ns, mib(s.estimated_bytes)))
+            .collect();
+        tracing::warn!(
+            skipped = %skipped.join(", "),
+            explicit = plan.explicit,
+            "partial load: these domains are NOT in memory; requests about them will find nothing"
+        );
+    }
 }
 
 /// Where the settings file lives: `--settings` wins, else

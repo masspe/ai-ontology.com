@@ -700,18 +700,49 @@ mesuré 25 à 30 % pour un ratio de 5 relations par concept et des payloads de
 1,3 Ko (§6.6, STORAGE.md §8.1). Le socle §7.1 reste le premier livrable
 quel que soit l'ordre retenu ensuite.
 
-### 7.1 Socle (avant P1)
+### 7.1 Socle (avant P1) — **livré (2026-09-22, branche `feat/phase5-socle`)**
 
-- Budget (§8.1) : cgroup v2 → v1 → `MemAvailable` ; **Windows :
-  `GlobalMemoryStatusEx` + limite de Job Object si présente** (absent de
-  STORAGE.md, à ajouter).
-- Estimation par domaine depuis les compteurs du MANIFEST (R14) ; ajouter au
-  MANIFEST `payload_bytes` et `edges` par partition (ça grossit le plancher
-  §8.7 de 16 o par partition — acceptable, à consigner).
-- `--memory-mode strict` : refus au démarrage avec requis/disponible (R17).
-  Livrable autonome et utile même sans P1.
-- Métriques `/metrics` : budget, utilisé, palier par domaine, `majflt/s`
-  (Linux seulement).
+Ce qui a été fait, et où c'est testé :
+
+- **Budget** (STORAGE.md §8.1) : explicite → cgroup v2 (cgroup du
+  processus et ses parents, pas seulement la racine) → cgroup v1 →
+  `MemAvailable` → Windows `GlobalMemoryStatusEx` → inconnu. Fraction
+  `--heap-fraction` (0,6) refusée par la CLI hors de ]0 ; 1]. Sources
+  dures (limite) / molles (mémoire libre) distinguées : `adaptive` ne
+  retranche que sous une limite dure, sinon tout est chargé avec
+  `over_budget` en `warn` (le comportement d'avant le socle est conservé
+  sur un hôte nu — revue du 2026-09-22). La limite de Job Object
+  Windows n'est **pas** lue (décision : `--memory-budget-mb` couvre ce cas).
+  Tests : analyseurs sur fixtures (`max`, sentinelles v1, `MemAvailable`
+  absent), borne de la fraction — `budget.rs` unitaires.
+- **Estimation par domaine** depuis les zone maps du MANIFEST (`records`,
+  `edges`, `payload_bytes` étaient déjà présents depuis la phase 3 : rien
+  à ajouter au plancher §8.7) **plus** les compteurs du segment actif
+  (`Active::counters`). Formule et coefficients en STORAGE.md §8.1. Tests :
+  égalité stricte estimation ↔ compteurs écrits sur un store à partitions
+  multiples, avant et après réouverture — `crates/storage/tests/budget.rs`.
+- **Plan de chargement** `plan_load(estimations, budget, mode, --ns)` :
+  `strict` refuse avec requis / budget / disponible / source / plus gros
+  domaines (R17) ; `adaptive` prend les domaines du plus petit au plus
+  grand ; `--ns` gagne, nom inconnu refusé ; budget inconnu → tout, avec
+  `warn`. Tests : trois modes, budget exact, un octet de moins, store vide,
+  hydratation effective des seuls domaines retenus — storage unitaires +
+  intégration ; bout en bout par le binaire (`stats` refusé en strict à 1
+  Mio avec code de sortie non nul et message ; charge partielle en adaptive
+  = multiple entier de domaines ; budget 0 → 0 concept mais démarre ;
+  variables d'environnement, priorité du drapeau, mode et fraction
+  invalides refusés par `clap` avant d'ouvrir le store) —
+  `crates/cli/tests/memory_socle.rs`.
+- **Exposition** : `GET /stats.memory` et gauges `/metrics` (liste en
+  STORAGE.md §8.1), `null` / absentes sans store disque. Tests : plan
+  partiel, plan complet, budget inconnu, sans plan —
+  `crates/server/tests/memory_socle.rs`.
+- **Bench** : `bench hydrate --json` imprime `estimate_mib` et
+  `estimate_vs_heap_pct` ; écart consigné en STORAGE.md §7.8.
+
+Hors socle, reporté : `majflt/s` (n'a de sens qu'avec des payloads sur
+disque, P1) ; palier par domaine dans `/metrics` (n'existe qu'à partir de
+P1) ; Job Object Windows.
 
 ### 7.2 P1 — payloads sur disque
 
