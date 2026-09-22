@@ -440,7 +440,10 @@ reconstruction coûte 0,4 à 1,7 s ; la maintenance par mutation des index
 dérivés coûtait donc (temps gagné + reconstruction) 45 à 65 % d'`apply` à
 200 k et 15 à 26 % à 500 k ; le reste est dans les structures primaires des
 relations (`STORAGE-PLAN.md` §6.6). Le profil par échantillonnage annoncé
-ci-dessus n'a pas été fait ; l'imputation est une soustraction. Effet de
+ci-dessus n'a pas été fait ; l'imputation est une soustraction. Il est
+planifié comme T6 dans `STORAGE-PLAN.md` §8, à faire avant le chantier
+relations de la phase 5, parce que le remède (pré-dimensionnement, table de
+symboles ou CSR) dépend de ce qu'il montrera. Effet de
 bord : les `BTreeSet` bâtis d'un bloc sont plus denses (−3 % de tas mesuré à
 200 k).
 
