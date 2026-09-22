@@ -285,8 +285,11 @@ export interface Subgraph {
 }
 
 export interface ListConceptsResponse {
-  total: number;
+  /** Exact count for an offset page; `null` on a cursor page. */
+  total: number | null;
   concepts: Concept[];
+  /** Cursor of the next page, `null` on the last one (T1). */
+  next_cursor: string | null;
 }
 
 export interface FileRecord {
@@ -459,13 +462,17 @@ export const listConcepts = (params: {
   type?: string;
   q?: string;
   limit?: number;
+  /** Deprecated: O(offset) on the server. Prefer `cursor`. */
   offset?: number;
+  /** `next_cursor` of the previous page: the page starts strictly after it. */
+  cursor?: string;
 } = {}) => {
   const qs = new URLSearchParams();
   if (params.type) qs.set("type", params.type);
   if (params.q) qs.set("q", params.q);
   if (params.limit != null) qs.set("limit", String(params.limit));
   if (params.offset != null) qs.set("offset", String(params.offset));
+  if (params.cursor) qs.set("cursor", params.cursor);
   const s = qs.toString();
   return http<ListConceptsResponse>(`/concepts${s ? `?${s}` : ""}`);
 };
@@ -561,8 +568,9 @@ export const updateAction = (
 // ---- Relations -----------------------------------------------------------
 
 export interface ListRelationsResponse {
-  total: number;
+  total: number | null;
   relations: Relation[];
+  next_cursor: string | null;
 }
 
 export const listRelations = (
@@ -571,7 +579,9 @@ export const listRelations = (
     target?: number;
     type?: string;
     limit?: number;
+    /** Deprecated: prefer `cursor`. */
     offset?: number;
+    cursor?: string;
   } = {},
 ) => {
   const qs = new URLSearchParams();
@@ -580,6 +590,7 @@ export const listRelations = (
   if (params.type) qs.set("type", params.type);
   if (params.limit != null) qs.set("limit", String(params.limit));
   if (params.offset != null) qs.set("offset", String(params.offset));
+  if (params.cursor) qs.set("cursor", params.cursor);
   const s = qs.toString();
   return http<ListRelationsResponse>(`/relations${s ? `?${s}` : ""}`);
 };
