@@ -632,7 +632,7 @@ and `cargo install cargo-llvm-cov` once):
 ```bash
 cargo llvm-cov --workspace --summary-only          # per-file table, TOTAL at the bottom
 cargo llvm-cov --workspace --html                  # browsable report in target/llvm-cov/html/
-cargo llvm-cov --workspace --json --output-path target/llvm-cov/cov.json
+mkdir -p target/llvm-cov && cargo llvm-cov --workspace --json --output-path target/llvm-cov/cov.json
 cd web && npm run test:coverage                    # vitest + V8, table in the terminal
 cd .. && python3 scripts/coverage_badges.py --rust target/llvm-cov/cov.json \
     --web web/coverage/coverage-summary.json --out badges   # same badges/table as the CI
@@ -640,6 +640,8 @@ cd .. && python3 scripts/coverage_badges.py --rust target/llvm-cov/cov.json \
 
 ```powershell
 cargo llvm-cov --workspace --summary-only
+New-Item -ItemType Directory -Force target/llvm-cov | Out-Null
+cargo llvm-cov --workspace --json --output-path target/llvm-cov/cov.json
 Set-Location web; npm run test:coverage; Set-Location ..
 python scripts/coverage_badges.py --rust target/llvm-cov/cov.json --web web/coverage/coverage-summary.json --out badges
 ```
