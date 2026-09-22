@@ -8,6 +8,10 @@ décisions à prendre avant d'écrire une ligne, les sections 3 à 8 les phases.
 Convention : `H*` / `R*` renvoient aux hypothèses et règles de
 `PERFORMANCE.md` (H1-H10, R1-R6) et de `STORAGE.md` (H11-H25, R7-R17).
 
+> **Où on en est et ce qui vient** : [`ROADMAP.md`](./ROADMAP.md) est le
+> point d'entrée d'une session (état, décisions datées, prochaines étapes
+> avec leurs critères, procédé). Ce plan garde le détail par phase.
+
 ---
 
 ## 0. Résumé
@@ -20,20 +24,21 @@ Convention : `H*` / `R*` renvoient aux hypothèses et règles de
 | 3 | Partitionnement par `ns` : routage, `.xref`, roulement, scellement `mmap`, compaction, group commit inter-requêtes | 2, G | 10-14 | **Livré** (§5.6) — compaction store entier, group commit inter-requêtes reporté à la mesure |
 | T1 | Pagination par curseur | — | 2 | API prête pour P3 ; à livrer avant 5a |
 | 4 | Mesure et codec : générateur 10⁷ / 5×10⁷, benchs, `postcard` | 2 | 4-6 | Chiffres réels sur la cible ; codec activé si gain mesuré |
-| 5a | **P1** : budget mémoire, mode `strict`/`adaptive`, slot + `Loc`, payloads relus depuis le disque | 3, 4, T1 | 8-12 | Capacité 10⁷ concepts sur 16 Go |
-| 5b | P2-P5 : `.adj`/`.srt`, paliers, hystérésis | 5a | 8-12 | Uniquement sur mesure ou besoin client |
+| 5a | **Socle** (livré 2026-09-22 : budget, estimation R14, `strict`/`adaptive`) puis **P1** : slot + `Loc`, payloads relus depuis le disque | 3, 4, T1 | 8-12 | Cible 10⁷ / 5×10⁷ sur un nœud de 64 Go ; 2,4×10⁶ / 1,2×10⁷ sur 16 Go |
+| 5b | P2-P5 : `.adj`/`.srt` (CSR), paliers, hystérésis | 5a | 8-12 | **Sur besoin client** : un tenant au-delà de 5×10⁶ concepts sur un nœud contraint |
 | R | Index de retrieval : persistance des vecteurs, index approximatif | indépendant | 8-12 | Retrieval en O(log N), démarrage sans réindexation |
 | T | CI Windows+Linux (**livré**), métriques, docs, position un store par tenant | — | 2-3 | — |
 
 **Stratégie (validée le 2026-09-08)** : la mémoire d'abord, le disque quand
 il faut. P0 reste le mode nominal ; le format est écrit maintenant pour que
 la descente vers P1+ soit possible sans changer de version de fichier.
-Cible de dimensionnement : 10⁷ concepts et 5×10⁷ relations par store sur un
-nœud de 16 Go (STORAGE.md §1). Les phases 2 et 3 s'exécutent maintenant.
-**P1 (5a) n'est pas optionnel à cette cible** : en JSON et en P0, 10⁷
-concepts représentent ~14 Go de heap et ~5 min de démarrage ; P1 est ce qui
-fait passer de 10⁶ à 10⁸ concepts par nœud. Il suit la phase 4 sans
-attendre un incident client. P2-P5 restent conditionnés à une mesure.
+Cible de dimensionnement : 10⁷ concepts et 5×10⁷ relations par store,
+**sur un nœud de 64 Go avec P1** depuis la révision du 2026-09-22
+(STORAGE.md §1 et §8.1 : la phase 4 a mesuré 45 à 50 Go en P0, et P1 seul
+ne loge pas 10⁷ sur 16 Go) ; sur 16 Go la garantie est 2×10⁶ / 10⁷.
+**P1 (5a) reste le prochain palier** : il retire le payload du tas sur
+tout store, quelle que soit la cible, et c'est la marche prévue par le
+format (slot + `Loc`). Le CSR (5b) n'est engagé que sur besoin client.
 
 ---
 
@@ -674,17 +679,22 @@ Décisions prises le 2026-09-17 (validées par le propriétaire du produit) :
    trigrammes, relations, règles, actions, traversées). Gain 1,1 à 1,75×,
    sous la cible 2–3× : le coût restant est dans les structures primaires des
    relations, pas dans les index dérivés.
-3. **Phase 5 — à trancher à son ouverture, pas dans cette phase** : la
-   cible 10⁷ / 5×10⁷ sur 16 Go exige P1 **et** le CSR (P2–P4). Proposition
-   pour l'ouverture : socle mémoire d'abord (§7.1 : budget, estimation R14,
-   refus explicite ou chargement partiel R17), puis T1 (curseur), puis P1
-   (payloads hors tas, −13 Go), puis CSR des relations (−16 à −23 Go) avant
-   les index de concepts (~14 Go) ; ou revoir la cible (≈ 3×10⁶ concepts et
-   1,5×10⁷ relations tiennent après P1 seul). Les chiffres sont des mesures
-   de tas sur un portable, une exécution par point : à confirmer sur le nœud
-   cible avant d'engager la phase 5. Cette question est un choix produit
-   (coût de deux paliers supplémentaires contre RAM du nœud ou cible plus
-   modeste), consigné ici pour l'ouverture de la phase 5.
+3. **Phase 5 — tranchée le 2026-09-22** : la cible 10⁷ / 5×10⁷ sur 16 Go
+   exigeait P1 **et** le CSR (P2–P4), le chantier le plus long et le plus
+   risqué du plan, pour un client qui n'existe pas encore. Décision (choix
+   produit, validé par le propriétaire du projet) : **la cible est portée
+   par le nœud**. 10⁷ / 5×10⁷ sur **64 Go avec P1** (`--heap-fraction 0.8`
+   sur un nœud dédié : ~1,3×10⁷ / 6,3×10⁷ estimés) ; sur **16 Go**, la
+   garantie est **2×10⁶ / 10⁷** (P0 dès aujourd'hui, ~2,4×10⁶ avec P1). Le
+   **CSR est reporté** à un besoin client au-delà de 5×10⁶ concepts sur un
+   nœud contraint. Motifs : le matériel est le levier le moins cher ; P1 a
+   une valeur garantie quelle que soit la cible et ne change pas le format ;
+   le socle (§7.1, livré) refuse ou réduit explicitement un chargement qui
+   ne tient pas, ce qui rend la garantie vérifiable ; rien dans P1 ne
+   contredit un CSR ultérieur. Tableau de capacité : STORAGE.md §8.1.
+   **Preuve exigée avant toute promesse contractuelle à 10⁷** : `bench gen`
+   à 5×10⁶ / 2,5×10⁷ puis `bench hydrate` sur une machine de 64 Go, écart
+   estimation / tas consigné en §7.8 (une heure, machine à prévoir).
 
 **Sortie de phase.** Générateur et benchs livrés, chiffres mesurés
 (STORAGE.md §7.7–7.8), codec tranché, `bulk_load` livré, mesuré et relu ;
@@ -694,11 +704,12 @@ jalon J4 atteint pour ce qui est mesurable sur 16 Go (§9).
 
 ## 7. Phase 5 — Mémoire contrainte (P1 → P5)
 
-Conditionnée à un besoin client réel. **Ordre à revoir à l'ouverture** :
-le plan supposait que P1 supprimait ~90 % de l'empreinte ; la phase 4 a
-mesuré 25 à 30 % pour un ratio de 5 relations par concept et des payloads de
-1,3 Ko (§6.6, STORAGE.md §8.1). Le socle §7.1 reste le premier livrable
-quel que soit l'ordre retenu ensuite.
+Ordre arrêté le 2026-09-22 (§6.6) : **socle (livré) → T1 → T6 (profil
+d'`apply`) → P1 → contrôleur** ; **P2–P4 (CSR) sur besoin client
+uniquement**. Le plan supposait que P1 supprimait ~90 % de l'empreinte ; la
+phase 4 a mesuré 25 à 30 % pour un ratio de 5 relations par concept et des
+payloads de 1,3 Ko (§6.6, STORAGE.md §8.1) : c'est pourquoi la cible 10⁷ est
+désormais portée par un nœud de 64 Go et non par le CSR.
 
 ### 7.1 Socle (avant P1) — **livré (2026-09-22, branche `feat/phase5-socle`)**
 
@@ -754,11 +765,14 @@ restent vrais. Le payload d'un enregistrement dans le segment **actif** est
 gardé en heap jusqu'au scellement (sa taille est bornée par le seuil de
 roulement).
 
-### 7.3 P2 → P4 — index dérivés sur disque
+### 7.3 P2 → P4 — index dérivés sur disque (**sur besoin client**)
 
 `.srt` et `.adj` construits au scellement (§8.3), R15 pour chacun ; fusion
 k-way pour le listing ; **prérequis : curseur de pagination (T1)**, sinon
-`GET /concepts?offset=` devient O(offset).
+`GET /concepts?offset=` devient O(offset). Déclencheur (décision du
+2026-09-22, §6.6) : un tenant au-delà de 5×10⁶ concepts sur un nœud
+contraint, ou une latence d'expansion de graphe que le CSR seul résoudrait ;
+T6 précède dans tous les cas.
 
 ### 7.4 Contrôleur
 
@@ -885,8 +899,11 @@ S3-S5   Phase 2  ─────────────┤── T2 (CI Windows
 S5      G (gros documents) + T1 curseur
 S6-S8   Phase 3  ─────────────┘
 S9      Phase 4 : générateur 10⁷ + benchs → GO / NO-GO codec, bulk_load
-S10-S12 Phase 5a : P1 (budget, strict/adaptive, slot + Loc)
-S13+    Phase 5b : P2-P5 uniquement sur mesure
+S10     Phase 5a : socle (budget, R14, strict/adaptive) ─ livré 2026-09-22
+S10     Couverture Rust ≥ 90 % par crate (server, cli) puis seuil CI ; T1 curseur
+S11     Preuve 5×10⁶ sur 64 Go ; T6 profil d'apply
+S11-S13 Phase 5a : P1 (slot + Loc, payloads relus hors verrou) ; contrôleur
+S14+    Phase 5b : P2-P4 (CSR) uniquement sur besoin client
 ```
 
 Jalons vérifiables :
@@ -897,7 +914,8 @@ Jalons vérifiables :
 | J2 (fin phase 2) | **Atteint** sur la branche : migration automatique de `graph.log` au démarrage, redémarrage HTTP sur `SegmentStore` testé, CI 2 OS à confirmer par la PR |
 | J3 (fin phase 3) | **Atteint** : trois domaines dans `examples/finance` (`parties`, `contrats`, `facturation`), hydratation sélective testée, 2 syncs par lot de 100 sur 2 domaines |
 | J4 (fin phase 4) | **Atteint pour ce qui est mesurable ici** : §7.7–7.8 de STORAGE.md remplis de chiffres mesurés à 2×10⁵ / 10⁶ et 5×10⁵ / 2,5×10⁶, codec tranché (JSON par défaut, postcard en option), `bulk_load` livré et mesuré ; la cible 10⁷ / 5×10⁷ (45 à 50 Go en P0) n'est pas hydratable sur 16 Go — c'est la mesure elle-même qui le montre ; extrapolation linéaire documentée |
-| J5 (P1) | Le store cible tient sur un nœud de 16 Go : RSS divisée par ≥ 5 par rapport à P0, P95 `GET /concepts/{id}` < 2× P0 |
+| J5 (P1) | Sur le store synthétique 5×10⁵ / 2,5×10⁶ : tas divisé par ≥ 1,4 par rapport à P0 (le payload est ~1,3 Ko sur ~2,75 Ko par concept ; la division par 5 du plan initial supposait le CSR), P95 `GET /concepts/{id}` < 2× P0, hydratation ≤ 1,2× P0 ; capacité vérifiée par `bench gen` 5×10⁶ / 2,5×10⁷ hydraté sur un nœud de 64 Go avec `--memory-mode strict` |
+| J5b (CSR, sur besoin) | 10⁷ / 5×10⁷ hydraté sur 16 Go en `strict` ; ~16 o par arête mesurés |
 | JR (retrieval) | `reindex_all` supprimé du démarrage ; recherche vectorielle en O(log N) mesurée à 10⁷ |
 
 ---
