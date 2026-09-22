@@ -696,9 +696,22 @@ par rejeu sont les deux leviers.
 | `expand` profondeur 2 (~130 nœuds) | 1,1–1,3 ms | 2,3–3,1 ms |
 
 La page à offset aléatoire est **O(offset)** (parcours de l'ensemble trié
-jusqu'à l'offset) : 13 ms à 500 k concepts, donc ~250 ms à 10⁷. C'est le
+jusqu'à l'offset) : 13 ms à 500 k concepts, donc ~250 ms à 10⁷. C'était le
 chantier T1 de `STORAGE-PLAN.md` (pagination par curseur), à faire avant
-toute phase 5, comme prévu.
+toute phase 5.
+
+**T1 livré (2026-09-22)** — même banc, store 200 k / 1 M, 200 itérations,
+machine au repos, `bench query --json` :
+
+| Page de 200 concepts | p50 | p99 |
+|---|---|---|
+| par `offset` aléatoire (`list_concepts_page`) | 2,6 ms | 7,2 ms |
+| par **curseur** après une clé aléatoire (`list_concepts_after`) | **0,65 ms** | **1,9 ms** |
+
+La page par curseur entre dans l'ensemble trié par `range` : son coût est
+celui du clonage des 200 concepts, indépendant de la position ; il restera
+de cet ordre à 10⁷ là où la page par offset passerait à ~250 ms. Le web
+pagine désormais par curseur ; `offset` reste servi, déprécié.
 
 ---
 

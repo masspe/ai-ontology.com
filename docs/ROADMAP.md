@@ -20,6 +20,7 @@ Dernière mise à jour : **2026-09-22**.
 | Chantier | État | Preuve |
 |---|---|---|
 | Stockage phases 1–4 (chemin d'écriture, conteneur binaire, partitionnement par `ns`, mesures et codec) | **Livré, dans `main`** | STORAGE-PLAN §3.6, §4.6, §5.6, §6.6 ; STORAGE.md §7.7–7.8 |
+| T1, pagination par curseur (`cursor=` / `next_cursor` sur `/concepts` et `/relations`, web par pile de curseurs, `offset` déprécié) | **Livré 2026-09-22** | STORAGE-PLAN §8 T1 ; STORAGE.md §7.8 |
 | Phase 5, socle mémoire (budget, estimation R14, plan `strict`/`adaptive`, `/stats.memory`, `/metrics`) | **Livré 2026-09-22** (`f5359b7`) | STORAGE.md §8.1 ; STORAGE-PLAN §7.1 |
 | Couverture de tests | Rust **90,2 %** de lignes (576 tests) ; web **99,7 %** (687 tests), seuil 90 % imposé par la CI | README « Test coverage » ; badges vivants en tête du README |
 | CI | rustfmt, clippy, tests Ubuntu + Windows, web (vitest avec seuils, tsc, build), `coverage` (publie les badges) | `.github/workflows/ci.yml` |
@@ -55,7 +56,7 @@ Chaque étape est une branche, revue indépendante, suite complète verte avec
 les seuils, fusion `--no-ff` dans `main`, CI verte, puis mise à jour de ce
 document et des sections datées du plan.
 
-### 3.1 T1 — pagination par curseur (plan §0, §8 T1 : « avant toute phase 5 »)
+### 3.1 T1 — pagination par curseur — **livré 2026-09-22** (plan §0, §8 T1)
 
 - Tel que spécifié au plan : `GET /concepts?cursor=<base64(ctype, name, id)>&limit=`
   avec `next_cursor` (R6 : `concepts_sorted` supporte déjà `range(..)` sur
