@@ -49,6 +49,7 @@ use ontology_graph::{GraphError, Ontology, OntologyGraph};
 use parking_lot::Mutex;
 use tracing::{info, warn};
 
+use crate::budget::{self, ActiveCounters, DomainEstimate, LoadPlan, MemoryBudget, MemoryMode};
 use crate::codec::{self, CODEC_JSON};
 use crate::log::{LogRecord, RecordKind, RouteHint};
 use crate::manifest::{CompactionMarker, META_NS};
@@ -173,6 +174,8 @@ pub struct SegmentStore {
     syncs: Arc<AtomicU64>,
     report: OpenReport,
     last_hydration: Arc<Mutex<Option<HydrationReport>>>,
+    /// The startup memory decision (`plan_load`), for `/stats` and `/metrics`.
+    last_plan: Arc<Mutex<Option<LoadPlan>>>,
 }
 
 impl SegmentStore {
@@ -385,6 +388,7 @@ impl SegmentStore {
             syncs: Arc::new(AtomicU64::new(0)),
             report,
             last_hydration: Arc::new(Mutex::new(None)),
+            last_plan: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -483,6 +487,53 @@ impl SegmentStore {
 
     pub fn manifest(&self) -> Manifest {
         self.inner.lock().manifest.clone()
+    }
+
+    /// Estimated P0 heap cost of every graph domain, from the MANIFEST
+    /// zone maps plus the active segments' counters — no data file is read
+    /// (R14; the active `.idx` is small and already open).
+    pub fn estimate_domains(&self) -> StoreResult<Vec<DomainEstimate>> {
+        let mut g = self.inner.lock();
+        let ns_ids: Vec<u16> = g.graph.keys().copied().collect();
+        let mut active: BTreeMap<u16, ActiveCounters> = BTreeMap::new();
+        for ns_id in ns_ids {
+            let (records, edges, payload_bytes) = g.stream_mut(ns_id).active_counters()?;
+            active.insert(
+                ns_id,
+                ActiveCounters {
+                    records,
+                    edges,
+                    payload_bytes,
+                },
+            );
+        }
+        let manifest = g.manifest.clone();
+        drop(g);
+        Ok(budget::estimate_domains(&manifest, &|ns| {
+            active.get(&ns).copied().unwrap_or_default()
+        }))
+    }
+
+    /// Decide what this process will load (`STORAGE-PLAN.md` §7.1): the
+    /// estimate against the budget, in `mode`, honouring an explicit `--ns`
+    /// list. Remembered for `last_plan`. Strict mode refuses with both
+    /// figures when the store does not fit (R17).
+    pub fn plan_load(
+        &self,
+        budget: MemoryBudget,
+        mode: MemoryMode,
+        explicit: Option<&[String]>,
+    ) -> StoreResult<LoadPlan> {
+        let estimates = self.estimate_domains()?;
+        let plan =
+            budget::plan_load(estimates, budget, mode, explicit).map_err(StoreError::Budget)?;
+        *self.last_plan.lock() = Some(plan.clone());
+        Ok(plan)
+    }
+
+    /// The last startup decision, if `plan_load` ran.
+    pub fn last_plan(&self) -> Option<LoadPlan> {
+        self.last_plan.lock().clone()
     }
     /// Next store-wide sequence number.
     pub fn next_seq(&self) -> u64 {

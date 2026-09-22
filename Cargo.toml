@@ -30,7 +30,7 @@ ahash = { version = "0.8", features = ["serde"] }
 smallvec = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 futures = "0.3"
 axum = { version = "0.7", features = ["multipart"] }
@@ -43,6 +43,7 @@ crc32c = "0.6"
 proptest = "1"
 postcard = { version = "1.1", features = ["alloc"] }
 memory-stats = "1"
+windows-sys = { version = "0.61", features = ["Win32_System_SystemInformation"] }
 criterion = { version = "0.5", default-features = false }
 
 ontology-graph = { path = "crates/graph" }

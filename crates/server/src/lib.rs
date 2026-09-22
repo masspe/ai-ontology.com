@@ -97,6 +97,10 @@ pub struct AppState {
     /// the apply; the store is single-writer by design (H17), so one
     /// process-wide async mutex is the natural fit. Readers never take it.
     pub writer: Arc<tokio::sync::Mutex<()>>,
+    /// The startup memory decision (`ontology_storage::LoadPlan`) when the
+    /// process was started with a persistent store; exposed by `/stats` and
+    /// `/metrics` so an operator sees which domains are (not) in memory.
+    pub memory_plan: Arc<PlRwLock<Option<ontology_storage::LoadPlan>>>,
 }
 
 impl AppState {
@@ -121,6 +125,7 @@ impl AppState {
             started_at: SystemTime::now(),
             settings_path: None,
             writer: Arc::new(tokio::sync::Mutex::new(())),
+            memory_plan: Arc::new(PlRwLock::new(None)),
         }
     }
 
@@ -161,6 +166,12 @@ impl AppState {
     pub fn with_settings_path(mut self, path: PathBuf) -> Self {
         load_settings_into(&self.settings, &path);
         self.settings_path = Some(path);
+        self
+    }
+
+    /// Record the startup memory decision for `/stats` and `/metrics`.
+    pub fn with_memory_plan(self, plan: Option<ontology_storage::LoadPlan>) -> Self {
+        *self.memory_plan.write() = plan;
         self
     }
 }
@@ -1496,6 +1507,51 @@ async fn metrics(State(s): State<AppState>) -> ([(String, String); 1], String) {
         s.graph.rule_count(),
         s.graph.action_count(),
     );
+    let mut body = body;
+    if let Some(rss) = process_rss_bytes() {
+        body.push_str(&format!(
+            "# HELP ontology_process_rss_bytes Resident set size of the process.\n\
+             # TYPE ontology_process_rss_bytes gauge\n\
+             ontology_process_rss_bytes {rss}\n"
+        ));
+    }
+    if let Some(plan) = s.memory_plan.read().as_ref() {
+        let m = memory_stats(plan);
+        body.push_str(&format!(
+            "# HELP ontology_memory_budget_known 1 when a memory budget could be determined.\n\
+             # TYPE ontology_memory_budget_known gauge\n\
+             ontology_memory_budget_known {}\n\
+             # HELP ontology_memory_budget_bytes Heap budget of the graph (0 when unknown).\n\
+             # TYPE ontology_memory_budget_bytes gauge\n\
+             ontology_memory_budget_bytes {}\n\
+             # HELP ontology_memory_estimate_bytes Estimated P0 heap of the whole store.\n\
+             # TYPE ontology_memory_estimate_bytes gauge\n\
+             ontology_memory_estimate_bytes {}\n\
+             # HELP ontology_memory_loaded_estimate_bytes Estimated P0 heap of the loaded domains.\n\
+             # TYPE ontology_memory_loaded_estimate_bytes gauge\n\
+             ontology_memory_loaded_estimate_bytes {}\n\
+             # HELP ontology_domains_loaded Storage domains held in memory.\n\
+             # TYPE ontology_domains_loaded gauge\n\
+             ontology_domains_loaded {}\n\
+             # HELP ontology_domains_skipped Storage domains left out of memory by the plan.\n\
+             # TYPE ontology_domains_skipped gauge\n\
+             ontology_domains_skipped {}\n\
+             # HELP ontology_memory_partial 1 when at least one domain is not in memory.\n\
+             # TYPE ontology_memory_partial gauge\n\
+             ontology_memory_partial {}\n\
+             # HELP ontology_memory_over_budget 1 when everything was loaded although the estimate exceeds a soft budget.\n\
+             # TYPE ontology_memory_over_budget gauge\n\
+             ontology_memory_over_budget {}\n",
+            u8::from(plan.budget.budget_bytes.is_some()),
+            plan.budget.budget_bytes.unwrap_or(0),
+            plan.estimated_total_bytes,
+            plan.estimated_loaded_bytes,
+            m.domains_loaded.len(),
+            m.domains_skipped.len(),
+            u8::from(m.partial),
+            u8::from(m.over_budget),
+        ));
+    }
     (
         [(
             axum::http::header::CONTENT_TYPE.to_string(),
@@ -1530,7 +1586,12 @@ async fn stats(State(s): State<AppState>) -> Json<StatsResponse> {
         h.record(sample);
         d
     };
-    Json(StatsResponse { core, deltas })
+    let memory = s.memory_plan.read().as_ref().map(memory_stats);
+    Json(StatsResponse {
+        core,
+        deltas,
+        memory,
+    })
 }
 
 #[derive(Serialize)]
@@ -1538,6 +1599,56 @@ struct StatsResponse {
     #[serde(flatten)]
     core: Stats,
     deltas: StatsDeltas,
+    /// Memory socle (STORAGE.md §8.1): budget, estimate and what is loaded.
+    /// `None` for an in-memory store (no plan was made).
+    memory: Option<MemoryStats>,
+}
+
+/// The startup memory decision, as the API shows it.
+#[derive(Serialize, Debug, Clone, PartialEq)]
+pub struct MemoryStats {
+    pub mode: String,
+    /// Where the available-memory figure came from.
+    pub budget_source: String,
+    pub budget_mib: Option<u64>,
+    pub available_mib: Option<u64>,
+    pub estimate_mib: u64,
+    pub loaded_estimate_mib: u64,
+    /// `true` when at least one domain was left out of memory.
+    pub partial: bool,
+    /// `true` when everything was loaded although the estimate exceeds a
+    /// budget derived from free memory (adaptive mode, soft source).
+    pub over_budget: bool,
+    pub domains_loaded: Vec<String>,
+    pub domains_skipped: Vec<String>,
+    /// Resident set of the process right now, when the platform reports it.
+    pub rss_mib: Option<u64>,
+}
+
+fn memory_stats(plan: &ontology_storage::LoadPlan) -> MemoryStats {
+    let mib = |b: u64| b / (1024 * 1024);
+    let loaded: Vec<String> = match &plan.domains {
+        Some(d) => d.clone(),
+        None => plan.estimates.iter().map(|e| e.ns.clone()).collect(),
+    };
+    MemoryStats {
+        mode: plan.mode.to_string(),
+        budget_source: plan.budget.source.to_string(),
+        budget_mib: plan.budget.budget_bytes.map(mib),
+        available_mib: plan.budget.available_bytes.map(mib),
+        estimate_mib: mib(plan.estimated_total_bytes),
+        loaded_estimate_mib: mib(plan.estimated_loaded_bytes),
+        partial: plan.is_partial(),
+        over_budget: plan.over_budget,
+        domains_loaded: loaded,
+        domains_skipped: plan.skipped.iter().map(|s| s.ns.clone()).collect(),
+        rss_mib: process_rss_bytes().map(mib),
+    }
+}
+
+/// Resident set size of this process, when the platform reports it.
+pub fn process_rss_bytes() -> Option<u64> {
+    memory_stats::memory_stats().map(|m| m.physical_mem as u64)
 }
 
 #[derive(Serialize)]
