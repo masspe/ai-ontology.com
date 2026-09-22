@@ -236,7 +236,7 @@ Stop-Process -Id $server.Id
 | GET    | `/stats`            | counts of concepts, relations, types                     |
 | GET    | `/metrics`          | Prometheus-format gauges                                 |
 | GET    | `/ontology`         | full schema (concept types + relation types)             |
-| GET    | `/concepts`         | paginated list; query: `type`, `q`, `limit`, `offset`    |
+| GET    | `/concepts`         | paginated list; query: `type`, `q`, `limit`, `cursor` (from the previous `next_cursor`; `offset` deprecated) |
 | POST   | `/concepts`         | create a `Concept`, returns `{id}`                       |
 | GET    | `/concepts/:id`     | fetch one concept                                        |
 | PATCH  | `/concepts/:id`     | partial update (`ConceptPatch`)                          |

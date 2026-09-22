@@ -346,7 +346,12 @@ export default function Concepts() {
 
   const [concepts, setConcepts] = useState<Concept[]>([]);
   const [total, setTotal] = useState(0);
-  const [page, setPage] = useState(0);
+  // Cursor pagination (T1): the stack of `next_cursor` values that led to
+  // the current page — its length is the page index, `‹` pops, `›` pushes.
+  // The first page has no cursor and is the one that reports `total`.
+  const [cursors, setCursors] = useState<string[]>([]);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const page = cursors.length;
   // Bumped after every mutation so the list effect re-fetches; setting the
   // search to its own value (the previous trick) does not re-run effects.
   const [reloadTick, setReloadTick] = useState(0);
@@ -368,17 +373,18 @@ export default function Concepts() {
     return () => clearTimeout(t);
   }, [search]);
 
-  // ---- Reset page when filters change ----
+  // ---- Back to the first page when filters change ----
   useEffect(() => {
-    setPage(0);
+    setCursors([]);
   }, [debouncedSearch, typeFilter, statusFilter, sort]);
 
-  // ---- Clamp page if total shrinks below current offset (e.g. after delete) ----
+  // ---- A page emptied by deletions steps back (e.g. the last row of the
+  // last page was removed) ----
   useEffect(() => {
-    if (total === 0) return;
-    const maxPage = Math.max(0, Math.ceil(total / PAGE_SIZE) - 1);
-    if (page > maxPage) setPage(maxPage);
-  }, [total, page]);
+    if (concepts.length === 0 && cursors.length > 0 && !nextCursor) {
+      setCursors((c) => c.slice(0, -1));
+    }
+  }, [concepts, cursors.length, nextCursor]);
 
   // ---- Load stats/history/ontology + coverage ----
   const refreshSidecar = async () => {
@@ -452,7 +458,7 @@ export default function Concepts() {
           try {
             const r = await listConcepts({ type: t, limit: 1 });
             const root = rootOf(t);
-            counts[root] = (counts[root] ?? 0) + r.total;
+            counts[root] = (counts[root] ?? 0) + (r.total ?? 0);
           } catch {
             /* ignore */
           }
@@ -473,13 +479,12 @@ export default function Concepts() {
         // Server supports type filter natively. Status filter is client-side
         // (the server has no status field). For server-side pagination we
         // fetch the slice and apply client-side status filter on the slice.
-        const limit = PAGE_SIZE;
-        const offset = page * PAGE_SIZE;
+        const cursor = cursors[cursors.length - 1];
         const r = await listConcepts({
           type: typeFilter || undefined,
           q: debouncedSearch || undefined,
-          limit,
-          offset,
+          limit: PAGE_SIZE,
+          cursor,
         });
         if (cancelled) return;
         let rows = r.concepts;
@@ -491,7 +496,9 @@ export default function Concepts() {
         else
           rows = [...rows].sort((a, b) => (conceptUpdatedAt(b) ?? 0) - (conceptUpdatedAt(a) ?? 0));
         setConcepts(rows);
-        setTotal(r.total);
+        // Only the first page counts; later pages keep its figure.
+        if (r.total != null) setTotal(r.total);
+        setNextCursor(r.next_cursor);
         setSelected((prev) => prev ?? rows[0] ?? null);
       } catch (e: unknown) {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e));
@@ -500,7 +507,7 @@ export default function Concepts() {
     return () => {
       cancelled = true;
     };
-  }, [debouncedSearch, typeFilter, statusFilter, sort, page, reloadTick]);
+  }, [debouncedSearch, typeFilter, statusFilter, sort, cursors, reloadTick]);
 
   // Drop selections that no longer exist on screen.
   useEffect(() => {
@@ -534,7 +541,7 @@ export default function Concepts() {
       await createConcept(data);
       setInfo(`Concept "${data.name}" created.`);
       setCreateOpen(false);
-      setPage(0);
+      setCursors([]);
       setReloadTick((t) => t + 1);
       await Promise.all([refreshSidecar(), refreshRecent()]);
     } catch (e: unknown) {
@@ -684,9 +691,8 @@ export default function Concepts() {
       }));
   }, [domainCounts]);
 
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  const showingFrom = total === 0 ? 0 : page * PAGE_SIZE + 1;
-  const showingTo = Math.min(total, (page + 1) * PAGE_SIZE);
+  const showingFrom = concepts.length === 0 ? 0 : page * PAGE_SIZE + 1;
+  const showingTo = page * PAGE_SIZE + concepts.length;
 
   // ---------------------------------------------------------------------------
   // Render
@@ -900,23 +906,18 @@ export default function Concepts() {
               Showing {showingFrom}–{showingTo} of {fmtNum(total)} concepts
             </span>
             <div className="pager">
-              <button disabled={page === 0} onClick={() => setPage((p) => Math.max(0, p - 1))}>‹</button>
-              {Array.from({ length: Math.min(5, totalPages) }, (_, i) => i).map((i) => (
-                <button
-                  key={i}
-                  className={i === page ? "pager-active" : ""}
-                  onClick={() => setPage(i)}
-                >
-                  {i + 1}
-                </button>
-              ))}
-              {totalPages > 5 && <span className="muted">…</span>}
-              {totalPages > 5 && (
-                <button onClick={() => setPage(totalPages - 1)}>{totalPages}</button>
-              )}
               <button
-                disabled={page + 1 >= totalPages}
-                onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+                aria-label="Previous page"
+                disabled={page === 0}
+                onClick={() => setCursors((c) => c.slice(0, -1))}
+              >
+                ‹
+              </button>
+              <span className="pager-active">Page {page + 1}</span>
+              <button
+                aria-label="Next page"
+                disabled={!nextCursor}
+                onClick={() => nextCursor && setCursors((c) => [...c, nextCursor])}
               >
                 ›
               </button>

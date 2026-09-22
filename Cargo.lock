@@ -1305,6 +1305,7 @@ dependencies = [
  "ahash",
  "async-trait",
  "axum",
+ "base64",
  "futures",
  "http",
  "http-body-util",

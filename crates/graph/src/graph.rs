@@ -11,6 +11,7 @@ use dashmap::DashMap;
 use parking_lot::{Mutex, RwLock};
 use smallvec::SmallVec;
 use std::collections::BTreeSet;
+use std::ops::Bound::{Excluded, Unbounded};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -45,7 +46,9 @@ fn trigrams(s: &str) -> Vec<[char; 3]> {
 /// Ordered key for the concept sort index: `(concept_type, name, id)`.
 /// Iteration yields the same total order used by `list_concepts_page`,
 /// so filtering + pagination can stream without materializing the world.
-type ConceptKey = (String, String, ConceptId);
+/// Sort key of the concept listing, `(concept_type, name, id)`; also the
+/// cursor of `list_concepts_after` (T1).
+pub type ConceptKey = (String, String, ConceptId);
 type RuleKey = (String, String, RuleId);
 type ActionKey = (String, String, ActionId);
 
@@ -1701,6 +1704,7 @@ impl OntologyGraph {
             limit,
             track_total,
             include_subtypes,
+            None,
         );
 
         let mut cache = self.list_concepts_cache.lock();
@@ -1718,6 +1722,37 @@ impl OntologyGraph {
         (total, page)
     }
 
+    /// Cursor listing (T1, `STORAGE-PLAN.md` §8): the page that starts
+    /// **strictly after** `after` in the order of `list_concepts_page` with
+    /// the same filters, and the cursor of the next page (`None` once the
+    /// page is short: the listing is exhausted). The sorted indexes are
+    /// entered with `range`, so a page costs O(log N + page) wherever it
+    /// starts, where `offset` costs O(offset).
+    pub fn list_concepts_after(
+        &self,
+        concept_type: Option<&str>,
+        name_substring_lowercase: Option<&str>,
+        after: Option<&ConceptKey>,
+        limit: usize,
+        include_subtypes: bool,
+    ) -> (Vec<Concept>, Option<ConceptKey>) {
+        let (_, page) = self.list_concepts_page_uncached(
+            concept_type,
+            name_substring_lowercase,
+            0,
+            limit,
+            false,
+            include_subtypes,
+            after,
+        );
+        let next = page
+            .last()
+            .filter(|_| page.len() == limit)
+            .map(|c| (c.concept_type.clone(), c.name.clone(), c.id));
+        (page, next)
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn list_concepts_page_uncached(
         &self,
         concept_type: Option<&str>,
@@ -1726,6 +1761,7 @@ impl OntologyGraph {
         limit: usize,
         track_total: bool,
         include_subtypes: bool,
+        after: Option<&ConceptKey>,
     ) -> (usize, Vec<Concept>) {
         // Resolve concept_type filter into the set of accepted type names
         // once, honouring subtype subsumption when requested.
@@ -1791,6 +1827,15 @@ impl OntologyGraph {
                             .then_with(|| a.2.cmp(&b.2))
                     });
                 }
+                if let Some(a) = after {
+                    survivors.retain(|(ct, n, id, _)| {
+                        if type_filter.is_some() {
+                            (n.as_str(), *id) > (a.1.as_str(), a.2)
+                        } else {
+                            (ct.as_str(), n.as_str(), *id) > (a.0.as_str(), a.1.as_str(), a.2)
+                        }
+                    });
+                }
                 let total = survivors.len();
                 let page: Vec<Concept> = survivors
                     .into_iter()
@@ -1821,6 +1866,10 @@ impl OntologyGraph {
             !(page.len() >= limit && !track_total)
         };
 
+        // Within a type filter the order is `(name, id)`: the cursor's
+        // `(concept_type, …)` head is implied by the filter.
+        let start: Option<(String, ConceptId)> = after.map(|a| (a.1.clone(), a.2));
+        let from = start.as_ref().map_or(Unbounded, Excluded);
         if let Some(t) = concept_type {
             if include_subtypes {
                 // K-way merge across descendant buckets to keep stable
@@ -1832,7 +1881,10 @@ impl OntologyGraph {
                     .iter()
                     .filter_map(|d| self.concepts_by_type.get(d).map(|b| b.clone()))
                     .collect();
-                let mut iters: Vec<_> = buckets.iter().map(|b| b.iter().peekable()).collect();
+                let mut iters: Vec<_> = buckets
+                    .iter()
+                    .map(|b| b.range((from, Unbounded)).peekable())
+                    .collect();
                 let mut heap: BinaryHeap<Reverse<(String, ConceptId, usize)>> = BinaryHeap::new();
                 for (i, it) in iters.iter_mut().enumerate() {
                     if let Some((n, id)) = it.peek() {
@@ -1849,7 +1901,7 @@ impl OntologyGraph {
                     }
                 }
             } else if let Some(bucket) = self.concepts_by_type.get(t) {
-                for (name, id) in bucket.iter() {
+                for (name, id) in bucket.range((from, Unbounded)) {
                     if !consume(name, id) {
                         break;
                     }
@@ -1857,7 +1909,7 @@ impl OntologyGraph {
             }
         } else {
             let idx = self.concepts_sorted.read();
-            for (_ct, name, id) in idx.iter() {
+            for (_ct, name, id) in idx.range((after.map_or(Unbounded, Excluded), Unbounded)) {
                 if !consume(name, id) {
                     break;
                 }
@@ -1922,6 +1974,7 @@ impl OntologyGraph {
             offset,
             limit,
             track_total,
+            None,
         );
 
         let mut cache = self.list_relations_cache.lock();
@@ -1939,6 +1992,31 @@ impl OntologyGraph {
         (total, page)
     }
 
+    /// Cursor listing of relations (T1): the page strictly after relation
+    /// `after` in id order, with the same filters as `list_relations_page`,
+    /// and the next cursor (`None` once the page is short).
+    pub fn list_relations_after(
+        &self,
+        source: Option<ConceptId>,
+        target: Option<ConceptId>,
+        relation_type: Option<&str>,
+        after: Option<RelationId>,
+        limit: usize,
+    ) -> (Vec<Relation>, Option<RelationId>) {
+        let (_, page) = self.list_relations_page_uncached(
+            source,
+            target,
+            relation_type,
+            0,
+            limit,
+            false,
+            after,
+        );
+        let next = page.last().filter(|_| page.len() == limit).map(|r| r.id);
+        (page, next)
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn list_relations_page_uncached(
         &self,
         source: Option<ConceptId>,
@@ -1947,6 +2025,7 @@ impl OntologyGraph {
         offset: usize,
         limit: usize,
         track_total: bool,
+        after: Option<RelationId>,
     ) -> (usize, Vec<Relation>) {
         // Adjacency fast path. When `source` and/or `target` is set, pull
         // candidate relation ids from the adjacency index rather than scanning
@@ -2008,6 +2087,10 @@ impl OntologyGraph {
                 (None, None, _, _) => unreachable!(),
             };
             candidates.sort_unstable();
+            if let Some(a) = after {
+                let skip = candidates.partition_point(|r| *r <= a);
+                candidates.drain(..skip);
+            }
             let mut total = 0usize;
             let mut page: Vec<Relation> = Vec::with_capacity(limit.min(LIST_PREALLOC_CAP));
             for rid in &candidates {
@@ -2044,7 +2127,7 @@ impl OntologyGraph {
         let idx = self.relations_sorted.read();
         let mut total = 0usize;
         let mut page: Vec<Relation> = Vec::with_capacity(limit.min(LIST_PREALLOC_CAP));
-        for rid in idx.iter() {
+        for rid in idx.range((after.as_ref().map_or(Unbounded, Excluded), Unbounded)) {
             let Some(rel) = self.relations.get(rid) else {
                 continue;
             };

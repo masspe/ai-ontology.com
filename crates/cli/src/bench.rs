@@ -628,6 +628,7 @@ async fn query(store_dir: &Path, iterations: usize) -> Result<serde_json::Value>
     }
 
     let mut page = Vec::with_capacity(iterations);
+    let mut cursor_page = Vec::with_capacity(iterations);
     let mut search = Vec::with_capacity(iterations);
     let mut expand = Vec::with_capacity(iterations);
     let mut page_rows = 0usize;
@@ -645,6 +646,15 @@ async fn query(store_dir: &Path, iterations: usize) -> Result<serde_json::Value>
         let t = Instant::now();
         let (_, rows) = graph.list_concepts_page(None, None, offset, 200, false, true);
         page.push(t.elapsed());
+        page_rows += rows.len();
+
+        // The same page reached by cursor (T1): start strictly after a
+        // random concept's sort key — O(log N + page) instead of O(offset).
+        let c = &sample[rng.below(sample.len() as u64) as usize];
+        let key = (c.concept_type.clone(), c.name.clone(), c.id);
+        let t = Instant::now();
+        let (rows, _) = graph.list_concepts_after(None, None, Some(&key), 200, true);
+        cursor_page.push(t.elapsed());
         page_rows += rows.len();
 
         let name = &sample[rng.below(sample.len() as u64) as usize].name;
@@ -674,7 +684,9 @@ async fn query(store_dir: &Path, iterations: usize) -> Result<serde_json::Value>
         "iterations": iterations,
         "page200_p50_us": round0(us(percentile(&page, 50.0))),
         "page200_p99_us": round0(us(percentile(&page, 99.0))),
-        "page200_rows_avg": round0(page_rows as f64 / iterations as f64),
+        "page200_rows_avg": round0(page_rows as f64 / (2 * iterations) as f64),
+        "cursor_page200_p50_us": round0(us(percentile(&cursor_page, 50.0))),
+        "cursor_page200_p99_us": round0(us(percentile(&cursor_page, 99.0))),
         "search_q_p50_us": round0(us(percentile(&search, 50.0))),
         "search_q_p99_us": round0(us(percentile(&search, 99.0))),
         "search_hits_avg": round2(hits as f64 / iterations as f64),

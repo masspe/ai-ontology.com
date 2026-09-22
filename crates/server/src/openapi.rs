@@ -356,10 +356,13 @@ const SPEC_JSON: &str = r##"{
                     "parameters": [
                         { "name": "type",   "in": "query", "schema": { "type": "string" } },
                         { "name": "q",      "in": "query", "schema": { "type": "string" } },
-                        { "name": "limit",  "in": "query", "schema": { "type": "integer", "default": 50 } },
-                        { "name": "offset", "in": "query", "schema": { "type": "integer", "default": 0 } }
+                        { "name": "limit",  "in": "query", "schema": { "type": "integer", "default": 200 } },
+                        { "name": "cursor", "in": "query", "schema": { "type": "string" }, "description": "Opaque cursor from a previous next_cursor; the page starts strictly after it. O(log N + page) wherever it starts." },
+                        { "name": "offset", "in": "query", "deprecated": true, "schema": { "type": "integer", "default": 0 }, "description": "Deprecated: O(offset). Use cursor." },
+                        { "name": "track_total", "in": "query", "schema": { "type": "boolean", "default": true } },
+                        { "name": "include_subtypes", "in": "query", "schema": { "type": "boolean", "default": true } }
                     ],
-                    "responses": { "200": { "description": "List response" } }
+                    "responses": { "200": { "description": "{ total (null on a cursor page), concepts, next_cursor (null on the last page) }" } }
                 },
                 "post": {
                     "summary": "Create a concept",
@@ -391,10 +394,12 @@ const SPEC_JSON: &str = r##"{
                         { "name": "source", "in": "query", "schema": { "type": "integer" } },
                         { "name": "target", "in": "query", "schema": { "type": "integer" } },
                         { "name": "type",   "in": "query", "schema": { "type": "string" } },
-                        { "name": "limit",  "in": "query", "schema": { "type": "integer", "default": 50 } },
-                        { "name": "offset", "in": "query", "schema": { "type": "integer", "default": 0 } }
+                        { "name": "limit",  "in": "query", "schema": { "type": "integer", "default": 100 } },
+                        { "name": "cursor", "in": "query", "schema": { "type": "string" }, "description": "Opaque cursor from a previous next_cursor; the page starts strictly after it." },
+                        { "name": "offset", "in": "query", "deprecated": true, "schema": { "type": "integer", "default": 0 }, "description": "Deprecated: O(offset). Use cursor." },
+                        { "name": "track_total", "in": "query", "schema": { "type": "boolean", "default": true } }
                     ],
-                    "responses": { "200": { "description": "List response" } }
+                    "responses": { "200": { "description": "{ total (null on a cursor page), relations, next_cursor (null on the last page) }" } }
                 },
                 "post": {
                     "summary": "Create a relation",

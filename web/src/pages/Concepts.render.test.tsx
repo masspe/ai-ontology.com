@@ -40,11 +40,6 @@ import * as api from "../api";
 
 const mocked = vi.mocked(api);
 
-// The page is heavy (four sparklines, a 7-row table and two side panels
-// re-render on every keystroke), so the scenarios that type through
-// `userEvent` take 2–4 s in jsdom. Give them headroom on a loaded CI box:
-// nothing here sleeps, every wait is a `findBy*` / `waitFor`.
-vi.setConfig({ testTimeout: 20_000 });
 
 // ---- Fixtures ---------------------------------------------------------------
 
@@ -152,9 +147,16 @@ beforeEach(() => {
       const q = params.q.toLowerCase();
       rows = rows.filter((c) => c.name.toLowerCase().includes(q));
     }
-    const offset = params.offset ?? 0;
+    // Cursor = index of the first row of the next page, like the server's
+    // opaque key but readable in assertions.
+    const offset = params.cursor != null ? Number(params.cursor) : (params.offset ?? 0);
     const limit = params.limit ?? rows.length;
-    return { total: rows.length, concepts: rows.slice(offset, offset + limit) };
+    const end = offset + limit;
+    return {
+      total: params.cursor != null ? null : rows.length,
+      concepts: rows.slice(offset, end),
+      next_cursor: end < rows.length ? String(end) : null,
+    };
   });
   mocked.listRelations.mockImplementation(async (params = {}) => {
     const out = rels.filter(
@@ -162,7 +164,7 @@ beforeEach(() => {
         (params.source == null || r.source === params.source) &&
         (params.target == null || r.target === params.target),
     );
-    return { total: out.length, relations: out };
+    return { total: out.length, relations: out, next_cursor: null };
   });
 
   mocked.createConcept.mockImplementation(async (c) => {
@@ -260,7 +262,7 @@ describe("Concepts page — stat tiles", () => {
 describe("Concepts page — library list", () => {
   it("lists the first page sorted by last update, with domain, clipped definition, status, links and date", async () => {
     await mountLoaded();
-    expect(mocked.listConcepts).toHaveBeenCalledWith({ type: undefined, q: undefined, limit: 7, offset: 0 });
+    expect(mocked.listConcepts).toHaveBeenCalledWith({ type: undefined, q: undefined, limit: 7, cursor: undefined });
     expect(rowNames()).toEqual(["Alice", "ACME", "Master SLA", "Bob"]);
 
     const [alice, acme, sla, bob] = libraryRows();
@@ -300,7 +302,7 @@ describe("Concepts page — library list", () => {
     // Nothing is fetched synchronously: the query waits for the debounce.
     expect(pageCalls().some((p) => p.q)).toBe(false);
     await waitFor(() =>
-      expect(mocked.listConcepts).toHaveBeenCalledWith({ type: undefined, q: "ali", limit: 7, offset: 0 }),
+      expect(mocked.listConcepts).toHaveBeenCalledWith({ type: undefined, q: "ali", limit: 7, cursor: undefined }),
     );
     await waitFor(() => expect(rowNames()).toEqual(["Alice"]));
     expect(screen.getByText("Showing 1–1 of 1 concepts")).toBeInTheDocument();
@@ -310,7 +312,7 @@ describe("Concepts page — library list", () => {
     const { user } = await mountLoaded();
     await user.selectOptions(screen.getByDisplayValue("All Domains"), "Company");
     await waitFor(() =>
-      expect(mocked.listConcepts).toHaveBeenCalledWith({ type: "Company", q: undefined, limit: 7, offset: 0 }),
+      expect(mocked.listConcepts).toHaveBeenCalledWith({ type: "Company", q: undefined, limit: 7, cursor: undefined }),
     );
     await waitFor(() => expect(rowNames()).toEqual(["ACME"]));
 
@@ -327,46 +329,52 @@ describe("Concepts page — library list", () => {
     await waitFor(() => expect(rowNames()).toEqual(["ACME", "Master SLA", "Alice", "Bob"]));
   });
 
-  it("pages through a long list with previous / next / numbered / last buttons", async () => {
-    db = many(40);
+  it("pages by cursor: next pushes the server cursor, previous pops it, total comes from page 1", async () => {
+    db = many(16);
     const { user } = await mountLoaded("Concept 01");
-    expect(screen.getByText("Showing 1–7 of 40 concepts")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "‹" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "5" })).toBeInTheDocument();
-    expect(screen.getByText("…")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "6" })).toBeInTheDocument(); // last page shortcut
-    expect(screen.queryByRole("button", { name: "7" })).not.toBeInTheDocument();
+    expect(screen.getByText("Showing 1–7 of 16 concepts")).toBeInTheDocument();
+    expect(screen.getByText("Page 1")).toBeInTheDocument();
+    const prev = screen.getByRole("button", { name: "Previous page" });
+    const next = screen.getByRole("button", { name: "Next page" });
+    expect(prev).toBeDisabled();
+    expect(next).toBeEnabled();
+    // The first page is fetched without a cursor (and without an offset).
+    expect(mocked.listConcepts).toHaveBeenCalledWith({ type: undefined, q: undefined, limit: 7, cursor: undefined });
 
-    await user.click(screen.getByRole("button", { name: "›" }));
-    await waitFor(() => expect(mocked.listConcepts).toHaveBeenCalledWith(expect.objectContaining({ offset: 7 })));
-    expect(await screen.findByText("Showing 8–14 of 40 concepts")).toBeInTheDocument();
+    await user.click(next);
+    await waitFor(() =>
+      expect(mocked.listConcepts).toHaveBeenCalledWith(expect.objectContaining({ cursor: "7" })),
+    );
+    expect(await screen.findByText("Showing 8–14 of 16 concepts")).toBeInTheDocument();
+    expect(screen.getByText("Page 2")).toBeInTheDocument();
     expect(rowNames()[0]).toBe("Concept 08");
-    expect(screen.getByRole("button", { name: "2" })).toHaveClass("pager-active");
 
-    await user.click(screen.getByRole("button", { name: "6" }));
-    await waitFor(() => expect(mocked.listConcepts).toHaveBeenCalledWith(expect.objectContaining({ offset: 35 })));
-    expect(await screen.findByText("Showing 36–40 of 40 concepts")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "›" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Next page" }));
+    await waitFor(() =>
+      expect(mocked.listConcepts).toHaveBeenCalledWith(expect.objectContaining({ cursor: "14" })),
+    );
+    expect(await screen.findByText("Showing 15–16 of 16 concepts")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Next page" })).toBeDisabled();
 
-    await user.click(screen.getByRole("button", { name: "‹" }));
-    await waitFor(() => expect(mocked.listConcepts).toHaveBeenCalledWith(expect.objectContaining({ offset: 28 })));
-    expect(await screen.findByText("Showing 29–35 of 40 concepts")).toBeInTheDocument();
-
-    await user.click(screen.getByRole("button", { name: "1" }));
-    expect(await screen.findByText("Showing 1–7 of 40 concepts")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Previous page" }));
+    expect(await screen.findByText("Showing 8–14 of 16 concepts")).toBeInTheDocument();
+    // Back on page 2 through the stack: the same cursor, not an offset.
+    expect(mocked.listConcepts).toHaveBeenLastCalledWith(expect.objectContaining({ cursor: "7" }));
+    await user.click(screen.getByRole("button", { name: "Previous page" }));
+    expect(await screen.findByText("Showing 1–7 of 16 concepts")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Previous page" })).toBeDisabled();
   });
 
-  it("clamps the page when the total shrinks below the current offset", async () => {
-    db = many(40);
+  it("steps back when the current page empties under it", async () => {
+    db = many(8);
     const { user } = await mountLoaded("Concept 01");
-    await user.click(screen.getByRole("button", { name: "6" }));
-    await screen.findByText("Showing 36–40 of 40 concepts");
-    // Someone else emptied most of the store meanwhile: the delete leaves 7.
-    mocked.deleteConcept.mockImplementation(async (id) => {
-      db = db.filter((c) => c.id !== id).slice(0, 7);
-    });
-    await user.click(screen.getByRole("button", { name: "Delete concept Concept 36" }));
+    await user.click(screen.getByRole("button", { name: "Next page" }));
+    await screen.findByText("Showing 8–8 of 8 concepts");
+    // Deleting the only row of page 2 leaves an empty last page: the pager
+    // steps back to page 1 by itself.
+    await user.click(screen.getByRole("button", { name: "Delete concept Concept 08" }));
     await answerConfirm(user, "Delete");
+    expect(await screen.findByText("Page 1")).toBeInTheDocument();
     expect(await screen.findByText("Showing 1–7 of 7 concepts")).toBeInTheDocument();
     expect(rowNames()[0]).toBe("Concept 01");
   });
@@ -374,7 +382,7 @@ describe("Concepts page — library list", () => {
   it("surfaces a failing page fetch in the error banner", async () => {
     mocked.listConcepts.mockImplementation(async (params = {}) => {
       if (params.limit === 7) throw new Error("list down");
-      return { total: 0, concepts: [] };
+      return { total: 0, concepts: [], next_cursor: null };
     });
     renderPage(<Concepts />);
     expect(await screen.findByText("list down")).toBeInTheDocument();
@@ -939,7 +947,8 @@ describe("Concepts page — side cards", () => {
       if (params.limit === 1 && params.type === "Person") throw new Error("count down");
       let rows = db;
       if (params.type) rows = rows.filter((c) => c.concept_type === params.type);
-      return { total: rows.length, concepts: rows.slice(params.offset ?? 0, (params.offset ?? 0) + (params.limit ?? 7)) };
+      const off = params.offset ?? 0;
+      return { total: rows.length, concepts: rows.slice(off, off + (params.limit ?? 7)), next_cursor: null };
     });
     await mountLoaded();
     expect(await screen.findByText("No recent activity.")).toBeInTheDocument();

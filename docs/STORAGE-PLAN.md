@@ -22,7 +22,7 @@ Convention : `H*` / `R*` renvoient aux hypothèses et règles de
 | 2 | Conteneur binaire mono-flux : `.data`/`.idx` 48 o, MANIFEST, CRC, recovery, migration, compteurs d'ids par famille | 1, D1-D6 | 10-14 | **Livré** (§4.6) — `SegmentStore` remplace `FileStore` |
 | G | Décision gros documents : fragments ou texte hors graphe | — | 1 | **Tranché et livré** : fragments (STORAGE.md §10.9) |
 | 3 | Partitionnement par `ns` : routage, `.xref`, roulement, scellement `mmap`, compaction, group commit inter-requêtes | 2, G | 10-14 | **Livré** (§5.6) — compaction store entier, group commit inter-requêtes reporté à la mesure |
-| T1 | Pagination par curseur | — | 2 | API prête pour P3 ; à livrer avant 5a |
+| T1 | Pagination par curseur | — | 2 | **Livré** (2026-09-22, §8 T1) — API prête pour P3 |
 | 4 | Mesure et codec : générateur 10⁷ / 5×10⁷, benchs, `postcard` | 2 | 4-6 | Chiffres réels sur la cible ; codec activé si gain mesuré |
 | 5a | **Socle** (livré 2026-09-22 : budget, estimation R14, `strict`/`adaptive`) puis **P1** : slot + `Loc`, payloads relus depuis le disque | 3, 4, T1 | 8-12 | Cible 10⁷ / 5×10⁷ sur un nœud de 64 Go ; 2,4×10⁶ / 1,2×10⁷ sur 16 Go |
 | 5b | P2-P5 : `.adj`/`.srt` (CSR), paliers, hystérésis | 5a | 8-12 | **Sur besoin client** : un tenant au-delà de 5×10⁶ concepts sur un nœud contraint |
@@ -786,12 +786,50 @@ vérifier absence d'oscillation sous charge constante.
 
 ## 8. Transverse
 
-### T1 — Pagination par curseur (à faire **tôt**, avant toute phase 5)
+### T1 — Pagination par curseur (à faire **tôt**, avant toute phase 5) — **livré 2026-09-22**
 
 `GET /concepts?cursor=<base64(ctype, name, id)>&limit=` avec `next_cursor`
 dans la réponse ; `offset` conservé mais documenté déprécié. `concepts_sorted`
 supporte déjà `range(..)` sur la clé `(type, name, id)` (R6). Idem
 `GET /relations` sur `RelationId`. Web UI et OpenAPI à jour.
+
+Tel que livré (branche `feat/t1-cursor`) :
+
+- **Curseur** = clé de tri de la ligne, sérialisée JSON puis base64url sans
+  padding : opaque pour le client, autonome pour le serveur (la suppression
+  du concept nommé par le curseur n'invalide pas le curseur), sûre dans une
+  URL. Concepts : `(concept_type, name, id)` ; relations : `RelationId`.
+- **Graphe** : `list_concepts_after` / `list_relations_after` entrent dans
+  les ensembles triés par `range((Excluded(clé), Unbounded))` sur chacun des
+  chemins existants (ensemble global, seau d'un type, fusion k-way des
+  sous-types, intersection de trigrammes filtrée après coup, adjacence des
+  relations) : une page coûte O(log N + page) où qu'elle commence, contre
+  O(offset) avant. `list_*_page` (offset) est inchangé et délègue à la même
+  fonction interne avec `after = None`.
+- **API** : `cursor=` sur `GET /concepts` et `GET /relations` ; la réponse
+  porte `next_cursor` (`null` sur la dernière page, une page courte termine
+  la marche) **y compris sur une page par offset**, pour qu'un client
+  commence à `offset=0` et poursuive par curseur. Sur une page par curseur,
+  `offset` et `track_total` sont ignorés et `total` vaut `null` (compter,
+  c'est parcourir). Curseur illisible → 400 `invalid cursor`, curseur vide →
+  absent. `offset` reste servi, marqué `deprecated` dans `/openapi.json`.
+  L'ETag ne change pas (génération des données).
+- **Web** : la page Concepts pagine par pile de curseurs (`›` empile
+  `next_cursor`, `‹` dépile) ; les sauts numérotés disparaissent, ce qui est
+  la propriété même d'un curseur ; le total affiché vient de la première
+  page. Le client `api.ts` expose `cursor` et `next_cursor`.
+- **Règles et actions** : non concernés (`STORAGE.md` §8 ne les met pas sur
+  disque ; leurs listes restent petites) — YAGNI, à faire le jour où un
+  index trié sur disque les touche.
+- **Tests** : graphe — la marche par curseur reproduit exactement le
+  listing par offset sur les huit chemins de balayage et cinq tailles de
+  page, un curseur survit à la suppression du concept qu'il nomme et aux
+  insertions de part et d'autre ; relations, cinq chemins ; serveur —
+  contrat complet (première page par offset puis curseur, filtres
+  transportés, `total` nul, dernière page, ETag, 400) pour les deux
+  ressources ; web — pile de curseurs, retour arrière, page vidée par une
+  suppression ; `bench query` mesure la page par curseur à côté de la page
+  par offset (chiffres en STORAGE.md §7.8).
 
 ### T2 — CI
 
