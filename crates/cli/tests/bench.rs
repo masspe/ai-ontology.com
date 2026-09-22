@@ -107,10 +107,23 @@ fn bench_commands_run_end_to_end_on_a_small_store() {
         assert!(h[key].is_number(), "{key} missing in {h}");
     }
     assert!(h["decode_share_pct"].as_f64().unwrap() <= 100.0);
+    // The memory socle's estimate rides along (STORAGE.md §8.1): a whole
+    // store of 2 101 records is a few MiB at most, never zero MiB below
+    // the payload it holds.
+    assert!(h["estimate_mib"].is_number(), "{h}");
+    assert!(
+        h["estimate_mib"].as_f64().unwrap() >= h["payload_bytes"].as_f64().unwrap() / 1048576.0,
+        "{h}"
+    );
 
     // Selective hydration of one domain: only that domain's concepts.
     let h1 = run_json(&data, &["bench", "--json", "hydrate", "--ns", "d0"]);
     assert_eq!(h1["concepts"], 200, "{h1}");
+    // The estimate follows the selection: one domain out of three.
+    assert!(
+        h1["estimate_mib"].as_f64().unwrap() <= h["estimate_mib"].as_f64().unwrap(),
+        "{h1}"
+    );
     assert!(h1["relations"].as_u64().unwrap() < 1500);
     for key in [
         "apply_estimate_ms",

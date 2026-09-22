@@ -1310,6 +1310,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "jsonwebtoken",
+ "memory-stats",
  "ontology-graph",
  "ontology-index",
  "ontology-io",
@@ -1345,6 +1346,7 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "tracing",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

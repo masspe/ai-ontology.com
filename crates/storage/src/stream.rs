@@ -300,6 +300,10 @@ impl Stream {
     pub fn active(&self) -> &ActiveSegment {
         &self.active
     }
+    /// Counters of the active segment (records, edges, payload bytes).
+    pub fn active_counters(&mut self) -> io::Result<(u64, u64, u64)> {
+        self.active.counters()
+    }
     /// Seq of the last record in the stream, sealed or active.
     pub fn last_seq(&self) -> Option<u64> {
         if self.active.record_count() > 0 {

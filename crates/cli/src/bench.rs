@@ -460,6 +460,20 @@ async fn hydrate(store_dir: &Path, ns: Option<Vec<String>>) -> Result<serde_json
     let rss_unmapped = rss_mib();
     let store = SegmentStore::open(store_dir).await?;
 
+    // The memory socle's estimate for what was just loaded (STORAGE.md
+    // §8.1), from the MANIFEST alone, next to the measured heap: the gap
+    // is what calibrates the coefficients.
+    let estimate_bytes: u64 = store
+        .estimate_domains()?
+        .iter()
+        .filter(|d| match &ns {
+            Some(domains) if !domains.is_empty() => domains.contains(&d.ns),
+            _ => true,
+        })
+        .map(|d| d.estimated_bytes)
+        .sum();
+    let estimate_mib = estimate_bytes as f64 / (1024.0 * 1024.0);
+
     // Decode-only pass over the same bytes: the read path minus `apply`.
     let t2 = Instant::now();
     let (records, payload_bytes) = {
@@ -500,6 +514,13 @@ async fn hydrate(store_dir: &Path, ns: Option<Vec<String>>) -> Result<serde_json
         // The graph alone, once the store's mappings are released.
         "heap_delta_mib": match (rss_start, rss_unmapped) { (Some(a), Some(b)) => Some(round0(b - a)), _ => None },
         "commit_delta_mib": match (commit_start, commit_loaded) { (Some(a), Some(b)) => Some(round0(b - a)), _ => None },
+        // STORAGE.md §8.1 estimate of the loaded domains, and its ratio to
+        // the measured heap (> 100 = the estimate is conservative).
+        "estimate_mib": round0(estimate_mib),
+        "estimate_vs_heap_pct": match (rss_start, rss_unmapped) {
+            (Some(a), Some(b)) if b - a > 1.0 => Some(round0(100.0 * estimate_mib / (b - a))),
+            _ => None,
+        },
         "bytes_in_ram_per_record": match (rss_start, rss_unmapped) {
             (Some(a), Some(b)) if full_load && records > 0 => Some(round0((b - a) * 1024.0 * 1024.0 / records as f64)),
             _ => None,

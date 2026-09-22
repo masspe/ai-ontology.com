@@ -634,6 +634,25 @@ engagée (`PagefileUsage`) — c'est lui qui dimensionne les paliers.
 | 200 k concepts, 1 M relations | +1 381 Mio | +978 Mio | prédit 897 Mio à 350 o/relation ; l'écart (~475 o/relation) vient des capacités des tables de hachage, qui doublent par palier |
 | **Extrapolation à la cible 10⁷ / 5×10⁷** | — | **~27 Go de concepts + 17 à 24 Go de relations ≈ 45 à 50 Go** en P0 | — |
 
+**Estimation du socle (§8.1) contre tas mesuré** (phase 5, 2026-09-22, même
+store 200 k / 1 M, `bench hydrate --json` : `estimate_mib`,
+`estimate_vs_heap_pct`) — l'estimateur ne lit que le MANIFEST et doit rester
+une borne supérieure :
+
+| Chargement | Estimation | Tas mesuré (store refermé) | Estimation / tas |
+|---|---|---|---|
+| Store entier, 200 k concepts, 1 M relations | 1 111 Mio | 949 Mio | **117 %** |
+| Un domaine sur 5 (`--ns d0`), 40 k concepts, 160 k relations | 222 Mio | 168 Mio | **132 %** |
+
+L'estimation majore le tas de 17 à 32 % : la marge vient des coefficients
+arrondis vers le haut (1 500 o d'index par concept pour ~1 450 mesurés, 480 o
+par relation pour 350 à 475) et du pic de reconstruction (130 o par concept)
+compté alors qu'il est transitoire. Elle est plus large sur un domaine seul
+parce que les relations inter-domaines (20 %) sont comptées dans le domaine
+qui les écrit mais qu'une partie de leurs extrémités n'est pas chargée. Une
+borne à +15/+30 % est le bon côté de l'erreur pour R14 ; les coefficients
+sont à resserrer quand le CSR (§6.3) changera le coût des relations.
+
 La cible « 10⁷ concepts et 5×10⁷ relations sur un nœud de 16 Go » n'est
 donc pas atteignable en P0, ce que la stratégie prévoyait (« en P1 sinon »),
 mais **P1 seul ne suffit pas non plus** : sortir les payloads de la RAM
@@ -724,43 +743,103 @@ bug.
 
 > **Mesuré en phase 4 (§7.8)** : en P0 un concept de 1,3 Ko coûte ~2,75 Ko
 > de tas et une relation ~350 à 475 o. La cible 10⁷ / 5×10⁷ pèse 45 à 50 Go
-> en P0 ; P1 en retire ~13 Go, le CSR (P2–P4) 16 à 23 Go. L'affirmation « P1
-> supprime ~90 % de l'empreinte » ci-dessous était vraie pour des payloads
-> de plusieurs Ko et peu de relations ; pour un ratio 1:5 avec des payloads
-> de 1,3 Ko, **les relations et les index de concepts pèsent plus que les
-> payloads**. L'ordre des paliers est à retrancher (`STORAGE-PLAN.md` §6.6).
+> en P0 ; P1 en retire ~13 Go, le CSR (P2–P4) 16 à 23 Go. Pour un ratio 1:5
+> avec des payloads de 1,3 Ko, **les relations et les index de concepts
+> pèsent plus que les payloads**. L'ordre des paliers est à retrancher
+> (`STORAGE-PLAN.md` §6.6).
+
+**Livré (phase 5, socle, 2026-09-22)** — `crates/storage/src/budget.rs`.
 
 Le budget se lit dans l'environnement d'exécution, jamais dans
 `/proc/meminfo` `MemTotal` — un conteneur avec `memory.max = 2 Gi` sur un
-hôte à 64 Gi verra 64 Gi et se fera tuer.
+hôte à 64 Gi verra 64 Gi et se fera tuer. Ordre de détection, la première
+source qui répond gagne :
 
-```rust
-fn budget() -> u64 {
-    let avail = cgroup_v2_max()                  // /sys/fs/cgroup/memory.max
-        .or_else(cgroup_v1_limit)
-        .unwrap_or_else(mem_available);          // /proc/meminfo MemAvailable
-    (avail as f64 * CONFIG.heap_fraction) as u64 // 0.6 par défaut
-}
-```
-
-L'estimation du coût d'un domaine se calcule depuis le MANIFEST, avant toute
-ouverture de fichier (R14) :
+| Source | Lecture | `budget_source` |
+|---|---|---|
+| Explicite | `--memory-budget-mb` / `ONTOLOGY_MEMORY_BUDGET_MB` (fraction ignorée) | `explicit` |
+| cgroup v2 | `memory.max` du cgroup du processus (`/proc/self/cgroup`, ligne `0::`) puis de chaque parent jusqu'à la racine `/sys/fs/cgroup` ; la plus petite limite trouvée gagne ; `max` partout = pas de limite → source suivante | `cgroup-v2` |
+| cgroup v1 | `/sys/fs/cgroup/memory/memory.limit_in_bytes` (valeur sentinelle ≥ 2⁶² = pas de limite) | `cgroup-v1` |
+| Linux sans cgroup | `/proc/meminfo` `MemAvailable` | `meminfo` |
+| Windows | `GlobalMemoryStatusEx().ullAvailPhys` | `windows` |
+| Autre | aucune — **rien n'est appliqué**, tout est chargé, `warn` au démarrage | `unknown` |
 
 ```
-coût(ns) ≈ payload_moyen × concepts   // P0 uniquement — entités complètes en heap
-         +  90 o × concepts           // slot 32 o + entrée de hash + symboles
-         +   8 o × arêtes             // CSR out + in
-         +  60 o × concepts           // trigrammes du nom (H4)
+budget = disponible × heap_fraction        // --heap-fraction, ONTOLOGY_HEAP_FRACTION, 0,6 par défaut
+                                           // la CLI refuse toute valeur hors de ]0 ; 1] ou non finie
 ```
 
-Le premier terme est de loin le plus gros (~1,4 Ko par entité sur le jeu
-actuel) et c'est le seul que P1 supprime : passer de P0 à P1 divise
-l'empreinte par un ordre de grandeur, au prix d'une lecture `mmap` sur les
-endpoints qui renvoient les propriétés. C'est pour ça que c'est la première
-marche.
+Les sources se répartissent en **limites dures** (`explicit`, `cgroup-v2`,
+`cgroup-v1` : dépasser, c'est être tué) et **lectures molles** (`meminfo`,
+`windows` : la mémoire libre à l'instant du démarrage, qui change d'un
+démarrage à l'autre). La distinction commande le comportement du mode
+`adaptive` ci-dessous.
 
-Parmi les index, le poste dominant est le troisième : les trigrammes coûtent
-à eux seuls plus que le graphe qu'ils indexent. C'est la marche suivante.
+La limite de Job Object Windows n'est pas lue : sur Windows le déploiement
+conteneurisé passe par `--memory-budget-mb`.
+
+L'estimation du coût P0 d'un domaine se calcule **depuis le MANIFEST et les
+compteurs des segments actifs, avant d'ouvrir un seul segment scellé**
+(R14). Les zone maps par partition (§4.5) portent `records`, `edges` et
+`payload_bytes` ; le segment actif est compté depuis son index positionnel
+(entrées validées + en attente). Les coefficients sont ceux mesurés en §7.8,
+arrondis vers le haut :
+
+```
+coût(ns) = payload_bytes                          // entités désérialisées, ~1:1 avec le JSON
+         + (records − edges) × (1 500 + 130) o    // index par concept (nom, trigrammes, ensembles
+                                                  // triés, table des propriétés) + pic de reconstruction
+                                                  // des index dérivés à la fin du bulk load
+         + edges × 480 o                          // struct, 4 entrées d'adjacence, ensemble trié, type
+```
+
+Les suppressions et mises à jour sont comptées comme des concepts :
+l'estimation est une **borne supérieure**, jamais une sous-estimation —
+avec le codec JSON par défaut. Avec `postcard` (§7.1), `payload_bytes` est
+la taille binaire sur disque, plus petite que l'entité désérialisée : le
+premier terme devient une légère sous-estimation (de l'ordre de −25 % sur
+ce seul terme), à garder en tête si le store a été compacté en binaire. Le
+domaine `meta` (schéma, règles) n'est pas estimé : il est toujours chargé et
+petit (H3). L'écart estimation / tas mesuré est consigné en §7.8 et
+reproductible avec `ontology bench hydrate --json` (`estimate_mib`,
+`estimate_vs_heap_pct`).
+
+Le **plan de chargement** est pris une fois, au démarrage, et se lit dans
+`GET /stats` (`memory`) et `GET /metrics` :
+
+- `--memory-mode strict` — si la somme des estimations dépasse le budget,
+  le processus **refuse de démarrer** (R17) avec le requis, le budget, le
+  disponible, la source et les plus gros domaines dans le message.
+- `--memory-mode adaptive` (défaut) — sous une **limite dure**, les
+  domaines sont pris **du plus petit au plus grand** tant que le budget
+  tient ; les autres ne sont pas chargés et sont nommés dans un `warn`
+  (« partial load : ces domaines ne sont PAS en mémoire »). Charger le
+  maximum de domaines est le choix par défaut ; un opérateur qui veut un
+  domaine précis le nomme. Sous une **lecture molle**, `adaptive` ne
+  retranche rien : tout est chargé (le comportement d'avant le socle) et,
+  si l'estimation dépasse le budget, un `warn` le dit (`over_budget`) —
+  retrancher sur la mémoire libre chargerait un jeu de domaines différent
+  à chaque démarrage, ce qui est pire qu'un avertissement explicite (R17).
+  Sur un tel hôte, la borne s'impose avec `strict` ou `--memory-budget-mb`.
+- `serve --ns a,b` — la liste explicite **gagne toujours** sur le plan ;
+  en `strict`, son estimation est tout de même vérifiée ; un nom inconnu
+  est refusé avec la liste des domaines connus.
+- Budget inconnu — tout est chargé, quel que soit le mode, avec un `warn`
+  invitant à poser `--memory-budget-mb`.
+
+Ce que le plan expose :
+
+| `GET /stats` → `memory` | `GET /metrics` |
+|---|---|
+| `mode`, `budget_source`, `budget_mib`, `available_mib` | `ontology_memory_budget_bytes` (0 si inconnu) |
+| `estimate_mib`, `loaded_estimate_mib` | `ontology_memory_estimate_bytes`, `ontology_memory_loaded_estimate_bytes` |
+| `partial`, `over_budget`, `domains_loaded[]`, `domains_skipped[]` | `ontology_memory_partial`, `ontology_memory_over_budget`, `ontology_domains_loaded`, `ontology_domains_skipped` |
+| — | `ontology_memory_budget_known` (lève l'ambiguïté d'un budget à 0) |
+| `rss_mib` | `ontology_process_rss_bytes` |
+
+`memory` est `null` sans store sur disque (mode mémoire pure). Le palier par
+domaine (§8.2) n'existe pas encore : le socle ne connaît que « chargé » et
+« pas chargé ».
 
 ### 8.2 Quatre paliers, décidés par domaine
 

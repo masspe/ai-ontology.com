@@ -38,6 +38,11 @@ pub enum StoreError {
     #[error("store format: {0}")]
     Format(String),
 
+    /// The memory plan refused the load (R17) or `--ns` named an unknown
+    /// domain; the message is the operator-facing one.
+    #[error("{0}")]
+    Budget(#[from] crate::budget::BudgetError),
+
     /// A write failed part-way (disk full, I/O error). The on-disk tail is
     /// in an unknown state, so the store refuses every further append until
     /// the process restarts and recovery truncates the torn tail. Retrying
