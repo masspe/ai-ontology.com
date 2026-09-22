@@ -78,9 +78,13 @@ document et des sections datées du plan.
 - Critère J5 (plan §9) : sur le store 5×10⁵ / 2,5×10⁶, tas divisé par
   ≥ 1,4, P95 `GET /concepts/{id}` < 2× P0, hydratation ≤ 1,2× P0 ;
   **capacité prouvée** par `bench gen 5×10⁶ / 2,5×10⁷` hydraté en
-  `--memory-mode strict` sur une machine de 64 Go (à prévoir : pas
-  disponible sur le poste de développement). Cette preuve est la seule qui
-  autorise à promettre 10⁷ à un client (plan §6.6, décision 3).
+  `--memory-mode strict` sur une machine de 64 Go. **Décision du
+  2026-09-22** : aucune machine de 64 Go n'est disponible et personne ne
+  demande 10⁷ ; cette preuve n'est faite que le jour où une promesse
+  contractuelle l'exige (une VM louée une heure suffit), et la formulation
+  actuelle — garantie 16 Go, cible 64 Go estimée — reste telle quelle.
+  Elle ne conditionne pas P1, dont le critère J5 se mesure sur le store
+  5×10⁵ du poste de développement.
 
 ### 3.3 Phase 5b — uniquement sur besoin client (plan §0, §7.3, §7.4, §8 T6)
 
