@@ -8,6 +8,9 @@ A Rust workspace implementing an ontology-structured graph database with a
 hybrid retrieval layer and a RAG pipeline that grounds language-model
 answers in retrieved subgraphs.
 
+**Where the project stands and what comes next:** [docs/ROADMAP.md](docs/ROADMAP.md)
+(state, dated decisions, next steps with acceptance criteria, working process).
+
 The coverage badges are **live**: after every push to `main` the CI measures
 line coverage of the whole Rust suite and of the web UI and publishes the
 figures (see [Test coverage](#test-coverage)). Green is ≥ 80 %, bright green
@@ -558,6 +561,20 @@ The plan taken is logged at startup and visible in `GET /stats` (`memory`) and
 `GET /metrics` (`ontology_memory_*`, `ontology_domains_*`). A partial load is
 a `warn` naming the domains left out. Details in
 [docs/STORAGE.md §8.1](docs/STORAGE.md#81-le-budget-pas-la-ram-totale).
+
+**Sizing** (measured coefficients, 1.3 KB payloads, 5 relations per concept;
+extrapolated, see STORAGE.md §8.1 for the assumptions):
+
+| Node | Today (P0) | With P1 (payloads on disk, next storage step) |
+|---|---|---|
+| 16 GB, default fraction 0.6 | ~1.8 M concepts / 9 M relations | ~2.4 M / 12 M |
+| 64 GB, fraction 0.6 | ~7 M / 35 M | ~9.5 M / 47 M |
+| 64 GB, `--heap-fraction 0.8` (dedicated node) | ~9.6 M / 48 M | **~13 M / 63 M** |
+
+The design target of 10 M concepts / 50 M relations per store is therefore
+served by a 64 GB node; on 16 GB the guarantee is 2 M / 10 M. Use `--memory-mode
+strict` on a sized deployment so an oversized store fails at startup with both
+figures instead of being killed later.
 
 ## Benchmarks (`ontology bench`)
 
