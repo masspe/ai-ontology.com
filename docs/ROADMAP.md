@@ -166,6 +166,18 @@ processus multi-tenant : l'isolation que le conteneur donne gratuitement
 n'est pas à réécrire. Le produit est l'API REST (`/openapi.json`) ;
 l'interface web est la console d'administration et d'analyse.
 
+Ce que chaque étape applique du plan de stockage (vérifié le 2026-09-24) :
+
+| Étape production | Ce qu'elle applique du plan de stockage |
+|---|---|
+| Une image, un conteneur par client | **T5**, tranchée le 2026-09-15 (STORAGE.md §10.8) : un store par tenant, un processus par tenant, le routage au reverse proxy |
+| Limite mémoire du conteneur | **D5** (le budget est une propriété du déploiement) et le socle §8.1 (cgroup v2 lu en premier) ; `--memory-mode strict` par défaut en conteneur = **R17** |
+| `docker stop` propre | Arrêt sur SIGTERM livré avec le chantier T (2026-09-23) |
+| Sauvegarde et restauration | Segments immuables et MANIFEST (phase 2), `LOCK` (H17), compaction comme condition de survie (§8.7) |
+| Mise à jour exercée en CI | Migration automatique de format (phase 2), `format_version` 1 et 2 (phase 4) |
+| Interface servie par le binaire, clés d'API, audit | Hors plan de stockage, sans contradiction avec lui |
+| Phase 5b (T6, CSR, contrôleur) | **Pas dans ce chantier** : sur besoin client, comme le plan l'écrit |
+
 Étapes, chacune sa branche, testée, fusionnée, dans cet ordre :
 
 1. **Image et déploiement de référence.** Le `Dockerfile` existant
