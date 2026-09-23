@@ -7,7 +7,7 @@
 // from Winven AI Sarl. See LICENSE and LICENSE-COMMERCIAL.md.
 
 use async_trait::async_trait;
-use ontology_graph::OntologyGraph;
+use ontology_graph::{GraphError, OntologyGraph};
 use parking_lot::Mutex;
 use std::sync::Arc;
 
@@ -93,20 +93,17 @@ pub(crate) fn apply(graph: &Arc<OntologyGraph>, r: LogRecord) -> StoreResult<()>
             }
         }
         RecordKind::UpdateConcept(c) => {
-            // If the concept already exists, drive update_concept so the
-            // rename path cleans the name-index. Otherwise treat the update
-            // as a create (defensive — shouldn't happen in normal logs).
-            if graph.get_concept(c.id).is_ok() {
-                graph.update_concept(
-                    c.id,
-                    ontology_graph::ConceptPatch {
-                        name: Some(c.name.clone()),
-                        description: Some(c.description.clone()),
-                        properties: Some(c.properties.clone()),
-                    },
-                )?;
-            } else {
-                graph.upsert_concept(c)?;
+            // The record holds the whole concept: replace in place (the
+            // rename path cleans the name index) without reading the old
+            // payload first — in P1 that read would come from disk. A
+            // concept unknown to the graph is created (defensive; a normal
+            // log never does this).
+            match graph.apply_concept_update(c.clone()) {
+                Ok(_) => {}
+                Err(GraphError::UnknownConcept(_)) => {
+                    graph.upsert_concept(c)?;
+                }
+                Err(e) => return Err(e.into()),
             }
         }
         RecordKind::DeleteConcept(id) => {

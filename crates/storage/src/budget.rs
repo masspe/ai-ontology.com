@@ -407,6 +407,11 @@ pub struct LoadPlan {
     /// limit), where trimming would make the set of loaded domains depend
     /// on what else ran at boot. The caller warns loudly (R17).
     pub over_budget: bool,
+    /// Domains loaded in **P1** (payloads on disk, STORAGE.md §8.2): in
+    /// adaptive mode under a hard limit, a domain that does not fit in P0
+    /// but fits without its payload is loaded that way instead of being
+    /// skipped. Subset of `domains`.
+    pub p1_domains: Vec<String>,
     /// Every domain's estimate, for reporting.
     pub estimates: Vec<DomainEstimate>,
 }
@@ -516,6 +521,7 @@ pub fn plan_load(
             skipped,
             explicit: true,
             over_budget: false,
+            p1_domains: Vec::new(),
             estimates,
         });
     }
@@ -530,6 +536,7 @@ pub fn plan_load(
             skipped: Vec::new(),
             explicit: false,
             over_budget: false,
+            p1_domains: Vec::new(),
             estimates,
         });
     };
@@ -544,6 +551,7 @@ pub fn plan_load(
             skipped: Vec::new(),
             explicit: false,
             over_budget: false,
+            p1_domains: Vec::new(),
             estimates,
         });
     }
@@ -567,6 +575,7 @@ pub fn plan_load(
                 skipped: Vec::new(),
                 explicit: false,
                 over_budget: true,
+                p1_domains: Vec::new(),
                 estimates,
             })
         }
@@ -579,11 +588,18 @@ pub fn plan_load(
             });
             let mut used = 0u64;
             let mut chosen: Vec<String> = Vec::new();
+            let mut p1: Vec<String> = Vec::new();
             let mut skipped: Vec<SkippedDomain> = Vec::new();
             for d in order {
+                // P1 cost: the same domain without its payloads in heap.
+                let p1_cost = d.estimated_bytes - d.payload_bytes;
                 if used + d.estimated_bytes <= budget_bytes {
                     used += d.estimated_bytes;
                     chosen.push(d.ns.clone());
+                } else if used + p1_cost <= budget_bytes {
+                    used += p1_cost;
+                    chosen.push(d.ns.clone());
+                    p1.push(d.ns.clone());
                 } else {
                     skipped.push(SkippedDomain {
                         ns: d.ns.clone(),
@@ -592,6 +608,7 @@ pub fn plan_load(
                 }
             }
             chosen.sort();
+            p1.sort();
             skipped.sort_by(|a, b| a.ns.cmp(&b.ns));
             Ok(LoadPlan {
                 mode,
@@ -602,6 +619,7 @@ pub fn plan_load(
                 skipped,
                 explicit: false,
                 over_budget: false,
+                p1_domains: p1,
                 estimates,
             })
         }
@@ -823,6 +841,40 @@ mod tests {
         let e = vec![est("a", 2, 100), est("b", 3, 200)];
         let p = plan_load(e, MemoryBudget::fixed(300), MemoryMode::Adaptive, None).unwrap();
         assert_eq!(p.domains, None);
+    }
+
+    #[test]
+    fn adaptive_falls_back_to_p1_when_only_the_payload_is_too_big() {
+        // `big` is 900 in P0 of which 600 is payload: 300 in P1.
+        let mut big = est("big", 2, 900);
+        big.payload_bytes = 600;
+        let e = vec![big, est("small", 3, 100)];
+        let p = plan_load(
+            e.clone(),
+            MemoryBudget::fixed(450),
+            MemoryMode::Adaptive,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            p.domains,
+            Some(vec!["big".to_string(), "small".to_string()])
+        );
+        assert_eq!(p.p1_domains, ["big"]);
+        assert_eq!(p.estimated_loaded_bytes, 400);
+        assert!(!p.is_partial());
+        // Below even the P1 cost, the domain is skipped as before.
+        let p = plan_load(
+            e.clone(),
+            MemoryBudget::fixed(350),
+            MemoryMode::Adaptive,
+            None,
+        )
+        .unwrap();
+        assert_eq!(p.domains, Some(vec!["small".to_string()]));
+        assert!(p.p1_domains.is_empty() && p.skipped.len() == 1);
+        // Strict does not fall back: refusing is its contract.
+        assert!(plan_load(e, MemoryBudget::fixed(450), MemoryMode::Strict, None).is_err());
     }
 
     #[test]

@@ -67,6 +67,7 @@ fn partial_plan() -> LoadPlan {
         }],
         explicit: false,
         over_budget: false,
+        p1_domains: vec![],
         estimates: vec![
             est("parties", 2, 1 << 20),
             est("contrats", 3, 2 << 20),
@@ -96,6 +97,10 @@ async fn stats_and_metrics_expose_the_memory_plan() {
     );
     assert_eq!(m["domains_skipped"], serde_json::json!(["facturation"]));
     assert!(m["rss_mib"].is_number() || m["rss_mib"].is_null());
+    // P1 (STORAGE.md §8.2): which domains keep their payloads on disk, and
+    // how many payloads are in memory right now (an empty graph: 0).
+    assert_eq!(m["p1_domains"], serde_json::json!([]));
+    assert_eq!(m["resident_payloads"], 0);
 
     let (st, text) = get(&app, "/metrics").await;
     assert_eq!(st, StatusCode::OK);
@@ -108,6 +113,8 @@ async fn stats_and_metrics_expose_the_memory_plan() {
         "ontology_memory_partial 1",
         "ontology_memory_over_budget 0",
         "ontology_memory_budget_known 1",
+        "ontology_domains_p1 0",
+        "ontology_resident_payloads 0",
     ] {
         assert!(text.contains(line), "missing `{line}` in:\n{text}");
     }
