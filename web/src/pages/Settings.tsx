@@ -826,14 +826,30 @@ function LlmServerSection({ settings, onPatch }: LlmServerSectionProps) {
   const initialProvider =
     llm.active_provider && llm.active_provider !== "default" ? llm.active_provider : "openai";
 
+  // The saved form of one provider. Used for the initial state *and* in the
+  // re-sync effect: initialising empty and letting the effect fill the form
+  // rendered one frame with the wrong model, catalogue and URL.
+  const formFor = (p: string) => ({
+    baseUrl:
+      p === "openai"
+        ? llm.openai_base_url
+        : p === "anthropic"
+          ? llm.anthropic_base_url
+          : llm.infomaniak_base_url,
+    model:
+      p === "openai" ? llm.openai_model : p === "anthropic" ? llm.anthropic_model : llm.infomaniak_model,
+    productId: p === "infomaniak" ? llm.infomaniak_product_id : "",
+    models: MODEL_FALLBACKS[p] ?? [],
+  });
+  const initial = formFor(initialProvider);
   const [provider, setProvider] = useState<string>(initialProvider);
   const [apiKey, setApiKey] = useState("");
   const [showKey, setShowKey] = useState(false);
-  const [productId, setProductId] = useState("");
-  const [baseUrl, setBaseUrl] = useState("");
+  const [productId, setProductId] = useState(initial.productId);
+  const [baseUrl, setBaseUrl] = useState(initial.baseUrl);
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const [model, setModel] = useState("");
-  const [models, setModels] = useState<LlmModelInfo[]>(MODEL_FALLBACKS.openai);
+  const [model, setModel] = useState(initial.model);
+  const [models, setModels] = useState<LlmModelInfo[]>(initial.models);
   const [products, setProducts] = useState<InfomaniakProduct[]>([]);
   const [temperature, setTemperature] = useState<number>(llm.temperature);
   const [maxTokens, setMaxTokens] = useState<number>(llm.max_tokens);
@@ -844,18 +860,13 @@ function LlmServerSection({ settings, onPatch }: LlmServerSectionProps) {
   // changes. Models reset to the offline fallback: a catalogue fetched for one
   // provider must not linger in another's picker.
   useEffect(() => {
-    if (provider === "openai") {
-      setBaseUrl(llm.openai_base_url);
-      setModel(llm.openai_model);
-    } else if (provider === "anthropic") {
-      setBaseUrl(llm.anthropic_base_url);
-      setModel(llm.anthropic_model);
-    } else if (provider === "infomaniak") {
-      setBaseUrl(llm.infomaniak_base_url);
-      setModel(llm.infomaniak_model);
-      setProductId(llm.infomaniak_product_id);
+    const f = formFor(provider);
+    setBaseUrl(f.baseUrl);
+    setModel(f.model);
+    if (provider === "infomaniak") {
+      setProductId(f.productId);
     }
-    setModels(MODEL_FALLBACKS[provider] ?? []);
+    setModels(f.models);
     setProducts([]);
     setTemperature(llm.temperature);
     setMaxTokens(llm.max_tokens);
