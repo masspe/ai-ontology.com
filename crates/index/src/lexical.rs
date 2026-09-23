@@ -10,7 +10,7 @@ use ahash::AHashMap;
 use ontology_graph::ConceptId;
 use parking_lot::RwLock;
 
-use crate::embed::tokens;
+use crate::embed::{tokens, top_k};
 
 /// Inverted index with tf-idf scoring. Thread-safe; updates take a write lock,
 /// queries take a read lock.
@@ -25,7 +25,23 @@ struct Inner {
     postings: AHashMap<String, Vec<(ConceptId, u32)>>,
     /// concept_id -> total tokens (for length normalization)
     doc_len: AHashMap<ConceptId, u32>,
+    /// concept_id -> its terms, so an update or a removal touches only its
+    /// own postings instead of every posting list of the vocabulary.
+    doc_terms: AHashMap<ConceptId, Vec<String>>,
     n_docs: u32,
+}
+
+impl Inner {
+    fn unpost(&mut self, id: ConceptId) {
+        for term in self.doc_terms.remove(&id).unwrap_or_default() {
+            if let Some(p) = self.postings.get_mut(&term) {
+                p.retain(|(cid, _)| *cid != id);
+                if p.is_empty() {
+                    self.postings.remove(&term);
+                }
+            }
+        }
+    }
 }
 
 impl LexicalIndex {
@@ -44,14 +60,17 @@ impl LexicalIndex {
         if g.doc_len.insert(id, total).is_none() {
             g.n_docs += 1;
         } else {
-            // Replace existing postings for `id`.
-            for postings in g.postings.values_mut() {
-                postings.retain(|(cid, _)| *cid != id);
-            }
+            g.unpost(id);
         }
+        let mut terms = Vec::with_capacity(tf.len());
         for (term, count) in tf {
-            g.postings.entry(term).or_default().push((id, count));
+            g.postings
+                .entry(term.clone())
+                .or_default()
+                .push((id, count));
+            terms.push(term);
         }
+        g.doc_terms.insert(id, terms);
     }
 
     pub fn remove(&self, id: ConceptId) {
@@ -59,9 +78,7 @@ impl LexicalIndex {
         if g.doc_len.remove(&id).is_some() {
             g.n_docs = g.n_docs.saturating_sub(1);
         }
-        for postings in g.postings.values_mut() {
-            postings.retain(|(cid, _)| *cid != id);
-        }
+        g.unpost(id);
     }
 
     /// Returns concept ids ranked by tf-idf score.
@@ -77,6 +94,14 @@ impl LexicalIndex {
                 Some(p) => p,
                 None => continue,
             };
+            // A term in more than half of a large corpus weighs ~0 (idf ≈
+            // ln 1) and would still cost a walk of most of the corpus: skip
+            // it, like a stop word learnt from the data. Small posting lists
+            // are walked whatever their share — the walk is microseconds and
+            // a two-document corpus must still find its shared word.
+            if postings.len() > 1_000 && postings.len() * 2 > g.n_docs as usize {
+                continue;
+            }
             let df = postings.len() as f32;
             let idf = ((n - df + 0.5) / (df + 0.5) + 1.0).ln();
             for (id, tf) in postings {
@@ -85,9 +110,6 @@ impl LexicalIndex {
                 *scores.entry(*id).or_insert(0.0) += weight;
             }
         }
-        let mut out: Vec<(ConceptId, f32)> = scores.into_iter().collect();
-        out.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        out.truncate(limit);
-        out
+        top_k(scores.into_iter().collect(), limit)
     }
 }
