@@ -167,7 +167,8 @@ describe("LLM card — initial state", () => {
     // The form opens on the active provider.
     expect(card.getByText("Configuration Anthropic")).toBeInTheDocument();
     expect(card.getByRole("link", { name: "console.anthropic.com" })).toBeInTheDocument();
-    expect(card.getByRole("option", { name: "claude-sonnet-4-6" })).toBeInTheDocument();
+    // The model list is filled after the settings answer: wait for it.
+    expect(await card.findByRole("option", { name: "claude-sonnet-4-6" })).toBeInTheDocument();
   });
 
   it("exposes a model unknown to the catalogue as a manual entry", async () => {
