@@ -1777,24 +1777,24 @@ async fn list_concepts(
     let (total, concepts, next) = match cursor {
         Some(c) => {
             let after: ConceptKey = decode_cursor(c)?;
-            let (page, next) = s.graph.list_concepts_after(
+            let (page, next) = s.graph.try_list_concepts_after(
                 q.concept_type.as_deref(),
                 needle.as_deref(),
                 Some(&after),
                 limit,
                 q.include_subtypes,
-            );
+            )?;
             (None, page, next)
         }
         None => {
-            let (total, page) = s.graph.list_concepts_page(
+            let (total, page) = s.graph.try_list_concepts_page(
                 q.concept_type.as_deref(),
                 needle.as_deref(),
                 q.offset,
                 limit,
                 q.track_total,
                 q.include_subtypes,
-            );
+            )?;
             let next = page
                 .last()
                 .filter(|_| page.len() == limit)
@@ -2805,7 +2805,7 @@ async fn export_handler(
             // Compact JSON snapshot: ontology + concepts + relations.
             let body = serde_json::json!({
                 "ontology": s.graph.ontology(),
-                "concepts": s.graph.all_concepts(),
+                "concepts": s.graph.try_all_concepts()?,
                 "relations": s.graph.all_relations(),
             });
             Ok(Json(body).into_response())
@@ -3904,6 +3904,9 @@ impl IntoResponse for ApiError {
             | ApiError::Graph(ontology_graph::GraphError::DisjointTypeViolation { .. })
             | ApiError::Graph(ontology_graph::GraphError::CardinalityViolation { .. }) => {
                 (StatusCode::UNPROCESSABLE_ENTITY, self.to_string())
+            }
+            ApiError::Graph(ontology_graph::GraphError::PayloadUnavailable(..)) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, self.to_string())
             }
             ApiError::Graph(_) => (StatusCode::BAD_REQUEST, self.to_string()),
             ApiError::Store(_) => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
