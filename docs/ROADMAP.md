@@ -11,7 +11,7 @@ route s'ajuste au plan, jamais l'inverse : toute évolution se décide et se
 date dans le plan, puis se reflète ici. Mise à jour à chaque fusion dans
 `main`.
 
-Dernière mise à jour : **2026-09-23**.
+Dernière mise à jour : **2026-09-24**.
 
 ---
 
@@ -137,6 +137,67 @@ des `.xref`, `ns` dans l'interface web, limite Job Object Windows, métrique
 | Le socle laisse de côté Job Object Windows, `majflt/s`, palier par domaine | Sans objet avant P1 | plan §7.1 |
 | Des paliers §8.2, seuls P0 et P1 existent ; `adaptive` choisit P1 pour un domaine qui tient sans ses payloads, pas de bascule à chaud | P2–P5 et le contrôleur sont en 5b, sur besoin client | STORAGE.md §8.1, §8.2 |
 | Le chantier R n'est pas commencé alors que le plan le place avant les murs du stockage | Priorité à mesurer (§3.4) | plan §1, §8 R |
+
+### 3.7 Mesure à 2×10⁶ — **prochaine étape** (une heure de machine)
+
+Générer un store à la taille de la garantie 16 Go (`bench gen --concepts
+2000000 --relations 10000000 --ns 5 --payload 1300`, ~1,8 Go sur disque)
+et mesurer ce que le README affiche par extrapolation : hydratation P0 et
+P1, mémoire privée, `reindex_all`, P50/P95 de la recherche hybride et de
+`GET /concepts/{id}`. Sortie : une ligne mesurée dans STORAGE.md §7.8 et
+§8.1 à la place de « estimé », et la décision HNSW (plan §8 R) confirmée
+ou avancée si le P95 dépasse 200 ms. Aucun code : `bench` suffit.
+
+### 3.8 Production — **chantier principal, validé le 2026-09-24**
+
+Hors du plan de stockage (il en est le débouché) ; direction arrêtée avec le
+propriétaire : **une seule image de conteneur, un conteneur par client**
+(limite mémoire cgroup lue par le socle §8.1, volume par client, isolation
+par construction), la même image livrée en auto-hébergement sous licence
+commerciale aux clients qui ne peuvent pas sortir leurs données. Pas de
+processus multi-tenant : l'isolation que le conteneur donne gratuitement
+n'est pas à réécrire. Le produit est l'API REST (`/openapi.json`) ;
+l'interface web est la console d'administration et d'analyse.
+
+Étapes, chacune sa branche, testée, fusionnée, dans cet ordre :
+
+1. **Image et déploiement de référence.** Le `Dockerfile` existant
+   (cargo-chef, distroless, `serve` sur 5000) complété d'un `compose.yml`
+   avec la limite mémoire, le volume de données, `--memory-mode strict`
+   par défaut en conteneur ; un test CI construit l'image et vérifie
+   `/healthz` et `/stats.memory.budget_source == "cgroup-v2"` dans le
+   conteneur. Critère : `docker compose up` sert l'API sur un store vide,
+   `docker stop` s'arrête proprement (fait : SIGTERM géré).
+2. **Interface servie par le binaire.** Les fichiers construits de `web/`
+   servis par `serve` sur `/` (Vite reste l'outil de développement, le
+   proxy disparaît en production) ; TLS terminé devant par un reverse
+   proxy, jamais dans le binaire. Critère : l'image seule sert l'API et la
+   console ; la suite web passe toujours.
+3. **Authentification.** Décision à prendre : le service Node
+   (`auth-server`) embarqué dans l'image, ou réécrit comme module Rust du
+   serveur (un seul processus, une seule surface). Recommandation : Rust.
+   Critère : inscription, connexion, JWT et OAuth couverts à ≥ 90 %.
+4. **Sauvegarde et restauration.** `ontology backup <dest>` (copie des
+   segments scellés et du MANIFEST après compaction, actif inclus sous
+   verrou) et `restore`, testés par un aller-retour vérifié par
+   `compare_graphs`. Critère : restauration d'un store 5×10⁵ identique au
+   fingerprint.
+5. **Mise à jour.** La CI ouvre un store produit par la version précédente
+   de `main` (artefact conservé) avec la version courante : migration de
+   format et hydratation vertes. Critère : job `upgrade` dans `ci.yml`.
+6. **Clés d'API par client et journal d'audit** des écritures (qui, quoi,
+   quand, sur quel record), en dernier : nécessaires à la facturation et
+   au support, pas au premier déploiement.
+
+Deux décisions reviennent au propriétaire avant l'étape 3 : l'hébergeur
+cible (Infomaniak Public Cloud par cohérence avec le fournisseur LLM, ou
+autre) et l'authentification en Rust ou Node.
+
+### 3.9 Dette, entre deux branches
+
+Migration `react-router` 7 (deux vulnérabilités npm modérées) ; modules
+d'authentification `.jsx` en TypeScript (testés à 97–100 %, la conversion
+est mécanique) ; ces deux points se règlent naturellement avec l'étape 3.8.3.
 
 ## 4. Procédé
 
