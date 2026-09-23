@@ -24,7 +24,7 @@ Convention : `H*` / `R*` renvoient aux hypothèses et règles de
 | 3 | Partitionnement par `ns` : routage, `.xref`, roulement, scellement `mmap`, compaction, group commit inter-requêtes | 2, G | 10-14 | **Livré** (§5.6) — compaction store entier, group commit inter-requêtes reporté à la mesure |
 | T1 | Pagination par curseur | — | 2 | **Livré** (2026-09-22, §8 T1) — API prête pour P3 |
 | 4 | Mesure et codec : générateur 10⁷ / 5×10⁷, benchs, `postcard` | 2 | 4-6 | Chiffres réels sur la cible ; codec activé si gain mesuré |
-| 5a | **Socle** (livré 2026-09-22 : budget, estimation R14, `strict`/`adaptive`) puis **P1** : slot + `Loc`, payloads relus depuis le disque | 3, 4, T1 | 8-12 | Cible 10⁷ / 5×10⁷ sur un nœud de 64 Go ; 2,4×10⁶ / 1,2×10⁷ sur 16 Go |
+| 5a | **Socle** (livré 2026-09-22) puis **P1** (livré 2026-09-23, §7.2) : slot + `Loc`, payloads relus depuis le disque | 3, 4, T1 | 8-12 | **Livré** — J5 mesuré (STORAGE.md §7.8) : mémoire privée ÷1,57, hydratation 1,19× |
 | 5b | P2-P5 : `.adj`/`.srt` (CSR), paliers, hystérésis | 5a | 8-12 | **Sur besoin client** : un tenant au-delà de 5×10⁶ concepts sur un nœud contraint |
 | R | Index de retrieval : persistance des vecteurs, index approximatif | indépendant | 8-12 | Retrieval en O(log N), démarrage sans réindexation |
 | T | CI Windows+Linux (**livré**), métriques, docs, position un store par tenant | — | 2-3 | — |
@@ -759,15 +759,70 @@ Hors socle, reporté : `majflt/s` (n'a de sens qu'avec des payloads sur
 disque, P1) ; palier par domaine dans `/metrics` (n'existe qu'à partir de
 P1) ; Job Object Windows.
 
-### 7.2 P1 — payloads sur disque
+### 7.2 P1 — payloads sur disque — **livré 2026-09-23** (branche `feat/p1`)
 
 Le plus gros chantier : `DashMap<ConceptId, Concept>` devient
 `DashMap<ConceptId, Slot>` avec `Slot { ctype: Sym, name: Sym, loc: Loc,
-gen }` et `get_concept` relit le payload via `Loc` (mmap scellé ou `pread`
-actif) **hors verrou** (R12). Touche `crates/graph` en profondeur ; H7/R1
+gen }` et `get_concept` relit le payload via `Loc` depuis le segment scellé
+(mmap) **hors verrou** (R12). Touche `crates/graph` en profondeur ; H7/R1
 restent vrais. Le payload d'un enregistrement dans le segment **actif** est
 gardé en heap jusqu'au scellement (sa taille est bornée par le seuil de
-roulement).
+roulement) : le segment actif n'est jamais lu par le graphe (R11), ce qui
+lève la mention initiale d'un `pread` sur l'actif.
+
+Tel que livré :
+
+- **Slot** : `{ concept_type: String, name: String, loc: Option<Loc>,
+  payload: Option<(description, properties)> }` ; `Loc { ns_id: u16,
+  partition: u32, offset: u64 }`. Les `Sym` (table de symboles §7.4) et le
+  `gen` du §6.2 de STORAGE.md restent la cible ; le slot livré tient en
+  ~80 o hors chaînes. `Option<payload>` est le drapeau de résidence.
+- **Lecture** : `get_concept`, les listings (`list_concepts_page`,
+  `list_concepts_after`, `all_concepts`, `concepts_of_type`) et `expand`
+  clonent le payload s'il est résident, sinon copient la `Loc`, relâchent
+  le shard, puis lisent via `PayloadSource` (le `SealedIndex` du store :
+  `RwLock<HashMap<(ns, partition), Arc<SealedSegment>>>`, l'`Arc` cloné
+  sous un verrou de lecture court, décodage hors verrou ; jamais le
+  `Mutex` du store). L'id du record est vérifié. Échec →
+  `GraphError::PayloadUnavailable` → HTTP 500 explicite (R17), jamais un
+  404 ni un panic ; les listings faillibles (`try_*`) sont utilisés partout
+  où un panic serait remonté à un client ou tenu sous le verrou du store
+  (compaction, vérification de migration, graines du sous-graphe).
+- **Écriture** (R8) : le store écrit le record, puis appelle
+  `set_loc(id, loc, resident = true)` **avant** que le graphe applique ;
+  la position est mise en attente et rattachée à l'apply. Une position
+  résidente arrivant pour un slot déjà évincé reste en attente (le record
+  est dans l'actif, illisible par le lecteur) : le slot garde sa position
+  scellée jusqu'à l'apply. Au roulement, le store appelle
+  `partition_sealed(ns, partition)` : les payloads résidents de cette
+  partition sont libérés (index latéral partition → ids ; une position
+  arrivant après le scellement de sa partition est évincée aussitôt).
+- **Hydratation** : `resident = record dans la partition active` ; les
+  records scellés d'un domaine P1 ne retiennent donc jamais leur payload.
+  Le rejeu d'un `UpdateConcept` remplace en place sans relire l'ancien
+  payload.
+- **Compaction** : nouveaux segments dans l'index → relocalisation de
+  chaque concept depuis les entrées `.idx` (`set_loc(.., false)`) →
+  retrait des anciennes partitions → suppression des fichiers. Un lecteur
+  tenant encore un `Arc` d'un ancien segment pendant quelques
+  microsecondes fait échouer la suppression sous Windows ; le fichier est
+  alors renommé `.old` et balayé à l'ouverture suivante (ceiling consigné).
+- **Palier par domaine** : `SegmentStore::set_tiers(HashMap<ns_id, Tier>)`
+  avant l'hydratation ; défaut P0 partout. Le plan de chargement
+  (STORAGE.md §8.1) choisit P1 pour un domaine qui ne tient pas en P0 mais
+  tient sans ses payloads ; `--tier auto|p0|p1` (`ONTOLOGY_TIER`) force ;
+  `/stats.memory.p1_domains`, `.resident_payloads`, gauges
+  `ontology_domains_p1`, `ontology_resident_payloads`.
+- **Tests** : graphe (P0 inchangé ; éviction et relecture ; ordre
+  write-ahead ; scellement par partition ; mise à jour d'un concept
+  évincé ; scripts aléatoires P0 = P1 sur listings, curseur, `expand`,
+  `all_concepts` ; suppression ; H7/R1), store (lecteur sur chaque entrée
+  de chaque partition scellée, refus des offsets faux et des relations ;
+  hydratation P1 = P0 ; éviction réelle ; roulement ; relocalisation par
+  compaction ; **écrivain et quatre lecteurs concurrents** sur un domaine
+  P1), serveur (P1 à travers HTTP : GET, listing, PATCH puis roulement ;
+  payload illisible → 500), CLI (`--tier p1` bout en bout).
+- **Mesure J5** : STORAGE.md §7.8.
 
 ### 7.3 P2 → P4 — index dérivés sur disque (**sur besoin client**)
 
@@ -955,7 +1010,7 @@ Jalons vérifiables :
 | J2 (fin phase 2) | **Atteint** sur la branche : migration automatique de `graph.log` au démarrage, redémarrage HTTP sur `SegmentStore` testé, CI 2 OS à confirmer par la PR |
 | J3 (fin phase 3) | **Atteint** : trois domaines dans `examples/finance` (`parties`, `contrats`, `facturation`), hydratation sélective testée, 2 syncs par lot de 100 sur 2 domaines |
 | J4 (fin phase 4) | **Atteint pour ce qui est mesurable ici** : §7.7–7.8 de STORAGE.md remplis de chiffres mesurés à 2×10⁵ / 10⁶ et 5×10⁵ / 2,5×10⁶, codec tranché (JSON par défaut, postcard en option), `bulk_load` livré et mesuré ; la cible 10⁷ / 5×10⁷ (45 à 50 Go en P0) n'est pas hydratable sur 16 Go — c'est la mesure elle-même qui le montre ; extrapolation linéaire documentée |
-| J5 (P1) | Sur le store synthétique 5×10⁵ / 2,5×10⁶ : tas divisé par ≥ 1,4 par rapport à P0 (le payload est ~1,3 Ko sur ~2,75 Ko par concept ; la division par 5 du plan initial supposait le CSR), P95 `GET /concepts/{id}` < 2× P0, hydratation ≤ 1,2× P0 ; capacité vérifiée par `bench gen` 5×10⁶ / 2,5×10⁷ hydraté sur un nœud de 64 Go avec `--memory-mode strict` |
+| J5 (P1) | **Atteint 2026-09-23** (STORAGE.md §7.8) : sur le store synthétique 5×10⁵ / 2,5×10⁶, mémoire privée ÷ 1,57 (critère ≥ 1,4), hydratation 1,19× (≤ 1,2×), P95 `GET /concepts/{id}` 1,0× (< 2×) ; payloads résidents 0 après hydratation ; preuve de capacité 5×10⁶ sur 64 Go reportée à une demande client (§6.6) |
 | J5b (CSR, sur besoin) | 10⁷ / 5×10⁷ hydraté sur 16 Go en `strict` ; ~16 o par arête mesurés |
 | JR (retrieval) | `reindex_all` supprimé du démarrage ; recherche vectorielle en O(log N) mesurée à 10⁷ |
 
