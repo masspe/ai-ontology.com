@@ -104,12 +104,14 @@ plan :
 
 ### 3.4 Chantiers du plan menés en parallèle
 
-- **R — index de retrieval** (plan §1 : « deux murs arrivent avant ceux du
-  stockage », §8 R) : `reindex_all` au démarrage et cosinus en O(N). Pas
-  commencé. Première action, une mesure : temps de réindexation et P95
-  d'une recherche à 5×10⁵ et 2×10⁶ concepts avec `bench`, pour dater le
-  mur par rapport à la garantie 16 Go affichée (2×10⁶). Puis persistance
-  des vecteurs et index approximatif ; jalon JR.
+- **R — index de retrieval** (plan §1, §8 R) — **tranche 1 livrée
+  2026-09-23** : le mur du démarrage était un O(N²) dans l'insertion
+  vectorielle (7 min → 17–28 s à 5×10⁵) ; la recherche hybride passe de
+  465 ms à 70 ms p50 (top-k O(N), termes à IDF ≈ 0 sautés, cosinus
+  vectorisé). Reste sur mesure (décisions datées au plan §8 R) :
+  persistance des vecteurs dès un modèle d'embedding réel ; HNSW quand le
+  P95 de `/retrieve` dépasse 200 ms (~1,5×10⁶ concepts). Mesure à 2×10⁶ à
+  faire quand un store de cette taille est généré.
 - **T — transverse** (plan §0 ligne T : CI, métriques, docs) : couverture
   Rust ≥ 90 % par crate (`server` 78,5 %, `cli` 76,9 % : relecture
   d'ingestion avec LLM simulé ; `ask`/`retrieve` sur `EchoModel`,

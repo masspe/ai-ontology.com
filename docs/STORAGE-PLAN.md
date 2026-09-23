@@ -922,6 +922,45 @@ indexé ; (2) index approximatif (HNSW) construit au scellement d'un segment,
 `mmap` ; (3) index lexical incrémental plutôt que reconstruit. Peut avancer
 en parallèle de la phase 2, il ne touche pas au format des `.data`.
 
+**Première tranche livrée le 2026-09-23 (branche `feat/r-retrieval`) —
+mesurer, puis corriger les causes avant d'ajouter des structures.**
+Mesuré sur le store 5×10⁵ / 2,5×10⁶ (`bench query`, STORAGE.md §7.8) :
+
+- Le mur du démarrage n'était pas l'embedding mais un **O(N²)** :
+  `VectorIndex::insert` retrouvait l'id par balayage linéaire des lignes,
+  soit 1,25×10¹¹ comparaisons à 5×10⁵. Une table id → position (O(1)) et,
+  côté lexical, la liste des termes de chaque document pour ne toucher que
+  ses propres postings : `reindex_all` passe de **~7 minutes à 17–28 s**,
+  moins que l'hydratation elle-même (32 s).
+- La recherche hybride était à **465 ms p50 / 2,1 s p99** : tri complet des
+  N scores dans les deux index, parcours des postings des termes présents
+  dans presque tout le corpus (poids IDF ≈ 0), produit scalaire non
+  vectorisé. Sélection top-k en O(N), saut des termes présents dans plus
+  de la moitié des documents (au-delà de mille postings), huit
+  accumulateurs dans `cosine` : **70 ms p50 / 100 ms p99**, aucune
+  dépendance ajoutée, résultats identiques (les termes sautés pesaient ≈ 0).
+- Ce qui reste est le balayage O(N·dim) attendu : ~70 ms à 5×10⁵, donc
+  ~0,3 s à 2×10⁶ (garantie 16 Go) et ~1,4 s à 10⁷ (cible 64 Go).
+
+**Décisions datées (2026-09-23), amendement du chantier** :
+
+1. **(1) persistance des vecteurs — reportée** tant que l'embedder est le
+   hachage : recalculer 5×10⁵ vecteurs coûte des secondes, un fichier
+   dérivé n'en économiserait pas plus. Elle redevient nécessaire le jour
+   où un modèle d'embedding réel (secondes par millier de textes) remplace
+   `HashEmbedder` ; à faire alors avec l'invalidation par hash du texte,
+   comme prévu.
+2. **(2) HNSW — reporté sur mesure** : déclencheur = un P95 de `/retrieve`
+   au-delà de 200 ms, soit ~1,5×10⁶ concepts avec l'embedder actuel, ou
+   l'arrivée d'un modèle d'embedding (dimension et coût de la distance
+   supérieurs). Construit au scellement, `mmap`, comme prévu.
+3. **(3) index lexical incrémental** : il l'était déjà par insertion ; le
+   coût de mise à jour est désormais borné aux termes du document.
+4. **Jalon JR** reformulé : « `reindex_all` sous la durée de
+   l'hydratation ; `/retrieve` P95 < 200 ms jusqu'à 2×10⁶ » — atteint à
+   5×10⁵, à mesurer à 2×10⁶ ; l'ancienne formulation (« supprimé du
+   démarrage », « O(log N) à 10⁷ ») reste l'objectif de la tranche HNSW.
+
 ### T5 — Un store par tenant
 
 Position à écrire dans le README et à honorer dans le code : le `ns` n'est
@@ -1012,7 +1051,7 @@ Jalons vérifiables :
 | J4 (fin phase 4) | **Atteint pour ce qui est mesurable ici** : §7.7–7.8 de STORAGE.md remplis de chiffres mesurés à 2×10⁵ / 10⁶ et 5×10⁵ / 2,5×10⁶, codec tranché (JSON par défaut, postcard en option), `bulk_load` livré et mesuré ; la cible 10⁷ / 5×10⁷ (45 à 50 Go en P0) n'est pas hydratable sur 16 Go — c'est la mesure elle-même qui le montre ; extrapolation linéaire documentée |
 | J5 (P1) | **Atteint 2026-09-23** (STORAGE.md §7.8) : sur le store synthétique 5×10⁵ / 2,5×10⁶, mémoire privée ÷ 1,57 (critère ≥ 1,4), hydratation 1,19× (≤ 1,2×), P95 `GET /concepts/{id}` 1,0× (< 2×) ; payloads résidents 0 après hydratation ; preuve de capacité 5×10⁶ sur 64 Go reportée à une demande client (§6.6) |
 | J5b (CSR, sur besoin) | 10⁷ / 5×10⁷ hydraté sur 16 Go en `strict` ; ~16 o par arête mesurés |
-| JR (retrieval) | `reindex_all` supprimé du démarrage ; recherche vectorielle en O(log N) mesurée à 10⁷ |
+| JR (retrieval) | **Tranche 1 atteinte 2026-09-23** (§8 R) : `reindex_all` 17–28 s à 5×10⁵ (< hydratation 32 s ; était ~7 min), `/retrieve` p50 70 ms / p99 100 ms (étaient 465 ms / 2,1 s). Tranche 2, sur mesure : `reindex_all` supprimé du démarrage (persistance, dès un modèle d'embedding) ; O(log N) par HNSW quand le P95 dépasse 200 ms (~1,5×10⁶ concepts) |
 
 ---
 

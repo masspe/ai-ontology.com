@@ -642,9 +642,17 @@ async fn query(store_dir: &Path, iterations: usize) -> Result<serde_json::Value>
         bail!("no concept listed");
     }
 
+    // The retrieval index (chantier R): how long the startup rebuild takes,
+    // then the hybrid ranking latency behind `/retrieve` and `/ask`.
+    let t = Instant::now();
+    let index = ontology_index::HybridIndex::with_default_embedder(graph.clone());
+    index.reindex_all();
+    let reindex = t.elapsed();
+
     let mut page = Vec::with_capacity(iterations);
     let mut cursor_page = Vec::with_capacity(iterations);
     let mut search = Vec::with_capacity(iterations);
+    let mut retrieve = Vec::with_capacity(iterations);
     let mut expand = Vec::with_capacity(iterations);
     let mut page_rows = 0usize;
     let mut hits = 0usize;
@@ -686,6 +694,22 @@ async fn query(store_dir: &Path, iterations: usize) -> Result<serde_json::Value>
         search.push(t.elapsed());
         hits += rows.len();
 
+        // Hybrid ranking on a few words of a real description.
+        let words: Vec<&str> = sample[rng.below(sample.len() as u64) as usize]
+            .description
+            .split_whitespace()
+            .take(4)
+            .collect();
+        let req = ontology_index::RetrievalRequest {
+            query: words.join(" "),
+            top_k: 8,
+            ..Default::default()
+        };
+        let t = Instant::now();
+        let ranked = index.rank(&req);
+        retrieve.push(t.elapsed());
+        hits += ranked.len();
+
         let seed = sample[rng.below(sample.len() as u64) as usize].id;
         let t = Instant::now();
         let sg = graph.expand(&[seed], &spec);
@@ -704,7 +728,10 @@ async fn query(store_dir: &Path, iterations: usize) -> Result<serde_json::Value>
         "cursor_page200_p99_us": round0(us(percentile(&cursor_page, 99.0))),
         "search_q_p50_us": round0(us(percentile(&search, 50.0))),
         "search_q_p99_us": round0(us(percentile(&search, 99.0))),
-        "search_hits_avg": round2(hits as f64 / iterations as f64),
+        "search_hits_avg": round2(hits as f64 / (2 * iterations) as f64),
+        "reindex_all_ms": round2(ms(reindex)),
+        "retrieve_p50_us": round0(us(percentile(&retrieve, 50.0))),
+        "retrieve_p99_us": round0(us(percentile(&retrieve, 99.0))),
         "expand_d2_p50_us": round0(us(percentile(&expand, 50.0))),
         "expand_d2_p99_us": round0(us(percentile(&expand, 99.0))),
         "expand_nodes_avg": round0(expanded_nodes as f64 / iterations as f64),
