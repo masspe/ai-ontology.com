@@ -436,3 +436,37 @@ fn lexical_and_vector_indexes_replace_rows_and_honour_limit() {
     assert_eq!(vec.len(), 1);
     assert_eq!(vec.search("anything", 10).len(), 1);
 }
+
+/// The vector index removes by swap: the row moved into the hole keeps a
+/// correct position, so a later re-insert of it replaces instead of
+/// duplicating and a later removal finds it.
+#[test]
+fn vector_swap_remove_keeps_positions_consistent() {
+    let vec = VectorIndex::new(Arc::new(HashEmbedder::new(32)));
+    vec.insert(ConceptId(1), "alpha");
+    vec.insert(ConceptId(2), "beta");
+    vec.insert(ConceptId(3), "gamma");
+    vec.remove(ConceptId(1)); // gamma moves to slot 0
+    assert_eq!(vec.len(), 2);
+    vec.insert(ConceptId(3), "gamma delta");
+    assert_eq!(vec.len(), 2, "re-insert of the moved row replaces it");
+    assert_eq!(vec.search("delta", 1)[0].0, ConceptId(3));
+    vec.remove(ConceptId(3));
+    assert_eq!(vec.len(), 1);
+    assert_eq!(vec.search("beta", 1)[0].0, ConceptId(2));
+    vec.remove(ConceptId(2));
+    assert!(vec.is_empty());
+
+    // Lexical: an update only rewrites the document's own terms; a term
+    // whose last document leaves disappears from the vocabulary.
+    let lex = LexicalIndex::new();
+    lex.insert(ConceptId(1), "alpha beta");
+    lex.insert(ConceptId(2), "beta gamma");
+    lex.insert(ConceptId(1), "delta");
+    assert_eq!(lex.search("alpha", 10).len(), 0);
+    assert_eq!(lex.search("beta", 10).len(), 1);
+    assert_eq!(lex.search("delta", 10)[0].0, ConceptId(1));
+    lex.remove(ConceptId(2));
+    assert!(lex.search("gamma", 10).is_empty());
+    assert!(lex.search("beta", 10).is_empty());
+}

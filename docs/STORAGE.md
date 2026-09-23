@@ -723,6 +723,20 @@ jusqu'à l'offset) : 13 ms à 500 k concepts, donc ~250 ms à 10⁷. C'était le
 chantier T1 de `STORAGE-PLAN.md` (pagination par curseur), à faire avant
 toute phase 5.
 
+**Retrieval, chantier R (2026-09-23)** — store 5×10⁵ / 2,5×10⁶,
+`bench query --iterations 200`, requêtes de quatre mots pris dans une
+description réelle, `HashEmbedder` 256 dimensions :
+
+| | Avant | Après (`feat/r-retrieval`) | Cause traitée |
+|---|---|---|---|
+| `reindex_all` (démarrage) | ~7 min (411 à 539 s de démarrage serveur, hydratation comprise) | **17 à 28 s** | insertion O(N) par ligne → table id → position |
+| `HybridIndex::rank` p50 | 465 ms | **70 ms** | tri de N scores → sélection top-k ; termes à IDF ≈ 0 sautés ; `cosine` vectorisable |
+| `HybridIndex::rank` p99 | 2,1 s | **100 ms** | idem |
+
+Le reste est le balayage O(N · dim) : ~0,3 s attendus à 2×10⁶, ~1,4 s à
+10⁷ ; l'HNSW (`STORAGE-PLAN.md` §8 R, tranche 2) se déclenche sur mesure
+au-delà de 200 ms de P95.
+
 **T1 livré (2026-09-22)** — même banc, store 200 k / 1 M, 200 itérations,
 machine au repos, `bench query --json` :
 

@@ -59,11 +59,46 @@ impl Embedder for HashEmbedder {
     }
 }
 
+/// Keep the `limit` best-scored entries, best first: an O(N) selection
+/// then a sort of the head, instead of sorting every score (a search over
+/// 500 000 rows sorted 500 000 pairs per query).
+pub(crate) fn top_k(
+    mut scored: Vec<(ontology_graph::ConceptId, f32)>,
+    limit: usize,
+) -> Vec<(ontology_graph::ConceptId, f32)> {
+    let desc = |a: &(ontology_graph::ConceptId, f32), b: &(ontology_graph::ConceptId, f32)| {
+        b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+    };
+    if limit == 0 {
+        return Vec::new();
+    }
+    if limit < scored.len() {
+        scored.select_nth_unstable_by(limit - 1, desc);
+        scored.truncate(limit);
+    }
+    scored.sort_by(desc);
+    scored
+}
+
+/// Dot product of two L2-normalised vectors. Eight independent
+/// accumulators over chunks of eight: a single running sum cannot be
+/// vectorised (float addition does not reassociate), eight lanes can, and
+/// the scan of the whole corpus is this loop times N.
 pub fn cosine(a: &[f32], b: &[f32]) -> f32 {
     debug_assert_eq!(a.len(), b.len());
-    let mut dot = 0f32;
-    for i in 0..a.len() {
-        dot += a[i] * b[i];
+    let n = a.len().min(b.len());
+    let (a, b) = (&a[..n], &b[..n]);
+    let mut acc = [0f32; 8];
+    let (ca, ra) = a.as_chunks::<8>();
+    let (cb, rb) = b.as_chunks::<8>();
+    for (x, y) in ca.iter().zip(cb) {
+        for i in 0..8 {
+            acc[i] += x[i] * y[i];
+        }
+    }
+    let mut dot: f32 = acc.iter().sum();
+    for (x, y) in ra.iter().zip(rb) {
+        dot += x * y;
     }
     dot
 }
