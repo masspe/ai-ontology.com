@@ -335,7 +335,6 @@ async fn p1_hydration_builds_the_same_graph_as_p0() {
 
 /// Eviction proper: after a P1 hydration only the payloads whose latest
 /// record sits in an active segment stay resident.
-// passes once feat/p1-graph lands
 #[tokio::test]
 async fn p1_hydration_evicts_sealed_payloads() {
     let dir = tempdir("evict");
@@ -454,8 +453,14 @@ async fn appends_seal_into_the_index_and_read_back() {
         }
     }
     assert_eq!(g.concept_count(), 7);
-    // passes once feat/p1-graph lands: the 7 sealed payloads are dropped
-    // (`partition_sealed`) and read back through the source on demand.
+    // The partition sealed before the graph applied the batch (write-ahead
+    // order): the locations arrive after the seal and are evicted at once,
+    // then read back through the source on demand.
+    assert_eq!(
+        g.resident_payloads(),
+        0,
+        "nothing stays resident after the seal"
+    );
     assert_eq!(g.get_concept(ConceptId(5)).unwrap().name, "Doc-5");
 }
 
@@ -499,8 +504,9 @@ async fn compaction_relocates_every_sealed_concept() {
             })
             .is_err());
     }
-    // passes once feat/p1-graph lands: every relocated payload is evicted
-    // (`set_loc(.., resident = false)`) and still readable.
+    // Every relocated payload is evicted (`set_loc(.., resident = false)`)
+    // and still readable.
+    assert_eq!(g.resident_payloads(), 0);
     assert_eq!(g.get_concept(ConceptId(3)).unwrap().name, "Doc-3-v2");
 
     // The compacted store hydrates to the same graph, in P1 again.
@@ -527,4 +533,93 @@ async fn tiers_apply_per_domain() {
     assert_eq!(store.last_hydration().unwrap().p1_domains, ["people"]);
     assert_eq!(g.concept_count(), 12);
     let _: Arc<dyn PayloadSource> = store.payload_source();
+}
+
+/// 8. Writers and readers on a P1 domain at the same time: a PATCH is a
+/// durable record (`set_loc` before the apply, write-ahead) then the apply;
+/// concurrent reads of the same concept must always succeed and never see a
+/// location the source cannot read (the active segment). The final state is
+/// the last update of every concept, mostly evicted again by the rolls.
+#[tokio::test(flavor = "multi_thread", worker_threads = 6)]
+async fn concurrent_updates_and_reads_on_a_p1_domain() {
+    let dir = tempdir("concurrent");
+    build(&dir, 30).await;
+    let store = Arc::new(SegmentStore::open_with(&dir, small_roll()).await.unwrap());
+    store.set_tiers(p1_everywhere(&store));
+    let g = OntologyGraph::with_arc(Ontology::new());
+    store.load_into(&g).await.unwrap();
+    // Only the tail of each stream's active partition is resident.
+    let streams = store.open_report().graph.len();
+    let active_records: usize = store
+        .open_report()
+        .graph
+        .values()
+        .map(|r| r.active_records as usize)
+        .sum();
+    assert!(
+        g.resident_payloads() <= active_records,
+        "{}",
+        g.resident_payloads()
+    );
+
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let readers: Vec<_> = (0..4)
+        .map(|r| {
+            let (g, stop) = (g.clone(), stop.clone());
+            tokio::task::spawn_blocking(move || {
+                let mut reads = 0u64;
+                let mut i = r as u64;
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    let id = ConceptId(1 + i % 30);
+                    let c = g
+                        .get_concept(id)
+                        .unwrap_or_else(|e| panic!("read {id:?}: {e}"));
+                    assert!(c.name.starts_with("Doc-"), "{}", c.name);
+                    reads += 1;
+                    i += 7;
+                }
+                reads
+            })
+        })
+        .collect();
+
+    // 40 rounds of updates over every third document, through the R8
+    // sequence the server uses: durable record, then apply.
+    for round in 0..40u32 {
+        for id in (1..=30u64).step_by(3) {
+            let c = Concept::new(ConceptId(id), "Doc", format!("Doc-{id}-r{round}"));
+            store
+                .append(&LogRecord::update_concept(c.clone()))
+                .await
+                .unwrap();
+            g.apply_concept_update(c).unwrap();
+        }
+    }
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    let mut total = 0;
+    for r in readers {
+        total += r.await.unwrap();
+    }
+    assert!(total > 0, "the readers ran");
+
+    for id in (1..=30u64).step_by(3) {
+        assert_eq!(
+            g.get_concept(ConceptId(id)).unwrap().name,
+            format!("Doc-{id}-r39")
+        );
+    }
+    // Everything sealed by the rolls is on disk again; only the tail of the
+    // last active segment may be resident (fewer records than a partition).
+    assert!(
+        g.resident_payloads() < 7 * streams,
+        "{} resident across {streams} streams",
+        g.resident_payloads()
+    );
+    // A reopen replays the same final state.
+    drop(store);
+    let store = SegmentStore::open_with(&dir, small_roll()).await.unwrap();
+    store.set_tiers(p1_everywhere(&store));
+    let g2 = OntologyGraph::with_arc(Ontology::new());
+    store.load_into(&g2).await.unwrap();
+    assert_eq!(keys(&g.all_concepts()), keys(&g2.all_concepts()));
 }

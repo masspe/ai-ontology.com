@@ -1428,14 +1428,22 @@ fn ingest_api_error(e: ontology_io::IngestError) -> ApiError {
 /// A path id that resolves to nothing is a 404. The graph reports the miss
 /// as a `GraphError` — which maps to 400 like every other graph refusal —
 /// so every handler that addresses an entity by its path id funnels the
-/// lookup through here first. Only ever wrapped around `get_*` lookups,
-/// whose sole failure mode is the unknown id.
+/// lookup through here first. Any other failure of a `get_*` (P1: the
+/// payload could not be read back from disk) keeps its own status.
 fn lookup<T>(
     found: Result<T, ontology_graph::GraphError>,
     what: &str,
     id: u64,
 ) -> Result<T, ApiError> {
-    found.map_err(|_| ApiError::NotFound(format!("{what} {id}")))
+    use ontology_graph::GraphError as G;
+    found.map_err(|e| match e {
+        // Rules and actions report a miss as `UnknownRelationType("rule N")`
+        // (their own miss variant never existed).
+        G::UnknownConcept(_) | G::UnknownRelation(_) | G::UnknownRelationType(_) => {
+            ApiError::NotFound(format!("{what} {id}"))
+        }
+        other => ApiError::Graph(other),
+    })
 }
 
 async fn compact(State(s): State<AppState>) -> Result<StatusCode, ApiError> {
@@ -2706,7 +2714,7 @@ struct SubgraphResponse {
 async fn subgraph_handler(
     State(s): State<AppState>,
     Json(req): Json<SubgraphRequest>,
-) -> Json<SubgraphResponse> {
+) -> Result<Json<SubgraphResponse>, ApiError> {
     let limit = req.limit.clamp(1, 2_000);
 
     // 1. Collect seed concept ids.
@@ -2739,15 +2747,20 @@ async fn subgraph_handler(
         if req.seed_concept_types.is_empty() {
             let (_, page) = s
                 .graph
-                .list_concepts_page(None, None, 0, limit, false, true);
+                .try_list_concepts_page(None, None, 0, limit, false, true)?;
             for c in page {
                 seeds.push(c.id);
             }
         } else {
             'outer: for t in &req.seed_concept_types {
-                let (_, page) =
-                    s.graph
-                        .list_concepts_page(Some(t), None, 0, limit - seeds.len(), false, true);
+                let (_, page) = s.graph.try_list_concepts_page(
+                    Some(t),
+                    None,
+                    0,
+                    limit - seeds.len(),
+                    false,
+                    true,
+                )?;
                 for c in page {
                     seeds.push(c.id);
                     if seeds.len() >= limit {
@@ -2765,7 +2778,7 @@ async fn subgraph_handler(
         ..Default::default()
     };
     let subgraph = s.graph.expand(&seeds, &spec);
-    Json(SubgraphResponse { subgraph })
+    Ok(Json(SubgraphResponse { subgraph }))
 }
 
 /// `GET /export?format=jsonl` — stream the entire graph as newline-
