@@ -27,7 +27,7 @@ Convention : `H*` / `R*` renvoient aux hypothèses et règles de
 | 5a | **Socle** (livré 2026-09-22) puis **P1** (livré 2026-09-23, §7.2) : slot + `Loc`, payloads relus depuis le disque | 3, 4, T1 | 8-12 | **Livré** — J5 mesuré (STORAGE.md §7.8) : mémoire privée ÷1,57, hydratation 1,19× |
 | 5b | P2-P5 : `.adj`/`.srt` (CSR), paliers, hystérésis | 5a | 8-12 | **Sur besoin client** : un tenant au-delà de 5×10⁶ concepts sur un nœud contraint |
 | R | Index de retrieval : persistance des vecteurs, index approximatif | indépendant | 8-12 | Retrieval en O(log N), démarrage sans réindexation |
-| T | CI Windows+Linux (**livré**), métriques, docs, position un store par tenant | — | 2-3 | — |
+| T | CI Windows+Linux (**livré**), métriques (**livré** : `/metrics` mémoire, paliers), docs, position un store par tenant (**livré** : STORAGE.md §10.8, README « Deployment model ») | — | 2-3 | Couverture ≥ 90 % par crate imposée en CI (2026-09-23) |
 
 **Stratégie (validée le 2026-09-08)** : la mémoire d'abord, le disque quand
 il faut. P0 reste le mode nominal ; le format est écrit maintenant pour que
@@ -961,12 +961,19 @@ Mesuré sur le store 5×10⁵ / 2,5×10⁶ (`bench query`, STORAGE.md §7.8) :
    5×10⁵, à mesurer à 2×10⁶ ; l'ancienne formulation (« supprimé du
    démarrage », « O(log N) à 10⁷ ») reste l'objectif de la tranche HNSW.
 
-### T5 — Un store par tenant
+### T5 — Un store par tenant — **tranché 2026-09-15, README écrit 2026-09-24**
 
 Position à écrire dans le README et à honorer dans le code : le `ns` n'est
 pas une clé de répartition horizontale ; le multi-tenant est un store par
 tenant (STORAGE.md §10.8). Décider processus par tenant ou processus
 multi-store avant la phase 3 (impact : fichiers ouverts, plancher §8.7).
+
+Décision : **un processus par tenant** (STORAGE.md §10.8). Le code
+l'honore (un `LOCK` par store, budget mémoire par processus §8.1, `serve
+--data <tenant>`), le README porte la position depuis le 2026-09-24
+(section « Deployment model »). Le chantier production de `ROADMAP.md`
+§3.8 en est l'application : une image, un conteneur par client, la limite
+cgroup du conteneur étant le budget que le socle lit.
 
 ### T6 — Profil d'`apply` par échantillonnage (à faire **avant** le chantier relations de la phase 5)
 
