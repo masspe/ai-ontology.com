@@ -41,6 +41,7 @@ fn run_raw(data: Option<&PathBuf>, env: &[(&str, &str)], args: &[&str]) -> (bool
         "ONTOLOGY_MEMORY_MODE",
         "ONTOLOGY_HEAP_FRACTION",
         "ONTOLOGY_MEMORY_BUDGET_MB",
+        "ONTOLOGY_TIER",
     ] {
         cmd.env_remove(k);
     }
@@ -242,4 +243,36 @@ fn bad_values_are_rejected_early_and_flags_are_inert_without_a_store() {
         ],
     );
     assert!(ok, "{err}");
+}
+
+/// `--tier p1` (P1, STORAGE.md §8.2): the same store hydrates to the same
+/// counts with every payload left on disk; `p0` and `auto` behave as
+/// before on a store that fits; a bad tier is refused by clap.
+#[test]
+fn tier_p1_hydrates_the_same_store_with_payloads_on_disk() {
+    let data = store_with_three_domains();
+    let (ok, stats_p0, _) = run(&data, &["--memory-budget-mb", "4096", "stats"]);
+    assert!(ok, "{stats_p0}");
+    let (ok, stats_p1, err) = run(
+        &data,
+        &["--memory-budget-mb", "4096", "--tier", "p1", "stats"],
+    );
+    assert!(
+        ok,
+        "{stats_p1}
+{err}"
+    );
+    assert_eq!(stats_counts(&stats_p1), stats_counts(&stats_p0));
+    assert!(
+        err.contains("P1: concept payloads stay on disk"),
+        "the tier is logged:
+{err}"
+    );
+    let (ok, _, err) = run_env(&data, &[("ONTOLOGY_TIER", "p1")], &["stats"]);
+    assert!(
+        ok && err.contains("P1: concept payloads stay on disk"),
+        "{err}"
+    );
+    let (ok, _, err) = run(&data, &["--tier", "p2", "stats"]);
+    assert!(!ok && err.contains("--tier"), "{err}");
 }

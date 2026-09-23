@@ -1516,7 +1516,7 @@ async fn metrics(State(s): State<AppState>) -> ([(String, String); 1], String) {
         ));
     }
     if let Some(plan) = s.memory_plan.read().as_ref() {
-        let m = memory_stats(plan);
+        let m = memory_stats(plan, &s.graph);
         body.push_str(&format!(
             "# HELP ontology_memory_budget_known 1 when a memory budget could be determined.\n\
              # TYPE ontology_memory_budget_known gauge\n\
@@ -1541,7 +1541,13 @@ async fn metrics(State(s): State<AppState>) -> ([(String, String); 1], String) {
              ontology_memory_partial {}\n\
              # HELP ontology_memory_over_budget 1 when everything was loaded although the estimate exceeds a soft budget.\n\
              # TYPE ontology_memory_over_budget gauge\n\
-             ontology_memory_over_budget {}\n",
+             ontology_memory_over_budget {}\n\
+             # HELP ontology_domains_p1 Storage domains whose concept payloads stay on disk.\n\
+             # TYPE ontology_domains_p1 gauge\n\
+             ontology_domains_p1 {}\n\
+             # HELP ontology_resident_payloads Concepts whose payload is held in memory.\n\
+             # TYPE ontology_resident_payloads gauge\n\
+             ontology_resident_payloads {}\n",
             u8::from(plan.budget.budget_bytes.is_some()),
             plan.budget.budget_bytes.unwrap_or(0),
             plan.estimated_total_bytes,
@@ -1550,6 +1556,8 @@ async fn metrics(State(s): State<AppState>) -> ([(String, String); 1], String) {
             m.domains_skipped.len(),
             u8::from(m.partial),
             u8::from(m.over_budget),
+            m.p1_domains.len(),
+            m.resident_payloads,
         ));
     }
     (
@@ -1586,7 +1594,11 @@ async fn stats(State(s): State<AppState>) -> Json<StatsResponse> {
         h.record(sample);
         d
     };
-    let memory = s.memory_plan.read().as_ref().map(memory_stats);
+    let memory = s
+        .memory_plan
+        .read()
+        .as_ref()
+        .map(|p| memory_stats(p, &s.graph));
     Json(StatsResponse {
         core,
         deltas,
@@ -1623,9 +1635,13 @@ pub struct MemoryStats {
     pub domains_skipped: Vec<String>,
     /// Resident set of the process right now, when the platform reports it.
     pub rss_mib: Option<u64>,
+    /// Domains whose concept payloads stay on disk (P1, STORAGE.md §8.2).
+    pub p1_domains: Vec<String>,
+    /// Concepts whose payload is held in memory right now.
+    pub resident_payloads: usize,
 }
 
-fn memory_stats(plan: &ontology_storage::LoadPlan) -> MemoryStats {
+fn memory_stats(plan: &ontology_storage::LoadPlan, graph: &OntologyGraph) -> MemoryStats {
     let mib = |b: u64| b / (1024 * 1024);
     let loaded: Vec<String> = match &plan.domains {
         Some(d) => d.clone(),
@@ -1643,6 +1659,8 @@ fn memory_stats(plan: &ontology_storage::LoadPlan) -> MemoryStats {
         domains_loaded: loaded,
         domains_skipped: plan.skipped.iter().map(|s| s.ns.clone()).collect(),
         rss_mib: process_rss_bytes().map(mib),
+        p1_domains: plan.p1_domains.clone(),
+        resident_payloads: graph.resident_payloads(),
     }
 }
 
