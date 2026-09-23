@@ -608,7 +608,7 @@ the full suite (unit, integration and end-to-end tests that spawn the
 `ontology` binary). `cargo llvm-cov` for Rust, V8 through vitest for the
 web. Source files only: test code is not in the denominator.
 
-Snapshot of 2026-09-22 (the badges above are the live figures):
+Snapshot of 2026-09-23 (the badges above are the live figures; `server` and `cli` measured on Windows before the CI run):
 
 | Crate | Line coverage | Lines |
 |---|---|---|
@@ -617,22 +617,22 @@ Snapshot of 2026-09-22 (the badges above are the live figures):
 | `ontology-rag` | 96.7 % | 3 217 / 3 326 |
 | `ontology-io` | 93.4 % | 1 924 / 2 060 |
 | `ontology-storage` | 91.6 % | 3 871 / 4 228 |
-| `ontology-server` | 78.5 % | 2 688 / 3 425 |
-| `ontology-cli` | 76.8 % | 1 141 / 1 486 |
-| **Rust total** | **90.2 %** | 16 399 / 18 182 |
+| `ontology-server` | 96.6 % | — |
+| `ontology-cli` | 95.1 % | — |
+| **Rust total** | **≥ 93 %** (CI publishes the exact figure) | — |
 | **Web (`web/src`, JS and TS)** | **99.7 %** | 3 210 / 3 221 |
 
 What the gaps are, so the numbers are read for what they mean:
 
-- **`server`** — `ingest_review.rs` (LLM-assisted ingest review) is at
-  53 %: the repair paths for truncated or malformed model output and the
-  provider error branches are only exercised by parsing tests. Everything
-  reachable without a language model in `lib.rs` is at 84 %.
-- **`cli`** — `main.rs` is at 64 %: `ask` / `retrieve` against a real
-  provider, `migrate` and an actual `serve` are not run by the tests, by
-  design (no network and no long-lived server in CI). The memory flags,
-  `stats`, `compact`, `reset`, `export`, `ingest` and every `bench`
-  subcommand are.
+- **`server`** — `ingest_review.rs` (LLM-assisted ingest review) went from
+  53 % to 95 % with a scripted language model (truncated or malformed
+  answers, `null` fields, provider errors, every apply branch). What is
+  left needs binaries (`tesseract`, `ocrmypdf`) or the real Infomaniak API.
+- **`cli`** — `main.rs` went from 64 % to 93 %: `ask` / `retrieve` on the
+  offline echo model, every ingest format, `serve` started on a free port
+  and stopped by SIGTERM / Ctrl+Break (it now shuts down cleanly). What is
+  left needs a real provider (token usage block) or host-dependent memory
+  readings.
 - **`storage`** — the codec error branches (`codec.rs`, 79 %) and the
   platform-specific budget detection: cgroup reading only runs on Linux and
   `GlobalMemoryStatusEx` only on Windows, so each platform reports the
