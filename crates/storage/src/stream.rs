@@ -135,8 +135,12 @@ impl<'a> SnapshotCursor<'a> {
             return None;
         }
         match decode_record(bytes, self.active_at, self.verify_crc) {
-            Ok(v) => {
+            Ok(mut v) => {
                 self.active_at = v.next;
+                // `active_bytes` starts past the file header: report the
+                // offset in the `.data` file, like the sealed branch does,
+                // so `(partition, offset)` is a `Loc` either way (P1).
+                v.offset += crate::segment::FILE_HEADER_LEN;
                 Some(Ok((self.snap.active_partition, v)))
             }
             Err(e) => {
@@ -356,7 +360,8 @@ impl Stream {
     }
 
     /// Append a payload encoded with `codec`, which may differ from the
-    /// stream's default (the record header carries it).
+    /// stream's default (the record header carries it). Returns the
+    /// record's offset in the active `.data` file.
     pub fn append_with_codec(
         &mut self,
         seq: u64,
@@ -365,10 +370,9 @@ impl Stream {
         codec: u8,
         payload: &[u8],
         fields: IndexFields,
-    ) -> io::Result<()> {
+    ) -> io::Result<u64> {
         self.active
-            .append_with_codec(seq, ts_micros, kind, codec, payload, fields)?;
-        Ok(())
+            .append_with_codec(seq, ts_micros, kind, codec, payload, fields)
     }
 
     pub fn has_pending(&self) -> bool {
