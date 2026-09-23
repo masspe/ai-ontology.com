@@ -37,16 +37,16 @@
 //! replay, rewriting one domain would put its records after the rules and
 //! cross-domain relations that depend on them (STORAGE-PLAN.md §5.6).
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use ontology_graph::{GraphError, Ontology, OntologyGraph};
-use parking_lot::Mutex;
+use ontology_graph::{Concept, ConceptId, GraphError, Loc, Ontology, OntologyGraph, PayloadSource};
+use parking_lot::{Mutex, RwLock};
 use tracing::{info, warn};
 
 use crate::budget::{self, ActiveCounters, DomainEstimate, LoadPlan, MemoryBudget, MemoryMode};
@@ -58,8 +58,8 @@ use crate::memory::apply;
 use crate::segment::active::{move_segment_files, remove_segment_files};
 use crate::segment::xref::{read_xref, XrefEntry};
 use crate::segment::{
-    unpack_endpoints, ActiveSegment, IndexFields, Kind, RecordMeta, RecordView, SealedSegment,
-    FORMAT_VERSION, FORMAT_VERSION_CODECS,
+    decode_record, unpack_endpoints, ActiveSegment, IndexFields, Kind, RecordMeta, RecordView,
+    SealedSegment, FORMAT_VERSION, FORMAT_VERSION_CODECS,
 };
 use crate::store::{Store, StoreError, StoreResult};
 use crate::stream::{RollPolicy, SnapshotCursor, Stream, StreamOpenReport, StreamSnapshot};
@@ -109,6 +109,65 @@ pub struct HydrationReport {
     /// reference lives in a domain that was not loaded (selective
     /// hydration only).
     pub skipped_cross_domain: u64,
+    /// Domains whose concept payloads stay on disk (P1), by name.
+    pub p1_domains: Vec<String>,
+}
+
+/// Where a domain's concept payloads live once hydrated (`STORAGE.md`
+/// §6.2): in the graph (P0) or in the sealed segments, read on demand (P1).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Tier {
+    #[default]
+    P0,
+    P1,
+}
+
+/// The sealed segments of every graph stream, by `(ns_id, partition)`,
+/// shared between the store and the graph's [`PayloadSource`]. Reads take
+/// a short read lock to clone an `Arc`, never the store's `Mutex` (R12).
+/// The graph owns this index, not the store, so there is no `Arc` cycle.
+#[derive(Default)]
+pub struct SealedIndex(RwLock<HashMap<(u16, u32), Arc<SealedSegment>>>);
+
+impl SealedIndex {
+    fn insert(&self, ns_id: u16, seg: Arc<SealedSegment>) {
+        self.0.write().insert((ns_id, seg.partition_id()), seg);
+    }
+    fn remove(&self, ns_id: u16, partition: u32) {
+        self.0.write().remove(&(ns_id, partition));
+    }
+    /// `(ns_id, partition)` of every indexed sealed segment, sorted.
+    pub fn partitions(&self) -> Vec<(u16, u32)> {
+        let mut v: Vec<(u16, u32)> = self.0.read().keys().copied().collect();
+        v.sort_unstable();
+        v
+    }
+}
+
+impl PayloadSource for SealedIndex {
+    fn read(&self, loc: Loc) -> Result<Concept, String> {
+        let at = |e: &dyn std::fmt::Display| {
+            format!(
+                "ns {} partition {} offset {}: {e}",
+                loc.ns_id, loc.partition, loc.offset
+            )
+        };
+        let seg = self
+            .0
+            .read()
+            .get(&(loc.ns_id, loc.partition))
+            .cloned()
+            .ok_or_else(|| at(&"no such sealed partition"))?;
+        // Hot read (`STORAGE.md` §7.3): the CRC was checked at hydration.
+        let v = decode_record(seg.data_bytes(), loc.offset as usize, false).map_err(|e| at(&e))?;
+        match codec::decode(v.header.codec, v.payload).map_err(|e| at(&e))? {
+            RecordKind::Concept(c) | RecordKind::UpdateConcept(c) => Ok(c),
+            other => Err(at(&format!(
+                "record is {:?}, not a concept",
+                RecordMeta::of(&other).kind
+            ))),
+        }
+    }
 }
 
 /// Outcome of a compaction.
@@ -134,11 +193,22 @@ struct Inner {
     /// state, so every further append is refused until restart, where
     /// recovery truncates whatever is torn (see `StoreError::Poisoned`).
     poisoned: bool,
+    /// P1 domains by `ns_id`; absent = P0 (`set_tiers`).
+    tiers: HashMap<u16, Tier>,
+    /// Sealed segments of the graph streams, shared with the reader (R12).
+    sealed_index: Arc<SealedIndex>,
+    /// The graph hydrated from this store: receives `set_loc` /
+    /// `partition_sealed` for P1 domains on the write path. Weak: the store
+    /// must not keep the graph alive.
+    hydrated: Weak<OntologyGraph>,
     /// Held for the life of the store (H17: single writer per store).
     _lock: File,
 }
 
 impl Inner {
+    fn is_p1(&self, ns_id: u16) -> bool {
+        self.tiers.get(&ns_id) == Some(&Tier::P1)
+    }
     fn stream_mut(&mut self, ns_id: u16) -> &mut Stream {
         if ns_id == META_NS_ID {
             &mut self.meta
@@ -359,8 +429,16 @@ impl SegmentStore {
             ontology,
             next_seq,
             poisoned: false,
+            tiers: HashMap::new(),
+            sealed_index: Arc::new(SealedIndex::default()),
+            hydrated: Weak::new(),
             _lock: lock,
         };
+        for (ns_id, s) in inner.graph.iter() {
+            for seg in s.sealed() {
+                inner.sealed_index.insert(*ns_id, seg.clone());
+            }
+        }
         let xref_entries = rebuild_xrefs(&mut inner)?;
 
         let report = OpenReport {
@@ -577,6 +655,32 @@ impl SegmentStore {
         self.last_hydration.lock().clone()
     }
 
+    /// Storage tier per domain (`ns_id`); a domain not named is P0. Set
+    /// before the first hydration: P1 domains get their concept locations
+    /// (`OntologyGraph::set_loc`) from replay, appends and compaction.
+    pub fn set_tiers(&self, tiers: HashMap<u16, Tier>) {
+        let mut inner = self.inner.lock();
+        // The plan is what `/stats` shows: a forced tier (`--tier p1`) must
+        // read there too, not only in the hydration report.
+        let mut names: Vec<String> = tiers
+            .iter()
+            .filter(|(_, t)| **t == Tier::P1)
+            .filter_map(|(id, _)| inner.manifest.ns_name(*id).map(str::to_string))
+            .collect();
+        names.sort();
+        inner.tiers = tiers;
+        drop(inner);
+        if let Some(plan) = self.last_plan.lock().as_mut() {
+            plan.p1_domains = names;
+        }
+    }
+
+    /// The lock-free reader of sealed concept payloads (R12); attached to
+    /// the graph at hydration when a domain is P1.
+    pub fn payload_source(&self) -> Arc<SealedIndex> {
+        self.inner.lock().sealed_index.clone()
+    }
+
     fn now_micros() -> u64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -768,18 +872,29 @@ impl SegmentStore {
     fn write_planned(inner: &mut Inner, planned: Vec<Planned>) -> StoreResult<u64> {
         let ts = Self::now_micros();
         let mut touched: Vec<u16> = Vec::new();
+        // P1: where each concept record of the batch landed.
+        let mut locs: Vec<(ConceptId, Loc)> = Vec::new();
         for (ns_id, kind, codec, payload, fields) in &planned {
             let seq = inner.next_seq;
-            inner
-                .stream_mut(*ns_id)
-                .append_with_codec(seq, ts, *kind, *codec, payload, *fields)?;
+            let stream = inner.stream_mut(*ns_id);
+            let partition = stream.active().partition_id();
+            let offset = stream.append_with_codec(seq, ts, *kind, *codec, payload, *fields)?;
             inner.next_seq += 1;
+            if matches!(kind, Kind::Concept | Kind::UpdateConcept) && inner.is_p1(*ns_id) {
+                let loc = Loc {
+                    ns_id: *ns_id,
+                    partition,
+                    offset,
+                };
+                locs.push((ConceptId(fields.entity_id), loc));
+            }
             if !touched.contains(ns_id) {
                 touched.push(*ns_id);
             }
         }
         let mut syncs = 0;
         let mut manifest_dirty = false;
+        let mut sealed: Vec<(u16, u32)> = Vec::new();
         let next_seq = inner.next_seq;
         for ns_id in touched {
             let mut next_partition = inner.manifest.next_partition_id;
@@ -791,6 +906,7 @@ impl SegmentStore {
             };
             inner.manifest.next_partition_id = next_partition;
             if let Some(entry) = rolled {
+                let partition = entry.id;
                 inner
                     .manifest
                     .stream_mut(ns_id)
@@ -798,10 +914,29 @@ impl SegmentStore {
                     .sealed
                     .push(entry);
                 manifest_dirty = true;
+                if ns_id != META_NS_ID {
+                    let seg = inner.stream_ref(ns_id).sealed().last().cloned();
+                    inner
+                        .sealed_index
+                        .insert(ns_id, seg.expect("maybe_roll pushed the sealed segment"));
+                    sealed.push((ns_id, partition));
+                }
             }
         }
         if manifest_dirty {
             inner.manifest.save(&inner.root)?;
+        }
+        // Durable and indexed: tell the graph where the P1 payloads are,
+        // then which partitions it may drop them from.
+        if let Some(graph) = inner.hydrated.upgrade() {
+            for (id, loc) in locs {
+                graph.set_loc(id, loc, true);
+            }
+            for (ns_id, partition) in sealed {
+                if inner.is_p1(ns_id) {
+                    graph.partition_sealed(ns_id, partition);
+                }
+            }
         }
         Ok(syncs)
     }
@@ -836,12 +971,13 @@ impl SegmentStore {
         snapshots: &[StreamSnapshot],
         graph: &Arc<OntologyGraph>,
         partial: bool,
+        tiers: &HashMap<u16, Tier>,
     ) -> StoreResult<(u64, u64)> {
         let mut cursors: Vec<SnapshotCursor<'_>> =
             snapshots.iter().map(|s| s.cursor(true)).collect();
         // One decoded head per stream: streams are internally seq-ordered,
         // so a k-way merge of their heads yields the global order.
-        let mut heads: Vec<Option<LogRecord>> = Vec::with_capacity(cursors.len());
+        let mut heads: Vec<Option<(Loc, LogRecord)>> = Vec::with_capacity(cursors.len());
         for (i, c) in cursors.iter_mut().enumerate() {
             heads.push(next_decoded(snapshots[i].ns_id, c)?);
         }
@@ -850,9 +986,9 @@ impl SegmentStore {
         loop {
             let mut best: Option<usize> = None;
             for (i, h) in heads.iter().enumerate() {
-                if let Some(r) = h {
+                if let Some((_, r)) = h {
                     let better = match best {
-                        Some(b) => r.seq < heads[b].as_ref().unwrap().seq,
+                        Some(b) => r.seq < heads[b].as_ref().unwrap().1.seq,
                         None => true,
                     };
                     if better {
@@ -861,7 +997,17 @@ impl SegmentStore {
                 }
             }
             let Some(i) = best else { break };
-            let rec = heads[i].take().unwrap();
+            let (loc, rec) = heads[i].take().unwrap();
+            // P1: the concept's payload is located after it is applied; only
+            // the active segment's copy stays resident (it is not mapped yet).
+            let p1_concept = match &rec.kind {
+                RecordKind::Concept(c) | RecordKind::UpdateConcept(c)
+                    if tiers.get(&loc.ns_id) == Some(&Tier::P1) =>
+                {
+                    Some(c.id)
+                }
+                _ => None,
+            };
             // In a partial load, a record may reference a concept of a domain
             // that was not loaded: a relation's *target* (its source lives in
             // the stream being read, so a missing source is real corruption),
@@ -874,7 +1020,12 @@ impl SegmentStore {
                 _ => (false, None),
             };
             match apply(graph, rec) {
-                Ok(()) => applied += 1,
+                Ok(()) => {
+                    applied += 1;
+                    if let Some(id) = p1_concept {
+                        graph.set_loc(id, loc, loc.partition == snapshots[i].active_partition);
+                    }
+                }
                 Err(StoreError::Graph(GraphError::UnknownConcept(id)))
                     if partial && skippable && target.is_none_or(|t| t == id) =>
                 {
@@ -916,27 +1067,43 @@ impl SegmentStore {
             }
         }
         let partial = selected.is_some();
+        // P1: the graph reads evicted payloads through the sealed index and
+        // receives the write-path locations from now on.
+        let mut p1_domains: Vec<String> = inner
+            .tiers
+            .iter()
+            .filter(|(_, t)| **t == Tier::P1)
+            .filter_map(|(ns, _)| inner.manifest.ns_name(*ns).map(str::to_string))
+            .collect();
+        p1_domains.sort();
+        if !p1_domains.is_empty() {
+            graph.set_payload_source(inner.sealed_index.clone());
+        }
+        inner.hydrated = Arc::downgrade(graph);
         // Bulk mode: derived indexes are rebuilt once after the replay
         // instead of per record (`OntologyGraph::begin_bulk`); the guard
         // also ends the mode if the replay fails part-way.
         let bulk = graph.begin_bulk();
-        let (applied, skipped) = Self::replay(&snapshots, graph, partial)?;
+        let (applied, skipped) = Self::replay(&snapshots, graph, partial, &inner.tiers)?;
         let index_build = bulk.finish();
         info!(?index_build, "derived indexes rebuilt after replay");
         Ok(HydrationReport {
             applied,
             domains: domains.map(|d| d.to_vec()),
             skipped_cross_domain: skipped,
+            p1_domains,
         })
     }
 
     /// Live state of `graph` as records, in dependency order: schema,
     /// concepts, relations (canonical direction only for symmetric types),
     /// rules, actions.
-    fn live_records(graph: &OntologyGraph) -> Vec<LogRecord> {
+    fn live_records(graph: &OntologyGraph) -> StoreResult<Vec<LogRecord>> {
         let ontology = graph.ontology();
         let mut records: Vec<LogRecord> = vec![LogRecord::ontology(ontology.clone())];
-        let mut concepts = graph.all_concepts();
+        // P1: every payload is read back from disk here; a read failure is
+        // an error of the compaction, not a panic under the store lock (R17).
+        let mut concepts = graph.try_all_concepts()?;
         concepts.sort_by_key(|c| c.id);
         records.extend(concepts.into_iter().map(LogRecord::concept));
         // Every live relation, both directions of a symmetric pair included,
@@ -952,7 +1119,7 @@ impl SegmentStore {
         let mut actions = graph.all_actions();
         actions.sort_by_key(|a| a.id);
         records.extend(actions.into_iter().map(LogRecord::action));
-        records
+        Ok(records)
     }
 
     /// Rewrite the whole store from `graph` into fresh partitions, verify by
@@ -972,7 +1139,7 @@ impl SegmentStore {
         let bytes_before = inner.total_bytes();
 
         // 1. Live state, routed by the live schema.
-        let records = Self::live_records(graph);
+        let records = Self::live_records(graph)?;
         inner.ontology = graph.ontology();
 
         // 2. Stage: one fresh partition per touched stream, fresh seqs, built
@@ -1045,7 +1212,7 @@ impl SegmentStore {
                 })
                 .collect();
             let scratch = OntologyGraph::with_arc(Ontology::new());
-            Self::replay(&candidate, &scratch, false)
+            Self::replay(&candidate, &scratch, false, &HashMap::new())
                 .and_then(|_| crate::migrate::compare_graphs(graph, &scratch))
             // `candidate` (and its mmaps) drop here.
         };
@@ -1105,13 +1272,38 @@ impl SegmentStore {
             let mut sealed: Vec<Arc<SealedSegment>> = Vec::new();
             if let Some((_, pid)) = staged_ids.iter().find(|(ns, _)| *ns == ns_id) {
                 move_segment_files(&staging_dir(&dir), &dir, *pid)?;
-                sealed.push(Arc::new(SealedSegment::open(&dir, *pid)?));
+                let seg = Arc::new(SealedSegment::open(&dir, *pid)?);
+                if ns_id != META_NS_ID {
+                    // Readable through the index, then relocated in the
+                    // graph, before any old file goes away: a P1 read never
+                    // finds a hole.
+                    inner.sealed_index.insert(ns_id, seg.clone());
+                    if inner.is_p1(ns_id) {
+                        for e in seg.entries().filter(|e| e.kind == Kind::Concept) {
+                            let loc = Loc {
+                                ns_id,
+                                partition: *pid,
+                                offset: e.offset,
+                            };
+                            graph.set_loc(ConceptId(e.entity_id), loc, false);
+                        }
+                    }
+                }
+                sealed.push(seg);
+            }
+            for old in inner.stream_ref(ns_id).partition_ids() {
+                inner.sealed_index.remove(ns_id, old);
             }
             let pid = inner.manifest.next_partition_id;
             inner.manifest.next_partition_id += 1;
             let fresh = ActiveSegment::create(&dir, pid, inner.next_seq, codec)?;
             let entries = {
                 let stream = inner.stream_mut(ns_id);
+                // ponytail: a reader that cloned an old `Arc<SealedSegment>`
+                // microseconds ago still maps the file; on Windows the
+                // delete then fails and `remove_segment_files` renames it
+                // `.old` for the next open to sweep. Good enough until a
+                // compaction is observed racing a hot read.
                 removed += stream.replace_segments(sealed, fresh)?.len();
                 // Rolls after a codec change must create segments in the
                 // store's current codec, not the one this stream opened with.
@@ -1171,11 +1363,19 @@ impl SegmentStore {
     }
 }
 
-/// Decode the next record of a cursor, mapping format errors to store errors.
-fn next_decoded(ns: u16, cursor: &mut SnapshotCursor<'_>) -> StoreResult<Option<LogRecord>> {
+/// Decode the next record of a cursor with its location, mapping format
+/// errors to store errors.
+fn next_decoded(ns: u16, cursor: &mut SnapshotCursor<'_>) -> StoreResult<Option<(Loc, LogRecord)>> {
     match cursor.next() {
         None => Ok(None),
-        Some(Ok((partition, v))) => Ok(Some(SegmentStore::decode(ns, partition, &v)?)),
+        Some(Ok((partition, v))) => {
+            let loc = Loc {
+                ns_id: ns,
+                partition,
+                offset: v.offset as u64,
+            };
+            Ok(Some((loc, SegmentStore::decode(ns, partition, &v)?)))
+        }
         Some(Err((partition, e))) => Err(StoreError::Corrupt(format!(
             "ns {ns} partition {partition}: {e}"
         ))),

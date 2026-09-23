@@ -68,6 +68,19 @@ struct Cli {
     #[arg(long, global = true, env = "ONTOLOGY_MEMORY_BUDGET_MB")]
     memory_budget_mb: Option<u64>,
 
+    /// Memory tier of the loaded domains (STORAGE.md §8.2). `auto`: the
+    /// plan decides (adaptive mode may put a domain in P1 when only its
+    /// payloads exceed the budget); `p0`: everything in memory; `p1`:
+    /// every concept payload stays on disk and is read back on demand.
+    #[arg(
+        long,
+        global = true,
+        env = "ONTOLOGY_TIER",
+        value_enum,
+        default_value_t = TierArg::Auto
+    )]
+    tier: TierArg,
+
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -88,6 +101,14 @@ impl From<MemoryModeArg> for ontology_storage::MemoryMode {
             MemoryModeArg::Adaptive => Self::Adaptive,
         }
     }
+}
+
+/// `--tier`, validated by clap.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+enum TierArg {
+    Auto,
+    P0,
+    P1,
 }
 
 /// `--heap-fraction`: a finite number in (0, 1]. Anything else is refused
@@ -342,6 +363,25 @@ async fn main() -> Result<()> {
                 .plan_load(budget, memory_mode, selected_ns.as_deref())
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
             log_load_plan(&plan);
+            // P1 (STORAGE.md §8.2): the plan's choice, or the operator's.
+            let p1: Vec<String> = match cli.tier {
+                TierArg::Auto => plan.p1_domains.clone(),
+                TierArg::P0 => Vec::new(),
+                TierArg::P1 => match &plan.domains {
+                    Some(d) => d.clone(),
+                    None => plan.estimates.iter().map(|e| e.ns.clone()).collect(),
+                },
+            };
+            if !p1.is_empty() {
+                let manifest = seg.manifest();
+                let tiers = p1
+                    .iter()
+                    .filter_map(|n| manifest.ns_id(n))
+                    .map(|id| (id, ontology_storage::Tier::P1))
+                    .collect();
+                seg.set_tiers(tiers);
+                tracing::info!(domains = ?p1, "P1: concept payloads stay on disk");
+            }
             plan.domains
         }
         None => selected_ns.clone(),

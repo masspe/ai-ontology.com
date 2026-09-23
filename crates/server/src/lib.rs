@@ -1428,14 +1428,22 @@ fn ingest_api_error(e: ontology_io::IngestError) -> ApiError {
 /// A path id that resolves to nothing is a 404. The graph reports the miss
 /// as a `GraphError` — which maps to 400 like every other graph refusal —
 /// so every handler that addresses an entity by its path id funnels the
-/// lookup through here first. Only ever wrapped around `get_*` lookups,
-/// whose sole failure mode is the unknown id.
+/// lookup through here first. Any other failure of a `get_*` (P1: the
+/// payload could not be read back from disk) keeps its own status.
 fn lookup<T>(
     found: Result<T, ontology_graph::GraphError>,
     what: &str,
     id: u64,
 ) -> Result<T, ApiError> {
-    found.map_err(|_| ApiError::NotFound(format!("{what} {id}")))
+    use ontology_graph::GraphError as G;
+    found.map_err(|e| match e {
+        // Rules and actions report a miss as `UnknownRelationType("rule N")`
+        // (their own miss variant never existed).
+        G::UnknownConcept(_) | G::UnknownRelation(_) | G::UnknownRelationType(_) => {
+            ApiError::NotFound(format!("{what} {id}"))
+        }
+        other => ApiError::Graph(other),
+    })
 }
 
 async fn compact(State(s): State<AppState>) -> Result<StatusCode, ApiError> {
@@ -1516,7 +1524,7 @@ async fn metrics(State(s): State<AppState>) -> ([(String, String); 1], String) {
         ));
     }
     if let Some(plan) = s.memory_plan.read().as_ref() {
-        let m = memory_stats(plan);
+        let m = memory_stats(plan, &s.graph);
         body.push_str(&format!(
             "# HELP ontology_memory_budget_known 1 when a memory budget could be determined.\n\
              # TYPE ontology_memory_budget_known gauge\n\
@@ -1541,7 +1549,13 @@ async fn metrics(State(s): State<AppState>) -> ([(String, String); 1], String) {
              ontology_memory_partial {}\n\
              # HELP ontology_memory_over_budget 1 when everything was loaded although the estimate exceeds a soft budget.\n\
              # TYPE ontology_memory_over_budget gauge\n\
-             ontology_memory_over_budget {}\n",
+             ontology_memory_over_budget {}\n\
+             # HELP ontology_domains_p1 Storage domains whose concept payloads stay on disk.\n\
+             # TYPE ontology_domains_p1 gauge\n\
+             ontology_domains_p1 {}\n\
+             # HELP ontology_resident_payloads Concepts whose payload is held in memory.\n\
+             # TYPE ontology_resident_payloads gauge\n\
+             ontology_resident_payloads {}\n",
             u8::from(plan.budget.budget_bytes.is_some()),
             plan.budget.budget_bytes.unwrap_or(0),
             plan.estimated_total_bytes,
@@ -1550,6 +1564,8 @@ async fn metrics(State(s): State<AppState>) -> ([(String, String); 1], String) {
             m.domains_skipped.len(),
             u8::from(m.partial),
             u8::from(m.over_budget),
+            m.p1_domains.len(),
+            m.resident_payloads,
         ));
     }
     (
@@ -1586,7 +1602,11 @@ async fn stats(State(s): State<AppState>) -> Json<StatsResponse> {
         h.record(sample);
         d
     };
-    let memory = s.memory_plan.read().as_ref().map(memory_stats);
+    let memory = s
+        .memory_plan
+        .read()
+        .as_ref()
+        .map(|p| memory_stats(p, &s.graph));
     Json(StatsResponse {
         core,
         deltas,
@@ -1623,9 +1643,13 @@ pub struct MemoryStats {
     pub domains_skipped: Vec<String>,
     /// Resident set of the process right now, when the platform reports it.
     pub rss_mib: Option<u64>,
+    /// Domains whose concept payloads stay on disk (P1, STORAGE.md §8.2).
+    pub p1_domains: Vec<String>,
+    /// Concepts whose payload is held in memory right now.
+    pub resident_payloads: usize,
 }
 
-fn memory_stats(plan: &ontology_storage::LoadPlan) -> MemoryStats {
+fn memory_stats(plan: &ontology_storage::LoadPlan, graph: &OntologyGraph) -> MemoryStats {
     let mib = |b: u64| b / (1024 * 1024);
     let loaded: Vec<String> = match &plan.domains {
         Some(d) => d.clone(),
@@ -1643,6 +1667,8 @@ fn memory_stats(plan: &ontology_storage::LoadPlan) -> MemoryStats {
         domains_loaded: loaded,
         domains_skipped: plan.skipped.iter().map(|s| s.ns.clone()).collect(),
         rss_mib: process_rss_bytes().map(mib),
+        p1_domains: plan.p1_domains.clone(),
+        resident_payloads: graph.resident_payloads(),
     }
 }
 
@@ -1777,24 +1803,24 @@ async fn list_concepts(
     let (total, concepts, next) = match cursor {
         Some(c) => {
             let after: ConceptKey = decode_cursor(c)?;
-            let (page, next) = s.graph.list_concepts_after(
+            let (page, next) = s.graph.try_list_concepts_after(
                 q.concept_type.as_deref(),
                 needle.as_deref(),
                 Some(&after),
                 limit,
                 q.include_subtypes,
-            );
+            )?;
             (None, page, next)
         }
         None => {
-            let (total, page) = s.graph.list_concepts_page(
+            let (total, page) = s.graph.try_list_concepts_page(
                 q.concept_type.as_deref(),
                 needle.as_deref(),
                 q.offset,
                 limit,
                 q.track_total,
                 q.include_subtypes,
-            );
+            )?;
             let next = page
                 .last()
                 .filter(|_| page.len() == limit)
@@ -2688,7 +2714,7 @@ struct SubgraphResponse {
 async fn subgraph_handler(
     State(s): State<AppState>,
     Json(req): Json<SubgraphRequest>,
-) -> Json<SubgraphResponse> {
+) -> Result<Json<SubgraphResponse>, ApiError> {
     let limit = req.limit.clamp(1, 2_000);
 
     // 1. Collect seed concept ids.
@@ -2721,15 +2747,20 @@ async fn subgraph_handler(
         if req.seed_concept_types.is_empty() {
             let (_, page) = s
                 .graph
-                .list_concepts_page(None, None, 0, limit, false, true);
+                .try_list_concepts_page(None, None, 0, limit, false, true)?;
             for c in page {
                 seeds.push(c.id);
             }
         } else {
             'outer: for t in &req.seed_concept_types {
-                let (_, page) =
-                    s.graph
-                        .list_concepts_page(Some(t), None, 0, limit - seeds.len(), false, true);
+                let (_, page) = s.graph.try_list_concepts_page(
+                    Some(t),
+                    None,
+                    0,
+                    limit - seeds.len(),
+                    false,
+                    true,
+                )?;
                 for c in page {
                     seeds.push(c.id);
                     if seeds.len() >= limit {
@@ -2747,7 +2778,7 @@ async fn subgraph_handler(
         ..Default::default()
     };
     let subgraph = s.graph.expand(&seeds, &spec);
-    Json(SubgraphResponse { subgraph })
+    Ok(Json(SubgraphResponse { subgraph }))
 }
 
 /// `GET /export?format=jsonl` — stream the entire graph as newline-
@@ -2805,7 +2836,7 @@ async fn export_handler(
             // Compact JSON snapshot: ontology + concepts + relations.
             let body = serde_json::json!({
                 "ontology": s.graph.ontology(),
-                "concepts": s.graph.all_concepts(),
+                "concepts": s.graph.try_all_concepts()?,
                 "relations": s.graph.all_relations(),
             });
             Ok(Json(body).into_response())
@@ -3904,6 +3935,9 @@ impl IntoResponse for ApiError {
             | ApiError::Graph(ontology_graph::GraphError::DisjointTypeViolation { .. })
             | ApiError::Graph(ontology_graph::GraphError::CardinalityViolation { .. }) => {
                 (StatusCode::UNPROCESSABLE_ENTITY, self.to_string())
+            }
+            ApiError::Graph(ontology_graph::GraphError::PayloadUnavailable(..)) => {
+                (StatusCode::INTERNAL_SERVER_ERROR, self.to_string())
             }
             ApiError::Graph(_) => (StatusCode::BAD_REQUEST, self.to_string()),
             ApiError::Store(_) => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),

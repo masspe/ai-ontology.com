@@ -11,6 +11,7 @@ use dashmap::DashMap;
 use parking_lot::{Mutex, RwLock};
 use smallvec::SmallVec;
 use std::collections::BTreeSet;
+use std::fmt;
 use std::ops::Bound::{Excluded, Unbounded};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -19,7 +20,8 @@ use std::time::Instant;
 use crate::error::{GraphError, GraphResult};
 use crate::id::{ActionId, ConceptId, IdAllocator, RelationId, RuleId};
 use crate::model::{
-    Action, ActionPatch, Concept, ConceptPatch, Relation, RelationPatch, Rule, RulePatch,
+    Action, ActionPatch, Concept, ConceptPatch, PropertyValue, Relation, RelationPatch, Rule,
+    RulePatch,
 };
 use crate::schema::Ontology;
 
@@ -49,6 +51,87 @@ fn trigrams(s: &str) -> Vec<[char; 3]> {
 /// Sort key of the concept listing, `(concept_type, name, id)`; also the
 /// cursor of `list_concepts_after` (T1).
 pub type ConceptKey = (String, String, ConceptId);
+
+/// Where a concept's payload record lives on disk (P1, `STORAGE.md` §6.2):
+/// the stream, the partition and the record's offset in its `.data` file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Loc {
+    pub ns_id: u16,
+    pub partition: u32,
+    pub offset: u64,
+}
+
+/// Reads a concept back from its record (P1). Implemented by the segment
+/// store over its sealed, memory-mapped segments; must never take the
+/// store's write lock (R12: reads outside the lock).
+pub trait PayloadSource: Send + Sync {
+    fn read(&self, loc: Loc) -> Result<Concept, String>;
+}
+
+/// The part of a concept record that P1 keeps in memory only while
+/// resident (`STORAGE.md` §6.2): everything but id, type and name.
+#[derive(Debug)]
+struct Payload {
+    description: String,
+    properties: AHashMap<String, PropertyValue>,
+}
+
+/// Entry of the primary concept map. Type and name stay in memory (every
+/// index, validation and cascade reads them); the payload is here while
+/// resident, and on disk at `loc` once evicted. In P0 `loc` is `None` and
+/// the payload is always resident.
+#[derive(Debug)]
+struct Slot {
+    concept_type: String,
+    name: String,
+    loc: Option<Loc>,
+    payload: Option<Payload>,
+}
+
+impl Slot {
+    fn new(c: Concept) -> Self {
+        Self {
+            concept_type: c.concept_type,
+            name: c.name,
+            loc: None,
+            payload: Some(Payload {
+                description: c.description,
+                properties: c.properties,
+            }),
+        }
+    }
+
+    /// The concept as held here: complete while resident, without its
+    /// payload (empty description / properties) once evicted — the caller
+    /// then reads `loc` through the source **after** releasing this slot.
+    fn concept(&self, id: ConceptId) -> Concept {
+        let (description, properties) = match &self.payload {
+            Some(p) => (p.description.clone(), p.properties.clone()),
+            None => Default::default(),
+        };
+        Concept {
+            id,
+            concept_type: self.concept_type.clone(),
+            name: self.name.clone(),
+            description,
+            properties,
+        }
+    }
+}
+
+/// The attached [`PayloadSource`], if any. A newtype only so that
+/// `OntologyGraph` can keep deriving `Debug` (the trait object has none).
+struct Source(RwLock<Option<Arc<dyn PayloadSource>>>);
+
+impl fmt::Debug for Source {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(if self.0.read().is_some() {
+            "Source(attached)"
+        } else {
+            "Source(none)"
+        })
+    }
+}
 type RuleKey = (String, String, RuleId);
 type ActionKey = (String, String, ActionId);
 
@@ -159,6 +242,12 @@ const LIST_RELATIONS_CACHE_CAP: usize = 256;
 /// huge one (`STORAGE.md` R17: fail explicitly, never get killed).
 const LIST_PREALLOC_CAP: usize = 1024;
 
+/// Message of the infallible read wrappers when a P1 payload read fails.
+/// Impossible in P0 (every payload is resident); a P1 caller reaches for
+/// the `try_*` twin instead.
+const PAYLOAD_EXPECT: &str =
+    "payload on disk unreadable: use the try_* variant when a payload source is attached";
+
 /// In-memory ontology graph. Built for high read concurrency: lookups go
 /// through `DashMap`s (sharded, lock-free reads) while edge index updates
 /// take a single short write lock. Ordered listings are served from
@@ -166,7 +255,23 @@ const LIST_PREALLOC_CAP: usize = 1024;
 #[derive(Debug)]
 pub struct OntologyGraph {
     ontology: RwLock<Ontology>,
-    concepts: DashMap<ConceptId, Concept>,
+    concepts: DashMap<ConceptId, Slot>,
+    /// P1: reader for the payloads that are not resident.
+    source: Source,
+    /// P1: locations recorded by `set_loc` before their concept was applied
+    /// (write-ahead: the record is durable first); attached, and consumed,
+    /// when the concept arrives.
+    pending_locs: Mutex<AHashMap<ConceptId, Loc>>,
+    /// Partitions the store has sealed. A location that arrives after its
+    /// partition sealed (the batch rolled before the graph applied the
+    /// record) is evicted at once instead of waiting for a seal that
+    /// already happened. Bounded by the number of partitions ever sealed.
+    sealed: Mutex<ahash::AHashSet<(u16, u32)>>,
+    /// P1: ids resident with a location, per partition, so that
+    /// `partition_sealed` drops them without scanning the map. Entries are
+    /// checked against the slot when the partition seals, so a stale one
+    /// (relocated, evicted or removed since) is simply skipped.
+    sealable: Mutex<AHashMap<(u16, u32), Vec<ConceptId>>>,
     rules: DashMap<RuleId, Rule>,
     actions: DashMap<ActionId, Action>,
     relations: DashMap<RelationId, Relation>,
@@ -219,6 +324,10 @@ impl OntologyGraph {
         Self {
             ontology: RwLock::new(ontology),
             concepts: DashMap::new(),
+            source: Source(RwLock::new(None)),
+            pending_locs: Mutex::new(AHashMap::new()),
+            sealed: Mutex::new(ahash::AHashSet::new()),
+            sealable: Mutex::new(AHashMap::new()),
             rules: DashMap::new(),
             actions: DashMap::new(),
             relations: DashMap::new(),
@@ -598,6 +707,9 @@ impl OntologyGraph {
     /// subsequent inserts start from id 1 again.
     pub fn clear_instances(&self) {
         self.concepts.clear();
+        self.pending_locs.lock().clear();
+        self.sealed.lock().clear();
+        self.sealable.lock().clear();
         self.rules.clear();
         self.actions.clear();
         self.relations.clear();
@@ -735,6 +847,7 @@ impl OntologyGraph {
                 ));
             }
         }
+        let mut prev_loc = None;
         if let Some(prev) = self.concepts.get(&concept.id) {
             if prev.concept_type != concept.concept_type {
                 return Err(GraphError::ImmutableConceptType(
@@ -748,13 +861,21 @@ impl OntologyGraph {
             if prev_key != key {
                 self.name_index.remove(&prev_key);
             }
+            prev_loc = prev.loc;
         }
         self.ids.observe_concept(concept.id);
         self.name_index.insert(key, concept.id);
         let id = concept.id;
         let sort_key = (concept.concept_type.clone(), concept.name.clone(), id);
         let new_name = concept.name.clone();
-        let prev = self.concepts.insert(id, concept);
+        let mut slot = Slot::new(concept);
+        // Write-ahead: a location recorded before the concept arrived.
+        let pending = self.pending_locs.lock().remove(&id);
+        slot.loc = pending.or(prev_loc);
+        let prev = self.concepts.insert(id, slot);
+        if let Some(loc) = pending {
+            self.sealable_push(id, loc);
+        }
         if self.derived() {
             if let Some(prev) = prev {
                 let old = (prev.concept_type.clone(), prev.name.clone(), id);
@@ -788,10 +909,71 @@ impl OntologyGraph {
     }
 
     pub fn get_concept(&self, id: ConceptId) -> GraphResult<Concept> {
-        self.concepts
+        let slot = self
+            .concepts
             .get(&id)
-            .map(|c| c.clone())
-            .ok_or(GraphError::UnknownConcept(id))
+            .ok_or(GraphError::UnknownConcept(id))?;
+        if slot.payload.is_some() {
+            return Ok(slot.concept(id));
+        }
+        let loc = slot.loc;
+        drop(slot);
+        self.read_payload(id, loc)
+    }
+
+    /// Read the payload of `id` through the source. Called with no slot
+    /// held: the source may block on I/O, and the store's writer thread
+    /// may be waiting on that very shard.
+    fn read_payload(&self, id: ConceptId, loc: Option<Loc>) -> GraphResult<Concept> {
+        let unavailable = |why: String| GraphError::PayloadUnavailable(id, why);
+        let loc = loc.ok_or_else(|| unavailable("evicted without a location".into()))?;
+        let source = self
+            .source
+            .0
+            .read()
+            .clone()
+            .ok_or_else(|| unavailable("no payload source attached".into()))?;
+        let c = source.read(loc).map_err(unavailable)?;
+        if c.id != id {
+            return Err(unavailable(format!(
+                "record at {loc:?} belongs to concept {}",
+                c.id
+            )));
+        }
+        Ok(c)
+    }
+
+    /// Replace the payload-less rows of `page` (the ids in `evicted`, with
+    /// their location) by a read through the source. No lock is held here.
+    fn fill(
+        &self,
+        page: &mut [Concept],
+        evicted: &AHashMap<ConceptId, Option<Loc>>,
+    ) -> GraphResult<()> {
+        if evicted.is_empty() {
+            return Ok(());
+        }
+        for c in page.iter_mut() {
+            if let Some(loc) = evicted.get(&c.id) {
+                *c = self.read_payload(c.id, *loc)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn sealable_push(&self, id: ConceptId, loc: Loc) {
+        let key = (loc.ns_id, loc.partition);
+        // The partition sealed before this location reached its slot: the
+        // seal notification is not coming again, evict now.
+        if self.sealed.lock().contains(&key) && self.source.0.read().is_some() {
+            if let Some(mut slot) = self.concepts.get_mut(&id) {
+                if slot.loc == Some(loc) {
+                    slot.payload = None;
+                }
+            }
+            return;
+        }
+        self.sealable.lock().entry(key).or_default().push(id);
     }
 
     pub fn find_by_name(&self, concept_type: &str, name: &str) -> Option<ConceptId> {
@@ -803,12 +985,114 @@ impl OntologyGraph {
     pub fn concept_count(&self) -> usize {
         self.concepts.len()
     }
+
+    // ---------- P1: payloads on disk (STORAGE.md §6.2, §8.2) ----------
+    //
+    // The store calls these; the graph implements them. A slot keeps type
+    // and name; its payload leaves memory when the partition holding the
+    // record seals, and reads then go through the attached source. Without
+    // `set_loc` (P0) every payload stays resident and the source is idle.
+
+    /// Attach the reader used for concepts whose payload is not resident.
+    pub fn set_payload_source(&self, source: Arc<dyn PayloadSource>) {
+        *self.source.0.write() = Some(source);
+    }
+
+    /// Record where concept `id`'s current payload lives. With
+    /// `resident = false` the in-memory copy is dropped (the source must be
+    /// attached); with `true` it is kept until `partition_sealed` names its
+    /// partition. May be called before the concept is applied (write-ahead:
+    /// the record is durable before the graph is updated): the location is
+    /// then attached when the concept arrives.
+    pub fn set_loc(&self, id: ConceptId, loc: Loc, resident: bool) {
+        let Some(mut slot) = self.concepts.get_mut(&id) else {
+            self.pending_locs.lock().insert(id, loc);
+            return;
+        };
+        // A resident location for an evicted slot names a record in the
+        // active segment, which the source cannot read (R11): the slot keeps
+        // its sealed location until the apply that follows brings the new
+        // payload, and takes the new location from the stash then.
+        if resident && slot.payload.is_none() {
+            drop(slot);
+            self.pending_locs.lock().insert(id, loc);
+            return;
+        }
+        slot.loc = Some(loc);
+        // Without a source the payload could never be read back: keep it.
+        let evict = !resident && self.source.0.read().is_some();
+        if evict {
+            slot.payload = None;
+        }
+        drop(slot);
+        if !evict {
+            self.sealable_push(id, loc);
+        }
+    }
+
+    /// The store sealed partition `partition` of stream `ns_id`: every
+    /// resident payload located in it is dropped (it is now readable through
+    /// the source). Returns how many were dropped.
+    pub fn partition_sealed(&self, ns_id: u16, partition: u32) -> usize {
+        if self.source.0.read().is_none() {
+            // Nothing could read them back yet; the bucket waits.
+            return 0;
+        }
+        self.sealed.lock().insert((ns_id, partition));
+        // Take the bucket out before touching any shard: `set_loc` pushes
+        // while holding no shard either, so the two never wait on each other.
+        let ids = self
+            .sealable
+            .lock()
+            .remove(&(ns_id, partition))
+            .unwrap_or_default();
+        let mut dropped = 0;
+        for id in ids {
+            let Some(mut slot) = self.concepts.get_mut(&id) else {
+                continue;
+            };
+            let here = slot
+                .loc
+                .is_some_and(|l| (l.ns_id, l.partition) == (ns_id, partition));
+            if here && slot.payload.take().is_some() {
+                dropped += 1;
+            }
+        }
+        dropped
+    }
+
+    /// Concepts whose payload is held in memory (all of them in P0).
+    pub fn resident_payloads(&self) -> usize {
+        // ponytail: O(n) scan; an AtomicUsize maintained at the six
+        // resident/evicted transitions if the store polls this per seal.
+        self.concepts.iter().filter(|s| s.payload.is_some()).count()
+    }
     pub fn relation_count(&self) -> usize {
         self.relations.len()
     }
 
+    /// Every concept, in no particular order. Panics if an evicted payload
+    /// cannot be read (P1): callers that attach a source use
+    /// [`try_all_concepts`](Self::try_all_concepts).
     pub fn all_concepts(&self) -> Vec<Concept> {
-        self.concepts.iter().map(|e| e.value().clone()).collect()
+        self.try_all_concepts().expect(PAYLOAD_EXPECT)
+    }
+
+    pub fn try_all_concepts(&self) -> GraphResult<Vec<Concept>> {
+        let mut out: Vec<Concept> = Vec::with_capacity(self.concepts.len());
+        let mut evicted: Vec<(ConceptId, Option<Loc>)> = Vec::new();
+        for e in self.concepts.iter() {
+            let id = *e.key();
+            if e.payload.is_some() {
+                out.push(e.concept(id));
+            } else {
+                evicted.push((id, e.loc));
+            }
+        }
+        for (id, loc) in evicted {
+            out.push(self.read_payload(id, loc)?);
+        }
+        Ok(out)
     }
 
     // ---------- relations ----------
@@ -1167,10 +1451,19 @@ impl OntologyGraph {
             }
         }
         entry.name = updated.name;
-        entry.description = updated.description;
-        entry.properties = updated.properties;
-        let snapshot = entry.clone();
+        entry.payload = Some(Payload {
+            description: updated.description,
+            properties: updated.properties,
+        });
+        let pending = self.pending_locs.lock().remove(&id);
+        if pending.is_some() {
+            entry.loc = pending;
+        }
+        let snapshot = entry.concept(id);
         drop(entry);
+        if let Some(loc) = pending {
+            self.sealable_push(id, loc);
+        }
         self.bump_concepts_gen();
         Ok(snapshot)
     }
@@ -1672,7 +1965,9 @@ impl OntologyGraph {
     /// Paginated, ordered listing of concepts. Iterates the
     /// `(concept_type, name)` sort index and only clones entities that
     /// survive the filter and fall inside `[offset, offset+limit)`.
-    /// Returns `(total_matching, page)`.
+    /// Returns `(total_matching, page)`. Panics if an evicted payload cannot
+    /// be read (P1): callers that attach a source use
+    /// [`try_list_concepts_page`](Self::try_list_concepts_page).
     pub fn list_concepts_page(
         &self,
         concept_type: Option<&str>,
@@ -1682,6 +1977,26 @@ impl OntologyGraph {
         track_total: bool,
         include_subtypes: bool,
     ) -> (usize, Vec<Concept>) {
+        self.try_list_concepts_page(
+            concept_type,
+            name_substring_lowercase,
+            offset,
+            limit,
+            track_total,
+            include_subtypes,
+        )
+        .expect(PAYLOAD_EXPECT)
+    }
+
+    pub fn try_list_concepts_page(
+        &self,
+        concept_type: Option<&str>,
+        name_substring_lowercase: Option<&str>,
+        offset: usize,
+        limit: usize,
+        track_total: bool,
+        include_subtypes: bool,
+    ) -> GraphResult<(usize, Vec<Concept>)> {
         let gen = self.concepts_gen.load(Ordering::Acquire);
         let cache_key: ListConceptsCacheKey = (
             concept_type.map(|s| s.to_string()),
@@ -1693,7 +2008,7 @@ impl OntologyGraph {
         );
         if let Some(entry) = self.list_concepts_cache.lock().get(&cache_key) {
             if entry.gen == gen {
-                return (entry.total, entry.page.clone());
+                return Ok((entry.total, entry.page.clone()));
             }
         }
 
@@ -1705,7 +2020,7 @@ impl OntologyGraph {
             track_total,
             include_subtypes,
             None,
-        );
+        )?;
 
         let mut cache = self.list_concepts_cache.lock();
         if cache.len() >= LIST_CONCEPTS_CACHE_CAP {
@@ -1719,7 +2034,7 @@ impl OntologyGraph {
                 page: page.clone(),
             },
         );
-        (total, page)
+        Ok((total, page))
     }
 
     /// Cursor listing (T1, `STORAGE-PLAN.md` §8): the page that starts
@@ -1727,7 +2042,9 @@ impl OntologyGraph {
     /// the same filters, and the cursor of the next page (`None` once the
     /// page is short: the listing is exhausted). The sorted indexes are
     /// entered with `range`, so a page costs O(log N + page) wherever it
-    /// starts, where `offset` costs O(offset).
+    /// starts, where `offset` costs O(offset). Panics if an evicted payload
+    /// cannot be read (P1): callers that attach a source use
+    /// [`try_list_concepts_after`](Self::try_list_concepts_after).
     pub fn list_concepts_after(
         &self,
         concept_type: Option<&str>,
@@ -1736,6 +2053,24 @@ impl OntologyGraph {
         limit: usize,
         include_subtypes: bool,
     ) -> (Vec<Concept>, Option<ConceptKey>) {
+        self.try_list_concepts_after(
+            concept_type,
+            name_substring_lowercase,
+            after,
+            limit,
+            include_subtypes,
+        )
+        .expect(PAYLOAD_EXPECT)
+    }
+
+    pub fn try_list_concepts_after(
+        &self,
+        concept_type: Option<&str>,
+        name_substring_lowercase: Option<&str>,
+        after: Option<&ConceptKey>,
+        limit: usize,
+        include_subtypes: bool,
+    ) -> GraphResult<(Vec<Concept>, Option<ConceptKey>)> {
         let (_, page) = self.list_concepts_page_uncached(
             concept_type,
             name_substring_lowercase,
@@ -1744,12 +2079,12 @@ impl OntologyGraph {
             false,
             include_subtypes,
             after,
-        );
+        )?;
         let next = page
             .last()
             .filter(|_| page.len() == limit)
             .map(|c| (c.concept_type.clone(), c.name.clone(), c.id));
-        (page, next)
+        Ok((page, next))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1762,7 +2097,10 @@ impl OntologyGraph {
         track_total: bool,
         include_subtypes: bool,
         after: Option<&ConceptKey>,
-    ) -> (usize, Vec<Concept>) {
+    ) -> GraphResult<(usize, Vec<Concept>)> {
+        // Evicted rows (P1) are collected as payload-less shells under the
+        // index locks and completed by `fill` once every lock is released.
+        let mut evicted: AHashMap<ConceptId, Option<Loc>> = AHashMap::new();
         // Resolve concept_type filter into the set of accepted type names
         // once, honouring subtype subsumption when requested.
         let type_filter: Option<std::collections::HashSet<String>> = concept_type.map(|t| {
@@ -1781,7 +2119,7 @@ impl OntologyGraph {
                 for g in &qgrams {
                     match idx.get(g) {
                         Some(s) => sets.push(s),
-                        None => return (0, Vec::new()),
+                        None => return Ok((0, Vec::new())),
                     }
                 }
                 sets.sort_by_key(|s| s.len());
@@ -1812,7 +2150,10 @@ impl OntologyGraph {
                     if !c.name.to_lowercase().contains(needle) {
                         continue;
                     }
-                    survivors.push((c.concept_type.clone(), c.name.clone(), id, c.clone()));
+                    if c.payload.is_none() {
+                        evicted.insert(id, c.loc);
+                    }
+                    survivors.push((c.concept_type.clone(), c.name.clone(), id, c.concept(id)));
                 }
                 // R6: same order as the needle-less listing with the same
                 // filters — `(name, id)` across the buckets of a type filter
@@ -1837,13 +2178,14 @@ impl OntologyGraph {
                     });
                 }
                 let total = survivors.len();
-                let page: Vec<Concept> = survivors
+                let mut page: Vec<Concept> = survivors
                     .into_iter()
                     .skip(offset)
                     .take(limit)
                     .map(|(_, _, _, c)| c)
                     .collect();
-                return (total, page);
+                self.fill(&mut page, &evicted)?;
+                return Ok((total, page));
             }
         }
 
@@ -1860,7 +2202,10 @@ impl OntologyGraph {
             total += 1;
             if rank >= offset && page.len() < limit {
                 if let Some(c) = self.concepts.get(id) {
-                    page.push(c.clone());
+                    if c.payload.is_none() {
+                        evicted.insert(*id, c.loc);
+                    }
+                    page.push(c.concept(*id));
                 }
             }
             !(page.len() >= limit && !track_total)
@@ -1915,12 +2260,24 @@ impl OntologyGraph {
                 }
             }
         }
-        (total, page)
+        self.fill(&mut page, &evicted)?;
+        Ok((total, page))
     }
 
     /// Public helper for traversal/RAG: every concept of `t`, optionally
-    /// including subtype instances.
+    /// including subtype instances. Panics if an evicted payload cannot be
+    /// read (P1): callers that attach a source use
+    /// [`try_concepts_of_type`](Self::try_concepts_of_type).
     pub fn concepts_of_type(&self, t: &str, include_subtypes: bool) -> Vec<Concept> {
+        self.try_concepts_of_type(t, include_subtypes)
+            .expect(PAYLOAD_EXPECT)
+    }
+
+    pub fn try_concepts_of_type(
+        &self,
+        t: &str,
+        include_subtypes: bool,
+    ) -> GraphResult<Vec<Concept>> {
         let types: Vec<String> = if include_subtypes {
             self.ontology.read().descendants(t)
         } else {
@@ -1928,15 +2285,21 @@ impl OntologyGraph {
         };
         let mut out: Vec<Concept> = Vec::new();
         for ty in types {
-            if let Some(bucket) = self.concepts_by_type.get(&ty) {
-                for (_, id) in bucket.iter() {
-                    if let Some(c) = self.concepts.get(id) {
-                        out.push(c.clone());
-                    }
+            // Ids first, so no bucket is held while a payload is read.
+            let ids: Vec<ConceptId> = match self.concepts_by_type.get(&ty) {
+                Some(bucket) => bucket.iter().map(|(_, id)| *id).collect(),
+                None => continue,
+            };
+            for id in ids {
+                match self.get_concept(id) {
+                    Ok(c) => out.push(c),
+                    // Stale bucket entry (bulk mode): skipped, as before.
+                    Err(GraphError::UnknownConcept(_)) => {}
+                    Err(e) => return Err(e),
                 }
             }
         }
-        out
+        Ok(out)
     }
 
     /// Paginated, ordered listing of relations (sorted by id ascending).

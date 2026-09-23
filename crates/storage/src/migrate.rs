@@ -265,7 +265,7 @@ pub fn compare_graphs(a: &OntologyGraph, b: &OntologyGraph) -> StoreResult<()> {
     if a.rule_count() != b.rule_count() || a.action_count() != b.action_count() {
         return Err(mismatch("rule or action count differs".into()));
     }
-    for c in a.all_concepts() {
+    for c in a.try_all_concepts()? {
         let other = b
             .get_concept(c.id)
             .map_err(|_| mismatch(format!("concept {} missing", c.id)))?;

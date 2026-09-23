@@ -554,6 +554,7 @@ ontology --data $DATA --memory-mode strict serve             # refuse to start i
 ontology --data $DATA --heap-fraction 0.5 serve              # share of available memory (default 0.6)
 ontology --data $DATA --memory-budget-mb 2048 serve          # explicit budget, detection and fraction ignored
 ontology --data $DATA serve --ns parties,contrats            # an explicit list always wins over the plan
+ontology --data $DATA --tier p1 serve                        # P1: concept payloads stay on disk, read back on demand (auto = the plan decides)
 ONTOLOGY_MEMORY_MODE=strict ONTOLOGY_MEMORY_BUDGET_MB=2048 ontology --data $DATA serve   # same, for Docker
 ```
 
@@ -567,7 +568,7 @@ extrapolated, see STORAGE.md §8.1 for the assumptions):
 
 | Node | Today (P0) | With P1 (payloads on disk, next storage step) |
 |---|---|---|
-| 16 GB, default fraction 0.6 | ~1.8 M concepts / 9 M relations | ~2.4 M / 12 M |
+| 16 GB, default fraction 0.6 | ~1.8 M concepts / 9 M relations | ~2.4 M / 12 M (P1 delivered 2026-09-23: private heap ÷1.57 measured at 500 k) |
 | 64 GB, fraction 0.6 | ~7 M / 35 M | ~9.5 M / 47 M |
 | 64 GB, `--heap-fraction 0.8` (dedicated node) | ~9.6 M / 48 M | **~13 M / 63 M** |
 

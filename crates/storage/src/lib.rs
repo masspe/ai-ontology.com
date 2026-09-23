@@ -46,7 +46,9 @@ pub use migrate::{
     legacy_present, migrate_legacy, staging_dir_for, store_dir_for, MigrationReport,
 };
 pub use periodic::{spawn_snapshotter, SnapshotHandle};
-pub use segment_store::{OpenReport, SegmentStore, SegmentStoreConfig};
+pub use segment_store::{
+    HydrationReport, OpenReport, SealedIndex, SegmentStore, SegmentStoreConfig, Tier,
+};
 pub use snapshot::Snapshot;
 pub use store::{Store, StoreError, StoreResult};
 pub use stream::RollPolicy;
