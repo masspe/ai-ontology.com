@@ -107,8 +107,8 @@ jobs:
         run: |
           npm ci
           npx vitest run --coverage --coverage.reporter=json-summary --coverage.reporter=text-summary
-      - name: Badges and table
-        run: python3 scripts/coverage_badges.py --rust target/llvm-cov/cov.json --web web/coverage/coverage-summary.json --out badges
+      - name: Badges and table (fails below 90 % on any crate or the web)
+        run: python3 scripts/coverage_badges.py --rust target/llvm-cov/cov.json --web web/coverage/coverage-summary.json --out badges --fail-under 90
       - uses: actions/upload-artifact@v4
         with:
           name: coverage-badges
