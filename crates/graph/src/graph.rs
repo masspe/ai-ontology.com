@@ -49,6 +49,22 @@ fn trigrams(s: &str) -> Vec<[char; 3]> {
 /// Sort key of the concept listing, `(concept_type, name, id)`; also the
 /// cursor of `list_concepts_after` (T1).
 pub type ConceptKey = (String, String, ConceptId);
+
+/// Where a concept's payload record lives on disk (P1, `STORAGE.md` §6.2):
+/// the stream, the partition and the record's offset in its `.data` file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Loc {
+    pub ns_id: u16,
+    pub partition: u32,
+    pub offset: u64,
+}
+
+/// Reads a concept back from its record (P1). Implemented by the segment
+/// store over its sealed, memory-mapped segments; must never take the
+/// store's write lock (R12: reads outside the lock).
+pub trait PayloadSource: Send + Sync {
+    fn read(&self, loc: Loc) -> Result<Concept, String>;
+}
 type RuleKey = (String, String, RuleId);
 type ActionKey = (String, String, ActionId);
 
@@ -801,6 +817,35 @@ impl OntologyGraph {
     }
 
     pub fn concept_count(&self) -> usize {
+        self.concepts.len()
+    }
+
+    // ---------- P1: payloads on disk (STORAGE.md §6.2, §8.2) ----------
+    //
+    // Interface fixed first (feat/p1-iface); the store calls these, the
+    // graph implements them. P0 semantics until the implementation lands:
+    // every payload stays resident.
+
+    /// Attach the reader used for concepts whose payload is not resident.
+    pub fn set_payload_source(&self, _source: Arc<dyn PayloadSource>) {}
+
+    /// Record where concept `id`'s current payload lives. With
+    /// `resident = false` the in-memory copy is dropped (the source must be
+    /// attached); with `true` it is kept until `partition_sealed` names its
+    /// partition. May be called before the concept is applied (write-ahead:
+    /// the record is durable before the graph is updated): the location is
+    /// then attached when the concept arrives.
+    pub fn set_loc(&self, _id: ConceptId, _loc: Loc, _resident: bool) {}
+
+    /// The store sealed partition `partition` of stream `ns_id`: every
+    /// resident payload located in it is dropped (it is now readable through
+    /// the source). Returns how many were dropped.
+    pub fn partition_sealed(&self, _ns_id: u16, _partition: u32) -> usize {
+        0
+    }
+
+    /// Concepts whose payload is held in memory (all of them in P0).
+    pub fn resident_payloads(&self) -> usize {
         self.concepts.len()
     }
     pub fn relation_count(&self) -> usize {

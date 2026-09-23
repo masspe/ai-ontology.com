@@ -16,6 +16,11 @@ pub enum GraphError {
     #[error("unknown concept {0}")]
     UnknownConcept(ConceptId),
 
+    /// P1: the concept's payload lives on disk and could not be read back
+    /// (no payload source attached, or the source failed).
+    #[error("payload of concept {0} unavailable: {1}")]
+    PayloadUnavailable(ConceptId, String),
+
     #[error("unknown relation {0}")]
     UnknownRelation(RelationId),
 
