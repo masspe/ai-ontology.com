@@ -319,3 +319,101 @@ fn compact_codec_switches_an_existing_store() {
     assert!(!out.status.success());
     assert!(String::from_utf8_lossy(&out.stderr).contains("--data"));
 }
+
+/// Human-readable output (no `--json`) is one `key  value` line per field;
+/// `hydrate --p1` hydrates every domain in P1 and reports the tier;
+/// `compact` without `--codec` keeps the codec; the argument and state
+/// checks of `append`, `query` and `compact` refuse with their cause.
+#[test]
+fn bench_human_output_p1_hydrate_plain_compact_and_refusals() {
+    // Refusals on an empty store: nothing to append to, nothing to query.
+    // Opening the store creates it, so `gen` below gets its own directory.
+    let empty = tempdir("human-empty");
+    let (ok, _, err) = run(&empty, &["bench", "append", "--n", "0"]);
+    assert!(
+        !ok && err.contains("--n and --batch must be positive"),
+        "{err}"
+    );
+    let (ok, _, err) = run(&empty, &["bench", "query", "--iterations", "0"]);
+    assert!(
+        !ok && err.contains("--iterations must be positive"),
+        "{err}"
+    );
+    let (ok, _, err) = run(&empty, &["bench", "append", "--n", "2"]);
+    assert!(!ok && err.contains("no concept type"), "{err}");
+    let (ok, _, err) = run(&empty, &["bench", "query", "--iterations", "1"]);
+    assert!(!ok && err.contains("empty store"), "{err}");
+    let (ok, _, err) = run(&empty, &["bench", "compact", "--codec", "bincode"]);
+    assert!(!ok && err.contains("unknown codec"), "{err}");
+    let _ = std::fs::remove_dir_all(&empty);
+
+    let data = tempdir("human");
+    let (ok, out, err) = run(
+        &data,
+        &[
+            "bench",
+            "gen",
+            "--concepts",
+            "40",
+            "--relations",
+            "60",
+            "--ns",
+            "2",
+            "--payload",
+            "300",
+            "--batch",
+            "7",
+        ],
+    );
+    assert!(ok, "{out}\n{err}");
+    let field = |out: &str, key: &str| -> String {
+        out.lines()
+            .find_map(|l| l.strip_prefix(key).filter(|r| r.starts_with(' ')))
+            .unwrap_or_else(|| panic!("no `{key}` line in:\n{out}"))
+            .trim()
+            .to_string()
+    };
+    assert_eq!(field(&out, "bench"), "gen");
+    assert_eq!(field(&out, "records_written"), "101");
+
+    let (ok, out, err) = run(&data, &["bench", "hydrate", "--p1"]);
+    assert!(ok, "{out}\n{err}");
+    assert_eq!(field(&out, "tier"), "p1");
+    assert_eq!(field(&out, "concepts"), "40");
+    assert_eq!(field(&out, "relations"), "60");
+    // A 101-record store never seals a segment: its payloads live in the
+    // active segment and stay resident even in P1 (eviction happens at seal).
+    let resident: usize = field(&out, "resident_payloads").parse().unwrap();
+    assert!(resident <= 40, "{resident}");
+    // Nested values print as JSON; `domains` is null on a full load.
+    assert_eq!(field(&out, "domains"), "null");
+    let (ok, out, _) = run(&data, &["bench", "hydrate", "--ns", "d1"]);
+    assert!(ok, "{out}");
+    assert_eq!(field(&out, "tier"), "p0");
+    assert_eq!(field(&out, "domains"), r#"["d1"]"#);
+    assert_eq!(field(&out, "concepts"), "20");
+
+    let (ok, out, err) = run(&data, &["bench", "append", "--n", "3", "--batch", "2"]);
+    assert!(ok, "{out}\n{err}");
+    assert_eq!(field(&out, "concept_type"), "D0A");
+    assert_eq!(field(&out, "n"), "3");
+    assert!(field(&out, "unit_p50_us").parse::<f64>().unwrap() > 0.0);
+
+    let (ok, out, err) = run(&data, &["bench", "query", "--iterations", "3"]);
+    assert!(ok, "{out}\n{err}");
+    assert_eq!(field(&out, "concepts"), "46");
+    assert_eq!(field(&out, "iterations"), "3");
+    assert!(field(&out, "reindex_all_ms").parse::<f64>().is_ok());
+
+    let (ok, out, err) = run(&data, &["bench", "compact"]);
+    assert!(ok, "{out}\n{err}");
+    assert_eq!(field(&out, "codec_before"), "json");
+    assert_eq!(field(&out, "codec_after"), "json");
+    assert_eq!(field(&out, "records_after"), "107");
+    let (_, stats, _) = run(&data, &["stats"]);
+    assert!(
+        stats.contains("concepts: 46") && stats.contains("relations: 60"),
+        "{stats}"
+    );
+    let _ = std::fs::remove_dir_all(&data);
+}

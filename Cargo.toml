@@ -22,7 +22,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 thiserror = "1"
 anyhow = "1"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "fs", "io-util", "io-std", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "fs", "io-util", "io-std", "time", "signal"] }
 async-trait = "0.1"
 dashmap = "5"
 parking_lot = "0.12"
