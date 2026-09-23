@@ -85,6 +85,12 @@ def main() -> int:
     ap.add_argument("--rust", type=pathlib.Path)
     ap.add_argument("--web", type=pathlib.Path)
     ap.add_argument("--out", type=pathlib.Path, default=pathlib.Path("badges"))
+    ap.add_argument(
+        "--fail-under",
+        type=float,
+        default=None,
+        help="exit 1 when any Rust crate or the web is below this line percentage",
+    )
     args = ap.parse_args()
     if not args.rust and not args.web:
         ap.error("give at least one of --rust / --web")
@@ -133,6 +139,14 @@ def main() -> int:
         encoding="utf-8",
     )
     sys.stdout.write(table)
+    if args.fail_under is not None:
+        low = [(k, v["pct"]) for k, v in summary["crates"].items() if v["pct"] < args.fail_under]
+        if "web" in summary and summary["web"]["pct"] < args.fail_under:
+            low.append(("web", summary["web"]["pct"]))
+        if low:
+            names = ", ".join(f"{k} {p:.1f} %" for k, p in low)
+            sys.stderr.write(f"coverage below {args.fail_under:.0f} %: {names}\n")
+            return 1
     return 0
 
 

@@ -754,11 +754,39 @@ async fn main() -> Result<()> {
             );
             let listener = tokio::net::TcpListener::bind(&bind).await?;
             tracing::info!(addr = %bind, "server listening");
-            axum::serve(listener, app).await?;
+            axum::serve(listener, app)
+                .with_graceful_shutdown(shutdown_signal())
+                .await?;
+            tracing::info!("server stopped");
         }
     }
 
     Ok(())
+}
+
+/// Resolves on Ctrl+C, SIGTERM (Unix: what `docker stop` sends) or
+/// Ctrl+Break (Windows). `serve` then finishes the in-flight requests and
+/// exits 0 instead of dying mid-request.
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    let platform = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("SIGTERM handler")
+            .recv()
+            .await;
+    };
+    #[cfg(windows)]
+    let platform = async {
+        tokio::signal::windows::ctrl_break()
+            .expect("Ctrl+Break handler")
+            .recv()
+            .await;
+    };
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {}
+        _ = platform => {}
+    }
+    tracing::info!("shutdown signal received; finishing in-flight requests");
 }
 
 /// One log line per startup memory decision, plus a warning per outcome
