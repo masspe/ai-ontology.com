@@ -659,7 +659,20 @@ impl SegmentStore {
     /// before the first hydration: P1 domains get their concept locations
     /// (`OntologyGraph::set_loc`) from replay, appends and compaction.
     pub fn set_tiers(&self, tiers: HashMap<u16, Tier>) {
-        self.inner.lock().tiers = tiers;
+        let mut inner = self.inner.lock();
+        // The plan is what `/stats` shows: a forced tier (`--tier p1`) must
+        // read there too, not only in the hydration report.
+        let mut names: Vec<String> = tiers
+            .iter()
+            .filter(|(_, t)| **t == Tier::P1)
+            .filter_map(|(id, _)| inner.manifest.ns_name(*id).map(str::to_string))
+            .collect();
+        names.sort();
+        inner.tiers = tiers;
+        drop(inner);
+        if let Some(plan) = self.last_plan.lock().as_mut() {
+            plan.p1_domains = names;
+        }
     }
 
     /// The lock-free reader of sealed concept payloads (R12); attached to

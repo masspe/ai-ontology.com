@@ -641,6 +641,29 @@ engagée (`PagefileUsage`) — c'est lui qui dimensionne les paliers.
 | 200 k concepts, 1 M relations | +1 381 Mio | +978 Mio | prédit 897 Mio à 350 o/relation ; l'écart (~475 o/relation) vient des capacités des tables de hachage, qui doublent par palier |
 | **Extrapolation à la cible 10⁷ / 5×10⁷** | — | **~27 Go de concepts + 17 à 24 Go de relations ≈ 45 à 50 Go** en P0 | — |
 
+**J5 — P1 mesuré (2026-09-23)** sur le store synthétique 5×10⁵ / 2,5×10⁶
+(`bench hydrate --json` puis `--p1`, même binaire, même machine, une
+exécution par point ; serveur réel pour la latence). La mémoire privée
+engagée (`PagefileUsage`) est la mesure du tas sous Windows : en P1 le
+graphe garde les segments scellés mappés, le RSS après fermeture du store
+ne les relâche donc plus.
+
+| | P0 | P1 | Rapport | Critère J5 |
+|---|---|---|---|---|
+| Mémoire privée engagée (tas) | 2 445 Mio | 1 556 Mio | **÷ 1,57** | ≥ 1,4 ✓ |
+| Payloads résidents après hydratation | 500 000 | 0 | — | — |
+| Hydratation | 31,9 s | 38,0 s | **1,19×** | ≤ 1,2× ✓ (de justesse) |
+| Estimation du socle (P0) | 2 782 Mio | — | 114 % du tas P0 | — |
+| P95 `GET /concepts/{id}` (serveur réel, 400 requêtes, ids aléatoires) | 2,17 ms (p50 1,67) | 2,14 ms (p50 1,57) | **1,0×** | < 2× ✓ |
+| Démarrage complet du serveur (hydratation + `reindex_all` du retrieval) | 539 s | 411 s | — | — (chantier R : ~7 à 9 min à 5×10⁵, mur annoncé au §1) |
+
+Le tiers de tas retiré est le payload (1,3 Ko sur ~2,75 Ko par concept) ;
+le reste — index de concepts et structures des relations — est la part
+que seuls le CSR (§6.3) et la table de symboles (§7.4) réduisent, comme
+prévu au §8.1. Le surcoût d'hydratation vient des `set_loc` par record et
+des évictions ; il est dans le critère mais sans marge : à surveiller si
+le seuil de roulement change.
+
 **Estimation du socle (§8.1) contre tas mesuré** (phase 5, 2026-09-22, même
 store 200 k / 1 M, `bench hydrate --json` : `estimate_mib`,
 `estimate_vs_heap_pct`) — l'estimateur ne lit que le MANIFEST et doit rester
@@ -876,16 +899,25 @@ Ce que le plan expose :
 | — | `ontology_memory_budget_known` (lève l'ambiguïté d'un budget à 0) |
 | `rss_mib` | `ontology_process_rss_bytes` |
 
-`memory` est `null` sans store sur disque (mode mémoire pure). Le palier par
-domaine (§8.2) n'existe pas encore : le socle ne connaît que « chargé » et
-« pas chargé ».
+`memory` est `null` sans store sur disque (mode mémoire pure).
+
+**Palier P1 dans le plan (2026-09-23).** En `adaptive` sous une limite
+dure, un domaine qui ne tient pas en P0 mais tient **sans ses payloads**
+(estimation moins `payload_bytes`) est chargé en **P1** au lieu d'être
+écarté ; `p1_domains` le dit dans `/stats` et le `warn` de démarrage. Le
+mode `strict` continue de refuser sur l'estimation P0. `--tier p1`
+(`ONTOLOGY_TIER`) force tous les domaines chargés en P1, `--tier p0` force
+la mémoire ; `auto` (défaut) suit le plan. `resident_payloads` compte les
+concepts dont le payload est en mémoire (la queue des segments actifs, et
+les concepts écrits depuis le dernier roulement). Les paliers P2 à P5 et la
+bascule à chaud (contrôleur, §8.5) restent à faire sur besoin client.
 
 ### 8.2 Quatre paliers, décidés par domaine
 
 | Palier | Résident | `?type=` / `?q=` | Listing ordonné | Traversée 1 saut |
 |---|---|---|---|---|
 | **P0** | tout, **payloads inclus** (état actuel) | O(bucket) / trigrammes | O(K) | O(deg) heap |
-| **P1** | payloads relâchés (relus via `Loc`) | O(bucket) / trigrammes | O(K) | O(deg) heap |
+| **P1** (livré 2026-09-23, `STORAGE-PLAN.md` §7.2) | payloads relâchés (relus via `Loc` depuis les segments scellés ; ceux du segment actif restent en heap jusqu'au scellement) | O(bucket) / trigrammes | O(K) + K lectures | O(deg) heap + lectures des nœuds rendus |
 | **P2** | sans trigrammes | O(bucket) / **scan `.srt`** | O(K) | O(deg) heap |
 | **P3** | sans `by_id` ni `*_sorted` | binaire `.ent` / scan `.srt` | fusion k-way `.srt` | O(deg) heap |
 | **P4** | sans adjacence | binaire `.ent` | fusion k-way `.srt` | binaire `.adj` + lecture contiguë |

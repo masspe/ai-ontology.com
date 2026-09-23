@@ -623,3 +623,31 @@ async fn concurrent_updates_and_reads_on_a_p1_domain() {
     store.load_into(&g2).await.unwrap();
     assert_eq!(keys(&g.all_concepts()), keys(&g2.all_concepts()));
 }
+
+/// `set_tiers` after a plan: the plan the API reports names the forced P1
+/// domains (`--tier p1` is a plan override, not a hydration detail).
+#[tokio::test]
+async fn forced_tiers_show_in_the_last_plan() {
+    let dir = tempdir("plan-tiers");
+    build(&dir, 3).await;
+    let store = SegmentStore::open_with(&dir, small_roll()).await.unwrap();
+    let plan = store
+        .plan_load(
+            ontology_storage::MemoryBudget::fixed(1 << 30),
+            ontology_storage::MemoryMode::Adaptive,
+            None,
+        )
+        .unwrap();
+    assert!(plan.p1_domains.is_empty(), "everything fits in P0");
+    store.set_tiers(p1_everywhere(&store));
+    let mut names: Vec<String> = store.last_plan().unwrap().p1_domains;
+    let mut all: Vec<String> = store
+        .manifest()
+        .graph_ns_ids()
+        .into_iter()
+        .filter_map(|id| store.manifest().ns_name(id).map(str::to_string))
+        .collect();
+    names.sort();
+    all.sort();
+    assert_eq!(names, all);
+}

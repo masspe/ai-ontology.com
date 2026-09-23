@@ -11,7 +11,7 @@ route s'ajuste au plan, jamais l'inverse : toute évolution se décide et se
 date dans le plan, puis se reflète ici. Mise à jour à chaque fusion dans
 `main`.
 
-Dernière mise à jour : **2026-09-22**.
+Dernière mise à jour : **2026-09-23**.
 
 ---
 
@@ -22,6 +22,7 @@ Dernière mise à jour : **2026-09-22**.
 | Stockage phases 1–4 (chemin d'écriture, conteneur binaire, partitionnement par `ns`, mesures et codec) | **Livré, dans `main`** | STORAGE-PLAN §3.6, §4.6, §5.6, §6.6 ; STORAGE.md §7.7–7.8 |
 | T1, pagination par curseur (`cursor=` / `next_cursor` sur `/concepts` et `/relations`, web par pile de curseurs, `offset` déprécié) | **Livré 2026-09-22** | STORAGE-PLAN §8 T1 ; STORAGE.md §7.8 |
 | Phase 5, socle mémoire (budget, estimation R14, plan `strict`/`adaptive`, `/stats.memory`, `/metrics`) | **Livré 2026-09-22** (`f5359b7`) | STORAGE.md §8.1 ; STORAGE-PLAN §7.1 |
+| Phase 5a, **P1** payloads sur disque (slot + `Loc`, lecteur sans verrou, éviction au scellement, relocalisation à la compaction, `--tier`, plan P1 en adaptive) | **Livré 2026-09-23** | STORAGE-PLAN §7.2 ; STORAGE.md §7.8 (J5), §8.1, §8.2 |
 | Couverture de tests | Rust **90,2 %** de lignes (576 tests) ; web **99,7 %** (687 tests), seuil 90 % imposé par la CI | README « Test coverage » ; badges vivants en tête du README |
 | CI | rustfmt, clippy, tests Ubuntu + Windows, web (vitest avec seuils, tsc, build), `coverage` (publie les badges) | `.github/workflows/ci.yml` |
 | Cible de dimensionnement | **Révisée 2026-09-22** : 10⁷ / 5×10⁷ sur 64 Go avec P1 ; 2×10⁶ / 10⁷ garantis sur 16 Go ; CSR sur besoin client | STORAGE-PLAN §6.6 décision 3 ; STORAGE.md §1 et §8.1 |
@@ -68,7 +69,7 @@ document et des sections datées du plan.
 - Critère : équivalence offset/curseur testée ; curseur stable sous
   insertions et suppressions concurrentes ; P95 du listing inchangé.
 
-### 3.2 Phase 5a — P1, payloads sur disque (plan §7.2 ; « suit la phase 4 sans attendre un incident client »)
+### 3.2 Phase 5a — P1, payloads sur disque — **livré 2026-09-23** (plan §7.2)
 
 - `DashMap<ConceptId, Concept>` devient `DashMap<ConceptId, Slot>` (32 o +
   `Loc`) ; `get_concept` relit le payload hors verrou (R12) depuis le
@@ -130,7 +131,7 @@ des `.xref`, `ns` dans l'interface web, limite Job Object Windows, métrique
 | Le socle (§7.1) a été livré avant T1, que le tableau §0 donne comme dépendance de 5a | De lettre : le socle ne pagine rien ; T1 reste devant P1 | plan §7 (ordre), ici §3.1 |
 | Les chiffres de la phase 4 sont mesurés à 2×10⁵ / 5×10⁵ et extrapolés, pas « sur la cible » | Contrainte matérielle (16 Go) ; fermé par la preuve à 5×10⁶ de §3.2 | plan §9 J4 |
 | Le socle laisse de côté Job Object Windows, `majflt/s`, palier par domaine | Sans objet avant P1 | plan §7.1 |
-| `adaptive` charge ou non un domaine ; les paliers §8.2 n'existent pas encore | Attendu avant P1 | STORAGE.md §8.1 |
+| Des paliers §8.2, seuls P0 et P1 existent ; `adaptive` choisit P1 pour un domaine qui tient sans ses payloads, pas de bascule à chaud | P2–P5 et le contrôleur sont en 5b, sur besoin client | STORAGE.md §8.1, §8.2 |
 | Le chantier R n'est pas commencé alors que le plan le place avant les murs du stockage | Priorité à mesurer (§3.4) | plan §1, §8 R |
 
 ## 4. Procédé
