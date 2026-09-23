@@ -150,8 +150,15 @@ ou avancée si le P95 dépasse 200 ms. Aucun code : `bench` suffit.
 
 ### 3.8 Production — **chantier principal, validé le 2026-09-24**
 
-Hors du plan de stockage (il en est le débouché) ; direction arrêtée avec le
-propriétaire : **une seule image de conteneur, un conteneur par client**
+Hors du plan de stockage, dont il est le débouché et dont il applique les
+décisions : **T5** (un store et un processus par tenant, STORAGE.md §10.8),
+**D5** (le budget mémoire est une propriété du déploiement : la limite
+cgroup du conteneur, lue par le socle §8.1), **R17** (refus explicite au
+démarrage plutôt qu'un OOM), la migration automatique de format (phase 2)
+pour la mise à jour, les segments immuables et le `LOCK` (phases 2–3) pour
+la sauvegarde, l'arrêt propre sur SIGTERM (chantier T). Direction arrêtée
+avec le propriétaire : **une seule image de conteneur, un conteneur par
+client**
 (limite mémoire cgroup lue par le socle §8.1, volume par client, isolation
 par construction), la même image livrée en auto-hébergement sous licence
 commerciale aux clients qui ne peuvent pas sortir leurs données. Pas de

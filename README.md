@@ -540,6 +540,20 @@ The CLI flag reads from a named environment variable rather than taking
 the literal value, so the token never appears in process listings or
 shell history. Comparison is constant-time.
 
+## Deployment model: one store per tenant, one process per tenant
+
+A storage domain (`ns`) is for locality, retention and access rights inside
+one tenant's ontology, never for spreading tenants over one store. Multi-tenancy
+is **one store per tenant, served by one process per tenant**
+(`ontology serve --data <tenant>`; decision T5 of the storage plan,
+[docs/STORAGE.md §10.8](docs/STORAGE.md#108-un-store-par-tenant--décision-t5--un-processus-par-tenant)):
+the write lock, the memory budget and failure isolation are naturally per
+process, and a multi-store process would multiply open files and the
+incompressible memory floor by the number of tenants for nothing. Routing a
+tenant to its process is the reverse proxy's job. In production this is one
+container per client, the container's memory limit being the budget the
+memory socle reads (see below).
+
 ## Memory budget (`--memory-mode`)
 
 The graph lives in memory (P0). Before loading anything the binary estimates
