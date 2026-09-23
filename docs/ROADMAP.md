@@ -23,8 +23,8 @@ Dernière mise à jour : **2026-09-23**.
 | T1, pagination par curseur (`cursor=` / `next_cursor` sur `/concepts` et `/relations`, web par pile de curseurs, `offset` déprécié) | **Livré 2026-09-22** | STORAGE-PLAN §8 T1 ; STORAGE.md §7.8 |
 | Phase 5, socle mémoire (budget, estimation R14, plan `strict`/`adaptive`, `/stats.memory`, `/metrics`) | **Livré 2026-09-22** (`f5359b7`) | STORAGE.md §8.1 ; STORAGE-PLAN §7.1 |
 | Phase 5a, **P1** payloads sur disque (slot + `Loc`, lecteur sans verrou, éviction au scellement, relocalisation à la compaction, `--tier`, plan P1 en adaptive) | **Livré 2026-09-23** | STORAGE-PLAN §7.2 ; STORAGE.md §7.8 (J5), §8.1, §8.2 |
-| Couverture de tests | Rust **90,2 %** de lignes (576 tests) ; web **99,7 %** (687 tests), seuil 90 % imposé par la CI | README « Test coverage » ; badges vivants en tête du README |
-| CI | rustfmt, clippy, tests Ubuntu + Windows, web (vitest avec seuils, tsc, build), `coverage` (publie les badges) | `.github/workflows/ci.yml` |
+| Couverture de tests | Rust **95,2 %** de lignes (cli 95,2, graph 97,0, index 99,3, io 93,7, rag 96,8, server 96,6, storage 91,8) ; web **99,7 %** ; **seuil 90 % par crate et pour le web imposé par la CI** (2026-09-23) | README « Test coverage » ; badges vivants ; `scripts/coverage_badges.py --fail-under 90` |
+| CI | rustfmt, clippy, tests Ubuntu + Windows, web (vitest avec seuils, tsc, build), `coverage` (publie les badges, échoue sous 90 % sur un crate ou le web) | `.github/workflows/ci.yml` |
 | Cible de dimensionnement | **Révisée 2026-09-22** : 10⁷ / 5×10⁷ sur 64 Go avec P1 ; 2×10⁶ / 10⁷ garantis sur 16 Go ; CSR sur besoin client | STORAGE-PLAN §6.6 décision 3 ; STORAGE.md §1 et §8.1 |
 
 Chiffres à garder en tête (mesurés phase 4, portable 16 Go) : un concept de
@@ -112,13 +112,15 @@ plan :
   persistance des vecteurs dès un modèle d'embedding réel ; HNSW quand le
   P95 de `/retrieve` dépasse 200 ms (~1,5×10⁶ concepts). Mesure à 2×10⁶ à
   faire quand un store de cette taille est généré.
-- **T — transverse** (plan §0 ligne T : CI, métriques, docs) : couverture
-  Rust ≥ 90 % par crate (`server` 78,5 %, `cli` 76,9 % : relecture
-  d'ingestion avec LLM simulé ; `ask`/`retrieve` sur `EchoModel`,
-  `migrate`, `serve` lancé et arrêté dans un test), puis
-  `--fail-under-lines 90` dans le job `coverage` ; migration
-  `react-router` 7 ; modules d'authentification `.jsx` en TypeScript.
-  Ces travaux ne bloquent pas T1 ni P1 et ne les précèdent pas.
+- **T — transverse** (plan §0 ligne T : CI, métriques, docs) —
+  **couverture livrée 2026-09-23** : `server` 78,9 → 96,6 % (relecture
+  d'ingestion avec un LLM scripté, plan de contrôle des fournisseurs sur
+  un serveur local), `cli` 76,9 → 95,2 % (`ask`/`retrieve` sur
+  `EchoModel`, tous les formats d'ingestion, `serve` lancé sur un port
+  libre et arrêté proprement) ; le job `coverage` échoue sous 90 % sur un
+  crate ou le web. Au passage, `serve` gère SIGTERM / Ctrl+C (arrêt propre
+  pour `docker stop`). Reste : migration `react-router` 7 ; modules
+  d'authentification `.jsx` en TypeScript.
 
 ### 3.5 Reports connus (plan §5.6, §7.1)
 
