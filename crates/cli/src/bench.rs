@@ -36,6 +36,7 @@ use ontology_graph::{
 };
 use ontology_storage::{
     codec_name, parse_codec, store_dir_for, LogRecord, SegmentStore, SegmentStoreConfig, Store,
+    Tier,
 };
 use serde_json::json;
 
@@ -71,6 +72,9 @@ pub enum BenchCmd {
     Hydrate {
         #[arg(long, value_delimiter = ',')]
         ns: Option<Vec<String>>,
+        /// Load every domain in P1 (payloads on disk): the J5 measurement.
+        #[arg(long)]
+        p1: bool,
     },
     /// Write latency through the graph API: unit appends then batched appends.
     Append {
@@ -120,7 +124,7 @@ pub async fn run(cmd: BenchCmd, data: PathBuf, json: bool) -> Result<()> {
             )
             .await?
         }
-        BenchCmd::Hydrate { ns } => hydrate(&store_dir, ns).await?,
+        BenchCmd::Hydrate { ns, p1 } => hydrate(&store_dir, ns, p1).await?,
         BenchCmd::Append { n, batch } => append(&store_dir, n, batch).await?,
         BenchCmd::Query { iterations } => query(&store_dir, iterations).await?,
         BenchCmd::Compact { codec } => {
@@ -432,12 +436,21 @@ fn commit_mib() -> Option<f64> {
     memory_stats::memory_stats().map(|m| m.virtual_mem as f64 / (1024.0 * 1024.0))
 }
 
-async fn hydrate(store_dir: &Path, ns: Option<Vec<String>>) -> Result<serde_json::Value> {
+async fn hydrate(store_dir: &Path, ns: Option<Vec<String>>, p1: bool) -> Result<serde_json::Value> {
     let rss_start = rss_mib();
     let commit_start = commit_mib();
     let t0 = Instant::now();
     let store = SegmentStore::open(store_dir).await?;
     let open = t0.elapsed();
+    if p1 {
+        let tiers = store
+            .manifest()
+            .graph_ns_ids()
+            .into_iter()
+            .map(|id| (id, Tier::P1))
+            .collect();
+        store.set_tiers(tiers);
+    }
     let graph = OntologyGraph::with_arc(Ontology::new());
     let t1 = Instant::now();
     match &ns {
@@ -488,6 +501,8 @@ async fn hydrate(store_dir: &Path, ns: Option<Vec<String>>) -> Result<serde_json
     let apply = load.saturating_sub(scan);
     Ok(json!({
         "bench": "hydrate",
+        "tier": if p1 { "p1" } else { "p0" },
+        "resident_payloads": graph.resident_payloads(),
         "codec": codec_name(store.codec()),
         "domains": ns,
         "open_ms": round2(ms(open)),
