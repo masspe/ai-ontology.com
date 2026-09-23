@@ -9,7 +9,7 @@
 //! P1, storage side (`STORAGE.md` §6.2, §8.2; `STORAGE-PLAN.md` §7.2):
 //! concept locations, the lock-free sealed reader, seal notifications and
 //! relocation by compaction. The graph side is stubbed on this branch, so
-//! eviction itself is asserted in an `#[ignore]`d test.
+//! eviction itself is asserted end to end (graph + store).
 
 use ontology_graph::{
     Concept, ConceptId, ConceptType, Loc, Ontology, OntologyGraph, PayloadSource, Relation,
@@ -336,7 +336,6 @@ async fn p1_hydration_builds_the_same_graph_as_p0() {
 /// Eviction proper: after a P1 hydration only the payloads whose latest
 /// record sits in an active segment stay resident.
 // passes once feat/p1-graph lands
-#[ignore = "passes once feat/p1-graph lands (set_loc / partition_sealed are P0 stubs here)"]
 #[tokio::test]
 async fn p1_hydration_evicts_sealed_payloads() {
     let dir = tempdir("evict");
