@@ -23,12 +23,71 @@ use ontology_graph::{
     ActionType, Cardinality, ConceptType, Ontology, OntologyGraph, RelationType, RuleType,
 };
 use ontology_index::HybridIndex;
-use ontology_rag::{EchoModel, LanguageModel, RagPipeline};
+use ontology_rag::{
+    EchoModel, LanguageModel, LlmError, LlmRequest, LlmResponse, RagPipeline, TokenUsage,
+};
 use ontology_server::{build_router, AppState};
 use ontology_storage::{FlakyStore, Store};
 use serde_json::{json, Value};
-use std::sync::Arc;
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
 use tower::ServiceExt;
+
+/// Offline LLM answering from a queue of scripted outcomes; the last one is
+/// repeated once the queue is drained. Nothing leaves the process.
+pub struct ScriptedLlm {
+    replies: Mutex<VecDeque<Result<LlmResponse, LlmError>>>,
+    last: Mutex<Option<Result<LlmResponse, LlmError>>>,
+}
+
+/// A successful, complete answer with the given text.
+pub fn reply(content: &str) -> Result<LlmResponse, LlmError> {
+    Ok(LlmResponse {
+        content: content.to_string(),
+        model: "scripted".into(),
+        stop_reason: Some("end_turn".into()),
+        usage: TokenUsage::default(),
+    })
+}
+
+fn clone_outcome(r: &Result<LlmResponse, LlmError>) -> Result<LlmResponse, LlmError> {
+    match r {
+        Ok(resp) => Ok(resp.clone()),
+        Err(LlmError::Http(m)) => Err(LlmError::Http(m.clone())),
+        Err(LlmError::Api(m)) => Err(LlmError::Api(m.clone())),
+        Err(LlmError::Decode(m)) => Err(LlmError::Decode(m.clone())),
+        Err(LlmError::Config(m)) => Err(LlmError::Config(m.clone())),
+    }
+}
+
+impl ScriptedLlm {
+    pub fn new(script: Vec<Result<LlmResponse, LlmError>>) -> Arc<Self> {
+        Arc::new(Self {
+            replies: Mutex::new(script.into()),
+            last: Mutex::new(None),
+        })
+    }
+}
+
+#[async_trait::async_trait]
+impl LanguageModel for ScriptedLlm {
+    async fn generate(&self, _req: &LlmRequest) -> Result<LlmResponse, LlmError> {
+        let next = self.replies.lock().unwrap().pop_front();
+        match next {
+            Some(r) => {
+                *self.last.lock().unwrap() = Some(clone_outcome(&r));
+                r
+            }
+            None => clone_outcome(
+                self.last
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .expect("script exhausted"),
+            ),
+        }
+    }
+}
 
 /// `Topic` and `Tag` concept types; `related_to` (Topic–Topic, symmetric),
 /// `owned_by` (Topic→Topic, many-to-one); rule type `must_review`; action
