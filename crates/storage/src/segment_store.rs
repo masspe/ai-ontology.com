@@ -1085,10 +1085,12 @@ impl SegmentStore {
     /// Live state of `graph` as records, in dependency order: schema,
     /// concepts, relations (canonical direction only for symmetric types),
     /// rules, actions.
-    fn live_records(graph: &OntologyGraph) -> Vec<LogRecord> {
+    fn live_records(graph: &OntologyGraph) -> StoreResult<Vec<LogRecord>> {
         let ontology = graph.ontology();
         let mut records: Vec<LogRecord> = vec![LogRecord::ontology(ontology.clone())];
-        let mut concepts = graph.all_concepts();
+        // P1: every payload is read back from disk here; a read failure is
+        // an error of the compaction, not a panic under the store lock (R17).
+        let mut concepts = graph.try_all_concepts()?;
         concepts.sort_by_key(|c| c.id);
         records.extend(concepts.into_iter().map(LogRecord::concept));
         // Every live relation, both directions of a symmetric pair included,
@@ -1104,7 +1106,7 @@ impl SegmentStore {
         let mut actions = graph.all_actions();
         actions.sort_by_key(|a| a.id);
         records.extend(actions.into_iter().map(LogRecord::action));
-        records
+        Ok(records)
     }
 
     /// Rewrite the whole store from `graph` into fresh partitions, verify by
@@ -1124,7 +1126,7 @@ impl SegmentStore {
         let bytes_before = inner.total_bytes();
 
         // 1. Live state, routed by the live schema.
-        let records = Self::live_records(graph);
+        let records = Self::live_records(graph)?;
         inner.ontology = graph.ontology();
 
         // 2. Stage: one fresh partition per touched stream, fresh seqs, built

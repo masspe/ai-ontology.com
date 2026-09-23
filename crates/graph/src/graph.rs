@@ -262,6 +262,11 @@ pub struct OntologyGraph {
     /// (write-ahead: the record is durable first); attached, and consumed,
     /// when the concept arrives.
     pending_locs: Mutex<AHashMap<ConceptId, Loc>>,
+    /// Partitions the store has sealed. A location that arrives after its
+    /// partition sealed (the batch rolled before the graph applied the
+    /// record) is evicted at once instead of waiting for a seal that
+    /// already happened. Bounded by the number of partitions ever sealed.
+    sealed: Mutex<ahash::AHashSet<(u16, u32)>>,
     /// P1: ids resident with a location, per partition, so that
     /// `partition_sealed` drops them without scanning the map. Entries are
     /// checked against the slot when the partition seals, so a stale one
@@ -321,6 +326,7 @@ impl OntologyGraph {
             concepts: DashMap::new(),
             source: Source(RwLock::new(None)),
             pending_locs: Mutex::new(AHashMap::new()),
+            sealed: Mutex::new(ahash::AHashSet::new()),
             sealable: Mutex::new(AHashMap::new()),
             rules: DashMap::new(),
             actions: DashMap::new(),
@@ -702,6 +708,7 @@ impl OntologyGraph {
     pub fn clear_instances(&self) {
         self.concepts.clear();
         self.pending_locs.lock().clear();
+        self.sealed.lock().clear();
         self.sealable.lock().clear();
         self.rules.clear();
         self.actions.clear();
@@ -955,11 +962,18 @@ impl OntologyGraph {
     }
 
     fn sealable_push(&self, id: ConceptId, loc: Loc) {
-        self.sealable
-            .lock()
-            .entry((loc.ns_id, loc.partition))
-            .or_default()
-            .push(id);
+        let key = (loc.ns_id, loc.partition);
+        // The partition sealed before this location reached its slot: the
+        // seal notification is not coming again, evict now.
+        if self.sealed.lock().contains(&key) && self.source.0.read().is_some() {
+            if let Some(mut slot) = self.concepts.get_mut(&id) {
+                if slot.loc == Some(loc) {
+                    slot.payload = None;
+                }
+            }
+            return;
+        }
+        self.sealable.lock().entry(key).or_default().push(id);
     }
 
     pub fn find_by_name(&self, concept_type: &str, name: &str) -> Option<ConceptId> {
@@ -995,6 +1009,15 @@ impl OntologyGraph {
             self.pending_locs.lock().insert(id, loc);
             return;
         };
+        // A resident location for an evicted slot names a record in the
+        // active segment, which the source cannot read (R11): the slot keeps
+        // its sealed location until the apply that follows brings the new
+        // payload, and takes the new location from the stash then.
+        if resident && slot.payload.is_none() {
+            drop(slot);
+            self.pending_locs.lock().insert(id, loc);
+            return;
+        }
         slot.loc = Some(loc);
         // Without a source the payload could never be read back: keep it.
         let evict = !resident && self.source.0.read().is_some();
@@ -1015,6 +1038,7 @@ impl OntologyGraph {
             // Nothing could read them back yet; the bucket waits.
             return 0;
         }
+        self.sealed.lock().insert((ns_id, partition));
         // Take the bucket out before touching any shard: `set_loc` pushes
         // while holding no shard either, so the two never wait on each other.
         let ids = self
