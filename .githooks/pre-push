@@ -1,0 +1,7 @@
+#!/bin/sh
+# Same guard as pre-commit, plus its self-test, before anything reaches
+# the remote. Enable once per clone: git config core.hooksPath .githooks
+py=python3
+command -v python3 >/dev/null 2>&1 || py=python
+"$py" scripts/repo_guard.py --self-test >/dev/null || exit 1
+exec "$py" scripts/repo_guard.py
