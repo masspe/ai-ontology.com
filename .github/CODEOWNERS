@@ -1,0 +1,10 @@
+# Every change needs a review from an owner once "Require review from Code
+# Owners" is enabled in the branch protection of main.
+* @masspe @ms-azeemarshad
+
+# The CI, the guard and the policy files never change without both owners.
+/.github/          @masspe @ms-azeemarshad
+/scripts/repo_guard.py @masspe @ms-azeemarshad
+/.githooks/        @masspe @ms-azeemarshad
+/.gitattributes    @masspe @ms-azeemarshad
+/SECURITY.md       @masspe @ms-azeemarshad

@@ -1,0 +1,8 @@
+#!/bin/sh
+# Refuse a commit that would introduce one of the file shapes of the
+# 2026-09-24 injection. Enable once per clone:
+#   git config core.hooksPath .githooks
+# See scripts/repo_guard.py and docs/INCIDENT-2026-09-25.md.
+py=python3
+command -v python3 >/dev/null 2>&1 || py=python
+exec "$py" scripts/repo_guard.py

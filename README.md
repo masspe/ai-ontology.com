@@ -695,6 +695,32 @@ and no secret is involved. The figures on Windows differ by a few tenths
 (platform-specific code), which is why the published measurement is the
 Linux one.
 
+## Security
+
+After the supply-chain injection of 2026-09-24 (write-up in
+[docs/INCIDENT-2026-09-25.md](docs/INCIDENT-2026-09-25.md)), the repository
+enforces the measures listed in [SECURITY.md](SECURITY.md). In short:
+
+- `scripts/repo_guard.py` is the first CI job and every other job waits for
+  it: fake binaries, VS Code `folderOpen` tasks, tracked `.vscode/` files,
+  npm lifecycle hooks and obfuscated sources fail the build.
+- GitHub Actions are pinned to commit SHAs, the workflow token is read-only,
+  `cargo audit` and `npm audit` run on every push, Dependabot opens the
+  updates.
+- `.npmrc` sets `ignore-scripts=true` in `web/` and `auth-server/`.
+- `.gitattributes` fixes line endings, so a whitespace-only rewrite of the
+  tree cannot hide a real change.
+
+Once per clone, enable the local hooks (the same guard before each commit
+and push) and signed commits:
+
+```sh
+git config core.hooksPath .githooks
+git config gpg.format ssh
+git config user.signingkey ~/.ssh/id_ed25519.pub   # also added on GitHub as a *signing* key
+git config commit.gpgsign true
+```
+
 ## Testing
 
 ```bash

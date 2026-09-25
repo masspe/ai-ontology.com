@@ -1,0 +1,24 @@
+# Fins de ligne figées : LF dans le dépôt et dans l'arbre de travail, quel que
+# soit le poste. Un commit qui ne change que des fins de ligne devient
+# impossible ; c'est le bruit dont s'est servi l'injection du 2026-09-24
+# (docs/INCIDENT-2026-09-25.md) pour noyer ses 4 vraies modifications.
+* text=auto eol=lf
+
+# Binaires : jamais normalisés, jamais diffés en texte.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.webp binary
+*.pdf  binary
+*.zip  binary
+*.gz   binary
+*.xlsx binary
+*.docx binary
+*.wasm binary
+*.woff binary
+*.woff2 binary
+*.ttf  binary
+*.otf  binary
+*.eot  binary
