@@ -12,6 +12,17 @@ env:
   RUSTFLAGS: -D warnings
 
 jobs:
+  guard:
+    # Refuses the file shapes of the 2026-09-24 injection (fake fonts,
+    # VS Code folderOpen tasks, obfuscated sources, npm hooks); see
+    # scripts/repo_guard.py and docs/INCIDENT-2026-09-25.md.
+    name: repo guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/repo_guard.py --self-test
+      - run: python3 scripts/repo_guard.py
+
   fmt:
     name: rustfmt
     runs-on: ubuntu-latest
