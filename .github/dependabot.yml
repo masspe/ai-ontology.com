@@ -1,0 +1,24 @@
+# Weekly dependency PRs for every ecosystem in the repository, including the
+# GitHub Actions the CI itself runs (pinned to commit SHAs in ci.yml, so an
+# update is a reviewed PR, never a silent tag move).
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+  - package-ecosystem: npm
+    directory: /web
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+  - package-ecosystem: npm
+    directory: /auth-server
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
