@@ -27,7 +27,7 @@ Convention : `H*` / `R*` renvoient aux hypothèses et règles de
 | 5a | **Socle** (livré 2026-09-22) puis **P1** (livré 2026-09-23, §7.2) : slot + `Loc`, payloads relus depuis le disque | 3, 4, T1 | 8-12 | **Livré** — J5 mesuré (STORAGE.md §7.8) : mémoire privée ÷1,57, hydratation 1,19× |
 | 5b | P2-P5 : `.adj`/`.srt` (CSR), paliers, hystérésis | 5a | 8-12 | **Sur besoin client** : un tenant au-delà de 5×10⁶ concepts sur un nœud contraint |
 | R | Index de retrieval : persistance des vecteurs, index approximatif | indépendant | 8-12 | Retrieval en O(log N), démarrage sans réindexation |
-| T | CI Windows+Linux (**livré**), métriques (**livré** : `/metrics` mémoire, paliers), docs, position un store par tenant (**livré** : STORAGE.md §10.8, README « Deployment model ») | — | 2-3 | Couverture ≥ 90 % par crate imposée en CI (2026-09-23) |
+| T | CI Windows+Linux (**livré**), métriques (**partiel** : mémoire et paliers livrés ; T3 par flux — segments, taille, `next_seq`, `sync_data`, dernière compaction — **à faire**), job `bench` manuel T2 (**à faire**), docs, position un store par tenant (**livré** : STORAGE.md §10.8, README « Deployment model ») | — | 2-3 | Couverture ≥ 90 % par crate imposée en CI (2026-09-23) ; correction du 2026-09-25 : la mention « métriques (livré) » du 2026-09-24 surévaluait T3 |
 
 **Stratégie (validée le 2026-09-08)** : la mémoire d'abord, le disque quand
 il faut. P0 reste le mode nominal ; le format est écrit maintenant pour que
@@ -893,11 +893,23 @@ Tel que livré (branche `feat/t1-cursor`) :
 Matrice `ubuntu-latest` × `windows-latest` dès la phase 2 ; `cargo test
 --workspace` ; job `bench` manuel (`workflow_dispatch`) en phase 4.
 
+État 2026-09-25 : matrice et `cargo test --workspace` livrés (phase 2),
+plus `coverage` avec seuil 90 % par crate ; **le job `bench` manuel manque**
+(`ROADMAP.md` §3.7 bis).
+
 ### T3 — Observabilité
 
 `/metrics` : par flux, nombre de segments, taille, `next_seq`, nombre de
 `sync_data` cumulés, durée de la dernière compaction ; par domaine, palier
 courant (phase 5).
+
+État 2026-09-25 : livré pour la mémoire (`ontology_memory_*`,
+`ontology_domains_*`, `ontology_resident_payloads`, socle §7.1 et P1) ;
+**manque** tout le par-flux (segments, taille, `next_seq`, `sync_data`,
+dernière compaction) et le palier par domaine en étiquette
+(`ontology_domains_p1` est un total). Le store expose déjà tout cela
+(`OpenReport`, MANIFEST, `syncs`, `CompactionReport`) : quelques jauges à
+brancher (`ROADMAP.md` §3.7 bis).
 
 ### G — Gros documents (décision avant la phase 3)
 

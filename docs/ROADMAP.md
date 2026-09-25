@@ -11,7 +11,7 @@ route s'ajuste au plan, jamais l'inverse : toute évolution se décide et se
 date dans le plan, puis se reflète ici. Mise à jour à chaque fusion dans
 `main`.
 
-Dernière mise à jour : **2026-09-24**.
+Dernière mise à jour : **2026-09-25**.
 
 ---
 
@@ -147,6 +147,30 @@ P1, mémoire privée, `reindex_all`, P50/P95 de la recherche hybride et de
 `GET /concepts/{id}`. Sortie : une ligne mesurée dans STORAGE.md §7.8 et
 §8.1 à la place de « estimé », et la décision HNSW (plan §8 R) confirmée
 ou avancée si le P95 dépasse 200 ms. Aucun code : `bench` suffit.
+
+### 3.7 bis Reliquats du plan — T2 et T3 (avant la production, une branche)
+
+Relecture du plan le 2026-09-25 : deux livrables transverses attendus
+depuis les phases 4 et 5 manquent, et ne figuraient pas ici.
+
+- **T3, observabilité par flux** (plan §8 T3) : `/metrics` gagne, par
+  domaine (étiquette `ns`), le nombre de segments scellés, les octets sur
+  disque, `next_seq`, les `sync_data` cumulés, la durée de la dernière
+  compaction, et le palier courant (`p0`/`p1`) en étiquette plutôt qu'en
+  total. Tout existe déjà côté store (`OpenReport`, MANIFEST, compteur de
+  syncs, `CompactionReport`) : brancher, tester les noms et valeurs des
+  jauges sur un store à deux domaines, documenter dans le README.
+- **T2, job `bench` manuel** (plan §8 T2) : `workflow_dispatch` dans
+  `ci.yml` qui génère un store de taille paramétrable, lance `hydrate`
+  (P0 et `--p1`) et `query`, et publie le JSON en artefact — la mesure
+  §3.7 devient reproductible sur un runner plutôt que sur le poste.
+
+Non consigné auparavant, aussi relevé : le **group commit inter-requêtes**
+(plan §5.6, « à mesurer d'abord, phase 4 ») a été mesuré en phase 4
+(STORAGE.md §7.7 : appends unitaires vs par lot) mais la décision de le
+faire ou d'y renoncer n'est pas écrite ; à trancher dans le plan §5.6 avec
+ces chiffres. La **compaction par domaine** (plan §6.6, « à prévoir ») reste
+un report daté, sans déclencheur : à lier au chantier 5b.
 
 ### 3.8 Production — **chantier principal, validé le 2026-09-24**
 
