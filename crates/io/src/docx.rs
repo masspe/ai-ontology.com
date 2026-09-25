@@ -43,33 +43,52 @@ pub fn extract_docx_text(bytes: &[u8]) -> Result<String, String> {
             Ok(Event::Start(e)) => {
                 let name = e.name();
                 let local = name.as_ref();
-                if local.ends_with(b"t") || local.ends_with(b":t") {
+                if local.ends_with("t") || local.ends_with(":t") {
                     in_text = true;
                 }
             }
             Ok(Event::End(e)) => {
                 let name = e.name();
                 let local = name.as_ref();
-                if local.ends_with(b"t") || local.ends_with(b":t") {
+                if local.ends_with("t") || local.ends_with(":t") {
                     in_text = false;
-                } else if local.ends_with(b"p") || local.ends_with(b":p") {
+                } else if local.ends_with("p") || local.ends_with(":p") {
                     out.push('\n');
-                } else if local.ends_with(b"tab") || local.ends_with(b":tab") {
+                } else if local.ends_with("tab") || local.ends_with(":tab") {
                     out.push('\t');
                 }
             }
             Ok(Event::Empty(e)) => {
                 let name = e.name();
                 let local = name.as_ref();
-                if local.ends_with(b"br") || local.ends_with(b":br") {
+                if local.ends_with("br") || local.ends_with(":br") {
                     out.push('\n');
-                } else if local.ends_with(b"tab") || local.ends_with(b":tab") {
+                } else if local.ends_with("tab") || local.ends_with(":tab") {
                     out.push('\t');
                 }
             }
             Ok(Event::Text(t)) if in_text => {
-                let s = t.unescape().map_err(|e| format!("xml unescape: {e}"))?;
-                out.push_str(&s);
+                out.push_str(&t.xml10_content());
+            }
+            // quick-xml >= 0.38 reports `&amp;` / `&#x41;` as their own event
+            // instead of unescaping the text: resolve character references
+            // and the five predefined entities, keep anything else verbatim.
+            Ok(Event::GeneralRef(r)) if in_text => {
+                let name = r.xml10_content();
+                match r
+                    .resolve_char_ref()
+                    .map_err(|e| format!("xml char ref: {e}"))?
+                {
+                    Some(c) => out.push(c),
+                    None => out.push_str(match &*name {
+                        "amp" => "&",
+                        "lt" => "<",
+                        "gt" => ">",
+                        "quot" => "\"",
+                        "apos" => "'",
+                        _ => "",
+                    }),
+                }
             }
             Ok(Event::Eof) => break,
             Err(e) => return Err(format!("xml parse: {e}")),
