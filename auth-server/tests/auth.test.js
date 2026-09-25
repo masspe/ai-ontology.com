@@ -66,7 +66,8 @@ test("me rejects tampered token", async () => {
   assert.equal(r.status, 401);
 });
 
-test("oauth start returns 503 when not configured", async () => {
+test("oauth start bounces to the SPA with an error when not configured", async () => {
   const r = await agent.get("/auth/oauth/google/start").redirects(0);
-  assert.equal(r.status, 503);
+  assert.equal(r.status, 302);
+  assert.match(r.headers.location, /error=google_not_configured/);
 });

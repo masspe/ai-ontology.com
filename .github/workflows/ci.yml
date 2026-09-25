@@ -4,8 +4,13 @@ on:
   push:
     # Feature branches run the full matrix on push so a stacked branch is
     # verified before its PR exists.
-    branches: [main, 'feat/**']
+    branches: [main, 'feat/**', 'sec/**']
   pull_request:
+
+# The workflow token is read-only; the coverage job alone asks for
+# contents: write to publish the badges branch.
+permissions:
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -19,58 +24,62 @@ jobs:
     name: repo guard
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - run: python3 scripts/repo_guard.py --self-test
       - run: python3 scripts/repo_guard.py
 
   fmt:
     name: rustfmt
+    needs: guard
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
         with:
           components: rustfmt
       - run: cargo fmt --all -- --check
 
   clippy:
     name: clippy
+    needs: guard
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
         with:
           components: clippy
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   test:
     # The storage layer touches the filesystem directly (fsync, truncation,
     # later mmap) and its behaviour differs between platforms; development
     # happens on Windows and deployment on Linux, so both must stay green.
     name: test (${{ matrix.os }})
+    needs: guard
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - run: cargo test --workspace --locked
 
   web:
     # The React UI has its own unit tests (vitest) and must type-check and
     # build with the strict tsconfig.
     name: web (vitest, tsc, build)
+    needs: guard
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: web
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
@@ -81,6 +90,45 @@ jobs:
       - run: npx tsc --noEmit
       - run: npx vite build
 
+  audit:
+    # Known vulnerabilities in the Rust and npm dependency trees.
+    name: audit (cargo, npm)
+    needs: guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+      - uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172 # v2.87.20
+        with:
+          tool: cargo-audit
+      - run: cargo audit
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+      - run: npm audit --audit-level=high
+        working-directory: web
+      - run: npm audit --audit-level=high
+        working-directory: auth-server
+
+  auth-server:
+    # The Node auth server (the file the 2026-09-24 injection targeted) has
+    # its own tests; they run after the guard, never before.
+    name: auth-server (node --test)
+    needs: guard
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: auth-server
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: auth-server/package-lock.json
+      - run: npm ci
+      - run: npm test
+
   coverage:
     # Line coverage of the Rust workspace (cargo-llvm-cov, whole suite
     # including the end-to-end tests that spawn the binary) and of the web
@@ -90,20 +138,23 @@ jobs:
     # always show the last measurement on main. Runs only on main: it
     # recompiles everything instrumented, which is slow.
     name: coverage (badges)
+    needs: guard
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
         with:
           components: llvm-tools-preview
-      - uses: taiki-e/install-action@cargo-llvm-cov
-      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172 # v2.87.20
+        with:
+          tool: cargo-llvm-cov
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           key: llvm-cov
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
@@ -120,7 +171,7 @@ jobs:
           npx vitest run --coverage --coverage.reporter=json-summary --coverage.reporter=text-summary
       - name: Badges and table (fails below 90 % on any crate or the web)
         run: python3 scripts/coverage_badges.py --rust target/llvm-cov/cov.json --web web/coverage/coverage-summary.json --out badges --fail-under 90
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: coverage-badges
           path: badges
