@@ -66,27 +66,31 @@ jobs:
         run: ./target/release/ontology --data "$DATA" bench hydrate --json | tee out/hydrate-p0.json
       - name: Hydrate P1 (payloads on disk)
         run: ./target/release/ontology --data "$DATA" bench hydrate --p1 --json | tee out/hydrate-p1.json
-      - name: Query latency (page, search, expand, retrieval)
-        run: ./target/release/ontology --data "$DATA" bench query --iterations ${{ inputs.iterations }} --json | tee out/query.json
+      - name: Query latency (page, search, expand, retrieval), graph in P1
+        # In P0 the 2×10⁶ graph (~10 GB) plus the retrieval index exceeds the
+        # runner's 16 GB and the job is killed; P1 leaves room for the index.
+        run: ./target/release/ontology --data "$DATA" bench query --p1 --iterations ${{ inputs.iterations }} --json | tee out/query.json
       - name: Summary
+        if: always()
         run: |
           {
             echo "## bench — ${{ inputs.concepts }} concepts, ${{ inputs.relations }} relations, ${{ inputs.ns }} domains, ${{ inputs.codec }}"
             echo
             echo '| Measure | P0 | P1 |'
             echo '|---|---|---|'
-            for k in hydrate_ms heap_delta_mib rss_delta_mib estimate_mib estimate_vs_heap_pct resident_payloads; do
-              a=$(python3 -c "import json;print(json.load(open('out/hydrate-p0.json')).get('$k'))")
-              b=$(python3 -c "import json;print(json.load(open('out/hydrate-p1.json')).get('$k'))")
+            for k in hydrate_ms heap_delta_mib commit_delta_mib rss_delta_mib estimate_mib estimate_vs_heap_pct resident_payloads; do
+              a=$(python3 -c "import json;print(json.load(open('out/hydrate-p0.json')).get('$k'))" 2>/dev/null || echo -)
+              b=$(python3 -c "import json;print(json.load(open('out/hydrate-p1.json')).get('$k'))" 2>/dev/null || echo -)
               echo "| $k | $a | $b |"
             done
             echo
             echo '### query.json'
             echo '```json'
-            cat out/query.json
+            cat out/query.json 2>/dev/null || echo '{}'
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
         with:
           name: bench-${{ inputs.concepts }}-${{ inputs.relations }}-${{ inputs.codec }}
           path: out
