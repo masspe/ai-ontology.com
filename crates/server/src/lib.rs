@@ -1568,6 +1568,16 @@ async fn metrics(State(s): State<AppState>) -> ([(String, String); 1], String) {
             m.resident_payloads,
         ));
     }
+    // The store lock may be held by a compaction: never wait for it on a
+    // runtime worker.
+    let store = s.store.clone();
+    if let Some(st) = tokio::task::spawn_blocking(move || store.store_stats())
+        .await
+        .ok()
+        .flatten()
+    {
+        body.push_str(&stream_metrics(&st));
+    }
     (
         [(
             axum::http::header::CONTENT_TYPE.to_string(),
@@ -1575,6 +1585,83 @@ async fn metrics(State(s): State<AppState>) -> ([(String, String); 1], String) {
         )],
         body,
     )
+}
+
+/// Per-stream gauges (STORAGE-PLAN.md §8 T3): one series per domain,
+/// labelled `ns`, plus the store-wide sequence, sync count and last
+/// compaction. Absent on stores without streams.
+fn stream_metrics(st: &ontology_storage::StoreStats) -> String {
+    fn label(s: &str) -> String {
+        s.replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\n', "\\n")
+    }
+    let mut out = format!(
+        "# HELP ontology_store_next_seq Next global sequence number of the store.\n\
+         # TYPE ontology_store_next_seq gauge\n\
+         ontology_store_next_seq {}\n\
+         # HELP ontology_store_syncs Data-file syncs issued since the store was opened.\n\
+         # TYPE ontology_store_syncs gauge\n\
+         ontology_store_syncs {}\n",
+        st.next_seq, st.syncs
+    );
+    if let Some(c) = &st.last_compaction {
+        out.push_str(&format!(
+            "# HELP ontology_store_last_compaction_seconds Duration of the last compaction since open.\n\
+             # TYPE ontology_store_last_compaction_seconds gauge\n\
+             ontology_store_last_compaction_seconds {:.3}\n\
+             # HELP ontology_store_last_compaction_timestamp_seconds Unix time when the last compaction finished.\n\
+             # TYPE ontology_store_last_compaction_timestamp_seconds gauge\n\
+             ontology_store_last_compaction_timestamp_seconds {}\n\
+             # HELP ontology_store_last_compaction_partitions_removed Partitions removed by the last compaction.\n\
+             # TYPE ontology_store_last_compaction_partitions_removed gauge\n\
+             ontology_store_last_compaction_partitions_removed {}\n",
+            c.duration_secs, c.finished_unix_secs, c.report.partitions_removed
+        ));
+    }
+    type Gauge = fn(&ontology_storage::StreamStats) -> u64;
+    let gauges: [(&str, &str, Gauge); 5] = [
+        (
+            "ontology_stream_sealed_segments",
+            "Sealed segments of the stream.",
+            |s| s.sealed_segments as u64,
+        ),
+        (
+            "ontology_stream_data_bytes",
+            "Bytes of .data files of the stream, sealed and active.",
+            |s| s.data_bytes,
+        ),
+        (
+            "ontology_stream_records",
+            "Records in the stream, sealed and active.",
+            |s| s.records,
+        ),
+        (
+            "ontology_stream_last_seq",
+            "Sequence number of the last record of the stream (0 when empty).",
+            |s| s.last_seq.unwrap_or(0),
+        ),
+        (
+            "ontology_stream_syncs",
+            "Data-file syncs issued on the stream since the store was opened.",
+            |s| s.syncs,
+        ),
+    ];
+    for (name, help, f) in gauges {
+        out.push_str(&format!("# HELP {name} {help}\n# TYPE {name} gauge\n"));
+        for s in &st.streams {
+            out.push_str(&format!("{name}{{ns=\"{}\"}} {}\n", label(&s.ns), f(s)));
+        }
+    }
+    out.push_str("# HELP ontology_domain_tier 1 on the memory tier of the domain (p0: everything in memory, p1: payloads on disk).\n# TYPE ontology_domain_tier gauge\n");
+    for s in st.streams.iter().filter(|s| s.tier != "meta") {
+        out.push_str(&format!(
+            "ontology_domain_tier{{ns=\"{}\",tier=\"{}\"}} 1\n",
+            label(&s.ns),
+            s.tier
+        ));
+    }
+    out
 }
 
 async fn stats(State(s): State<AppState>) -> Json<StatsResponse> {

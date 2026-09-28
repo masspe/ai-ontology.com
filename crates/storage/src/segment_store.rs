@@ -180,6 +180,43 @@ pub struct CompactionReport {
     pub partitions_removed: usize,
 }
 
+/// The last compaction since the store was opened (T3, `/metrics`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct LastCompaction {
+    pub duration_secs: f64,
+    /// Unix time, seconds, when it finished.
+    pub finished_unix_secs: u64,
+    pub report: CompactionReport,
+}
+
+/// One stream (domain) as an operator watches it (STORAGE-PLAN.md §8 T3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StreamStats {
+    /// Domain name; `meta` for the schema stream.
+    pub ns: String,
+    pub ns_id: u16,
+    /// `p0`, `p1`, or `meta`.
+    pub tier: &'static str,
+    pub sealed_segments: usize,
+    /// Bytes of `.data`, sealed and active.
+    pub data_bytes: u64,
+    pub records: u64,
+    pub last_seq: Option<u64>,
+    /// `fdatasync` calls on this stream since open.
+    pub syncs: u64,
+}
+
+/// Store-wide figures for `/metrics`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StoreStats {
+    pub next_seq: u64,
+    /// `fdatasync` calls since open, every stream: the sum of the
+    /// per-stream counts (a stream is counted once its commit succeeded).
+    pub syncs: u64,
+    pub last_compaction: Option<LastCompaction>,
+    pub streams: Vec<StreamStats>,
+}
+
 struct Inner {
     root: PathBuf,
     cfg: SegmentStoreConfig,
@@ -195,6 +232,10 @@ struct Inner {
     poisoned: bool,
     /// P1 domains by `ns_id`; absent = P0 (`set_tiers`).
     tiers: HashMap<u16, Tier>,
+    /// Syncs issued per stream since open (T3).
+    syncs_by_ns: HashMap<u16, u64>,
+    /// The last compaction since open (T3).
+    last_compaction: Option<LastCompaction>,
     /// Sealed segments of the graph streams, shared with the reader (R12).
     sealed_index: Arc<SealedIndex>,
     /// The graph hydrated from this store: receives `set_loc` /
@@ -430,6 +471,8 @@ impl SegmentStore {
             next_seq,
             poisoned: false,
             tiers: HashMap::new(),
+            syncs_by_ns: HashMap::new(),
+            last_compaction: None,
             sealed_index: Arc::new(SealedIndex::default()),
             hydrated: Weak::new(),
             _lock: lock,
@@ -519,10 +562,65 @@ impl SegmentStore {
             }
             // `compact_all` adopts the codec only at its commit point; a
             // failure before that leaves manifest and segments untouched.
-            Self::compact_all(&mut g, &graph, codec)
+            Self::compact_timed(&mut g, &graph, codec)
         })
         .await
         .map_err(|e| StoreError::Io(std::io::Error::other(e)))?
+    }
+
+    /// `compact_all`, timed, remembered for `/metrics` (T3).
+    fn compact_timed(
+        g: &mut Inner,
+        graph: &Arc<OntologyGraph>,
+        codec: u8,
+    ) -> StoreResult<CompactionReport> {
+        let t = std::time::Instant::now();
+        let report = Self::compact_all(g, graph, codec)?;
+        let finished_unix_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        g.last_compaction = Some(LastCompaction {
+            duration_secs: t.elapsed().as_secs_f64(),
+            finished_unix_secs,
+            report: report.clone(),
+        });
+        Ok(report)
+    }
+
+    /// Per-stream and store-wide figures for `/metrics` (STORAGE-PLAN.md
+    /// §8 T3): segments, bytes, records, last seq and syncs per domain, the
+    /// domain's tier, and the last compaction since open. Takes the store
+    /// lock: call it off the async runtime (a compaction holds that lock).
+    pub fn stats(&self) -> StoreStats {
+        let g = self.inner.lock();
+        let mut streams = Vec::with_capacity(g.graph.len() + 1);
+        let stream_stats = |ns_id: u16, s: &Stream, ns: String, tier: &'static str| StreamStats {
+            ns,
+            ns_id,
+            tier,
+            sealed_segments: s.sealed().len(),
+            data_bytes: s.data_bytes(),
+            records: s.record_count(),
+            last_seq: s.last_seq(),
+            syncs: g.syncs_by_ns.get(&ns_id).copied().unwrap_or(0),
+        };
+        streams.push(stream_stats(META_NS_ID, &g.meta, "meta".into(), "meta"));
+        for (&ns_id, s) in &g.graph {
+            let ns = g
+                .manifest
+                .ns_name(ns_id)
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("ns-{ns_id}"));
+            let tier = if g.is_p1(ns_id) { "p1" } else { "p0" };
+            streams.push(stream_stats(ns_id, s, ns, tier));
+        }
+        StoreStats {
+            next_seq: g.next_seq,
+            syncs: streams.iter().map(|s| s.syncs).sum(),
+            last_compaction: g.last_compaction.clone(),
+            streams,
+        }
     }
 
     /// Visit every record of the store, decoded, in global `seq` order
@@ -905,6 +1003,7 @@ impl SegmentStore {
                 stream.maybe_roll(&mut next_partition, next_seq)?
             };
             inner.manifest.next_partition_id = next_partition;
+            *inner.syncs_by_ns.entry(ns_id).or_insert(0) += 1;
             if let Some(entry) = rolled {
                 let partition = entry.id;
                 inner
@@ -1356,7 +1455,7 @@ impl SegmentStore {
         tokio::task::spawn_blocking(move || {
             let mut g = inner.lock();
             let codec = g.manifest.codec;
-            Self::compact_all(&mut g, &graph, codec)
+            Self::compact_timed(&mut g, &graph, codec)
         })
         .await
         .map_err(|e| StoreError::Io(std::io::Error::other(e)))?
@@ -1547,6 +1646,10 @@ impl Store for SegmentStore {
 
     async fn compact(&self, graph: &Arc<OntologyGraph>) -> StoreResult<()> {
         self.compact_store(graph).await.map(|_| ())
+    }
+
+    fn store_stats(&self) -> Option<StoreStats> {
+        Some(self.stats())
     }
 }
 
