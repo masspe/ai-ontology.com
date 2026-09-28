@@ -842,14 +842,14 @@ bug.
 > avec des payloads de 1,3 Ko, **les relations et les index de concepts
 > pèsent plus que les payloads**. Décision du 2026-09-22 (`STORAGE-PLAN.md`
 > §6.6) : cible 10⁷ / 5×10⁷ sur 64 Go avec P1 ; 2×10⁶ / 10⁷ garantis sur
-> 16 Go ; CSR sur besoin client.
+> 16 Go **en P1** (mesuré le 2026-09-28, §7.8) ; CSR sur besoin client.
 
 **Capacité par nœud et par palier** (ce que le budget de §8.1 laisse
 charger, en concepts / relations) :
 
 | Nœud, fraction → budget | P0 (aujourd'hui) | P1 (payloads sur disque) | P1 + CSR (P2–P4) |
 |---|---|---|---|
-| 16 Go × 0,6 → 9,6 Go | ~1,8×10⁶ / 9×10⁶ (mesuré 2026-09-28 : 2×10⁶ / 10⁷ = 9,9 Go, hors budget, index de retrieval exclu) | ~2,4×10⁶ / 1,2×10⁷ (**mesuré : 2×10⁶ / 10⁷ = 6,4 Go**, index compris) | ~1,7×10⁷ / 8,5×10⁷ |
+| 16 Go × 0,6 → 9,6 Go | ~1,8×10⁶ / 9×10⁶ (mesuré 2026-09-28 : 2×10⁶ / 10⁷ = 9,9 Go, hors budget, index de retrieval exclu) | ~2,4×10⁶ / 1,2×10⁷ (**mesuré : 2×10⁶ / 10⁷ = 6,4 Go** après hydratation ; l'index de retrieval tient ensuite) | ~1,7×10⁷ / 8,5×10⁷ |
 | 64 Go × 0,6 → 38 Go | ~7×10⁶ / 3,5×10⁷ | ~9,5×10⁶ / 4,7×10⁷ | au-delà de la cible |
 | 64 Go × 0,8 → 51 Go | ~9,6×10⁶ / 4,8×10⁷ | **~1,3×10⁷ / 6,3×10⁷** | au-delà de la cible |
 
