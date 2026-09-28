@@ -607,6 +607,12 @@ ontology --data $DATA bench hydrate --json    # same store, binary codec
 cargo bench -p ontology-storage --bench codec # per-record encode/decode, JSON vs postcard
 ```
 
+The same sequence runs on a GitHub runner (16 GB, no laptop needed) through
+the manual **bench** workflow: Actions → bench → *Run workflow*, with the
+store size as inputs (defaults: 2 M concepts / 10 M relations, the 16 GB
+guarantee). It publishes the JSON results as an artifact and a P0/P1 table
+in the job summary.
+
 `--json` prints one object per run. `ontology --data D compact --codec postcard`
 switches an existing store to the binary codec (whole-store compaction; every
 record header carries its codec, so JSON and postcard segments coexist until
