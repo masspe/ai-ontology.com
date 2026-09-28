@@ -1,0 +1,92 @@
+name: bench
+
+# Manual storage benchmark (STORAGE-PLAN.md §8 T2, ROADMAP.md §3.7 bis): a
+# synthetic store of the requested size is generated on the runner, then
+# hydrated in P0 and in P1 and queried, with `ontology bench` exactly as on
+# a developer machine. The JSON results are published as an artifact and
+# summarised in the job summary, so the capacity figures of STORAGE.md §7.8
+# / §8.1 are reproducible on a 16 GB runner instead of a laptop.
+#
+# Defaults are the 16 GB guarantee of STORAGE.md §1: 2×10⁶ concepts and
+# 10⁷ relations (~1.8 GB on disk). At that size the P0 hydration needs
+# about 10 GB of heap; ubuntu-latest runners have 16 GB.
+
+on:
+  workflow_dispatch:
+    inputs:
+      concepts:
+        description: Concepts to generate
+        default: "2000000"
+      relations:
+        description: Relations to generate
+        default: "10000000"
+      ns:
+        description: Storage domains
+        default: "5"
+      payload:
+        description: Target payload bytes per concept
+        default: "1300"
+      codec:
+        description: Write codec (json | postcard)
+        default: json
+      iterations:
+        description: Query iterations per measurement
+        default: "200"
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    name: bench (${{ inputs.concepts }} concepts, ${{ inputs.relations }} relations, ${{ inputs.codec }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      DATA: ${{ github.workspace }}/bench-store
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          key: bench-release
+      - name: Build the CLI (release)
+        run: cargo build --release --locked -p ontology-cli
+      - name: Runner resources
+        run: |
+          nproc; free -h; df -h "$GITHUB_WORKSPACE" | tail -1
+      - name: Generate the store
+        run: |
+          mkdir -p out
+          ./target/release/ontology --data "$DATA" bench gen \
+            --concepts ${{ inputs.concepts }} --relations ${{ inputs.relations }} \
+            --ns ${{ inputs.ns }} --payload ${{ inputs.payload }} --codec ${{ inputs.codec }} \
+            --json | tee out/gen.json
+          du -sh "$DATA"
+      - name: Hydrate P0 (everything in memory)
+        run: ./target/release/ontology --data "$DATA" bench hydrate --json | tee out/hydrate-p0.json
+      - name: Hydrate P1 (payloads on disk)
+        run: ./target/release/ontology --data "$DATA" bench hydrate --p1 --json | tee out/hydrate-p1.json
+      - name: Query latency (page, search, expand, retrieval)
+        run: ./target/release/ontology --data "$DATA" bench query --iterations ${{ inputs.iterations }} --json | tee out/query.json
+      - name: Summary
+        run: |
+          {
+            echo "## bench — ${{ inputs.concepts }} concepts, ${{ inputs.relations }} relations, ${{ inputs.ns }} domains, ${{ inputs.codec }}"
+            echo
+            echo '| Measure | P0 | P1 |'
+            echo '|---|---|---|'
+            for k in hydrate_ms heap_delta_mib rss_delta_mib estimate_mib estimate_vs_heap_pct resident_payloads; do
+              a=$(python3 -c "import json;print(json.load(open('out/hydrate-p0.json')).get('$k'))")
+              b=$(python3 -c "import json;print(json.load(open('out/hydrate-p1.json')).get('$k'))")
+              echo "| $k | $a | $b |"
+            done
+            echo
+            echo '### query.json'
+            echo '```json'
+            cat out/query.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: bench-${{ inputs.concepts }}-${{ inputs.relations }}-${{ inputs.codec }}
+          path: out
