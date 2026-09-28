@@ -477,3 +477,136 @@ fn vector_swap_remove_keeps_positions_consistent() {
     assert!(lex.search("gamma", 10).is_empty());
     assert!(lex.search("beta", 10).is_empty());
 }
+
+/// Deterministic pseudo-random unit vectors (LCG), no dependency.
+fn unit_vectors(n: usize, dim: usize, seed: u64) -> Vec<Vec<f32>> {
+    let mut x = seed;
+    (0..n)
+        .map(|_| {
+            let mut v: Vec<f32> = (0..dim)
+                .map(|_| {
+                    x = x
+                        .wrapping_mul(6364136223846793005)
+                        .wrapping_add(1442695040888963407);
+                    ((x >> 33) as f32 / (1u64 << 31) as f32) - 0.5
+                })
+                .collect();
+            let norm = v.iter().map(|a| a * a).sum::<f32>().sqrt();
+            v.iter_mut().for_each(|a| *a /= norm);
+            v
+        })
+        .collect()
+}
+
+/// Tranche 2a (STORAGE-PLAN.md §8 R): above 16 384 rows the scan is split
+/// across the cores; its result must be the one a single scan gives.
+#[test]
+fn parallel_scan_returns_the_same_top_k_as_a_single_scan() {
+    let embedder: Arc<dyn Embedder> = Arc::new(HashEmbedder::new(32));
+    let idx = VectorIndex::new(embedder.clone());
+    let rows = unit_vectors(50_000, 32, 7);
+    for (i, v) in rows.iter().enumerate() {
+        idx.insert_vector(ConceptId(i as u64 + 1), v);
+    }
+    assert_eq!(idx.len(), 50_000);
+    // Overwriting a row keeps the count; removing the first row moves the
+    // last one into its slot without losing anybody.
+    idx.insert_vector(ConceptId(1), &rows[1]);
+    assert_eq!(idx.len(), 50_000);
+    idx.remove(ConceptId(1));
+    assert_eq!(idx.len(), 49_999);
+    // The last row, moved into slot 0 by the swap-remove, is still there.
+    let last = ConceptId(50_000);
+    let all = idx.search("placeholder", 50_000);
+    assert_eq!(all.len(), 49_999);
+    assert!(all.iter().any(|(id, _)| *id == last), "row 50 000 vanished");
+    assert!(
+        all.iter().all(|(id, _)| *id != ConceptId(1)),
+        "row 1 still listed"
+    );
+
+    let q = "alpha beta gamma delta";
+    let qv = embedder.embed(q);
+    let mut expected: Vec<(ConceptId, f32)> = (1..50_000usize)
+        .map(|i| {
+            let id = ConceptId(i as u64 + 1);
+            (id, ontology_index::embed::cosine(&qv, &rows[i]))
+        })
+        .collect();
+    expected.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+    expected.truncate(10);
+    let got = idx.search(q, 10);
+    assert_eq!(
+        got.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+        expected.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+        "parallel top-10 differs from the single scan"
+    );
+    assert!(idx.search(q, 0).is_empty());
+}
+
+/// Tranche 2a: `reindex_all` tokenises and embeds on every core; the index
+/// it builds must rank like one filled concept by concept.
+#[test]
+fn parallel_reindex_matches_incremental_indexing() {
+    let g = OntologyGraph::with_arc(ontology());
+    let words = [
+        "ledger", "invoice", "audit", "graph", "tenant", "segment", "vector", "cursor",
+    ];
+    for i in 0..10_000u64 {
+        let a = words[(i % 8) as usize];
+        let b = words[((i / 8) % 8) as usize];
+        topic(
+            &g,
+            &format!("topic-{i}"),
+            &format!("about {a} and {b} number {i}"),
+        );
+    }
+    let bulk = HybridIndex::with_default_embedder(g.clone());
+    let report = bulk.reindex_all_timed();
+    assert_eq!(report.concepts, 10_000);
+    assert!(report.lexical_ms >= 0.0 && report.vector_ms >= 0.0);
+    let one_by_one = HybridIndex::with_default_embedder(g.clone());
+    for c in g.all_concepts() {
+        one_by_one.index_concept(c.id).unwrap();
+    }
+    // Thousands of documents tie on both signals (64 distinct bags of
+    // words), so which of the tied ids fill a top-8 depends on hash-map
+    // order; the scores are what both indexes must agree on, and a unique
+    // token has a unique winner.
+    let vector_scores = |idx: &HybridIndex, q: &str| -> Vec<i64> {
+        let r = RetrievalRequest {
+            query: q.into(),
+            lexical_weight: 0.0,
+            ..Default::default()
+        };
+        idx.rank(&r)
+            .iter()
+            .map(|s| (s.vector * 1e5).round() as i64)
+            .collect()
+    };
+    for q in ["ledger audit", "vector segment number 42", "tenant"] {
+        assert_eq!(
+            vector_scores(&bulk, q),
+            vector_scores(&one_by_one, q),
+            "query {q}"
+        );
+    }
+    let lexical_only = RetrievalRequest {
+        query: "42".into(),
+        lexical_weight: 1.0,
+        ..Default::default()
+    };
+    let first = |idx: &HybridIndex| ranked_ids(idx, &lexical_only)[0];
+    assert_eq!(first(&bulk), first(&one_by_one));
+    assert_eq!(g.get_concept(first(&bulk)).unwrap().name, "topic-42");
+    // The lexical index still updates and forgets a document through its
+    // interned terms.
+    let lex = LexicalIndex::new();
+    lex.insert(ConceptId(1), "alpha beta");
+    lex.insert(ConceptId(2), "beta gamma");
+    lex.insert(ConceptId(1), "gamma only");
+    assert_eq!(lex.search("alpha", 5), Vec::<(ConceptId, f32)>::new());
+    assert_eq!(lex.search("gamma", 5).len(), 2);
+    lex.remove(ConceptId(2));
+    assert_eq!(lex.search("gamma", 5).len(), 1);
+}
