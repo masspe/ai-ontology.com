@@ -26,7 +26,7 @@ Convention : `H*` / `R*` renvoient aux hypothèses et règles de
 | 4 | Mesure et codec : générateur 10⁷ / 5×10⁷, benchs, `postcard` | 2 | 4-6 | Chiffres réels sur la cible ; codec activé si gain mesuré |
 | 5a | **Socle** (livré 2026-09-22) puis **P1** (livré 2026-09-23, §7.2) : slot + `Loc`, payloads relus depuis le disque | 3, 4, T1 | 8-12 | **Livré** — J5 mesuré (STORAGE.md §7.8) : mémoire privée ÷1,57, hydratation 1,19× |
 | 5b | P2-P5 : `.adj`/`.srt` (CSR), paliers, hystérésis | 5a | 8-12 | **Sur besoin client** : un tenant au-delà de 5×10⁶ concepts sur un nœud contraint |
-| R | Index de retrieval : persistance des vecteurs, index approximatif | indépendant | 8-12 | Retrieval en O(log N), démarrage sans réindexation |
+| R | Index de retrieval : persistance des vecteurs, index approximatif | indépendant | 8-12 | Retrieval en O(log N), démarrage sans réindexation — **tranche 2 déclenchée le 2026-09-28** (p99 230 ms et `reindex_all` 61,6 s à 2×10⁶, §8 R) |
 | T | CI Windows+Linux (**livré**), métriques (**partiel** : mémoire et paliers livrés ; T3 par flux — segments, taille, `next_seq`, `sync_data`, dernière compaction — **à faire**), job `bench` manuel T2 (**livré** 2026-09-28 : `.github/workflows/bench.yml`, `workflow_dispatch`), docs, position un store par tenant (**livré** : STORAGE.md §10.8, README « Deployment model ») | — | 2-3 | Couverture ≥ 90 % par crate imposée en CI (2026-09-23) ; correction du 2026-09-25 : la mention « métriques (livré) » du 2026-09-24 surévaluait T3 |
 
 **Stratégie (validée le 2026-09-08)** : la mémoire d'abord, le disque quand
@@ -35,7 +35,8 @@ la descente vers P1+ soit possible sans changer de version de fichier.
 Cible de dimensionnement : 10⁷ concepts et 5×10⁷ relations par store,
 **sur un nœud de 64 Go avec P1** depuis la révision du 2026-09-22
 (STORAGE.md §1 et §8.1 : la phase 4 a mesuré 45 à 50 Go en P0, et P1 seul
-ne loge pas 10⁷ sur 16 Go) ; sur 16 Go la garantie est 2×10⁶ / 10⁷.
+ne loge pas 10⁷ sur 16 Go) ; sur 16 Go la garantie est 2×10⁶ / 10⁷, **en P1**
+(précision du 2026-09-28, §6.6 et STORAGE.md §7.8).
 **P1 (5a) reste le prochain palier** : il retire le payload du tas sur
 tout store, quelle que soit la cible, et c'est la marche prévue par le
 format (slot + `Loc`). Le CSR (5b) n'est engagé que sur besoin client.
@@ -685,7 +686,11 @@ Décisions prises le 2026-09-17 (validées par le propriétaire du produit) :
    produit, validé par le propriétaire du projet) : **la cible est portée
    par le nœud**. 10⁷ / 5×10⁷ sur **64 Go avec P1** (`--heap-fraction 0.8`
    sur un nœud dédié : ~1,3×10⁷ / 6,3×10⁷ estimés) ; sur **16 Go**, la
-   garantie est **2×10⁶ / 10⁷** (P0 dès aujourd'hui, ~2,4×10⁶ avec P1). Le
+   garantie est **2×10⁶ / 10⁷** (P0 dès aujourd'hui, ~2,4×10⁶ avec P1) —
+   **précisé le 2026-09-28** après la mesure à 2×10⁶ sur runner 16 Go
+   (STORAGE.md §7.8) : en P0 le tas seul fait 9,9 Go et l'index de retrieval
+   ne tient plus ; la garantie 16 Go s'entend **en P1** (6,4 Go, index
+   compris), soit `--tier p1` sur un tel nœud. Le
    **CSR est reporté** à un besoin client au-delà de 5×10⁶ concepts sur un
    nœud contraint. Motifs : le matériel est le levier le moins cher ; P1 a
    une valeur garantie quelle que soit la cible et ne change pas le format ;
@@ -980,6 +985,13 @@ Mesuré sur le store 5×10⁵ / 2,5×10⁶ (`bench query`, STORAGE.md §7.8) :
    l'hydratation ; `/retrieve` P95 < 200 ms jusqu'à 2×10⁶ » — atteint à
    5×10⁵, à mesurer à 2×10⁶ ; l'ancienne formulation (« supprimé du
    démarrage », « O(log N) à 10⁷ ») reste l'objectif de la tranche HNSW.
+5. **Mesuré le 2026-09-28 à 2×10⁶ / 10⁷** (runner CI 4 vCPU, graphe P1,
+   STORAGE.md §7.8) : `/retrieve` p50 222 ms, p99 230 ms ; `reindex_all`
+   61,6 s contre 42,5 s d'hydratation. **Les deux déclencheurs de la tranche
+   2 sont atteints** : HNSW construit au scellement (mmap) et persistance
+   des vecteurs pour sortir `reindex_all` du démarrage. À planifier : après
+   T3 (§8), avant la mise en production d'un tenant au-delà de ~10⁶
+   concepts ; en dessous, la tranche 1 suffit (70 ms à 5×10⁵).
 
 ### T5 — Un store par tenant — **tranché 2026-09-15, README écrit 2026-09-24**
 
@@ -1078,7 +1090,7 @@ Jalons vérifiables :
 | J4 (fin phase 4) | **Atteint pour ce qui est mesurable ici** : §7.7–7.8 de STORAGE.md remplis de chiffres mesurés à 2×10⁵ / 10⁶ et 5×10⁵ / 2,5×10⁶, codec tranché (JSON par défaut, postcard en option), `bulk_load` livré et mesuré ; la cible 10⁷ / 5×10⁷ (45 à 50 Go en P0) n'est pas hydratable sur 16 Go — c'est la mesure elle-même qui le montre ; extrapolation linéaire documentée |
 | J5 (P1) | **Atteint 2026-09-23** (STORAGE.md §7.8) : sur le store synthétique 5×10⁵ / 2,5×10⁶, mémoire privée ÷ 1,57 (critère ≥ 1,4), hydratation 1,19× (≤ 1,2×), P95 `GET /concepts/{id}` 1,0× (< 2×) ; payloads résidents 0 après hydratation ; preuve de capacité 5×10⁶ sur 64 Go reportée à une demande client (§6.6) |
 | J5b (CSR, sur besoin) | 10⁷ / 5×10⁷ hydraté sur 16 Go en `strict` ; ~16 o par arête mesurés |
-| JR (retrieval) | **Tranche 1 atteinte 2026-09-23** (§8 R) : `reindex_all` 17–28 s à 5×10⁵ (< hydratation 32 s ; était ~7 min), `/retrieve` p50 70 ms / p99 100 ms (étaient 465 ms / 2,1 s). Tranche 2, sur mesure : `reindex_all` supprimé du démarrage (persistance, dès un modèle d'embedding) ; O(log N) par HNSW quand le P95 dépasse 200 ms (~1,5×10⁶ concepts) |
+| JR (retrieval) | **Tranche 1 atteinte 2026-09-23** (§8 R) : `reindex_all` 17–28 s à 5×10⁵ (< hydratation 32 s ; était ~7 min), `/retrieve` p50 70 ms / p99 100 ms (étaient 465 ms / 2,1 s). Tranche 2, sur mesure : `reindex_all` supprimé du démarrage (persistance, dès un modèle d'embedding) ; O(log N) par HNSW quand le P95 dépasse 200 ms (~1,5×10⁶ concepts). **Déclenchée le 2026-09-28** : à 2×10⁶, p99 230 ms et `reindex_all` 61,6 s > hydratation 42,5 s |
 
 ---
 

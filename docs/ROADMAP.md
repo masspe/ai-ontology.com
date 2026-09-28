@@ -138,7 +138,15 @@ des `.xref`, `ns` dans l'interface web, limite Job Object Windows, métrique
 | Des paliers §8.2, seuls P0 et P1 existent ; `adaptive` choisit P1 pour un domaine qui tient sans ses payloads, pas de bascule à chaud | P2–P5 et le contrôleur sont en 5b, sur besoin client | STORAGE.md §8.1, §8.2 |
 | Le chantier R n'est pas commencé alors que le plan le place avant les murs du stockage | Priorité à mesurer (§3.4) | plan §1, §8 R |
 
-### 3.7 Mesure à 2×10⁶ — **prochaine étape** (une heure de machine)
+### 3.7 Mesure à 2×10⁶ — **livré 2026-09-28** (runner CI, workflow `bench`)
+
+Faite sur le runner (T2) et non sur le portable (2 à 5 Go libres) : résultats
+dans STORAGE.md §7.8 (tableau « Mesure à 2×10⁶ / 10⁷ »), §8.1 et README
+« Sizing ». Retenu : la garantie 16 Go s'entend **en P1** (tas 9,9 Go en P0
+sans l'index de retrieval, 6,4 Go en P1 avec) ; **déclencheur HNSW atteint**
+(`/retrieve` p99 230 ms, `reindex_all` 61,6 s > hydratation) → chantier R
+tranche 2 à planifier (plan §8 R, décision datée) ; curseur T1 ×32 sur
+l'offset. Le texte d'origine suit pour mémoire.
 
 Générer un store à la taille de la garantie 16 Go (`bench gen --concepts
 2000000 --relations 10000000 --ns 5 --payload 1300`, ~1,8 Go sur disque)

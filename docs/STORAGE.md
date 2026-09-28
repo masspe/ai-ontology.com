@@ -59,7 +59,9 @@ et un store doit servir **10⁷ concepts et 5×10⁷ relations**. **Révisée le
 2026-09-22** après les mesures de la phase 4 (§7.8) : cette cible se tient
 **sur un nœud de 64 Go avec P1** (payloads sur disque, `--heap-fraction
 0.8` sur un nœud dédié) ; sur un nœud de **16 Go**, la garantie est de
-**2×10⁶ concepts et 10⁷ relations** (P0 aujourd'hui, ~2,4×10⁶ avec P1). Le
+**2×10⁶ concepts et 10⁷ relations**, **en P1** depuis la mesure du 2026-09-28
+(§7.8 : 9,9 Go de tas en P0, l'index de retrieval ne tient plus ; 6,4 Go en
+P1, il tient). Le
 CSR des relations (P2–P4), seul moyen de loger 10⁷ sur 16 Go, est reporté à
 un besoin client avéré au-delà de 5×10⁶ concepts sur un nœud contraint : le
 matériel est le levier le moins cher, et le socle mémoire (§8.1) refuse ou
@@ -664,6 +666,39 @@ prévu au §8.1. Le surcoût d'hydratation vient des `set_loc` par record et
 des évictions ; il est dans le critère mais sans marge : à surveiller si
 le seuil de roulement change.
 
+**Mesure à 2×10⁶ / 10⁷ — la garantie 16 Go (2026-09-28, runner CI)**.
+Workflow `bench` (STORAGE-PLAN.md §8 T2), `ubuntu-latest` : 4 vCPU, 15 Gio,
+SSD, une exécution par point, codec JSON, `--ns 5 --payload 1300`, run
+36430598736. Le tas privé est `RssAnon` sous Linux (pages anonymes
+résidentes, segments mappés exclus), l'équivalent du `PagefileUsage` de
+Windows ; `heap_delta_mib` (RSS après fermeture du store) n'est pas
+significatif en P1 puisque le graphe garde les segments mappés.
+
+| | P0 | P1 | Rapport |
+|---|---|---|---|
+| Store sur disque (12 M enregistrements) | 4,6 Go, 385 o/enr., généré à 342 k enr./s | idem | — |
+| Hydratation | 45,5 s (264 k enr./s) | 42,5 s (283 k enr./s) | 0,93× |
+| Tas privé après hydratation | **9 893 Mio** | **6 394 Mio** | **÷ 1,55** (J5 : ÷ 1,57 à 5×10⁵) |
+| RSS pendant l'hydratation | +12,8 Go | +10,8 Go | — |
+| Estimation R14 / tas | 11 146 Mio, 113 % | 103 % | borne supérieure tenue |
+| Payloads résidents | 2 000 000 | 0 | — |
+| `reindex_all` (retrieval, sur le graphe P1) | tué : P0 + index > 15 Gio | **61,6 s** | > hydratation |
+| `/retrieve` (rank hybride) p50 / p99 | — | **222 ms / 230 ms** | seuil HNSW (200 ms) dépassé |
+| Page 200 par offset aléatoire p50 / p99 | — | 23,6 ms / 31,6 ms | — |
+| Page 200 par curseur (T1) p50 / p99 | — | **0,73 ms / 14,4 ms** | ×32 sur l'offset |
+| `?q=` trigrammes p50 / p99 | — | 36 µs / 155 ms | — |
+| Expand profondeur 2 (128 nœuds) p50 / p99 | — | 20 ms / 35 ms | — |
+
+Trois conséquences. (1) **La garantie « 2×10⁶ / 10⁷ sur 16 Go » s'entend
+en P1** : en P0 le tas seul dépasse déjà le budget 0,6 (9,9 Go > 9,6 Go) et,
+avec l'index de retrieval par-dessus, le processus a été tué à 15 Gio lors
+du premier run ; en P1 (6,4 Go) l'index tient. `--tier p1` est donc le
+réglage d'un nœud de 16 Go à cette taille. (2) **Le déclencheur HNSW est
+atteint** (plan §8 R, tranche 2) : p95 > 200 ms sur 4 vCPU, et `reindex_all`
+(61,6 s) dépasse l'hydratation (42,5 s), le critère JR n'est plus tenu à
+2×10⁶. (3) Le curseur (T1) est le seul mode de pagination viable à cette
+taille : l'offset coûte 24 ms par page contre 0,7 ms.
+
 **Estimation du socle (§8.1) contre tas mesuré** (phase 5, 2026-09-22, même
 store 200 k / 1 M, `bench hydrate --json` : `estimate_mib`,
 `estimate_vs_heap_pct`) — l'estimateur ne lit que le MANIFEST et doit rester
@@ -735,7 +770,8 @@ description réelle, `HashEmbedder` 256 dimensions :
 
 Le reste est le balayage O(N · dim) : ~0,3 s attendus à 2×10⁶, ~1,4 s à
 10⁷ ; l'HNSW (`STORAGE-PLAN.md` §8 R, tranche 2) se déclenche sur mesure
-au-delà de 200 ms de P95.
+au-delà de 200 ms de P95. **Mesuré le 2026-09-28 à 2×10⁶** (runner 4 vCPU,
+§7.8) : p50 222 ms, p99 230 ms, `reindex_all` 61,6 s — déclencheur atteint.
 
 **T1 livré (2026-09-22)** — même banc, store 200 k / 1 M, 200 itérations,
 machine au repos, `bench query --json` :
@@ -813,7 +849,7 @@ charger, en concepts / relations) :
 
 | Nœud, fraction → budget | P0 (aujourd'hui) | P1 (payloads sur disque) | P1 + CSR (P2–P4) |
 |---|---|---|---|
-| 16 Go × 0,6 → 9,6 Go | ~1,8×10⁶ / 9×10⁶ | ~2,4×10⁶ / 1,2×10⁷ | ~1,7×10⁷ / 8,5×10⁷ |
+| 16 Go × 0,6 → 9,6 Go | ~1,8×10⁶ / 9×10⁶ (mesuré 2026-09-28 : 2×10⁶ / 10⁷ = 9,9 Go, hors budget, index de retrieval exclu) | ~2,4×10⁶ / 1,2×10⁷ (**mesuré : 2×10⁶ / 10⁷ = 6,4 Go**, index compris) | ~1,7×10⁷ / 8,5×10⁷ |
 | 64 Go × 0,6 → 38 Go | ~7×10⁶ / 3,5×10⁷ | ~9,5×10⁶ / 4,7×10⁷ | au-delà de la cible |
 | 64 Go × 0,8 → 51 Go | ~9,6×10⁶ / 4,8×10⁷ | **~1,3×10⁷ / 6,3×10⁷** | au-delà de la cible |
 

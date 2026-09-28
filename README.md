@@ -582,12 +582,13 @@ extrapolated, see STORAGE.md §8.1 for the assumptions):
 
 | Node | Today (P0) | With P1 (payloads on disk, next storage step) |
 |---|---|---|
-| 16 GB, default fraction 0.6 | ~1.8 M concepts / 9 M relations | ~2.4 M / 12 M (P1 delivered 2026-09-23: private heap ÷1.57 measured at 500 k) |
+| 16 GB, default fraction 0.6 | ~1.8 M concepts / 9 M relations (2 M / 10 M measured 2026-09-28 on a 16 GB runner: 9.9 GB private heap, over budget, and the retrieval index no longer fits) | **2 M / 10 M measured: 6.4 GB** private heap, retrieval index included (÷1.55; ÷1.57 at 500 k) |
 | 64 GB, fraction 0.6 | ~7 M / 35 M | ~9.5 M / 47 M |
 | 64 GB, `--heap-fraction 0.8` (dedicated node) | ~9.6 M / 48 M | **~13 M / 63 M** |
 
 The design target of 10 M concepts / 50 M relations per store is therefore
-served by a 64 GB node; on 16 GB the guarantee is 2 M / 10 M. Use `--memory-mode
+served by a 64 GB node; on 16 GB the guarantee is 2 M / 10 M **in P1** (`--tier p1`,
+measured 2026-09-28, STORAGE.md §7.8). Use `--memory-mode
 strict` on a sized deployment so an oversized store fails at startup with both
 figures instead of being killed later.
 
