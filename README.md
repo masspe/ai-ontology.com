@@ -580,9 +580,9 @@ a `warn` naming the domains left out. Details in
 **Sizing** (measured coefficients, 1.3 KB payloads, 5 relations per concept;
 extrapolated, see STORAGE.md §8.1 for the assumptions):
 
-| Node | Today (P0) | With P1 (payloads on disk, next storage step) |
+| Node | Today (P0) | With P1 (payloads on disk, `--tier p1`) |
 |---|---|---|
-| 16 GB, default fraction 0.6 | ~1.8 M concepts / 9 M relations (2 M / 10 M measured 2026-09-28 on a 16 GB runner: 9.9 GB private heap, over budget, and the retrieval index no longer fits) | **2 M / 10 M measured: 6.4 GB** private heap, retrieval index included (÷1.55; ÷1.57 at 500 k) |
+| 16 GB, default fraction 0.6 | ~1.8 M concepts / 9 M relations (2 M / 10 M measured 2026-09-28 on a 16 GB runner: 9.9 GB private heap, over budget, and the retrieval index no longer fits) | **2 M / 10 M measured: 6.4 GB** private heap after hydration, the retrieval index then fits (÷1.55; ÷1.57 at 500 k) |
 | 64 GB, fraction 0.6 | ~7 M / 35 M | ~9.5 M / 47 M |
 | 64 GB, `--heap-fraction 0.8` (dedicated node) | ~9.6 M / 48 M | **~13 M / 63 M** |
 
@@ -629,19 +629,19 @@ the full suite (unit, integration and end-to-end tests that spawn the
 `ontology` binary). `cargo llvm-cov` for Rust, V8 through vitest for the
 web. Source files only: test code is not in the denominator.
 
-Snapshot of 2026-09-23 (the badges above are the live figures; `server` and `cli` measured on Windows before the CI run):
+Snapshot of 2026-09-28 (CI, Linux; the badges above are the live figures):
 
 | Crate | Line coverage | Lines |
 |---|---|---|
-| `ontology-index` | 99.7 % | 387 / 388 |
-| `ontology-graph` | 97.0 % | 3 171 / 3 269 |
-| `ontology-rag` | 96.7 % | 3 217 / 3 326 |
-| `ontology-io` | 93.4 % | 1 924 / 2 060 |
-| `ontology-storage` | 91.6 % | 3 871 / 4 228 |
-| `ontology-server` | 96.6 % | — |
-| `ontology-cli` | 95.1 % | — |
-| **Rust total** | **≥ 93 %** (CI publishes the exact figure) | — |
-| **Web (`web/src`, JS and TS)** | **99.7 %** | 3 210 / 3 221 |
+| `ontology-index` | 99.3 % | 426 / 429 |
+| `ontology-graph` | 97.0 % | 3 447 / 3 555 |
+| `ontology-rag` | 96.8 % | 3 219 / 3 326 |
+| `ontology-io` | 93.4 % | 1 937 / 2 073 |
+| `ontology-storage` | 91.8 % | 4 055 / 4 418 |
+| `ontology-server` | 96.6 % | 3 395 / 3 513 |
+| `ontology-cli` | 95.2 % | 1 511 / 1 587 |
+| **Rust total** | **95.2 %** | 17 990 / 18 901 |
+| **Web (`web/src`, JS and TS)** | **99.7 %** | 3 205 / 3 216 |
 
 What the gaps are, so the numbers are read for what they mean:
 

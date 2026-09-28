@@ -11,11 +11,11 @@ route s'ajuste au plan, jamais l'inverse : toute évolution se décide et se
 date dans le plan, puis se reflète ici. Mise à jour à chaque fusion dans
 `main`.
 
-Dernière mise à jour : **2026-09-25**.
+Dernière mise à jour : **2026-09-28**.
 
 ---
 
-## 1. État au 2026-09-22
+## 1. État au 2026-09-28
 
 | Chantier | État | Preuve |
 |---|---|---|
@@ -23,9 +23,13 @@ Dernière mise à jour : **2026-09-25**.
 | T1, pagination par curseur (`cursor=` / `next_cursor` sur `/concepts` et `/relations`, web par pile de curseurs, `offset` déprécié) | **Livré 2026-09-22** | STORAGE-PLAN §8 T1 ; STORAGE.md §7.8 |
 | Phase 5, socle mémoire (budget, estimation R14, plan `strict`/`adaptive`, `/stats.memory`, `/metrics`) | **Livré 2026-09-22** (`f5359b7`) | STORAGE.md §8.1 ; STORAGE-PLAN §7.1 |
 | Phase 5a, **P1** payloads sur disque (slot + `Loc`, lecteur sans verrou, éviction au scellement, relocalisation à la compaction, `--tier`, plan P1 en adaptive) | **Livré 2026-09-23** | STORAGE-PLAN §7.2 ; STORAGE.md §7.8 (J5), §8.1, §8.2 |
-| Couverture de tests | Rust **95,2 %** de lignes (cli 95,2, graph 97,0, index 99,3, io 93,7, rag 96,8, server 96,6, storage 91,8) ; web **99,7 %** ; **seuil 90 % par crate et pour le web imposé par la CI** (2026-09-23) | README « Test coverage » ; badges vivants ; `scripts/coverage_badges.py --fail-under 90` |
-| CI | rustfmt, clippy, tests Ubuntu + Windows, web (vitest avec seuils, tsc, build), `coverage` (publie les badges, échoue sous 90 % sur un crate ou le web) | `.github/workflows/ci.yml` |
-| Cible de dimensionnement | **Révisée 2026-09-22** : 10⁷ / 5×10⁷ sur 64 Go avec P1 ; 2×10⁶ / 10⁷ garantis sur 16 Go ; CSR sur besoin client | STORAGE-PLAN §6.6 décision 3 ; STORAGE.md §1 et §8.1 |
+| Couverture de tests | Rust **95,2 %** de lignes (CI Linux du 2026-09-28 : cli 95,2, graph 97,0, index 99,3, io 93,4, rag 96,8, server 96,6, storage 91,8) ; web **99,7 %** ; **seuil 90 % par crate et pour le web imposé par la CI** (2026-09-23) | README « Test coverage » ; badges vivants ; `scripts/coverage_badges.py --fail-under 90` |
+| CI | huit jobs : `repo guard` (premier, les autres l'attendent), rustfmt, clippy, tests Ubuntu + Windows, web (vitest avec seuils, tsc, build), `audit` (cargo, npm), `auth-server` (node --test), `coverage` (publie les badges, échoue sous 90 % sur un crate ou le web) ; job manuel `bench` (T2) | `.github/workflows/ci.yml`, `bench.yml` |
+| Cible de dimensionnement | **Révisée 2026-09-22, précisée 2026-09-28** : 10⁷ / 5×10⁷ sur 64 Go avec P1 ; 2×10⁶ / 10⁷ garantis sur 16 Go **en P1** ; CSR sur besoin client | STORAGE-PLAN §6.6 décision 3 ; STORAGE.md §1, §7.8 et §8.1 |
+| T2, job `bench` manuel | **Livré 2026-09-28** (`bench.yml`, `workflow_dispatch`) | STORAGE-PLAN §8 T2 ; ici §3.7 bis |
+| Mesure à 2×10⁶ / 10⁷ (§3.7) | **Faite 2026-09-28** sur le runner : P0 9,9 Go, P1 6,4 Go, `/retrieve` p99 230 ms | STORAGE.md §7.8 ; ici §3.7 |
+| R, retrieval | Tranche 1 livrée 2026-09-23 ; **tranche 2 (HNSW + persistance des vecteurs) déclenchée 2026-09-28**, à planifier après T3 | STORAGE-PLAN §8 R décision 5 ; ici §3.7 ter |
+| T3, métriques par flux | **À faire** (prochaine étape) | STORAGE-PLAN §8 T3 ; ici §3.7 bis |
 
 Chiffres à garder en tête (mesurés phase 4, portable 16 Go) : un concept de
 1,3 Ko coûte ~2,75 Ko de tas en P0, une relation 350 à 475 o ; hydratation
@@ -110,8 +114,9 @@ plan :
   465 ms à 70 ms p50 (top-k O(N), termes à IDF ≈ 0 sautés, cosinus
   vectorisé). Reste sur mesure (décisions datées au plan §8 R) :
   persistance des vecteurs dès un modèle d'embedding réel ; HNSW quand le
-  P95 de `/retrieve` dépasse 200 ms (~1,5×10⁶ concepts). Mesure à 2×10⁶ à
-  faire quand un store de cette taille est généré.
+  P95 de `/retrieve` dépasse 200 ms (~1,5×10⁶ concepts). **Mesuré le
+  2026-09-28 à 2×10⁶** (§3.7) : p99 230 ms, `reindex_all` 61,6 s — tranche 2
+  déclenchée, à planifier après T3 (plan §8 R décision 5, ici §3.7 ter).
 - **T — transverse** (plan §0 ligne T : CI, métriques, docs) —
   **couverture livrée 2026-09-23** : `server` 78,9 → 96,6 % (relecture
   d'ingestion avec un LLM scripté, plan de contrôle des fournisseurs sur
@@ -133,23 +138,25 @@ des `.xref`, `ns` dans l'interface web, limite Job Object Windows, métrique
 | Écart | Nature | Où c'est consigné |
 |---|---|---|
 | Le socle (§7.1) a été livré avant T1, que le tableau §0 donne comme dépendance de 5a | De lettre : le socle ne pagine rien ; T1 reste devant P1 | plan §7 (ordre), ici §3.1 |
-| Les chiffres de la phase 4 sont mesurés à 2×10⁵ / 5×10⁵ et extrapolés, pas « sur la cible » | Contrainte matérielle (16 Go) ; fermé par la preuve à 5×10⁶ de §3.2 | plan §9 J4 |
+| Les chiffres de la phase 4 sont mesurés à 2×10⁵ / 5×10⁵ et extrapolés, pas « sur la cible » | Contrainte matérielle (16 Go) ; partiellement fermé par la mesure à 2×10⁶ sur runner (§3.7) ; preuve 5×10⁶ / 64 Go reportée à une demande client (§3.2) | plan §9 J4, §6.6 |
 | Le socle laisse de côté Job Object Windows, `majflt/s`, palier par domaine | Sans objet avant P1 | plan §7.1 |
 | Des paliers §8.2, seuls P0 et P1 existent ; `adaptive` choisit P1 pour un domaine qui tient sans ses payloads, pas de bascule à chaud | P2–P5 et le contrôleur sont en 5b, sur besoin client | STORAGE.md §8.1, §8.2 |
-| Le chantier R n'est pas commencé alors que le plan le place avant les murs du stockage | Priorité à mesurer (§3.4) | plan §1, §8 R |
+| Le chantier R a démarré après les phases 1–4 alors que le plan le plaçait en parallèle | Tranche 1 livrée 2026-09-23 ; tranche 2 déclenchée 2026-09-28 (§3.7 ter) | plan §1, §8 R |
 
 ### 3.7 Mesure à 2×10⁶ — **livré 2026-09-28** (runner CI, workflow `bench`)
 
 Faite sur le runner (T2) et non sur le portable (2 à 5 Go libres) : résultats
 dans STORAGE.md §7.8 (tableau « Mesure à 2×10⁶ / 10⁷ »), §8.1 et README
-« Sizing ». Retenu : la garantie 16 Go s'entend **en P1** (tas 9,9 Go en P0
-sans l'index de retrieval, 6,4 Go en P1 avec) ; **déclencheur HNSW atteint**
+« Memory budget » (Sizing). Retenu : la garantie 16 Go s'entend **en P1**
+(tas 9,9 Go en P0 et l'index de retrieval ne tient plus ; 6,4 Go après
+hydratation en P1, l'index tient ensuite) ; **déclencheur HNSW atteint**
 (`/retrieve` p99 230 ms, `reindex_all` 61,6 s > hydratation) → chantier R
 tranche 2 à planifier (plan §8 R, décision datée) ; curseur T1 ×32 sur
 l'offset. Le texte d'origine suit pour mémoire.
 
 Générer un store à la taille de la garantie 16 Go (`bench gen --concepts
-2000000 --relations 10000000 --ns 5 --payload 1300`, ~1,8 Go sur disque)
+2000000 --relations 10000000 --ns 5 --payload 1300`, ~1,8 Go sur disque —
+mesuré : 4,6 Go)
 et mesurer ce que le README affiche par extrapolation : hydratation P0 et
 P1, mémoire privée, `reindex_all`, P50/P95 de la recherche hybride et de
 `GET /concepts/{id}`. Sortie : une ligne mesurée dans STORAGE.md §7.8 et
@@ -169,10 +176,10 @@ depuis les phases 4 et 5 manquent, et ne figuraient pas ici.
   syncs, `CompactionReport`) : brancher, tester les noms et valeurs des
   jauges sur un store à deux domaines, documenter dans le README.
 - **T2, job `bench` manuel** (plan §8 T2) — **livré 2026-09-28**
-  (`.github/workflows/bench.yml`, lancé depuis l'onglet Actions ou l'API) : `workflow_dispatch` dans
-  `ci.yml` qui génère un store de taille paramétrable, lance `hydrate`
-  (P0 et `--p1`) et `query`, et publie le JSON en artefact — la mesure
-  §3.7 devient reproductible sur un runner plutôt que sur le poste.
+  (`.github/workflows/bench.yml`, lancé depuis l'onglet Actions ou l'API) :
+  un `workflow_dispatch` qui génère un store de taille paramétrable, lance
+  `hydrate` (P0 et `--p1`) et `query --p1`, et publie le JSON en artefact —
+  la mesure §3.7 a été faite avec lui sur un runner plutôt que sur le poste.
 
 Non consigné auparavant, aussi relevé : le **group commit inter-requêtes**
 (plan §5.6, « à mesurer d'abord, phase 4 ») a été mesuré en phase 4
@@ -180,6 +187,16 @@ Non consigné auparavant, aussi relevé : le **group commit inter-requêtes**
 faire ou d'y renoncer n'est pas écrite ; à trancher dans le plan §5.6 avec
 ces chiffres. La **compaction par domaine** (plan §6.6, « à prévoir ») reste
 un report daté, sans déclencheur : à lier au chantier 5b.
+
+### 3.7 ter Chantier R, tranche 2 — **déclenchée 2026-09-28**, à planifier après T3
+
+La mesure §3.7 a atteint les deux déclencheurs datés du plan (§8 R décision
+5) : `/retrieve` p99 230 ms (> 200 ms) et `reindex_all` 61,6 s au-delà de
+l'hydratation. Contenu : HNSW construit au scellement d'un segment (`mmap`)
+et persistance des vecteurs par domaine pour sortir `reindex_all` du
+démarrage. Place : après T3, **avant la mise en production d'un tenant
+au-delà de ~10⁶ concepts** ; en dessous, la tranche 1 suffit (70 ms à
+5×10⁵). Décision du propriétaire attendue sur l'ordre R tranche 2 / §3.8.
 
 ### 3.8 Production — **chantier principal, validé le 2026-09-24**
 
@@ -206,6 +223,7 @@ Ce que chaque étape applique du plan de stockage (vérifié le 2026-09-24) :
 | Une image, un conteneur par client | **T5**, tranchée le 2026-09-15 (STORAGE.md §10.8) : un store par tenant, un processus par tenant, le routage au reverse proxy |
 | Limite mémoire du conteneur | **D5** (le budget est une propriété du déploiement) et le socle §8.1 (cgroup v2 lu en premier) ; `--memory-mode strict` par défaut en conteneur = **R17** |
 | `docker stop` propre | Arrêt sur SIGTERM livré avec le chantier T (2026-09-23) |
+| Retrieval d'un tenant > ~10⁶ concepts | **R tranche 2** (§3.7 ter), déclenchée 2026-09-28 : HNSW au scellement + vecteurs persistés |
 | Sauvegarde et restauration | Segments immuables et MANIFEST (phase 2), `LOCK` (H17), compaction comme condition de survie (§8.7) |
 | Mise à jour exercée en CI | Migration automatique de format (phase 2), `format_version` 1 et 2 (phase 4) |
 | Interface servie par le binaire, clés d'API, audit | Hors plan de stockage, sans contradiction avec lui |
@@ -261,7 +279,7 @@ est mécanique) ; ces deux points se règlent naturellement avec l'étape 3.8.3.
    `cd web && npm run test:coverage && npx tsc --noEmit`.
 4. Revue indépendante contre le plan (un agent relecteur en lecture seule),
    corrections sur la branche.
-5. `git merge --no-ff` dans `main`, push, CI verte sur les six jobs ; les
+5. `git merge --no-ff` dans `main`, push, CI verte sur les huit jobs de `ci.yml` ; les
    badges de couverture se republient seuls.
 6. Mise à jour de ce document (état, décisions, étape suivante) et des
    sections datées de `STORAGE-PLAN.md`.
