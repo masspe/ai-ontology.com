@@ -206,7 +206,20 @@ démarrage. Place : après T3, **avant la mise en production d'un tenant
 au-delà de ~10⁶ concepts** ; en dessous, la tranche 1 suffit (70 ms à
 5×10⁵). Décision du propriétaire attendue sur l'ordre R tranche 2 / §3.8.
 
-### 3.8 Production — **chantier principal, validé le 2026-09-24**
+### 3.8 Production — **chantier principal, validé le 2026-09-24** — **prochaine étape (reprise du 2026-09-29)**
+
+État à la fin du 2026-09-28 : tous les reliquats du plan sont livrés (T1,
+T2, T3, mesure §3.7, R tranche 2a) ; `main` = 44a47fd, CI verte, incident
+clos pour ce dépôt. Trois décisions du propriétaire ouvrent ce chantier,
+dans cet ordre : (1) auth en Rust dans le binaire (recommandé : un
+processus par tenant, T5, plus de surface npm) ou conservation du serveur
+Node ; (2) cible de déploiement (image + compose sur un serveur géré, ou
+hébergeur managé) ; (3) sauvegarde (copie des segments immuables et du
+MANIFEST vers un stockage objet, ou snapshot disque). L'image et le compose
+n'en dépendent pas et démarrent en premier. Points d'hygiène hors chantier :
+jeton GitHub du poste à révoquer (Settings, Applications), protection de
+`main` à durcir pour imposer les PR, scan `claude-security` en attente de
+l'accord sur le coût.
 
 Hors du plan de stockage, dont il est le débouché et dont il applique les
 décisions : **T5** (un store et un processus par tenant, STORAGE.md §10.8),
