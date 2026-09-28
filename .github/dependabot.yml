@@ -2,6 +2,10 @@
 # GitHub Actions the CI itself runs (pinned to commit SHAs in ci.yml, so an
 # update is a reviewed PR, never a silent tag move).
 #
+# 2026-09-28: version-update PRs DISABLED (open-pull-requests-limit: 0) at the
+# owner's request — the first run flooded the mailbox. Security alerts stay on
+# (repository setting). Raise the limits to re-enable.
+#
 # Updates are grouped: one PR per ecosystem and week (minor + patch), and a
 # separate PR per major bump, which always needs a human look. Without the
 # groups the first run opened 19 PRs at once (2026-09-25).
@@ -12,7 +16,7 @@ updates:
     schedule:
       interval: weekly
       day: monday
-    open-pull-requests-limit: 2
+    open-pull-requests-limit: 0
     groups:
       cargo-minor:
         update-types: [minor, patch]
@@ -21,7 +25,7 @@ updates:
     schedule:
       interval: weekly
       day: monday
-    open-pull-requests-limit: 2
+    open-pull-requests-limit: 0
     groups:
       web-minor:
         update-types: [minor, patch]
@@ -30,7 +34,7 @@ updates:
     schedule:
       interval: weekly
       day: monday
-    open-pull-requests-limit: 2
+    open-pull-requests-limit: 0
     groups:
       auth-server-minor:
         update-types: [minor, patch]
@@ -39,7 +43,7 @@ updates:
     schedule:
       interval: weekly
       day: monday
-    open-pull-requests-limit: 2
+    open-pull-requests-limit: 0
     groups:
       actions:
         patterns: ["*"]
