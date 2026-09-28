@@ -195,3 +195,13 @@ async fn a_soft_budget_exceeded_is_reported_as_over_budget_not_partial() {
         "{text}"
     );
 }
+
+/// T3: a store without streams (`MemoryStore`) exposes no per-stream gauge.
+#[tokio::test]
+async fn a_store_without_streams_has_no_stream_gauges() {
+    let app = build_router(state());
+    let (_, text) = get(&app, "/metrics").await;
+    assert!(!text.contains("ontology_stream_"), "{text}");
+    assert!(!text.contains("ontology_store_next_seq"), "{text}");
+    assert!(!text.contains("ontology_domain_tier"), "{text}");
+}

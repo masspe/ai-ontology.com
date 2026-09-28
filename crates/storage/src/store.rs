@@ -122,6 +122,12 @@ pub trait Store: Send + Sync + 'static {
         self.compact(&OntologyGraph::with_arc(Ontology::new()))
             .await
     }
+
+    /// Per-stream figures for `/metrics` (T3). `None` for stores without
+    /// streams (memory, legacy file store).
+    fn store_stats(&self) -> Option<crate::segment_store::StoreStats> {
+        None
+    }
 }
 
 /// Convenience helpers used by callers that hold a graph + store together.

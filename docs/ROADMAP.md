@@ -29,7 +29,7 @@ Dernière mise à jour : **2026-09-28**.
 | T2, job `bench` manuel | **Livré 2026-09-28** (`bench.yml`, `workflow_dispatch`) | STORAGE-PLAN §8 T2 ; ici §3.7 bis |
 | Mesure à 2×10⁶ / 10⁷ (§3.7) | **Faite 2026-09-28** sur le runner : P0 9,9 Go, P1 6,4 Go, `/retrieve` p99 230 ms | STORAGE.md §7.8 ; ici §3.7 |
 | R, retrieval | Tranche 1 livrée 2026-09-23 ; **tranche 2 (HNSW + persistance des vecteurs) déclenchée 2026-09-28**, à planifier après T3 | STORAGE-PLAN §8 R décision 5 ; ici §3.7 ter |
-| T3, métriques par flux | **À faire** (prochaine étape) | STORAGE-PLAN §8 T3 ; ici §3.7 bis |
+| T3, métriques par flux | **Livré 2026-09-28** : `ontology_stream_*{ns}`, `ontology_domain_tier{ns,tier}`, `ontology_store_*` | STORAGE-PLAN §8 T3 ; README « Observability » |
 
 Chiffres à garder en tête (mesurés phase 4, portable 16 Go) : un concept de
 1,3 Ko coûte ~2,75 Ko de tas en P0, une relation 350 à 475 o ; hydratation
@@ -168,7 +168,8 @@ ou avancée si le P95 dépasse 200 ms. Aucun code : `bench` suffit.
 Relecture du plan le 2026-09-25 : deux livrables transverses attendus
 depuis les phases 4 et 5 manquent, et ne figuraient pas ici.
 
-- **T3, observabilité par flux** (plan §8 T3) : `/metrics` gagne, par
+- **T3, observabilité par flux** (plan §8 T3) — **livré 2026-09-28** (état
+  détaillé au plan §8 T3, README « Observability ») : `/metrics` gagne, par
   domaine (étiquette `ns`), le nombre de segments scellés, les octets sur
   disque, `next_seq`, les `sync_data` cumulés, la durée de la dernière
   compaction, et le palier courant (`p0`/`p1`) en étiquette plutôt qu'en

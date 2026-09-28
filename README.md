@@ -410,9 +410,21 @@ and finally `relations.jsonl`.
 
 ## Observability
 
-`GET /metrics` returns Prometheus-format gauges (`ontology_concepts`,
-`ontology_relations`, `ontology_concept_types`, `ontology_relation_types`).
-Wire it into your Prometheus scrape config alongside the bearer token.
+`GET /metrics` returns Prometheus-format gauges (exposition 0.0.4). Wire it
+into your Prometheus scrape config alongside the bearer token.
+
+| Family | What it says |
+|---|---|
+| `ontology_concepts`, `ontology_relations`, `ontology_rules`, `ontology_actions`, `ontology_*_types` | Sizes of the graph and of the ontology. |
+| `ontology_process_rss_bytes` | Resident set size of the process. |
+| `ontology_memory_*`, `ontology_domains_loaded` / `_skipped` / `_p1`, `ontology_resident_payloads` | The memory plan of the startup (budget, estimate, what was loaded, P1) — see "Memory budget". |
+| `ontology_store_next_seq`, `ontology_store_syncs` | Next global sequence number; `fdatasync` calls since the store was opened. |
+| `ontology_store_last_compaction_seconds`, `_timestamp_seconds`, `_partitions_removed` | The last compaction since open (absent until one ran). |
+| `ontology_stream_sealed_segments{ns}`, `ontology_stream_data_bytes{ns}`, `ontology_stream_records{ns}`, `ontology_stream_last_seq{ns}`, `ontology_stream_syncs{ns}` | One series per storage domain (`ns="meta"` is the schema stream): sealed segments, bytes of `.data`, records, last sequence number, syncs since open. |
+| `ontology_domain_tier{ns,tier}` | 1 on the current memory tier of each domain (`p0` everything in memory, `p1` payloads on disk). |
+
+The per-stream families exist only on the segment store (the default);
+they are the T3 deliverable of `docs/STORAGE-PLAN.md` §8.
 
 ## Ingest formats
 
