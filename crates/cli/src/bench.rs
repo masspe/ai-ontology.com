@@ -89,6 +89,11 @@ pub enum BenchCmd {
     Query {
         #[arg(long, default_value_t = 200)]
         iterations: usize,
+        /// Hydrate in P1 first (payloads on disk): the retrieval index is
+        /// built on top of the graph, so at 2×10⁶ concepts P0 + index
+        /// does not fit in 16 GB while P1 + index does.
+        #[arg(long)]
+        p1: bool,
     },
     /// Whole-store compaction, optionally switching the write codec.
     Compact {
@@ -126,7 +131,7 @@ pub async fn run(cmd: BenchCmd, data: PathBuf, json: bool) -> Result<()> {
         }
         BenchCmd::Hydrate { ns, p1 } => hydrate(&store_dir, ns, p1).await?,
         BenchCmd::Append { n, batch } => append(&store_dir, n, batch).await?,
-        BenchCmd::Query { iterations } => query(&store_dir, iterations).await?,
+        BenchCmd::Query { iterations, p1 } => query(&store_dir, iterations, p1).await?,
         BenchCmd::Compact { codec } => {
             let codec = match codec {
                 Some(c) => Some(parse_codec(&c).with_context(|| format!("unknown codec `{c}`"))?),
@@ -430,10 +435,28 @@ fn rss_mib() -> Option<f64> {
 }
 
 /// Committed private memory. On Windows this is `PagefileUsage`, i.e. the
-/// heap without file-backed mappings; on Linux it is the virtual size and
-/// only its delta is indicative.
+/// heap without file-backed mappings; on Linux it is `RssAnon` from
+/// `/proc/self/status`, the same thing seen from the other side (resident
+/// anonymous pages, mapped segment files excluded), so P0 and P1 compare
+/// on both platforms.
 fn commit_mib() -> Option<f64> {
-    memory_stats::memory_stats().map(|m| m.virtual_mem as f64 / (1024.0 * 1024.0))
+    #[cfg(target_os = "linux")]
+    {
+        let status = std::fs::read_to_string("/proc/self/status").ok()?;
+        let kib: f64 = status
+            .lines()
+            .find_map(|l| l.strip_prefix("RssAnon:"))?
+            .trim()
+            .trim_end_matches("kB")
+            .trim()
+            .parse()
+            .ok()?;
+        Some(kib / 1024.0)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        memory_stats::memory_stats().map(|m| m.virtual_mem as f64 / (1024.0 * 1024.0))
+    }
 }
 
 async fn hydrate(store_dir: &Path, ns: Option<Vec<String>>, p1: bool) -> Result<serde_json::Value> {
@@ -624,11 +647,20 @@ async fn append(store_dir: &Path, n: usize, batch: usize) -> Result<serde_json::
 // query
 // ---------------------------------------------------------------------------
 
-async fn query(store_dir: &Path, iterations: usize) -> Result<serde_json::Value> {
+async fn query(store_dir: &Path, iterations: usize, p1: bool) -> Result<serde_json::Value> {
     if iterations == 0 {
         bail!("--iterations must be positive");
     }
     let store = SegmentStore::open(store_dir).await?;
+    if p1 {
+        let tiers = store
+            .manifest()
+            .graph_ns_ids()
+            .into_iter()
+            .map(|id| (id, Tier::P1))
+            .collect();
+        store.set_tiers(tiers);
+    }
     let graph = OntologyGraph::with_arc(Ontology::new());
     store.load_into(&graph).await?;
     let total = graph.concept_count();
@@ -718,6 +750,7 @@ async fn query(store_dir: &Path, iterations: usize) -> Result<serde_json::Value>
     }
     Ok(json!({
         "bench": "query",
+        "tier": if p1 { "p1" } else { "p0" },
         "concepts": total,
         "relations": graph.relation_count(),
         "iterations": iterations,
