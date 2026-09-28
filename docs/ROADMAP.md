@@ -160,7 +160,8 @@ depuis les phases 4 et 5 manquent, et ne figuraient pas ici.
   total. Tout existe déjà côté store (`OpenReport`, MANIFEST, compteur de
   syncs, `CompactionReport`) : brancher, tester les noms et valeurs des
   jauges sur un store à deux domaines, documenter dans le README.
-- **T2, job `bench` manuel** (plan §8 T2) : `workflow_dispatch` dans
+- **T2, job `bench` manuel** (plan §8 T2) — **livré 2026-09-28**
+  (`.github/workflows/bench.yml`, lancé depuis l'onglet Actions ou l'API) : `workflow_dispatch` dans
   `ci.yml` qui génère un store de taille paramétrable, lance `hydrate`
   (P0 et `--p1`) et `query`, et publie le JSON en artefact — la mesure
   §3.7 devient reproductible sur un runner plutôt que sur le poste.
