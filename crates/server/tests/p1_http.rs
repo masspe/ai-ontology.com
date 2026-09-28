@@ -195,3 +195,89 @@ async fn an_unreadable_payload_is_a_500_not_a_panic() {
     // Type and name never need the payload: the name lookup still works.
     assert_eq!(graph.find_by_name("Topic", "t"), Some(id));
 }
+
+/// `/metrics` as text (the shared `get` parses JSON).
+async fn get_text(app: &axum::Router, uri: &str) -> String {
+    let resp = tower::ServiceExt::oneshot(
+        app.clone(),
+        Request::builder().uri(uri).body(Body::empty()).unwrap(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(resp.into_body(), 1 << 20)
+        .await
+        .unwrap();
+    String::from_utf8_lossy(&body).into_owned()
+}
+
+/// T3 (STORAGE-PLAN.md §8): one series per domain, labelled `ns`, the
+/// domain's tier, the store-wide seq and syncs, and the last compaction
+/// once one happened.
+#[tokio::test]
+async fn metrics_expose_per_stream_gauges_and_the_last_compaction() {
+    let (app, graph, store) = p1_app(12).await;
+    let manifest = store.manifest();
+    let ns = manifest
+        .graph_ns_ids()
+        .into_iter()
+        .map(|id| manifest.ns_name(id).unwrap().to_string())
+        .next()
+        .unwrap();
+
+    let text = get_text(&app, "/metrics").await;
+    for line in [
+        format!("ontology_stream_sealed_segments{{ns=\"{ns}\"}} 2"),
+        format!("ontology_stream_records{{ns=\"{ns}\"}} 12"),
+        format!("ontology_stream_last_seq{{ns=\"{ns}\"}} 13"),
+        // Counted since open: the writes happened on the previous handle.
+        format!("ontology_stream_syncs{{ns=\"{ns}\"}} 0"),
+        format!("ontology_domain_tier{{ns=\"{ns}\",tier=\"p1\"}} 1"),
+        "ontology_stream_records{ns=\"meta\"} 1".to_string(),
+        "ontology_store_next_seq 14".to_string(),
+        "ontology_store_syncs 0".to_string(),
+        "# TYPE ontology_stream_data_bytes gauge".to_string(),
+    ] {
+        assert!(
+            text.contains(&line),
+            "missing `{line}` in:
+{text}"
+        );
+    }
+    assert!(!text.contains("ontology_store_last_compaction_seconds"));
+    assert!(
+        !text.contains("ontology_domain_tier{ns=\"meta\""),
+        "meta has no tier"
+    );
+
+    // A write on this handle counts on its stream and store-wide.
+    store
+        .append(&LogRecord::concept(Concept::new(
+            ConceptId(13),
+            "Topic",
+            "topic-13",
+        )))
+        .await
+        .unwrap();
+    let text = get_text(&app, "/metrics").await;
+    assert!(
+        text.contains(&format!("ontology_stream_syncs{{ns=\"{ns}\"}} 1")),
+        "{text}"
+    );
+    assert!(text.contains("ontology_store_syncs 1"), "{text}");
+
+    store.compact_store(&graph).await.unwrap();
+    let text = get_text(&app, "/metrics").await;
+    assert!(
+        text.contains("ontology_store_last_compaction_seconds "),
+        "{text}"
+    );
+    assert!(
+        text.contains("ontology_store_last_compaction_timestamp_seconds "),
+        "{text}"
+    );
+    assert!(
+        text.contains("ontology_store_last_compaction_partitions_removed "),
+        "{text}"
+    );
+}

@@ -47,7 +47,8 @@ pub use migrate::{
 };
 pub use periodic::{spawn_snapshotter, SnapshotHandle};
 pub use segment_store::{
-    HydrationReport, OpenReport, SealedIndex, SegmentStore, SegmentStoreConfig, Tier,
+    HydrationReport, LastCompaction, OpenReport, SealedIndex, SegmentStore, SegmentStoreConfig,
+    StoreStats, StreamStats, Tier,
 };
 pub use snapshot::Snapshot;
 pub use store::{Store, StoreError, StoreResult};
