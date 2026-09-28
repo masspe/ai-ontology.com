@@ -678,7 +678,7 @@ async fn query(store_dir: &Path, iterations: usize, p1: bool) -> Result<serde_js
     // then the hybrid ranking latency behind `/retrieve` and `/ask`.
     let t = Instant::now();
     let index = ontology_index::HybridIndex::with_default_embedder(graph.clone());
-    index.reindex_all();
+    let split = index.reindex_all_timed();
     let reindex = t.elapsed();
 
     let mut page = Vec::with_capacity(iterations);
@@ -763,6 +763,9 @@ async fn query(store_dir: &Path, iterations: usize, p1: bool) -> Result<serde_js
         "search_q_p99_us": round0(us(percentile(&search, 99.0))),
         "search_hits_avg": round2(hits as f64 / (2 * iterations) as f64),
         "reindex_all_ms": round2(ms(reindex)),
+        "reindex_texts_ms": round2(split.texts_ms),
+        "reindex_lexical_ms": round2(split.lexical_ms),
+        "reindex_vector_ms": round2(split.vector_ms),
         "retrieve_p50_us": round0(us(percentile(&retrieve, 50.0))),
         "retrieve_p99_us": round0(us(percentile(&retrieve, 99.0))),
         "expand_d2_p50_us": round0(us(percentile(&expand, 50.0))),

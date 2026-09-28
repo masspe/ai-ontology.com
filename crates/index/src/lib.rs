@@ -25,6 +25,6 @@ pub mod lexical;
 pub mod vector;
 
 pub use embed::{Embedder, HashEmbedder};
-pub use hybrid::{HybridIndex, RetrievalRequest, ScoredConcept};
+pub use hybrid::{HybridIndex, ReindexReport, RetrievalRequest, ScoredConcept};
 pub use lexical::LexicalIndex;
 pub use vector::VectorIndex;

@@ -1008,6 +1008,29 @@ Mesuré sur le store 5×10⁵ / 2,5×10⁶ (`bench query`, STORAGE.md §7.8) :
    des vecteurs pour sortir `reindex_all` du démarrage. À planifier : après
    T3 (§8), avant la mise en production d'un tenant au-delà de ~10⁶
    concepts ; en dessous, la tranche 1 suffit (70 ms à 5×10⁵).
+6. **Découpage de la tranche 2 (2026-09-28, après T3)** — même méthode
+   qu'en tranche 1 : mesurer, corriger les causes, n'ajouter une structure
+   que si la mesure l'exige. `reindex_all` découpé en trois temps (`bench
+   query`, `reindex_texts_ms` / `reindex_lexical_ms` / `reindex_vector_ms`)
+   sur le store 2×10⁵ / 10⁶, portable 14 threads : lecture des textes
+   1,2 s en P0 et 1,9 s en P1 (10 à 15 %), **index lexical 6,4 à 7,4 s
+   (50 à 57 %)**, index vectoriel 4,2 à 4,6 s (33 %), total 12,9 s. La
+   persistance des seuls vecteurs n'aurait donc retiré qu'un tiers du
+   démarrage, et rien n'était parallèle. **Tranche 2a, sans nouvelle
+   structure ni dépendance** : (i) lignes vectorielles contiguës (un seul
+   `Vec<f32>`, la disposition d'un futur fichier `mmap`) et balayage
+   réparti sur les cœurs par threads à portée ; (ii) tokenisation et
+   embedding de `reindex_all` sur tous les cœurs, seules les insertions
+   sous verrou ; (iii) termes internés dans l'index lexical (`u32` par
+   posting, `Vec<u32>` par document) à la place d'une `String` par posting.
+   Critère JR inchangé, mesuré sur le runner 4 vCPU à 2×10⁶ avec le
+   workflow `bench` : `/retrieve` P95 < 200 ms et `reindex_all` sous
+   l'hydratation (42,5 s). **Tranche 2b** (persistance des deux index en
+   fichiers dérivés R7, puis index approximatif) **seulement si 2a ne tient
+   pas le critère**, ou dès qu'un modèle d'embedding réel remplace le
+   hachage (l'embedding devient alors le coût dominant et la persistance
+   des vecteurs redevient la première mesure). Chiffres de 2a en STORAGE.md
+   §7.8.
 
 ### T5 — Un store par tenant — **tranché 2026-09-15, README écrit 2026-09-24**
 
@@ -1095,7 +1118,7 @@ S10     T1 curseur (prérequis de 5a, §0) ; T en parallèle : couverture Rust �
 S11-S13 Phase 5a : P1 (slot + Loc, payloads relus hors verrou) ─ livré 2026-09-23 ; J5 atteint à 5×10⁵ ; preuve 5×10⁶ / 64 Go sur demande client
 S13     R tranche 1 ─ livré 2026-09-23 ; T couverture ≥ 90 % ─ livré 2026-09-23
 S14     T2 job bench ─ livré 2026-09-28 ; mesure 2×10⁶ / 10⁷ ─ faite 2026-09-28 (garantie 16 Go = P1 ; déclencheurs R tranche 2 atteints)
-S14     T3 métriques par flux ─ livré 2026-09-28 → R tranche 2 (HNSW + persistance) → production (ROADMAP §3.8)
+S14     T3 métriques par flux ─ livré 2026-09-28 → R tranche 2a (§8 R décision 6, en cours) → production (ROADMAP §3.8) ; 2b conditionnelle
 S15+    Phase 5b, uniquement sur besoin client : T6 profil d'apply → P2-P4 (CSR) → contrôleur
 ```
 
