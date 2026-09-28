@@ -27,7 +27,7 @@ Convention : `H*` / `R*` renvoient aux hypothèses et règles de
 | 5a | **Socle** (livré 2026-09-22) puis **P1** (livré 2026-09-23, §7.2) : slot + `Loc`, payloads relus depuis le disque | 3, 4, T1 | 8-12 | **Livré** — J5 mesuré (STORAGE.md §7.8) : mémoire privée ÷1,57, hydratation 1,19× |
 | 5b | P2-P5 : `.adj`/`.srt` (CSR), paliers, hystérésis | 5a | 8-12 | **Sur besoin client** : un tenant au-delà de 5×10⁶ concepts sur un nœud contraint |
 | R | Index de retrieval : persistance des vecteurs, index approximatif | indépendant | 8-12 | Retrieval en O(log N), démarrage sans réindexation — **tranche 2 déclenchée le 2026-09-28** (p99 230 ms et `reindex_all` 61,6 s à 2×10⁶, §8 R) |
-| T | CI Windows+Linux (**livré**), métriques (**partiel** : mémoire et paliers livrés ; T3 par flux — segments, taille, `next_seq`, `sync_data`, dernière compaction — **à faire**), job `bench` manuel T2 (**livré** 2026-09-28 : `.github/workflows/bench.yml`, `workflow_dispatch`), docs, position un store par tenant (**livré** : STORAGE.md §10.8, README « Deployment model ») | — | 2-3 | Couverture ≥ 90 % par crate imposée en CI (2026-09-23) ; correction du 2026-09-25 : la mention « métriques (livré) » du 2026-09-24 surévaluait T3 |
+| T | CI Windows+Linux (**livré**), métriques (**livré** : mémoire et paliers le 2026-09-22/23, T3 par flux — segments, taille, `last_seq`/`next_seq`, syncs, dernière compaction, palier en étiquette — le 2026-09-28), job `bench` manuel T2 (**livré** 2026-09-28 : `.github/workflows/bench.yml`, `workflow_dispatch`), docs, position un store par tenant (**livré** : STORAGE.md §10.8, README « Deployment model ») | — | 2-3 | Couverture ≥ 90 % par crate imposée en CI (2026-09-23) ; correction du 2026-09-25 : la mention « métriques (livré) » du 2026-09-24 surévaluait T3 |
 
 **Stratégie (validée le 2026-09-08)** : la mémoire d'abord, le disque quand
 il faut. P0 reste le mode nominal ; le format est écrit maintenant pour que
@@ -926,6 +926,20 @@ dernière compaction) et le palier par domaine en étiquette
 (`OpenReport`, MANIFEST, `syncs`, `CompactionReport`) : quelques jauges à
 brancher (`ROADMAP.md` §3.7 bis).
 
+État 2026-09-28 : **livré**. `SegmentStore::stats()` (exposé par
+`Store::store_stats`, `None` pour les stores sans flux) donne par flux le
+nombre de segments scellés, les octets `.data`, les enregistrements, le
+dernier `seq`, les syncs depuis l'ouverture (nouveau compteur par flux) et
+le palier ; côté store, `next_seq`, les syncs cumulés et la dernière
+compaction (durée, fin, rapport — nouvelle mémoire de `compact_all`).
+`/metrics` les publie en `ontology_stream_*{ns}`, `ontology_domain_tier{ns,tier}`
+et `ontology_store_*` (README « Observability »). Tests : store à deux
+domaines + domaine par défaut (`storage/tests/stats.rs`), scrape HTTP sur
+un store P1 avant et après compaction (`server/tests/p1_http.rs`), absence
+sur `MemoryStore` (`server/tests/memory_socle.rs`). Écart de lettre : le
+plan disait `next_seq` par flux ; la séquence est globale (H12), le flux
+publie son dernier `seq` et le store son `next_seq`.
+
 ### G — Gros documents (décision avant la phase 3)
 
 L'ingest texte met le fichier entier dans la description du concept
@@ -1081,7 +1095,7 @@ S10     T1 curseur (prérequis de 5a, §0) ; T en parallèle : couverture Rust �
 S11-S13 Phase 5a : P1 (slot + Loc, payloads relus hors verrou) ─ livré 2026-09-23 ; J5 atteint à 5×10⁵ ; preuve 5×10⁶ / 64 Go sur demande client
 S13     R tranche 1 ─ livré 2026-09-23 ; T couverture ≥ 90 % ─ livré 2026-09-23
 S14     T2 job bench ─ livré 2026-09-28 ; mesure 2×10⁶ / 10⁷ ─ faite 2026-09-28 (garantie 16 Go = P1 ; déclencheurs R tranche 2 atteints)
-S14     T3 métriques par flux → R tranche 2 (HNSW + persistance) → production (ROADMAP §3.8)
+S14     T3 métriques par flux ─ livré 2026-09-28 → R tranche 2 (HNSW + persistance) → production (ROADMAP §3.8)
 S15+    Phase 5b, uniquement sur besoin client : T6 profil d'apply → P2-P4 (CSR) → contrôleur
 ```
 
