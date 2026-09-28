@@ -28,8 +28,8 @@ These cannot be expressed in files; they are settings of the repository.
 
 - Branch protection or a ruleset on `main`: no force push, no deletion,
   pull request required with one approving review from a code owner,
-  required status checks `repo guard`, `rustfmt`, `clippy`, `test`, `web`,
-  `audit`, signed commits required, linear history.
+  required status checks (exact job names) `repo guard`, `rustfmt`, `clippy`, `test (ubuntu-latest)`, `test (windows-latest)`, `web (vitest, tsc, build)`, `audit (cargo, npm)`, `auth-server (node --test)`,
+  signed commits required, linear history.
 - Secret scanning with push protection, Dependabot alerts, private
   vulnerability reporting.
 - Actions: only actions from GitHub and verified creators, default workflow

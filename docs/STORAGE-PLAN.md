@@ -23,7 +23,7 @@ Convention : `H*` / `R*` renvoient aux hypothèses et règles de
 | G | Décision gros documents : fragments ou texte hors graphe | — | 1 | **Tranché et livré** : fragments (STORAGE.md §10.9) |
 | 3 | Partitionnement par `ns` : routage, `.xref`, roulement, scellement `mmap`, compaction, group commit inter-requêtes | 2, G | 10-14 | **Livré** (§5.6) — compaction store entier, group commit inter-requêtes reporté à la mesure |
 | T1 | Pagination par curseur | — | 2 | **Livré** (2026-09-22, §8 T1) — API prête pour P3 |
-| 4 | Mesure et codec : générateur 10⁷ / 5×10⁷, benchs, `postcard` | 2 | 4-6 | Chiffres réels sur la cible ; codec activé si gain mesuré |
+| 4 | Mesure et codec : générateur 10⁷ / 5×10⁷, benchs, `postcard` | 2 | 4-6 | **Livré** (§6.6, close le 2026-09-17) : mesuré à 2×10⁵ / 5×10⁵ puis 2×10⁶ (2026-09-28), JSON par défaut, `postcard` en option, `bulk_load` |
 | 5a | **Socle** (livré 2026-09-22) puis **P1** (livré 2026-09-23, §7.2) : slot + `Loc`, payloads relus depuis le disque | 3, 4, T1 | 8-12 | **Livré** — J5 mesuré (STORAGE.md §7.8) : mémoire privée ÷1,57, hydratation 1,19× |
 | 5b | P2-P5 : `.adj`/`.srt` (CSR), paliers, hystérésis | 5a | 8-12 | **Sur besoin client** : un tenant au-delà de 5×10⁶ concepts sur un nœud contraint |
 | R | Index de retrieval : persistance des vecteurs, index approximatif | indépendant | 8-12 | Retrieval en O(log N), démarrage sans réindexation — **tranche 2 déclenchée le 2026-09-28** (p99 230 ms et `reindex_all` 61,6 s à 2×10⁶, §8 R) |
@@ -37,7 +37,8 @@ Cible de dimensionnement : 10⁷ concepts et 5×10⁷ relations par store,
 (STORAGE.md §1 et §8.1 : la phase 4 a mesuré 45 à 50 Go en P0, et P1 seul
 ne loge pas 10⁷ sur 16 Go) ; sur 16 Go la garantie est 2×10⁶ / 10⁷, **en P1**
 (précision du 2026-09-28, §6.6 et STORAGE.md §7.8).
-**P1 (5a) reste le prochain palier** : il retire le payload du tas sur
+**P1 (5a) est livré (2026-09-23)** et c'est le réglage d'un nœud de 16 Go à
+2×10⁶ : il retire le payload du tas sur
 tout store, quelle que soit la cible, et c'est la marche prévue par le
 format (slot + `Loc`). Le CSR (5b) n'est engagé que sur besoin client.
 
@@ -686,11 +687,12 @@ Décisions prises le 2026-09-17 (validées par le propriétaire du produit) :
    produit, validé par le propriétaire du projet) : **la cible est portée
    par le nœud**. 10⁷ / 5×10⁷ sur **64 Go avec P1** (`--heap-fraction 0.8`
    sur un nœud dédié : ~1,3×10⁷ / 6,3×10⁷ estimés) ; sur **16 Go**, la
-   garantie est **2×10⁶ / 10⁷** (P0 dès aujourd'hui, ~2,4×10⁶ avec P1) —
-   **précisé le 2026-09-28** après la mesure à 2×10⁶ sur runner 16 Go
+   garantie est **2×10⁶ / 10⁷** (~1,8×10⁶ estimés en P0, 2×10⁶ mesurés en
+   P1) — **précisé le 2026-09-28** après la mesure à 2×10⁶ sur runner 16 Go
    (STORAGE.md §7.8) : en P0 le tas seul fait 9,9 Go et l'index de retrieval
-   ne tient plus ; la garantie 16 Go s'entend **en P1** (6,4 Go, index
-   compris), soit `--tier p1` sur un tel nœud. Le
+   ne tient plus ; la garantie 16 Go s'entend **en P1** (6,4 Go après
+   hydratation, l'index de retrieval tient ensuite), soit `--tier p1` sur un
+   tel nœud. Le
    **CSR est reporté** à un besoin client au-delà de 5×10⁶ concepts sur un
    nœud contraint. Motifs : le matériel est le levier le moins cher ; P1 a
    une valeur garantie quelle que soit la cible et ne change pas le format ;
@@ -1076,8 +1078,11 @@ S6-S8   Phase 3  ─────────────┘
 S9      Phase 4 : générateur 10⁷ + benchs → GO / NO-GO codec, bulk_load
 S10     Phase 5a : socle (budget, R14, strict/adaptive) ─ livré 2026-09-22
 S10     T1 curseur (prérequis de 5a, §0) ; T en parallèle : couverture Rust ≥ 90 % par crate puis seuil CI
-S11-S13 Phase 5a : P1 (slot + Loc, payloads relus hors verrou) ; J5 prouvé à 5×10⁶ sur 64 Go
-S14+    Phase 5b, uniquement sur besoin client : T6 profil d'apply → P2-P4 (CSR) → contrôleur ; R en parallèle
+S11-S13 Phase 5a : P1 (slot + Loc, payloads relus hors verrou) ─ livré 2026-09-23 ; J5 atteint à 5×10⁵ ; preuve 5×10⁶ / 64 Go sur demande client
+S13     R tranche 1 ─ livré 2026-09-23 ; T couverture ≥ 90 % ─ livré 2026-09-23
+S14     T2 job bench ─ livré 2026-09-28 ; mesure 2×10⁶ / 10⁷ ─ faite 2026-09-28 (garantie 16 Go = P1 ; déclencheurs R tranche 2 atteints)
+S14     T3 métriques par flux → R tranche 2 (HNSW + persistance) → production (ROADMAP §3.8)
+S15+    Phase 5b, uniquement sur besoin client : T6 profil d'apply → P2-P4 (CSR) → contrôleur
 ```
 
 Jalons vérifiables :
