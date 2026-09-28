@@ -71,6 +71,15 @@ impl Default for RetrievalRequest {
     }
 }
 
+/// Where `reindex_all` spends its time (milliseconds).
+#[derive(Debug, Clone)]
+pub struct ReindexReport {
+    pub concepts: usize,
+    pub texts_ms: f64,
+    pub lexical_ms: f64,
+    pub vector_ms: f64,
+}
+
 /// Combines lexical, vector and graph indexes into a single retrieval
 /// surface. All inserts route to both underlying indexes; queries fuse
 /// scores using `lexical_weight`.
@@ -114,10 +123,50 @@ impl HybridIndex {
 
     /// Reindex every concept currently in the graph.
     pub fn reindex_all(&self) {
-        for c in self.graph.all_concepts() {
-            let text = c.indexable_text();
-            self.lexical.insert(c.id, &text);
-            self.vector.insert(c.id, &text);
+        self.reindex_all_timed();
+    }
+
+    /// `reindex_all` with its three costs apart, for the bench and the plan
+    /// (STORAGE-PLAN.md §8 R): reading every concept's text (payloads come
+    /// from disk in P1), the lexical postings, the vectors. Tokenising and
+    /// embedding are pure, so they run on every core with scoped threads;
+    /// only the inserts take the locks.
+    pub fn reindex_all_timed(&self) -> ReindexReport {
+        let t = std::time::Instant::now();
+        let texts: Vec<(ConceptId, String)> = self
+            .graph
+            .all_concepts()
+            .into_iter()
+            .map(|c| (c.id, c.indexable_text()))
+            .collect();
+        let texts_ms = t.elapsed().as_secs_f64() * 1e3;
+
+        // Batches bound the transient memory: at 2×10⁶ the vectors alone are
+        // 2 GB, so they must not all exist before the first insert.
+        const BATCH: usize = 65_536;
+        let t = std::time::Instant::now();
+        for batch in texts.chunks(BATCH) {
+            let docs = parallel_map(batch, |(_, text)| LexicalIndex::tokenize(text));
+            for ((id, _), doc) in batch.iter().zip(docs) {
+                self.lexical.insert_tokenized(*id, doc);
+            }
+        }
+        let lexical_ms = t.elapsed().as_secs_f64() * 1e3;
+
+        let t = std::time::Instant::now();
+        self.vector.reserve(texts.len());
+        for batch in texts.chunks(BATCH) {
+            let vectors = parallel_map(batch, |(_, text)| self.vector.embed(text));
+            for ((id, _), v) in batch.iter().zip(vectors) {
+                self.vector.insert_vector(*id, &v);
+            }
+        }
+        let vector_ms = t.elapsed().as_secs_f64() * 1e3;
+        ReindexReport {
+            concepts: texts.len(),
+            texts_ms,
+            lexical_ms,
+            vector_ms,
         }
     }
 
@@ -223,6 +272,34 @@ impl HybridIndex {
         let subgraph = self.graph.expand(&seeds, &req.expansion);
         (scored, subgraph)
     }
+}
+
+/// `items.iter().map(f)` on every available core, order preserved. Scoped
+/// threads: no pool, no dependency; below one chunk per core it is a plain
+/// map.
+fn parallel_map<T: Sync, U: Send>(items: &[T], f: impl Fn(&T) -> U + Sync) -> Vec<U> {
+    const CHUNK_MIN: usize = 4_096;
+    let cores = std::thread::available_parallelism()
+        .map(|c| c.get())
+        .unwrap_or(1);
+    let threads = (items.len() / CHUNK_MIN).clamp(1, cores);
+    if threads == 1 {
+        return items.iter().map(&f).collect();
+    }
+    let chunk = items.len().div_ceil(threads);
+    std::thread::scope(|s| {
+        let handles: Vec<_> = items
+            .chunks(chunk)
+            .map(|part| {
+                let f = &f;
+                s.spawn(move || part.iter().map(f).collect::<Vec<U>>())
+            })
+            .collect();
+        handles
+            .into_iter()
+            .flat_map(|h| h.join().expect("map thread panicked"))
+            .collect()
+    })
 }
 
 #[cfg(test)]
