@@ -148,6 +148,23 @@ fn bench_commands_run_end_to_end_on_a_small_store() {
         assert!(q[key].is_number(), "{key} missing in {q}");
     }
     assert_eq!(q["page200_rows_avg"], 200.0);
+    assert_eq!(q["tier"], "p0");
+
+    // Same measurements on a P1 hydration: the retrieval index is built on a
+    // graph whose payloads stay on disk (the 16 GB runner path at 2×10⁶).
+    let q1 = run_json(
+        &data,
+        &["bench", "--json", "query", "--iterations", "3", "--p1"],
+    );
+    assert_eq!(q1["tier"], "p1");
+    for key in [
+        "page200_p50_us",
+        "search_q_p50_us",
+        "retrieve_p50_us",
+        "reindex_all_ms",
+    ] {
+        assert!(q1[key].is_number(), "{key} missing in {q1}");
+    }
 
     let a = run_json(
         &data,
