@@ -28,7 +28,7 @@ Dernière mise à jour : **2026-09-28**.
 | Cible de dimensionnement | **Révisée 2026-09-22, précisée 2026-09-28** : 10⁷ / 5×10⁷ sur 64 Go avec P1 ; 2×10⁶ / 10⁷ garantis sur 16 Go **en P1** ; CSR sur besoin client | STORAGE-PLAN §6.6 décision 3 ; STORAGE.md §1, §7.8 et §8.1 |
 | T2, job `bench` manuel | **Livré 2026-09-28** (`bench.yml`, `workflow_dispatch`) | STORAGE-PLAN §8 T2 ; ici §3.7 bis |
 | Mesure à 2×10⁶ / 10⁷ (§3.7) | **Faite 2026-09-28** sur le runner : P0 9,9 Go, P1 6,4 Go, `/retrieve` p99 230 ms | STORAGE.md §7.8 ; ici §3.7 |
-| R, retrieval | Tranche 1 livrée 2026-09-23 ; **tranche 2 déclenchée 2026-09-28** : 2a en cours (plan §8 R décision 6 : scan parallèle, réindexation parallèle, termes internés), 2b (persistance, index approximatif) conditionnelle | STORAGE-PLAN §8 R décisions 5-6 ; ici §3.7 ter |
+| R, retrieval | Tranche 1 livrée 2026-09-23 ; **tranche 2a livrée 2026-09-28** (scan parallèle, réindexation parallèle, termes internés) : à 2×10⁶ `/retrieve` p99 230 → 66 ms, `reindex_all` 61,6 → 37,9 s, **critère JR tenu** ; 2b (persistance, index approximatif) conditionnelle | STORAGE-PLAN §8 R décisions 5-7 ; STORAGE.md §7.8 ; ici §3.7 ter |
 | T3, métriques par flux | **Livré 2026-09-28** : `ontology_stream_*{ns}`, `ontology_domain_tier{ns,tier}`, `ontology_store_*` | STORAGE-PLAN §8 T3 ; README « Observability » |
 
 Chiffres à garder en tête (mesurés phase 4, portable 16 Go) : un concept de
@@ -189,10 +189,10 @@ faire ou d'y renoncer n'est pas écrite ; à trancher dans le plan §5.6 avec
 ces chiffres. La **compaction par domaine** (plan §6.6, « à prévoir ») reste
 un report daté, sans déclencheur : à lier au chantier 5b.
 
-### 3.7 ter Chantier R, tranche 2 — **déclenchée 2026-09-28**, en cours (2a)
+### 3.7 ter Chantier R, tranche 2 — **2a livrée 2026-09-28**, 2b conditionnelle
 
-Découpage daté au plan §8 R décision 6 : **2a** (en cours) corrige les
-causes mesurées sans nouvelle structure — balayage vectoriel parallèle sur
+Découpage daté au plan §8 R décision 6 : **2a** (livrée, mesurée au plan
+décision 7 : JR tenu à 2×10⁶) corrige les causes mesurées sans nouvelle structure — balayage vectoriel parallèle sur
 lignes contiguës, tokenisation et embedding parallèles, termes internés
 dans l'index lexical ; critère JR mesuré à 2×10⁶ sur le runner. **2b**
 (persistance des deux index, index approximatif) seulement si 2a ne tient
@@ -231,7 +231,7 @@ Ce que chaque étape applique du plan de stockage (vérifié le 2026-09-24) :
 | Une image, un conteneur par client | **T5**, tranchée le 2026-09-15 (STORAGE.md §10.8) : un store par tenant, un processus par tenant, le routage au reverse proxy |
 | Limite mémoire du conteneur | **D5** (le budget est une propriété du déploiement) et le socle §8.1 (cgroup v2 lu en premier) ; `--memory-mode strict` par défaut en conteneur = **R17** |
 | `docker stop` propre | Arrêt sur SIGTERM livré avec le chantier T (2026-09-23) |
-| Retrieval d'un tenant > ~10⁶ concepts | **R tranche 2** (§3.7 ter) : 2a en cours (plan §8 R décision 6) ; 2b (persistance, index approximatif) conditionnelle |
+| Retrieval d'un tenant > ~10⁶ concepts | **R tranche 2a livrée** (§3.7 ter) : JR tenu à 2×10⁶ ; 2b (persistance, index approximatif) conditionnelle, plan §8 R décision 6 |
 | Sauvegarde et restauration | Segments immuables et MANIFEST (phase 2), `LOCK` (H17), compaction comme condition de survie (§8.7) |
 | Mise à jour exercée en CI | Migration automatique de format (phase 2), `format_version` 1 et 2 (phase 4) |
 | Interface servie par le binaire, clés d'API, audit | Hors plan de stockage, sans contradiction avec lui |

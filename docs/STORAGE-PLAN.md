@@ -26,7 +26,7 @@ Convention : `H*` / `R*` renvoient aux hypothèses et règles de
 | 4 | Mesure et codec : générateur 10⁷ / 5×10⁷, benchs, `postcard` | 2 | 4-6 | **Livré** (§6.6, close le 2026-09-17) : mesuré à 2×10⁵ / 5×10⁵ puis 2×10⁶ (2026-09-28), JSON par défaut, `postcard` en option, `bulk_load` |
 | 5a | **Socle** (livré 2026-09-22) puis **P1** (livré 2026-09-23, §7.2) : slot + `Loc`, payloads relus depuis le disque | 3, 4, T1 | 8-12 | **Livré** — J5 mesuré (STORAGE.md §7.8) : mémoire privée ÷1,57, hydratation 1,19× |
 | 5b | P2-P5 : `.adj`/`.srt` (CSR), paliers, hystérésis | 5a | 8-12 | **Sur besoin client** : un tenant au-delà de 5×10⁶ concepts sur un nœud contraint |
-| R | Index de retrieval : persistance des vecteurs, index approximatif | indépendant | 8-12 | Retrieval en O(log N), démarrage sans réindexation — **tranche 2 déclenchée le 2026-09-28** (p99 230 ms et `reindex_all` 61,6 s à 2×10⁶, §8 R) |
+| R | Index de retrieval : persistance des vecteurs, index approximatif | indépendant | 8-12 | Retrieval en O(log N), démarrage sans réindexation — tranche 2 déclenchée le 2026-09-28 (p99 230 ms, `reindex_all` 61,6 s à 2×10⁶) ; **2a livrée le jour même, JR tenu** (p99 66 ms, 37,9 s, §8 R décisions 6-7) ; 2b conditionnelle |
 | T | CI Windows+Linux (**livré**), métriques (**livré** : mémoire et paliers le 2026-09-22/23, T3 par flux — segments, taille, `last_seq`/`next_seq`, syncs, dernière compaction, palier en étiquette — le 2026-09-28), job `bench` manuel T2 (**livré** 2026-09-28 : `.github/workflows/bench.yml`, `workflow_dispatch`), docs, position un store par tenant (**livré** : STORAGE.md §10.8, README « Deployment model ») | — | 2-3 | Couverture ≥ 90 % par crate imposée en CI (2026-09-23) ; correction du 2026-09-25 : la mention « métriques (livré) » du 2026-09-24 surévaluait T3 |
 
 **Stratégie (validée le 2026-09-08)** : la mémoire d'abord, le disque quand
@@ -1031,6 +1031,14 @@ Mesuré sur le store 5×10⁵ / 2,5×10⁶ (`bench query`, STORAGE.md §7.8) :
    hachage (l'embedding devient alors le coût dominant et la persistance
    des vecteurs redevient la première mesure). Chiffres de 2a en STORAGE.md
    §7.8.
+7. **Tranche 2a livrée et mesurée le 2026-09-28** (runner 4 vCPU, 2×10⁶ /
+   10⁷, graphe P1) : `reindex_all` 61,6 s → **37,9 s** (textes 11,1 s,
+   lexical 18,9 s, vecteurs 7,8 s), `/retrieve` p50 222 → **60 ms**, p99
+   230 → **66 ms** ; portable 2×10⁵ : 12,9 → 4,6 s et 28 → 8,9 ms p50.
+   **Critère JR tenu à 2×10⁶** (P95 < 200 ms ; réindexation sous
+   l'hydratation). La tranche 2b n'est pas déclenchée ; ses déclencheurs
+   restent ceux de la décision 6. Prochaine cause connue si le critère
+   manque plus haut : la lecture séquentielle des textes P1 (11 s à 2×10⁶).
 
 ### T5 — Un store par tenant — **tranché 2026-09-15, README écrit 2026-09-24**
 
@@ -1118,7 +1126,7 @@ S10     T1 curseur (prérequis de 5a, §0) ; T en parallèle : couverture Rust �
 S11-S13 Phase 5a : P1 (slot + Loc, payloads relus hors verrou) ─ livré 2026-09-23 ; J5 atteint à 5×10⁵ ; preuve 5×10⁶ / 64 Go sur demande client
 S13     R tranche 1 ─ livré 2026-09-23 ; T couverture ≥ 90 % ─ livré 2026-09-23
 S14     T2 job bench ─ livré 2026-09-28 ; mesure 2×10⁶ / 10⁷ ─ faite 2026-09-28 (garantie 16 Go = P1 ; déclencheurs R tranche 2 atteints)
-S14     T3 métriques par flux ─ livré 2026-09-28 → R tranche 2a (§8 R décision 6, en cours) → production (ROADMAP §3.8) ; 2b conditionnelle
+S14     T3 métriques par flux ─ livré 2026-09-28 ; R tranche 2a ─ livré 2026-09-28, JR tenu à 2×10⁶ → production (ROADMAP §3.8) ; 2b conditionnelle (§8 R décision 6)
 S15+    Phase 5b, uniquement sur besoin client : T6 profil d'apply → P2-P4 (CSR) → contrôleur
 ```
 
@@ -1132,7 +1140,7 @@ Jalons vérifiables :
 | J4 (fin phase 4) | **Atteint pour ce qui est mesurable ici** : §7.7–7.8 de STORAGE.md remplis de chiffres mesurés à 2×10⁵ / 10⁶ et 5×10⁵ / 2,5×10⁶, codec tranché (JSON par défaut, postcard en option), `bulk_load` livré et mesuré ; la cible 10⁷ / 5×10⁷ (45 à 50 Go en P0) n'est pas hydratable sur 16 Go — c'est la mesure elle-même qui le montre ; extrapolation linéaire documentée |
 | J5 (P1) | **Atteint 2026-09-23** (STORAGE.md §7.8) : sur le store synthétique 5×10⁵ / 2,5×10⁶, mémoire privée ÷ 1,57 (critère ≥ 1,4), hydratation 1,19× (≤ 1,2×), P95 `GET /concepts/{id}` 1,0× (< 2×) ; payloads résidents 0 après hydratation ; preuve de capacité 5×10⁶ sur 64 Go reportée à une demande client (§6.6) |
 | J5b (CSR, sur besoin) | 10⁷ / 5×10⁷ hydraté sur 16 Go en `strict` ; ~16 o par arête mesurés |
-| JR (retrieval) | **Tranche 1 atteinte 2026-09-23** (§8 R) : `reindex_all` 17–28 s à 5×10⁵ (< hydratation 32 s ; était ~7 min), `/retrieve` p50 70 ms / p99 100 ms (étaient 465 ms / 2,1 s). Tranche 2, sur mesure : `reindex_all` supprimé du démarrage (persistance, dès un modèle d'embedding) ; O(log N) par HNSW quand le P95 dépasse 200 ms (~1,5×10⁶ concepts). **Déclenchée le 2026-09-28** : à 2×10⁶, p99 230 ms et `reindex_all` 61,6 s > hydratation 42,5 s |
+| JR (retrieval) | **Tranche 1 atteinte 2026-09-23** (§8 R) : `reindex_all` 17–28 s à 5×10⁵ (< hydratation 32 s ; était ~7 min), `/retrieve` p50 70 ms / p99 100 ms (étaient 465 ms / 2,1 s). Tranche 2, sur mesure : `reindex_all` supprimé du démarrage (persistance, dès un modèle d'embedding) ; O(log N) par HNSW quand le P95 dépasse 200 ms (~1,5×10⁶ concepts). Déclenchée le 2026-09-28 : à 2×10⁶, p99 230 ms et `reindex_all` 61,6 s > hydratation 42,5 s ; **2a livrée le jour même** : p99 66 ms, `reindex_all` 37,9 s, **JR tenu à 2×10⁶** ; 2b conditionnelle (décision 6) |
 
 ---
 

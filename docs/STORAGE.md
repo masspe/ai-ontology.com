@@ -693,11 +693,40 @@ Trois conséquences. (1) **La garantie « 2×10⁶ / 10⁷ sur 16 Go » s'entend
 en P1** : en P0 le tas seul dépasse déjà le budget 0,6 (9,9 Go > 9,6 Go) et,
 avec l'index de retrieval par-dessus, le processus a été tué à 15 Gio lors
 du premier run ; en P1 (6,4 Go) l'index tient. `--tier p1` est donc le
-réglage d'un nœud de 16 Go à cette taille. (2) **Le déclencheur HNSW est
+réglage d'un nœud de 16 Go à cette taille. (2) **Le déclencheur HNSW était
 atteint** (plan §8 R, tranche 2) : p95 > 200 ms sur 4 vCPU, et `reindex_all`
-(61,6 s) dépasse l'hydratation (42,5 s), le critère JR n'est plus tenu à
-2×10⁶. (3) Le curseur (T1) est le seul mode de pagination viable à cette
+(61,6 s) dépassait l'hydratation (42,5 s), le critère JR n'était plus tenu à
+2×10⁶ — **tenu de nouveau le même jour par la tranche 2a**, sans nouvelle
+structure (tableau suivant). (3) Le curseur (T1) est le seul mode de pagination viable à cette
 taille : l'offset coûte 24 ms par page contre 0,7 ms.
+
+**Retrieval, tranche 2a (2026-09-28, même runner, même store 2×10⁶ / 10⁷,
+graphe P1, `bench query --p1`)** — plan §8 R décision 6 : mesurer où va
+`reindex_all`, corriger les causes, n'ajouter une structure que si la
+mesure l'exige. Découpage mesuré d'abord à 2×10⁵ sur le portable : lecture
+des textes 10 à 15 %, index lexical 50 à 57 %, index vectoriel 33 %, rien de
+parallèle. Corrections, sans dépendance : lignes vectorielles contiguës et
+balayage réparti sur les cœurs ; tokenisation et embedding de `reindex_all`
+sur tous les cœurs par lots de 65 536, insertions seules sous verrou ;
+termes internés (`u32` par posting) dans l'index lexical.
+
+| | Avant 2a (matin) | Après 2a (après-midi) | Critère JR |
+|---|---|---|---|
+| `reindex_all` (2×10⁶, P1) | 61,6 s | **37,9 s** (textes 11,1 s, lexical 18,9 s, vecteurs 7,8 s) | < hydratation (42,5 à 60,4 s selon le run) ✓ |
+| `/retrieve` p50 / p99 | 222 ms / 230 ms | **60 ms / 66 ms** | P95 < 200 ms ✓ |
+| `?q=` trigrammes p50 / p99 | 36 µs / 155 ms | 68 µs / 177 ms | — |
+| Page 200 par curseur p50 | 0,73 ms | 1,08 ms | — |
+| Expand profondeur 2 p50 | 20 ms | 18,9 ms | — |
+| Portable 14 threads, 2×10⁵ / 10⁶, P0 : `reindex_all` | 12,9 s | **4,6 s** | — |
+| idem, `/retrieve` p50 / p99 | 28 ms / 47 ms | **8,9 ms / 14 ms** | — |
+
+Sur 4 vCPU la part parallélisable (lexical + vecteurs) passe de ~55 s à
+26,7 s ; le reste, la lecture des textes depuis les segments P1 (11 s), est
+séquentiel et mono-thread par construction (un lecteur par verrou de
+segment), c'est la prochaine cause si le critère venait à manquer. **La
+tranche 2b** (persistance des deux index, index approximatif) reste
+conditionnelle, plan §8 R décision 6 : un modèle d'embedding réel, ou un
+P95 mesuré au-delà de 200 ms à une taille supérieure sur le nœud cible.
 
 **Estimation du socle (§8.1) contre tas mesuré** (phase 5, 2026-09-22, même
 store 200 k / 1 M, `bench hydrate --json` : `estimate_mib`,
@@ -771,7 +800,9 @@ description réelle, `HashEmbedder` 256 dimensions :
 Le reste est le balayage O(N · dim) : ~0,3 s attendus à 2×10⁶, ~1,4 s à
 10⁷ ; l'HNSW (`STORAGE-PLAN.md` §8 R, tranche 2) se déclenche sur mesure
 au-delà de 200 ms de P95. **Mesuré le 2026-09-28 à 2×10⁶** (runner 4 vCPU,
-§7.8) : p50 222 ms, p99 230 ms, `reindex_all` 61,6 s — déclencheur atteint.
+§7.8) : p50 222 ms, p99 230 ms, `reindex_all` 61,6 s — déclencheur atteint,
+puis **tenu par la tranche 2a le même jour** : p50 60 ms, p99 66 ms,
+`reindex_all` 37,9 s (balayage et réindexation parallèles, termes internés).
 
 **T1 livré (2026-09-22)** — même banc, store 200 k / 1 M, 200 itérations,
 machine au repos, `bench query --json` :
