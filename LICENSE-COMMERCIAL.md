@@ -29,14 +29,12 @@ Contacting Mediasoft & Cie S.A.
 
 ```
 Mediasoft & Cie S.A.
-Route de Crassier 7
-1262 Eysins, VD
 Switzerland
 ```
 
 Pricing, scope, and the wording of the commercial agreement are
-negotiated case by case. Please contact the company at the address
-above to start the conversation.
+negotiated case by case. Please contact the company to start the
+conversation.
 
 Unless and until you sign a commercial agreement, your use of this
 software is governed entirely by the AGPL-3.0-or-later. Distributing

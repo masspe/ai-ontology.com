@@ -3,7 +3,7 @@
 //
 // This file is part of ai-ontology.com.
 // Dual-licensed: AGPL-3.0-or-later OR a commercial license
-// from Mediasoft & Cie S.A.. See LICENSE and LICENSE-COMMERCIAL.md.
+// from Mediasoft & Cie S.A. See LICENSE and LICENSE-COMMERCIAL.md.
 
 //! The one segment of a stream that still grows. Records are appended to a
 //! buffered `.data` writer, then made durable with a single `fdatasync` per

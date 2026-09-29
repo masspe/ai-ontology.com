@@ -3,7 +3,7 @@
 //
 // This file is part of ai-ontology.com.
 // Dual-licensed: AGPL-3.0-or-later OR a commercial license
-// from Mediasoft & Cie S.A.. See LICENSE and LICENSE-COMMERCIAL.md.
+// from Mediasoft & Cie S.A. See LICENSE and LICENSE-COMMERCIAL.md.
 
 //! Codec 1 (`postcard`) end to end: a store written in postcard hydrates to
 //! the same graph as one written in JSON; a store switched from JSON to

@@ -3,7 +3,7 @@
 //
 // This file is part of ai-ontology.com.
 // Dual-licensed: AGPL-3.0-or-later OR a commercial license
-// from Mediasoft & Cie S.A.. See LICENSE and LICENSE-COMMERCIAL.md.
+// from Mediasoft & Cie S.A. See LICENSE and LICENSE-COMMERCIAL.md.
 
 //! Byte-level front door of the text pipeline: charset sniffing and the
 //! binary heuristic, the `.docx` extractor on hand-built archives, and

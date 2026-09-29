@@ -3,7 +3,7 @@
 //
 // This file is part of ai-ontology.com.
 // Dual-licensed: AGPL-3.0-or-later OR a commercial license
-// from Mediasoft & Cie S.A.. See LICENSE and LICENSE-COMMERCIAL.md.
+// from Mediasoft & Cie S.A. See LICENSE and LICENSE-COMMERCIAL.md.
 
 //! Test doubles for the [`Store`] trait, shared by the integration tests of
 //! every crate that writes to a store. Not behind a feature flag: the code

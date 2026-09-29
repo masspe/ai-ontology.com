@@ -3,7 +3,7 @@
 //
 // This file is part of ai-ontology.com.
 // Dual-licensed: AGPL-3.0-or-later OR a commercial license
-// from Mediasoft & Cie S.A.. See LICENSE and LICENSE-COMMERCIAL.md.
+// from Mediasoft & Cie S.A. See LICENSE and LICENSE-COMMERCIAL.md.
 
 //! P1, graph side (`STORAGE.md` §6.2 / §8.2, `STORAGE-PLAN.md` §7.2): a
 //! concept slot keeps type and name in memory and drops its payload once
