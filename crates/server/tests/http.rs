@@ -290,6 +290,8 @@ async fn rate_limiter_rejects_after_burst() {
                 max_requests: 2,
                 window: Duration::from_secs(60),
             }),
+            users: None,
+            web_dir: None,
         },
     );
 
@@ -457,6 +459,8 @@ async fn jwt_and_static_token_coexist() {
             bearer_token: Some("service-token".into()),
             jwt: Some(JwtAuth::from_secret(secret.to_vec())),
             rate_limit: None,
+            users: None,
+            web_dir: None,
         },
     );
 
