@@ -1,5 +1,5 @@
-// SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Winven-Commercial
-// Copyright (C) 2026 Winven AI Sarl
+// SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Mediasoft-Commercial
+// Copyright (C) 2026 Mediasoft & Cie S.A.
 //
 // Shared Vitest setup: runs before every test file. Guarantees that browser
 // storage never leaks between tests and that no test can hit the network by

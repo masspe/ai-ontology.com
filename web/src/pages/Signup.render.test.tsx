@@ -1,5 +1,5 @@
-// SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Winven-Commercial
-// Copyright (C) 2026 Winven AI Sarl
+// SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Mediasoft-Commercial
+// Copyright (C) 2026 Mediasoft & Cie S.A.
 //
 // Rendering tests of the Signup page: `?next=` sanitising, the four field
 // validations, the password-strength meter, the loading state, the success

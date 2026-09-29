@@ -1,5 +1,5 @@
-// SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Winven-Commercial
-// Copyright (C) 2026 Winven AI Sarl
+// SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Mediasoft-Commercial
+// Copyright (C) 2026 Mediasoft & Cie S.A.
 
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 import Layout from "./layout/Layout";

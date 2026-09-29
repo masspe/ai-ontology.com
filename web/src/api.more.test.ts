@@ -1,5 +1,5 @@
-// SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Winven-Commercial
-// Copyright (C) 2026 Winven AI Sarl
+// SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Mediasoft-Commercial
+// Copyright (C) 2026 Mediasoft & Cie S.A.
 //
 // Endpoint-level tests of the REST client: every exported wrapper is called
 // once against a stubbed `fetch`, and the URL, method, headers and JSON body
