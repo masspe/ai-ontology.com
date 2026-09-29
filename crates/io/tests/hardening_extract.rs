@@ -1,10 +1,9 @@
-// SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Winven-Commercial
-// Copyright (C) 2026 Winven AI Sarl
-// Route de Crassier 7, 1262 Eysins, VD, CH
+// SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Mediasoft-Commercial
+// Copyright (C) 2026 Mediasoft & Cie S.A.
 //
 // This file is part of ai-ontology.com.
 // Dual-licensed: AGPL-3.0-or-later OR a commercial license
-// from Winven AI Sarl. See LICENSE and LICENSE-COMMERCIAL.md.
+// from Mediasoft & Cie S.A.. See LICENSE and LICENSE-COMMERCIAL.md.
 
 //! Decision G (`STORAGE.md` §10.9) at the edges: the 4 000-character
 //! boundary, multi-byte text, paragraph-aligned cuts, the 2 000-fragment

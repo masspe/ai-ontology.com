@@ -1,10 +1,9 @@
-// SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Winven-Commercial
-// Copyright (C) 2026 Winven AI Sarl
-// Route de Crassier 7, 1262 Eysins, VD, CH
+// SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Mediasoft-Commercial
+// Copyright (C) 2026 Mediasoft & Cie S.A.
 //
 // This file is part of ai-ontology.com.
 // Dual-licensed: AGPL-3.0-or-later OR a commercial license
-// from Winven AI Sarl. See LICENSE and LICENSE-COMMERCIAL.md.
+// from Mediasoft & Cie S.A.. See LICENSE and LICENSE-COMMERCIAL.md.
 
 //! Derived-index invariants (`PERFORMANCE.md` R2, R5, R6, §4.2–4.5): every
 //! mutation keeps every index consistent with the primary maps, listings

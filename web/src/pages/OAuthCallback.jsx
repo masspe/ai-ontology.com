@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Winven-Commercial
+// SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Mediasoft-Commercial
 // Consumes the token from the URL fragment (#token=...&next=...). Using the
 // fragment instead of the query string keeps the JWT out of Referer headers
 // and out of any server-side access logs the SPA's host might keep.
