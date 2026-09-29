@@ -6,7 +6,7 @@ Commercial License Notice
 1. **GNU Affero General Public License v3.0 or later** (AGPL-3.0-or-later)
    — see [`LICENSE`](./LICENSE) for the full text.
 
-2. **Winven Commercial License** — a separate, paid agreement that
+2. **Mediasoft Commercial License** — a separate, paid agreement that
    removes the AGPL's copyleft and network-source obligations.
 
 You may choose which license to use, but you must comply with the
@@ -24,11 +24,11 @@ you intend to:
 
 — then you need a commercial license.
 
-Contacting Winven AI Sarl
+Contacting Mediasoft & Cie S.A.
 -------------------------
 
 ```
-Winven AI Sarl
+Mediasoft & Cie S.A.
 Route de Crassier 7
 1262 Eysins, VD
 Switzerland
@@ -64,7 +64,7 @@ a network service for others.
 
 **Can I contribute?**
 Yes. Contributions are welcome under the AGPL-3.0. By submitting a
-pull request you license your contribution to Winven AI Sarl under
+pull request you license your contribution to Mediasoft & Cie S.A. under
 both tracks of the dual license, so the project can keep offering the
 commercial option.
 

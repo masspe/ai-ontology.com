@@ -1,5 +1,5 @@
-// SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Winven-Commercial
-// Copyright (C) 2026 Winven AI Sarl
+// SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Mediasoft-Commercial
+// Copyright (C) 2026 Mediasoft & Cie S.A.
 //
 // Rendering tests of the two small stat widgets: the StatCard tile (value
 // formatting, delta arrow and hint) and the Sparkline SVG it is paired with.
