@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Mediasoft-Commercial
 // Copyright (C) 2026 Mediasoft & Cie S.A.
 
+import { Link } from "react-router-dom";
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import ReactFlow, {
   Background,
@@ -237,7 +238,12 @@ function CanvasInner({
   );
 
   if (!subgraph || subgraph.concepts.length === 0) {
-    return <div className="empty">No concepts to display. Upload data or generate an ontology to populate the graph.</div>;
+    return (
+      <div className="empty">
+        Rien à afficher : le graphe est vide. <Link to="/files">Déposez des fichiers</Link> ou
+        <Link to="/builder"> définissez le modèle</Link> pour le remplir.
+      </div>
+    );
   }
 
   return (

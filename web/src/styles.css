@@ -479,7 +479,6 @@ label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px
 }
 
 /* Network preview */
-.network-preview svg { width: 100%; height: 230px; display: block; }
 .network-legend {
   display: flex; flex-wrap: wrap; gap: 12px;
   font-size: 11px; color: var(--muted);
@@ -1926,3 +1925,61 @@ label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px
 .cd-props th { text-align: left; font-weight: 600; color: var(--muted, #64748b); padding: 3px 10px 3px 0; white-space: nowrap; vertical-align: top; }
 .cd-props td { padding: 3px 0; word-break: break-word; }
 .cd-props tr + tr th, .cd-props tr + tr td { border-top: 1px solid var(--border); }
+
+/* ---------- Account menu (top bar) ---------- */
+.account { position: relative; }
+.account .avatar { border: none; }
+.account-menu {
+  position: absolute; right: 0; top: 40px; z-index: 30;
+  min-width: 220px; padding: 8px;
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); box-shadow: 0 8px 24px rgba(0,0,0,0.12);
+  display: flex; flex-direction: column; gap: 2px;
+}
+.account-who { display: flex; flex-direction: column; padding: 6px 10px 10px; border-bottom: 1px solid var(--border); margin-bottom: 4px; font-size: 13px; }
+.account-menu .btn-ghost { justify-content: flex-start; width: 100%; }
+
+/* ---------- Guide (Tour) ---------- */
+.tour { position: fixed; inset: 0; z-index: 1000; }
+.tour-backdrop { position: absolute; inset: 0; background: rgba(15, 23, 42, 0.55); }
+.tour-spot {
+  position: fixed; border-radius: 8px; pointer-events: none;
+  box-shadow: 0 0 0 9999px rgba(15, 23, 42, 0.55), 0 0 0 2px var(--accent);
+  transition: top 0.2s, left 0.2s, width 0.2s, height 0.2s;
+}
+.tour-card {
+  position: fixed; width: 360px; max-width: calc(100vw - 32px);
+  background: var(--panel); color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: 0 16px 40px rgba(0,0,0,0.25); padding: 16px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.tour-head { display: flex; align-items: center; justify-content: space-between; font-size: 12px; }
+.tour-title { margin: 0; font-size: 18px; }
+.tour-text { margin: 0; line-height: 1.5; }
+.tour-summary { margin: 4px 0 0; padding-left: 20px; max-height: 200px; overflow: auto; font-size: 13px; }
+.link-btn { background: none; border: none; color: var(--accent); font-size: 12px; cursor: pointer; padding: 4px 6px; }
+.link-btn:hover { text-decoration: underline; }
+.tour-summary .link-btn.active { font-weight: 600; color: var(--accent); }
+.tour-actions { display: flex; gap: 8px; align-items: center; margin-top: 6px; }
+
+/* ---------- Onboarding (first day) ---------- */
+.onboarding { max-width: 760px; }
+.onboarding-steps { list-style: none; padding: 0; margin: 20px 0 0; display: flex; flex-direction: column; gap: 14px; }
+.onboarding-step {
+  display: flex; gap: 16px; padding: 18px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+}
+.onboarding-step.locked { opacity: 0.55; }
+.onboarding-step.done { border-color: var(--success, #16a34a); }
+.onboarding-num {
+  width: 36px; height: 36px; border-radius: 50%; flex-shrink: 0;
+  display: grid; place-items: center; font-weight: 700;
+  background: var(--accent-soft); color: var(--accent);
+}
+.onboarding-step.done .onboarding-num { background: var(--success-soft, #dcfce7); color: var(--success, #16a34a); }
+.onboarding-body h2 { margin: 0 0 4px; font-size: 16px; }
+.onboarding-body p { margin: 0 0 10px; }
+.onboarding-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.onboarding-actions a, .onboarding-actions button { text-decoration: none; }
+.empty-action { margin-top: 8px; }

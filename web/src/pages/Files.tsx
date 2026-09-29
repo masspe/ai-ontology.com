@@ -401,7 +401,7 @@ export default function Files() {
           )}
 
           {filtered.length === 0 ? (
-            <div className="empty">No files match your filters.</div>
+            <div className="empty">Aucun fichier ne correspond. Déposez un Word, un Excel, un CSV, un PDF ou un texte ci-dessus, ou élargissez le filtre.</div>
           ) : (
             <table className="table files-table">
               <thead>

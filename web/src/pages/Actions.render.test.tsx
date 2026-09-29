@@ -471,16 +471,14 @@ describe("Actions page", () => {
     expect(typeInput).toHaveValue("Custom Sync");
   });
 
-  it("keeps the quick-action links inert", async () => {
-    const { user } = renderPage(<Actions />);
+  it("has no inert quick actions or Run Now button any more", async () => {
+    renderPage(<Actions />);
     await loaded();
     for (const title of ["Import Actions", "Generate with AI", "Bulk Edit", "Run All Active"]) {
-      const link = screen.getByText(title).closest("a") as HTMLAnchorElement;
-      expect(link).toHaveAttribute("href", "#");
-      await user.click(link);
+      expect(screen.queryByText(title)).not.toBeInTheDocument();
     }
-    await user.click(screen.getByRole("button", { name: "Run Now" }));
+    expect(screen.queryByRole("button", { name: "Run Now" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Expand" })).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Actions" })).toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: "Create Action" })).not.toBeInTheDocument();
   });
 });

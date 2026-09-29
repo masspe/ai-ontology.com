@@ -216,9 +216,10 @@ du MANIFEST vers un stockage externe** (objet compatible S3 ou second
 serveur), incrémentale, rétention 30 jours, restauration exercée en CI ;
 les instantanés disque restent un complément optionnel de l'hébergeur.
 Ordre d'exécution retenu : passe 1 = 3.8.1 + 3.8.2 (image, compose, web
-servie par le binaire, test de bout en bout) ; passe 2 = lot A de
-l'interface (§3.9) ; puis 3.8.3 auth Rust, 3.8.4 sauvegarde, lot B, 3.8.5,
-3.8.6.
+servie par le binaire, test de bout en bout) — **livrée 2026-09-29**
+(`276d22e`) ; passe 2 = lot A de l'interface (§3.9) — **livrée
+2026-09-29** ; puis 3.8.3b OAuth en Rust et retrait d'`auth-server/`,
+3.8.4 sauvegarde, lot B, 3.8.5, 3.8.6.
 
 État à la fin du 2026-09-28 : tous les reliquats du plan sont livrés (T1,
 T2, T3, mesure §3.7, R tranche 2a) ; `main` = 44a47fd, CI verte, incident
@@ -307,7 +308,7 @@ Deux décisions reviennent au propriétaire avant l'étape 3 : l'hébergeur
 cible (Infomaniak Public Cloud par cohérence avec le fournisseur LLM, ou
 autre) et l'authentification en Rust ou Node.
 
-### 3.9 Interface — deux publics, deux lots (plan du 2026-09-29)
+### 3.9 Interface — deux publics, deux lots (plan du 2026-09-29) — **lot A livré 2026-09-29**
 
 L'interface a deux publics : la personne qui ouvre l'application pour la
 première fois (tableau de bord vide, dix entrées de menu sans ordre, tout
@@ -351,6 +352,25 @@ avant 3.8.3**, c'est-à-dire avant toute démonstration à un prospect) :
    en français, testé comme le reste (rendu, navigation, mémorisation,
    réouverture). Il remplace le parcours guidé du point 1 pour la partie
    « découvrir », le point 1 garde la partie « faire » (les trois étapes).
+
+**Livraison du lot A (2026-09-29, branche `feat/ui-lot-a`)** : les six
+points sont en place dans `web/src` — parcours en trois étapes à la place
+du tableau de bord vide (`components/Onboarding.tsx`, affiché tant que le
+graphe n'a aucune fiche : l'étape 2 s'ouvre dès que le modèle existe) ; « Essayer avec
+l'exemple finance » envoie les huit fichiers d'`examples/finance` par
+l'API d'import existante, dans l'ordre du README (`lib/example.ts`, fichiers
+embarqués dans le bundle, copiés dans l'image) ; états vides orientés vers
+l'action sur le graphe, les fiches, les fichiers et les questions ; menu
+par flux avec icônes et libellés français (`layout/nav.tsx`) ; boutons
+inertes traités (tableau ci-dessous) ; guide interactif (`components/Tour.tsx`,
+une étape par entrée du menu plus accueil, recherche et retour
+d'expérience, spot sur l'élément, navigation automatique, sommaire,
+clavier, mémorisé sous `tour.v1`, rouvert par le « ? »). Couverture web
+99,5 % lignes. **Reporté au lot B** : les modèles prêts à l'emploi de
+l'étape 1 (seul l'exemple finance existe ; l'étape renvoie au Modèle de
+données) et la traduction du contenu des pages (titres, tableaux,
+formulaires restent en anglais ; seuls le menu, la barre du haut, le
+parcours, le guide et les états vides sont en français).
 
 **Lot B — quotidien** (au fil de l'eau, **après 3.8.4 sauvegarde**, guidé
 par ce que les premiers utilisateurs font réellement) :
@@ -397,6 +417,12 @@ TypeScript (testés à 97–100 %, conversion mécanique).
 | Modèle de données | « More options ▾ » à côté de Générer | rien | **Retirer** |
 | Modèle de données | « Layout ▾ », zoom +, zoom −, « Fit », plein écran | rien | **Brancher** sur la vue (le Graphe a déjà ces commandes) ou retirer |
 | Modèle de données | « View Details › » | rien | **Retirer** ou ouvrir le type sélectionné |
+
+État au 2026-09-29 : toutes les lignes traitées ; là où la décision
+laissait le choix : « View Analytics » retiré (doublon), « Run Now » retiré
+(pas d'exécution côté serveur), « Export » branché sur l'export JSONL du
+serveur, commandes de vue du Modèle de données retirées, « View Details »
+retiré, « Expand » des fiches retiré.
 
 Règle pour la suite : un bouton n'entre dans l'interface qu'avec son
 action et son test de rendu ; « coming soon » n'est pas un état.
