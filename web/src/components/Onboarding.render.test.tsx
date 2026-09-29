@@ -20,7 +20,7 @@ import * as api from "../api";
 const mocked = api as unknown as { upload: ReturnType<typeof vi.fn> };
 
 beforeEach(() => {
-  vi.stubGlobal("fetch", vi.fn(async () => new Response(new Blob(["x"]))));
+  vi.stubGlobal("fetch", vi.fn(async () => ({ blob: async () => new Blob(["x"]) })));
   mocked.upload.mockResolvedValue({ file_id: 1, ingested: { concepts: 3, relations: 5, ontology_updates: 0 } });
 });
 

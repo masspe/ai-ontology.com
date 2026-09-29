@@ -14,7 +14,8 @@ import * as api from "../api";
 const mocked = api as unknown as { upload: ReturnType<typeof vi.fn> };
 
 beforeEach(() => {
-  vi.stubGlobal("fetch", vi.fn(async (url: string) => new Response(new Blob([`body of ${url}`]))));
+  // Not a real Response: on Node 22 it cannot read a jsdom Blob.
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => ({ blob: async () => new Blob([`body of ${url}`]) })));
   mocked.upload.mockResolvedValue({ file_id: 1, ingested: { concepts: 3, relations: 5, ontology_updates: 0 } });
 });
 
