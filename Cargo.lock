@@ -1344,6 +1344,7 @@ dependencies = [
  "ontology-rag",
  "ontology-server",
  "ontology-storage",
+ "rand 0.9.4",
  "serde_json",
  "tokio",
  "tracing",

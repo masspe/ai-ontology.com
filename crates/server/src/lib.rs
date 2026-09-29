@@ -1124,8 +1124,10 @@ fn build_router_inner(state: AppState, cfg: RouterConfig) -> Router {
     // for any other path so the client-side router owns it. API routes are
     // matched first, so an unknown API path still answers as before.
     if let Some(dir) = web_dir {
+        // `fallback`, not `not_found_service`: a client-side route must get
+        // `index.html` with a 200, the browser then renders it.
         let index = tower_http::services::ServeFile::new(dir.join("index.html"));
-        app = app.fallback_service(tower_http::services::ServeDir::new(dir).not_found_service(index));
+        app = app.fallback_service(tower_http::services::ServeDir::new(dir).fallback(index));
     }
 
     if let Some(rl) = rate_limit {

@@ -129,7 +129,8 @@ impl UserStore {
     pub fn open(path: impl AsRef<FsPath>) -> Result<Self, UserStoreError> {
         let path = path.as_ref().to_path_buf();
         let db = match std::fs::read(&path) {
-            Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| UserStoreError::Parse(path.clone(), e))?,
+            Ok(bytes) => serde_json::from_slice(&bytes)
+                .map_err(|e| UserStoreError::Parse(path.clone(), e))?,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Db::default(),
             Err(e) => return Err(UserStoreError::Io(path, e)),
         };
@@ -236,7 +237,11 @@ fn new_id() -> String {
     let mut h = ahash::RandomState::new().build_hasher();
     h.write_u128(nanos);
     h.write_u64(n);
-    format!("{:016x}{:016x}", nanos as u64 ^ h.finish(), h.finish().rotate_left(17) ^ n)
+    format!(
+        "{:016x}{:016x}",
+        nanos as u64 ^ h.finish(),
+        h.finish().rotate_left(17) ^ n
+    )
 }
 
 fn now_rfc3339() -> String {
@@ -282,7 +287,11 @@ fn valid_email(email: &str) -> bool {
         return false;
     };
     let ok = |s: &str| !s.is_empty() && !s.chars().any(|c| c.is_whitespace() || c == '@');
-    ok(local) && ok(domain) && domain.contains('.') && !domain.starts_with('.') && !domain.ends_with('.')
+    ok(local)
+        && ok(domain)
+        && domain.contains('.')
+        && !domain.starts_with('.')
+        && !domain.ends_with('.')
 }
 
 // ---------------------------------------------------------------- tokens
@@ -388,9 +397,13 @@ fn error(status: StatusCode, msg: &str) -> Response {
     (status, Json(serde_json::json!({ "error": msg }))).into_response()
 }
 
-fn hash_password(password: &str) -> Result<String, Response> {
+/// Errors are `(status, message)` pairs, turned into a response at the
+/// edge (a `Response` in an `Err` is what clippy calls a large error).
+type Refused = (StatusCode, &'static str);
+
+fn hash_password(password: &str) -> Result<String, Refused> {
     bcrypt::hash(password, BCRYPT_COST)
-        .map_err(|_| error(StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))
+        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))
 }
 
 fn created(s: &AuthState, user: &User, status: StatusCode) -> Response {
@@ -428,7 +441,7 @@ async fn signup(State(s): State<AuthState>, Json(c): Json<Credentials>) -> Respo
     }
     let hash = match hash_password(&c.password) {
         Ok(h) => h,
-        Err(r) => return r,
+        Err((st, m)) => return error(st, m),
     };
     match s
         .store
@@ -453,7 +466,8 @@ async fn login(State(s): State<AuthState>, Json(c): Json<Credentials>) -> Respon
     let Some(user) = s.store.find_by_email(&c.email) else {
         // Same cost as a real check, so an unknown email is not faster.
         static DUMMY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-        let dummy = DUMMY.get_or_init(|| bcrypt::hash("not-a-password", BCRYPT_COST).unwrap_or_default());
+        let dummy =
+            DUMMY.get_or_init(|| bcrypt::hash("not-a-password", BCRYPT_COST).unwrap_or_default());
         let _ = bcrypt::verify(&c.password, dummy);
         return error(StatusCode::UNAUTHORIZED, "Invalid credentials");
     };
@@ -482,19 +496,19 @@ async fn oauth_not_configured(Path(provider): Path<String>) -> Redirect {
     Redirect::to(&format!("/login?error={provider}_not_configured"))
 }
 
-fn current(s: &AuthState, ctx: &AuthContext) -> Result<User, Response> {
+fn current(s: &AuthState, ctx: &AuthContext) -> Result<User, Refused> {
     if ctx.service {
-        return Err(error(StatusCode::UNAUTHORIZED, "User not found"));
+        return Err((StatusCode::UNAUTHORIZED, "User not found"));
     }
     s.store
         .find_by_id(&ctx.subject)
-        .ok_or_else(|| error(StatusCode::UNAUTHORIZED, "User not found"))
+        .ok_or((StatusCode::UNAUTHORIZED, "User not found"))
 }
 
-fn admin(s: &AuthState, ctx: &AuthContext) -> Result<User, Response> {
+fn admin(s: &AuthState, ctx: &AuthContext) -> Result<User, Refused> {
     let user = current(s, ctx)?;
     if !user.is_admin() {
-        return Err(error(StatusCode::FORBIDDEN, "Administrator only"));
+        return Err((StatusCode::FORBIDDEN, "Administrator only"));
     }
     Ok(user)
 }
@@ -502,14 +516,17 @@ fn admin(s: &AuthState, ctx: &AuthContext) -> Result<User, Response> {
 async fn me(State(s): State<AuthState>, Extension(ctx): Extension<AuthContext>) -> Response {
     match current(&s, &ctx) {
         Ok(user) => Json(serde_json::json!({ "user": user.public() })).into_response(),
-        Err(r) => r,
+        Err((st, m)) => error(st, m),
     }
 }
 
-async fn list_users(State(s): State<AuthState>, Extension(ctx): Extension<AuthContext>) -> Response {
+async fn list_users(
+    State(s): State<AuthState>,
+    Extension(ctx): Extension<AuthContext>,
+) -> Response {
     match admin(&s, &ctx) {
         Ok(_) => Json(serde_json::json!({ "users": s.store.list() })).into_response(),
-        Err(r) => r,
+        Err((st, m)) => error(st, m),
     }
 }
 
@@ -518,8 +535,8 @@ async fn create_user(
     Extension(ctx): Extension<AuthContext>,
     Json(c): Json<Credentials>,
 ) -> Response {
-    if let Err(r) = admin(&s, &ctx) {
-        return r;
+    if let Err((st, m)) = admin(&s, &ctx) {
+        return error(st, m);
     }
     if !valid_email(&c.email) {
         return error(StatusCode::BAD_REQUEST, "Invalid email");
@@ -532,7 +549,7 @@ async fn create_user(
     }
     let hash = match hash_password(&c.password) {
         Ok(h) => h,
-        Err(r) => return r,
+        Err((st, m)) => return error(st, m),
     };
     match s.store.create(&c.email, &c.name, hash, None) {
         Ok(user) => (
@@ -555,10 +572,13 @@ async fn delete_user(
 ) -> Response {
     let me = match admin(&s, &ctx) {
         Ok(u) => u,
-        Err(r) => return r,
+        Err((st, m)) => return error(st, m),
     };
     if me.id == id {
-        return error(StatusCode::BAD_REQUEST, "An administrator cannot delete their own account");
+        return error(
+            StatusCode::BAD_REQUEST,
+            "An administrator cannot delete their own account",
+        );
     }
     match s.store.delete(&id) {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
