@@ -216,7 +216,9 @@ processus par tenant, T5, plus de surface npm) ou conservation du serveur
 Node ; (2) cible de déploiement (image + compose sur un serveur géré, ou
 hébergeur managé) ; (3) sauvegarde (copie des segments immuables et du
 MANIFEST vers un stockage objet, ou snapshot disque). L'image et le compose
-n'en dépendent pas et démarrent en premier. Points d'hygiène hors chantier :
+n'en dépendent pas et démarrent en premier. Le lot A de l'interface (§3.9,
+premier jour, boutons inertes) s'intercale juste après, avant toute
+démonstration ; le lot B (quotidien) suit la sauvegarde. Points d'hygiène hors chantier :
 jeton GitHub du poste à révoquer (Settings, Applications), protection de
 `main` à durcir pour imposer les PR, scan `claude-security` en attente de
 l'accord sur le coût.
@@ -284,11 +286,84 @@ Deux décisions reviennent au propriétaire avant l'étape 3 : l'hébergeur
 cible (Infomaniak Public Cloud par cohérence avec le fournisseur LLM, ou
 autre) et l'authentification en Rust ou Node.
 
-### 3.9 Dette, entre deux branches
+### 3.9 Interface — deux publics, deux lots (plan du 2026-09-29)
 
-Migration `react-router` 7 (deux vulnérabilités npm modérées) ; modules
-d'authentification `.jsx` en TypeScript (testés à 97–100 %, la conversion
-est mécanique) ; ces deux points se règlent naturellement avec l'étape 3.8.3.
+L'interface a deux publics : la personne qui ouvre l'application pour la
+première fois (tableau de bord vide, dix entrées de menu sans ordre, tout
+en anglais et en jargon) et celle qui y travaille tous les jours (cherche,
+importe, relit, corrige). Deux lots, à des moments différents du calendrier
+§3.8 ; le vocabulaire et le menu se font une fois pour les deux.
+
+**Lot A — premier jour** (2 à 3 jours ; **après 3.8.1 image + compose et
+avant 3.8.3**, c'est-à-dire avant toute démonstration à un prospect) :
+
+1. Parcours guidé à la place du tableau de bord vide : trois étapes
+   numérotées, « Décrivez vos données » (modèle prêt à l'emploi : contrats
+   et factures, personnes et organisations, équipements et procédures, ou
+   vide), « Déposez vos fichiers », « Posez une question ». Chaque étape
+   s'ouvre quand la précédente est faite ; le parcours disparaît une fois
+   l'ontologie en place.
+2. « Essayer avec l'exemple finance » en un clic (`examples/finance`
+   existe) : un graphe rempli, une question, une réponse sourcée.
+3. États vides orientés vers l'action, sur chaque page : la phrase dit
+   quoi faire et le bouton le fait (« Aucun fichier. Déposez un Word, un
+   Excel ou un PDF ici, ou essayez l'exemple »).
+4. Menu par flux et vocabulaire sans jargon (vaut pour les deux lots) :
+   *Préparer* (Modèle de données, Fichiers, Importer des documents),
+   *Explorer* (Graphe, Fiches, Questions), *Automatiser* (Règles,
+   Actions) ; vraies icônes ; une langue par défaut (français) ; aucun
+   terme technique hors Paramètres (pas de `ns`, `P1`, `payload`).
+5. Nettoyage des boutons qui ne mènent nulle part (tableau ci-dessous) :
+   chacun est branché ou retiré, aucun ne reste inerte.
+
+**Lot B — quotidien** (au fil de l'eau, **après 3.8.4 sauvegarde**, guidé
+par ce que les premiers utilisateurs font réellement) :
+
+1. Recherche unique en haut, toujours visible, avec réponse sourcée
+   (aujourd'hui elle renvoie vers la page Questions).
+2. La fiche d'un concept comme centre : sur un écran, ses liens, les
+   documents d'origine, les règles qui s'appliquent, correction sur place.
+3. Accueil orienté activité : importé cette semaine, en attente de
+   relecture, exceptions signalées par les règles, dernières questions ; à
+   la place des courbes et de l'aperçu décoratif du réseau.
+4. Relecture d'import proposée d'office après un dépôt : « 12 personnes,
+   4 organisations, 9 relations trouvées. Vérifier et ajouter ».
+5. Questions enregistrées, rejouables en un clic, épinglables sur
+   l'accueil (l'écran Questions les stocke déjà).
+6. Graphe comme outil de réponse : part d'une fiche ou d'une question,
+   voisinage à deux pas, filtre par type (le parcours existe côté serveur).
+7. Évolution du modèle sans peur : ajouter un type ou une relation dit ce
+   que ça touche (« 3 400 fiches concernées, rien à migrer »).
+
+**Dette technique** (avec 3.8.3, inchangé) : migration `react-router` 7
+(deux vulnérabilités npm modérées) ; modules d'authentification `.jsx` en
+TypeScript (testés à 97–100 %, conversion mécanique).
+
+**Boutons et liens qui ne mènent nulle part** (inventaire du 2026-09-29,
+`web/src`) — traités dans le lot A, décision par ligne :
+
+| Où | Élément | Aujourd'hui | Décision |
+|---|---|---|---|
+| Barre du haut | « ? » Aide | rien | **Brancher** : ouvre le guide (lot A.1) ou la doc ; sinon retirer |
+| Barre du haut | « ⚑ » Notifications | rien | **Retirer** jusqu'à ce qu'il existe des événements à notifier (lot B.3) |
+| Barre du haut | Avatar « U » | rien | **Brancher** : nom de l'utilisateur, déconnexion, Paramètres |
+| Tableau de bord | « View Analytics » | ouvre le Graphe | **Renommer** « Ouvrir le graphe » ou retirer (doublon de la carte voisine) |
+| Tableau de bord | Aperçu du réseau | décoratif | **Retirer** (lot B.3 le remplace) |
+| Fiches | icône « Expand » de la carte Détails | rien | **Retirer** (ou ouvrir la fiche en plein écran, lot B.2) |
+| Fiches | « Export » dans les détails | rien | **Brancher** sur l'export existant du serveur (JSON), sinon retirer |
+| Fiches | « Validate Definitions » | message « coming soon » | **Retirer** tant que la validation n'existe pas |
+| Actions | icône « Expand » | rien | **Retirer** |
+| Actions | « Run Now » | rien | **Brancher** sur l'exécution d'une action, sinon retirer |
+| Actions | « Import Actions », « Generate with AI », « Bulk Edit », « Run All Active » | liens `href="#"` | **Retirer** les quatre ; « Generate with AI » revient quand la génération existe |
+| Actions | bouton Supprimer de la liste | icône « … » (more) pour une suppression | **Corriger l'icône** (corbeille) |
+| Actions | « Delete » des détails | icône « télécharger » | **Corriger l'icône** |
+| Règles | icône « Expand » | rien | **Retirer** |
+| Modèle de données | « More options ▾ » à côté de Générer | rien | **Retirer** |
+| Modèle de données | « Layout ▾ », zoom +, zoom −, « Fit », plein écran | rien | **Brancher** sur la vue (le Graphe a déjà ces commandes) ou retirer |
+| Modèle de données | « View Details › » | rien | **Retirer** ou ouvrir le type sélectionné |
+
+Règle pour la suite : un bouton n'entre dans l'interface qu'avec son
+action et son test de rendu ; « coming soon » n'est pas un état.
 
 ## 4. Procédé
 
