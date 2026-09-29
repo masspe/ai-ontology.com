@@ -22,6 +22,7 @@
 //! The router is constructed via [`build_router`] so callers can mount it
 //! into a larger axum app or test it with `tower::ServiceExt`.
 
+pub mod auth;
 mod ingest_review;
 mod openapi;
 
@@ -868,6 +869,12 @@ pub struct RouterConfig {
     pub jwt: Option<JwtAuth>,
     /// Per-IP request limit. `None` disables rate limiting.
     pub rate_limit: Option<RateLimit>,
+    /// Built-in `/auth/*` (users file, sign-up policy); needs `jwt` to sign
+    /// the tokens it issues.
+    pub users: Option<auth::UserAuth>,
+    /// Directory of the built web UI, served for every path no API route
+    /// claims (`index.html` for the client-side routes).
+    pub web_dir: Option<PathBuf>,
 }
 
 /// JWT verification parameters. Mirrors the Node `auth-server` defaults
@@ -935,6 +942,8 @@ impl RouterConfig {
             bearer_token: None,
             jwt: None,
             rate_limit: None,
+            users: None,
+            web_dir: None,
         }
     }
 }
@@ -951,6 +960,8 @@ pub fn build_router_with_auth(state: AppState, bearer_token: Option<String>) -> 
             bearer_token,
             jwt: None,
             rate_limit: None,
+            users: None,
+            web_dir: None,
         },
     )
 }
@@ -964,6 +975,8 @@ pub fn build_router_with_jwt(state: AppState, jwt: JwtAuth) -> Router {
             bearer_token: None,
             jwt: Some(jwt),
             rate_limit: None,
+            users: None,
+            web_dir: None,
         },
     )
 }
@@ -973,19 +986,50 @@ pub fn build_router_with_jwt(state: AppState, jwt: JwtAuth) -> Router {
 /// 2. optional rate-limit by client IP,
 /// 3. optional bearer-token / JWT check.
 pub fn build_router_with_config(state: AppState, cfg: RouterConfig) -> Router {
-    build_router_inner(state, cfg.bearer_token, cfg.jwt, cfg.rate_limit)
+    build_router_inner(state, cfg)
 }
 
-fn build_router_inner(
-    state: AppState,
-    bearer_token: Option<String>,
-    jwt: Option<JwtAuth>,
-    rate_limit: Option<RateLimit>,
-) -> Router {
-    let healthz_router = Router::new()
+fn build_router_inner(state: AppState, cfg: RouterConfig) -> Router {
+    let RouterConfig {
+        bearer_token,
+        jwt,
+        rate_limit,
+        users,
+        web_dir,
+    } = cfg;
+    let mut healthz_router = Router::new()
         .route("/healthz", get(healthz))
         .route("/openapi.json", get(openapi::openapi_spec))
         .route("/docs", get(openapi::swagger_ui));
+
+    // Built-in auth (ROADMAP §3.8.3): the public half next to /healthz,
+    // behind its own rate limit (credential guessing), the private half
+    // inside the protected router below.
+    let auth_state = match (&users, &jwt) {
+        (Some(u), Some(j)) => {
+            let store = auth::UserStore::open(&u.users_file).unwrap_or_else(|e| {
+                panic!("cannot open the users file: {e}");
+            });
+            Some(auth::AuthState {
+                store: StdArc::new(store),
+                signer: StdArc::new(auth::Signer::new(j)),
+                allow_signup: u.allow_signup,
+            })
+        }
+        (Some(_), None) => panic!("built-in auth needs a JWT secret to sign tokens"),
+        _ => None,
+    };
+    if let Some(a) = &auth_state {
+        let limiter = StdArc::new(RateLimiter::new(RateLimit {
+            max_requests: 30,
+            window: Duration::from_secs(60),
+        }));
+        let public = auth::public_routes(a.clone()).layer(middleware::from_fn(move |req, next| {
+            let limiter = limiter.clone();
+            async move { rate_limit_layer(req, next, limiter).await }
+        }));
+        healthz_router = healthz_router.merge(public);
+    }
 
     let protected = Router::new()
         .route("/stats", get(stats))
@@ -1057,6 +1101,10 @@ fn build_router_inner(
         .route("/feedbacks/:id", delete(delete_feedback))
         .route("/logs/tail", get(logs_tail))
         .with_state(state);
+    let protected = match &auth_state {
+        Some(a) => protected.merge(auth::protected_routes(a.clone())),
+        None => protected,
+    };
 
     let protected = if bearer_token.is_some() || jwt.is_some() {
         let static_token = bearer_token.map(StdArc::new);
@@ -1071,6 +1119,14 @@ fn build_router_inner(
     };
 
     let mut app = healthz_router.merge(protected);
+
+    // The web UI (ROADMAP §3.8.2): files under `web_dir`, and `index.html`
+    // for any other path so the client-side router owns it. API routes are
+    // matched first, so an unknown API path still answers as before.
+    if let Some(dir) = web_dir {
+        let index = tower_http::services::ServeFile::new(dir.join("index.html"));
+        app = app.fallback_service(tower_http::services::ServeDir::new(dir).not_found_service(index));
+    }
 
     if let Some(rl) = rate_limit {
         let limiter = StdArc::new(RateLimiter::new(rl));

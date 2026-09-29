@@ -749,6 +749,8 @@ async fn main() -> Result<()> {
                     bearer_token: bearer,
                     jwt,
                     rate_limit: None,
+                    users: None,
+                    web_dir: None,
                 },
             );
             let listener = tokio::net::TcpListener::bind(&bind).await?;
