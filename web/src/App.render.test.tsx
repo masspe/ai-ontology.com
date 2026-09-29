@@ -73,8 +73,8 @@ describe("App routes", () => {
 
   it("highlights the sidebar entry of the current section", () => {
     visit("/rules");
-    expect(screen.getByRole("link", { name: "Rules" })).toHaveClass("active");
-    expect(screen.getByRole("link", { name: "Dashboard" })).not.toHaveClass("active");
+    expect(screen.getByRole("link", { name: "Règles" })).toHaveClass("active");
+    expect(screen.getByRole("link", { name: "Tableau de bord" })).not.toHaveClass("active");
   });
 
   it.each([

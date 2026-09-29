@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Mediasoft & Cie S.A.
 //
 // Rendering tests of the Dashboard: the six parallel requests, stat tiles
-// with deltas and sparklines, the growth chart, the network preview, the
+// with deltas and sparklines, the growth chart, the
 // file / query / activity lists, the insights card, the 15 s poll, the
 // error banner and every empty state.
 
@@ -171,17 +171,6 @@ describe("Dashboard page", () => {
     expect(texts[0]).toBe("21");
   });
 
-  it("draws the network preview with the first six concept types around the first one", async () => {
-    renderPage(<Dashboard />);
-    await waitFor(() => expect(tileValue("Entities")).toBe("1,234"));
-    const preview = document.querySelector(".network-preview")!;
-    expect(preview.querySelectorAll("rect")).toHaveLength(6);
-    expect(preview.querySelectorAll("line")).toHaveLength(5);
-    expect(preview).toHaveTextContent("Person");
-    expect(preview).toHaveTextContent("Invoice");
-    expect(preview).not.toHaveTextContent("Hidden");
-  });
-
   it("tables the first five concept types with parent and property count", async () => {
     renderPage(<Dashboard />);
     await waitFor(() => expect(tileValue("Entities")).toBe("1,234"));
@@ -293,8 +282,8 @@ describe("Dashboard page", () => {
       extraRoutes: <Route path="/builder" element={<LocationProbe />} />,
     });
     await waitFor(() => expect(tileValue("Entities")).toBe("1,234"));
-    expect(screen.getByRole("link", { name: "View Analytics" })).toHaveAttribute("href", "/graph");
-    expect(screen.getByRole("link", { name: "Open Graph ↗" })).toHaveAttribute("href", "/graph");
+    expect(screen.queryByRole("link", { name: "View Analytics" })).not.toBeInTheDocument();
+    expect(screen.queryByText("Ontology Network Preview")).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Upload Files.*Import and process data/ })).toHaveAttribute("href", "/files");
     expect(screen.getByRole("link", { name: /Run Query/ })).toHaveAttribute("href", "/queries");
     expect(screen.getByRole("link", { name: /Drag & drop files anywhere/ })).toHaveAttribute("href", "/files");
@@ -315,7 +304,8 @@ describe("Dashboard page", () => {
     expect(screen.queryByRole("alert")).toBeNull();
     expect(document.querySelector(".error-banner")).toBeNull();
     expect(screen.getByText("No samples yet. The dashboard auto-refreshes every 15s.")).toBeInTheDocument();
-    expect(screen.getAllByText("No ontology defined yet.")).toHaveLength(2);
+    expect(screen.getByText(/No ontology defined yet/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Define the model" })).toHaveAttribute("href", "/builder");
     expect(screen.getByText("No files uploaded yet.")).toBeInTheDocument();
     expect(screen.getByText("No saved queries yet.")).toBeInTheDocument();
     expect(screen.getByText("No activity yet.")).toBeInTheDocument();
@@ -360,5 +350,24 @@ describe("Dashboard page", () => {
     // branch for coverage and only checks that the late resolution does
     // not throw.
     await expect(Promise.resolve().then(() => undefined)).resolves.toBeUndefined();
+  });
+});
+
+describe("Dashboard — first day", () => {
+  it("replaces the empty dashboard by the three steps until there is data", async () => {
+    mocked.getStats.mockResolvedValue({ ...stats, concepts: 0, concept_types: 0 });
+    mocked.getOntology.mockResolvedValue({ concept_types: {}, relation_types: {} });
+    mocked.listConcepts.mockResolvedValue({ total: 0, concepts: [] });
+    renderPage(<Dashboard />);
+    expect(await screen.findByRole("heading", { name: "Bienvenue" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Définir le modèle" })).toHaveAttribute("href", "/builder");
+    expect(screen.queryByRole("heading", { name: "Dashboard" })).not.toBeInTheDocument();
+  });
+
+  it("shows the dashboard as soon as a model exists, even without data", async () => {
+    mocked.getStats.mockResolvedValue({ ...stats, concepts: 0 });
+    renderPage(<Dashboard />);
+    await waitFor(() => expect(tileValue("Concept Types")).toBe("12"));
+    expect(screen.queryByRole("heading", { name: "Bienvenue" })).not.toBeInTheDocument();
   });
 });

@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Mediasoft-Commercial
 // Copyright (C) 2026 Mediasoft & Cie S.A.
 //
-// OntologyGraph — pill-style SVG visualization matching the Dashboard
-// `NetworkPreview` look. Renders a Subgraph (concepts + relations) with
+// OntologyGraph — pill-style SVG visualization. Renders a Subgraph (concepts + relations) with
 // rounded rectangle nodes colored by concept type, light-grey edges, and
 // optional relation labels.
 
@@ -10,7 +9,7 @@ import { useMemo } from "react";
 import type { Subgraph } from "../api";
 import type { OntologyProposal } from "../lib/proposalTypes";
 
-// --- palette (kept in sync with Dashboard.NetworkPreview) -------------------
+// --- palette ---------------------------------------------------------------
 const PALETTE: { fill: string; stroke: string; text: string }[] = [
   { fill: "#dbeafe", stroke: "#2563eb", text: "#1d4ed8" }, // blue
   { fill: "#dcfce7", stroke: "#16a34a", text: "#15803d" }, // green

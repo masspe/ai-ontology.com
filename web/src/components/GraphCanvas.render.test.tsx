@@ -9,6 +9,7 @@
 import { createRef } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { renderPage } from "../test/render";
 import GraphCanvas, { type GraphCanvasHandle } from "./GraphCanvas";
 import type { Subgraph } from "../api";
 
@@ -87,10 +88,11 @@ afterEach(() => {
 
 describe("GraphCanvas", () => {
   it("shows the empty state without a subgraph or without concepts", () => {
-    const { rerender } = render(<GraphCanvas subgraph={null} />);
-    expect(screen.getByText(/No concepts to display/)).toBeInTheDocument();
+    const { rerender } = renderPage(<GraphCanvas subgraph={null} />);
+    expect(screen.getByText(/le graphe est vide/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Déposez des fichiers" })).toHaveAttribute("href", "/files");
     rerender(<GraphCanvas subgraph={{ concepts: [], relations: [] }} />);
-    expect(screen.getByText(/No concepts to display/)).toBeInTheDocument();
+    expect(screen.getByText(/le graphe est vide/)).toBeInTheDocument();
   });
 
   it("renders one node per concept with its label, and one labelled edge per relation", async () => {
@@ -234,7 +236,7 @@ describe("GraphCanvas", () => {
 
   it("falls back to no-op handle methods before the scene mounts", () => {
     const ref = createRef<GraphCanvasHandle>();
-    render(<GraphCanvas ref={ref} subgraph={null} />);
+    renderPage(<GraphCanvas ref={ref} subgraph={null} />);
     expect(ref.current).not.toBeNull();
     expect(() => {
       ref.current!.fit();

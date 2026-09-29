@@ -21,6 +21,9 @@ configure({ asyncUtilTimeout: 3_000 });
 beforeEach(() => {
   window.localStorage.clear();
   window.sessionStorage.clear();
+  // The interactive guide opens alone on a first visit; page tests are not
+  // first visits (Tour.render.test.tsx removes this to test that path).
+  window.localStorage.setItem("tour.v1", JSON.stringify({ done: true }));
   vi.stubGlobal(
     "fetch",
     vi.fn(() => Promise.reject(new Error("network access is disabled in unit tests"))),

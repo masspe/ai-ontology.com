@@ -43,6 +43,9 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
+    // The finance example is imported from ../examples at build time
+    // (src/lib/example.ts); the dev server must be allowed to read it.
+    fs: { allow: [".."] },
     proxy: {
       ...Object.fromEntries(
         API_PATHS.map((p) => [p, { target: API_TARGET, changeOrigin: true, ws: true }]),

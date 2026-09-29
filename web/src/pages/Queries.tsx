@@ -119,7 +119,7 @@ export default function Queries() {
 
         <Card title="Saved queries" actions={<button onClick={refresh}>Reload</button>}>
           {queries.length === 0 ? (
-            <div className="empty">No saved queries yet.</div>
+            <div className="empty">Aucune question enregistrée. Posez-en une ci-dessus : la réponse cite les fiches d'où elle vient, et vous pourrez la garder.</div>
           ) : (
             <table className="table">
               <thead>

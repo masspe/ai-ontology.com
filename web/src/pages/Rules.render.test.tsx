@@ -536,14 +536,13 @@ describe("Rules page", () => {
     expect(mocked.createRule).not.toHaveBeenCalled();
   });
 
-  it("keeps the quick-action links inert", async () => {
-    const { user } = renderPage(<Rules />);
+  it("has no inert quick actions any more", async () => {
+    renderPage(<Rules />);
     await loaded();
     for (const title of ["Import Rules", "Generate with AI", "Bulk Edit", "Run Validation"]) {
-      const link = screen.getByText(title).closest("a") as HTMLAnchorElement;
-      expect(link).toHaveAttribute("href", "#");
-      await user.click(link);
+      expect(screen.queryByText(title)).not.toBeInTheDocument();
     }
+    expect(screen.queryByRole("button", { name: "Expand" })).not.toBeInTheDocument();
     // Still on the page, no modal opened, nothing fetched.
     expect(screen.getByRole("heading", { name: "Rules" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Create Rule" })).not.toBeInTheDocument();

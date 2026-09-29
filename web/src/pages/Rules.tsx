@@ -562,7 +562,6 @@ export default function Rules() {
         <Card
           className="rule-details"
           title="Rule Details"
-          actions={<button className="btn-ghost icon-btn" aria-label="Expand">{Icon.expand}</button>}
         >
           {selected && selectedRule ? (
             <>
@@ -677,38 +676,6 @@ export default function Rules() {
           </ul>
         </Card>
 
-        <Card title="Quick Actions">
-          <div className="quick-actions rule-quick">
-            <a className="quick-action qa-blue" href="#" onClick={(e) => e.preventDefault()}>
-              <div className="qa-icon">{Icon.import}</div>
-              <div>
-                <div className="qa-title">Import Rules</div>
-                <div className="qa-sub muted">Import rules from files or sources</div>
-              </div>
-            </a>
-            <a className="quick-action qa-violet" href="#" onClick={(e) => e.preventDefault()}>
-              <div className="qa-icon">{Icon.spark}</div>
-              <div>
-                <div className="qa-title">Generate with AI</div>
-                <div className="qa-sub muted">Auto-generate rules from data</div>
-              </div>
-            </a>
-            <a className="quick-action qa-amber" href="#" onClick={(e) => e.preventDefault()}>
-              <div className="qa-icon">{Icon.bulk}</div>
-              <div>
-                <div className="qa-title">Bulk Edit</div>
-                <div className="qa-sub muted">Edit multiple rules</div>
-              </div>
-            </a>
-            <a className="quick-action qa-green" href="#" onClick={(e) => e.preventDefault()}>
-              <div className="qa-icon">{Icon.play}</div>
-              <div>
-                <div className="qa-title">Run Validation</div>
-                <div className="qa-sub muted">Validate all rules and constraints</div>
-              </div>
-            </a>
-          </div>
-        </Card>
       </div>
 
       {editing != null && (

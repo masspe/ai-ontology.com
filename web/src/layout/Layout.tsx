@@ -5,6 +5,7 @@ import { useState } from "react";
 import { Outlet } from "react-router-dom";
 import Sidebar from "./Sidebar";
 import TopBar from "./TopBar";
+import Tour from "../components/Tour";
 
 export default function Layout() {
   const [collapsed, setCollapsed] = useState(false);
@@ -17,6 +18,7 @@ export default function Layout() {
           <Outlet />
         </main>
       </div>
+      <Tour />
     </div>
   );
 }
