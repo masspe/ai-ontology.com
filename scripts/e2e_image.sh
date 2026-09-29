@@ -63,6 +63,7 @@ echo "== the seeded graph is there"
 stats=$(curl -fsS -H "authorization: Bearer $TOKEN" "$BASE/stats")
 echo "$stats" | json "d['concepts']" | grep -qx 22
 echo "$stats" | json "d['relations']" | grep -qx 38
+echo "$stats" | json "d['memory']['budget_source']" | grep -qx cgroup-v2 || { echo "budget not read from the cgroup: $stats"; exit 1; }
 curl -fsS -H "authorization: Bearer $TOKEN" "$BASE/metrics" | grep -q '^ontology_stream_records{ns="meta"}'
 
 echo "== a write survives a restart"

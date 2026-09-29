@@ -771,10 +771,18 @@ async fn main() -> Result<()> {
                 (true, None) => anyhow::bail!("--login needs --data <dir>"),
                 (false, _) => None,
             };
-            let users = auth_dir.as_ref().map(|d| ontology_server::auth::UserAuth {
-                users_file: users_file.unwrap_or_else(|| d.join("users.json")),
-                allow_signup,
-            });
+            let users = match auth_dir.as_ref() {
+                Some(d) => {
+                    let path = users_file.unwrap_or_else(|| d.join("users.json"));
+                    let store = ontology_server::auth::UserStore::open(&path)
+                        .map_err(|e| anyhow::anyhow!("{e}"))?;
+                    Some(ontology_server::auth::UserAuth {
+                        store: Arc::new(store),
+                        allow_signup,
+                    })
+                }
+                None => None,
+            };
             let jwt = match jwt_secret_env {
                 Some(env_name) => {
                     let secret = std::env::var(&env_name)
@@ -813,7 +821,7 @@ async fn main() -> Result<()> {
                 tracing::info!(dir = %dir.display(), "serving the web UI");
             }
             if let Some(u) = &users {
-                tracing::info!(file = %u.users_file.display(), allow_signup, "built-in login enabled");
+                tracing::info!(file = %u.store.path().display(), allow_signup, "built-in login enabled");
             }
             let app = ontology_server::build_router_with_config(
                 state,
@@ -827,9 +835,14 @@ async fn main() -> Result<()> {
             );
             let listener = tokio::net::TcpListener::bind(&bind).await?;
             tracing::info!(addr = %bind, "server listening");
-            axum::serve(listener, app)
-                .with_graceful_shutdown(shutdown_signal())
-                .await?;
+            // With the peer address attached, the rate limit on /auth/* is
+            // per client IP (behind a reverse proxy: the proxy's address).
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .with_graceful_shutdown(shutdown_signal())
+            .await?;
             tracing::info!("server stopped");
         }
     }
@@ -853,37 +866,48 @@ fn healthcheck(url: &str) -> Result<u16> {
     } else {
         format!("{host_port}:80")
     };
-    let mut s = std::net::TcpStream::connect_timeout(
-        &std::net::ToSocketAddrs::to_socket_addrs(&addr)?
-            .next()
-            .context("unresolvable host")?,
-        Duration::from_secs(3),
-    )?;
-    s.set_read_timeout(Some(Duration::from_secs(3)))?;
-    write!(
-        s,
-        "GET {path} HTTP/1.0
-Host: {host_port}
-Connection: close
-
-"
-    )?;
-    let mut head = [0u8; 64];
-    let n = s.read(&mut head)?;
-    let line = String::from_utf8_lossy(&head[..n]);
-    line.split_whitespace()
-        .nth(1)
-        .and_then(|c| c.parse().ok())
-        .context("no HTTP status line")
+    // Try every address the name resolves to (localhost may be ::1 first).
+    let mut last = anyhow::anyhow!("unresolvable host");
+    for sa in std::net::ToSocketAddrs::to_socket_addrs(&addr)? {
+        let mut s = match std::net::TcpStream::connect_timeout(&sa, Duration::from_secs(3)) {
+            Ok(s) => s,
+            Err(e) => {
+                last = e.into();
+                continue;
+            }
+        };
+        s.set_read_timeout(Some(Duration::from_secs(3)))?;
+        write!(
+            s,
+            "GET {path} HTTP/1.0\r\nHost: {host_port}\r\nConnection: close\r\n\r\n"
+        )?;
+        let mut head = [0u8; 64];
+        let n = s.read(&mut head)?;
+        let line = String::from_utf8_lossy(&head[..n]);
+        return line
+            .split_whitespace()
+            .nth(1)
+            .and_then(|c| c.parse().ok())
+            .context("no HTTP status line");
+    }
+    Err(last)
 }
 
 /// The JWT secret of the built-in login: read from `path`, or generated
 /// (32 random bytes, hex) and written there on the first start. Losing the
 /// file only logs every user out.
 fn jwt_secret_file(path: &Path) -> Result<Vec<u8>> {
+    use std::io::Write;
     match std::fs::read(path) {
         Ok(bytes) if !bytes.trim_ascii().is_empty() => Ok(bytes.trim_ascii().to_vec()),
-        Ok(_) | Err(_) => {
+        Ok(_) => anyhow::bail!(
+            "{} is empty: delete it to generate a new secret",
+            path.display()
+        ),
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            Err(e).with_context(|| format!("reading {}", path.display()))
+        }
+        Err(_) => {
             use rand::RngCore;
             let mut raw = [0u8; 32];
             rand::rng().fill_bytes(&mut raw);
@@ -891,12 +915,17 @@ fn jwt_secret_file(path: &Path) -> Result<Vec<u8>> {
             if let Some(dir) = path.parent() {
                 std::fs::create_dir_all(dir)?;
             }
-            std::fs::write(path, &hex).with_context(|| format!("writing {}", path.display()))?;
+            // Created owner-only from the start (Unix), never world-readable.
+            let mut opts = std::fs::OpenOptions::new();
+            opts.write(true).create_new(true);
             #[cfg(unix)]
             {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+                use std::os::unix::fs::OpenOptionsExt;
+                opts.mode(0o600);
             }
+            opts.open(path)
+                .and_then(|mut f| f.write_all(hex.as_bytes()))
+                .with_context(|| format!("writing {}", path.display()))?;
             tracing::warn!(file = %path.display(), "generated a new JWT secret (every user will log in again)");
             Ok(hex.into_bytes())
         }

@@ -15,7 +15,6 @@
 # refuses to start and says by how much, instead of being killed later.
 
 x-tenant: &tenant
-  build: .
   image: ontology:local
   restart: unless-stopped
   mem_limit: 4g
@@ -35,6 +34,7 @@ x-tenant: &tenant
 services:
   acme:
     <<: *tenant
+    build: .          # built once; globex reuses the image
     ports: ["5001:5000"]
     volumes: ["acme-data:/data"]
   globex:

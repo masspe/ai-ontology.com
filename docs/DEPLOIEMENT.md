@@ -33,7 +33,9 @@ open http://localhost:5001            # acme
 
 `compose.yaml` montre le modèle : un service par client, un volume par
 service, `mem_limit`, une sonde de santé (`ontology healthcheck`), un arrêt
-propre (`stop_grace_period`). Pour un client de plus, copiez un bloc de
+propre (`stop_grace_period`). La limitation des tentatives de connexion est
+par adresse IP : derrière un reverse proxy, c'est l'adresse du proxy que le
+binaire voit, sauf à faire porter cette limite par le proxy. Pour un client de plus, copiez un bloc de
 service et son volume ; le routage par nom d'hôte (TLS compris) est
 l'affaire du reverse proxy devant les conteneurs (Caddy ou Traefik font
 cela en quelques lignes).
@@ -67,7 +69,10 @@ curl -s -X POST http://localhost:5001/auth/users -H "authorization: Bearer $TOKE
 Règles : adresse valide, mot de passe de 8 caractères et trois classes
 (majuscule, minuscule, chiffre, autre), nom non vide. Les mots de passe sont
 hachés (bcrypt) ; un `users.json` écrit par l'ancien serveur Node reste
-valable tel quel. L'écran de création de comptes dans Paramètres arrive
+valable tel quel. Un tel fichier n'a pas d'administrateur et l'inscription y
+est fermée : pour en désigner un, arrêtez le conteneur, ajoutez
+`"role": "admin"` sur un compte du fichier, redémarrez. Supprimer un compte
+révoque ses jetons immédiatement. L'écran de création de comptes dans Paramètres arrive
 avec le lot A de l'interface (ROADMAP §3.9).
 
 Google et Microsoft (OAuth) ne sont pas encore servis par le binaire : les

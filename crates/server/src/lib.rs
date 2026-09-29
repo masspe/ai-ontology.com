@@ -1006,16 +1006,11 @@ fn build_router_inner(state: AppState, cfg: RouterConfig) -> Router {
     // behind its own rate limit (credential guessing), the private half
     // inside the protected router below.
     let auth_state = match (&users, &jwt) {
-        (Some(u), Some(j)) => {
-            let store = auth::UserStore::open(&u.users_file).unwrap_or_else(|e| {
-                panic!("cannot open the users file: {e}");
-            });
-            Some(auth::AuthState {
-                store: StdArc::new(store),
-                signer: StdArc::new(auth::Signer::new(j)),
-                allow_signup: u.allow_signup,
-            })
-        }
+        (Some(u), Some(j)) => Some(auth::AuthState {
+            store: u.store.clone(),
+            signer: StdArc::new(auth::Signer::new(j)),
+            allow_signup: u.allow_signup,
+        }),
         (Some(_), None) => panic!("built-in auth needs a JWT secret to sign tokens"),
         _ => None,
     };
@@ -1109,10 +1104,14 @@ fn build_router_inner(state: AppState, cfg: RouterConfig) -> Router {
     let protected = if bearer_token.is_some() || jwt.is_some() {
         let static_token = bearer_token.map(StdArc::new);
         let jwt_cfg = jwt.map(|j| StdArc::new(BuiltJwt::new(j)));
+        // With the built-in login on, a token must also name an account that
+        // still exists: deleting a user revokes their tokens at once.
+        let accounts = auth_state.as_ref().map(|a| a.store.clone());
         protected.layer(middleware::from_fn(move |req, next| {
             let static_token = static_token.clone();
             let jwt_cfg = jwt_cfg.clone();
-            async move { require_auth(req, next, static_token, jwt_cfg).await }
+            let accounts = accounts.clone();
+            async move { require_auth(req, next, static_token, jwt_cfg, accounts).await }
         }))
     } else {
         protected
@@ -1122,11 +1121,41 @@ fn build_router_inner(state: AppState, cfg: RouterConfig) -> Router {
 
     // The web UI (ROADMAP §3.8.2): files under `web_dir`, and `index.html`
     // for any other path so the client-side router owns it. API routes are
-    // matched first, so an unknown API path still answers as before.
+    // matched first; six UI pages share a path with a GET API route
+    // (`/concepts`, `/files`, …), so a browser *navigation* to one of them
+    // (a reload, a bookmark: `Accept: text/html`) is answered with
+    // `index.html` before routing, while API clients (`application/json`,
+    // `*/*`) reach the API as before.
     if let Some(dir) = web_dir {
+        let index = tower_http::services::ServeFile::new(dir.join("index.html"));
+        let index_for_nav = index.clone();
+        app = app.layer(middleware::from_fn(
+            move |req: Request<axum::body::Body>, next: Next| {
+                let index = index_for_nav.clone();
+                async move {
+                    let path = req.uri().path();
+                    let api_only = path.starts_with("/auth/")
+                        || path == "/healthz"
+                        || path == "/docs"
+                        || path == "/openapi.json";
+                    let wants_html = req
+                        .headers()
+                        .get(axum::http::header::ACCEPT)
+                        .and_then(|v| v.to_str().ok())
+                        .is_some_and(|a| a.contains("text/html"));
+                    if req.method() == axum::http::Method::GET && wants_html && !api_only {
+                        let mut svc = index;
+                        return tower::ServiceExt::oneshot(&mut svc, req)
+                            .await
+                            .map(|r| r.into_response())
+                            .unwrap_or_else(|_| StatusCode::NOT_FOUND.into_response());
+                    }
+                    next.run(req).await
+                }
+            },
+        ));
         // `fallback`, not `not_found_service`: a client-side route must get
         // `index.html` with a 200, the browser then renders it.
-        let index = tower_http::services::ServeFile::new(dir.join("index.html"));
         app = app.fallback_service(tower_http::services::ServeDir::new(dir).fallback(index));
     }
 
@@ -1390,6 +1419,7 @@ async fn require_auth(
     next: Next,
     static_token: Option<StdArc<String>>,
     jwt: Option<StdArc<BuiltJwt>>,
+    accounts: Option<StdArc<auth::UserStore>>,
 ) -> Result<Response, StatusCode> {
     let provided = extract_bearer(&req).ok_or(StatusCode::UNAUTHORIZED)?;
 
@@ -1399,6 +1429,11 @@ async fn require_auth(
     if let Some(jwt) = jwt.as_ref() {
         match jwt.verify(&provided) {
             Ok(claims) => {
+                if let Some(store) = accounts.as_ref() {
+                    if !store.exists(&claims.sub) {
+                        return Err(StatusCode::UNAUTHORIZED);
+                    }
+                }
                 req.extensions_mut().insert(AuthContext {
                     subject: claims.sub,
                     email: claims.email,
