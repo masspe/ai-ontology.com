@@ -36,19 +36,20 @@ export interface RenderedPage extends RenderResult {
 export function renderPage(ui: ReactElement, options: RenderPageOptions = {}): RenderedPage {
   const { route = "/", path = "*", extraRoutes, ...rest } = options;
   const user = userEvent.setup();
-  const result = render(
+  // A wrapper rather than an inline tree, so `rerender(ui)` keeps it.
+  const wrapper = ({ children }: { children: ReactNode }) => (
     <MemoryRouter initialEntries={[route]}>
       <ToastProvider>
         <ConfirmProvider>
           <Routes>
-            <Route path={path} element={ui} />
+            <Route path={path} element={children} />
             {extraRoutes}
           </Routes>
         </ConfirmProvider>
       </ToastProvider>
-    </MemoryRouter>,
-    rest,
+    </MemoryRouter>
   );
+  const result = render(ui, { ...rest, wrapper });
   return { ...result, user };
 }
 

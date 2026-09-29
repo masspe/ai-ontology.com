@@ -4,6 +4,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import Card from "../components/Card";
+import Onboarding from "../components/Onboarding";
 import Sparkline from "../components/Sparkline";
 import {
   getFiles,
@@ -243,61 +244,6 @@ function GrowthChart({ samples }: ChartProps) {
 // Decorative mini network preview
 // ---------------------------------------------------------------------------
 
-function NetworkPreview({ ontology }: { ontology: Ontology | null }) {
-  const names = ontology ? Object.keys(ontology.concept_types).slice(0, 6) : [];
-  if (names.length === 0) {
-    return <div className="empty">No ontology defined yet.</div>;
-  }
-  const center = { x: 240, y: 130, label: names[0]! };
-  const radius = 100;
-  const around = names.slice(1).map((label, i, arr) => {
-    const angle = (i / Math.max(1, arr.length)) * Math.PI * 2 - Math.PI / 2;
-    return {
-      label,
-      x: center.x + Math.cos(angle) * radius * (1 + (i % 2) * 0.1),
-      y: center.y + Math.sin(angle) * (radius - 30),
-    };
-  });
-  const palette = ["#dbeafe", "#dcfce7", "#fef3c7", "#fee2e2", "#ede9fe", "#cffafe"];
-  const stroke = ["#2563eb", "#16a34a", "#d97706", "#dc2626", "#7c3aed", "#0891b2"];
-  return (
-    <div className="network-preview">
-      <svg viewBox="0 0 480 260" preserveAspectRatio="xMidYMid meet">
-        {around.map((n, i) => (
-          <line key={`l-${i}`} x1={center.x} y1={center.y} x2={n.x} y2={n.y} stroke="#cbd5e1" strokeWidth={1.2} />
-        ))}
-        <g>
-          <rect x={center.x - 50} y={center.y - 16} width={100} height={32} rx={16} fill="#dbeafe" stroke="#2563eb" />
-          <text x={center.x} y={center.y + 4} fontSize="12" fontWeight="600" fill="#1d4ed8" textAnchor="middle">
-            {center.label}
-          </text>
-        </g>
-        {around.map((n, i) => (
-          <g key={`n-${i}`}>
-            <rect
-              x={n.x - 44}
-              y={n.y - 14}
-              width={88}
-              height={28}
-              rx={14}
-              fill={palette[i % palette.length]}
-              stroke={stroke[i % stroke.length]}
-            />
-            <text x={n.x} y={n.y + 4} fontSize="11" fontWeight="600" fill={stroke[i % stroke.length]} textAnchor="middle">
-              {n.label}
-            </text>
-          </g>
-        ))}
-      </svg>
-      <div className="network-legend">
-        <span><i style={{ background: "#2563eb" }} /> Class</span>
-        <span><i style={{ background: "#16a34a" }} /> Entity</span>
-        <span><i style={{ background: "#d97706" }} /> Relation</span>
-        <span><i style={{ background: "#dc2626" }} /> Constraint</span>
-      </div>
-    </div>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // Dashboard page
@@ -311,6 +257,7 @@ export default function Dashboard() {
   const [ontology, setOntology] = useState<Ontology | null>(null);
   const [concepts, setConcepts] = useState<Concept[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [refresh, setRefresh] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -342,7 +289,7 @@ export default function Dashboard() {
       cancelled = true;
       window.clearInterval(id);
     };
-  }, []);
+  }, [refresh]);
 
   const samples = history?.samples ?? [];
   const sparkConcepts = samples.map((s) => s.concepts);
@@ -360,6 +307,19 @@ export default function Dashboard() {
   const topMax = topTypes.length > 0 ? topTypes[0]![1] : 1;
 
   const conceptTypes = ontology ? Object.entries(ontology.concept_types).slice(0, 5) : [];
+
+  // The first day (ROADMAP §3.9 lot A): an empty graph shows the three
+  // steps instead of empty tiles; the dashboard returns with the data.
+  const hasModel = Boolean(ontology && Object.keys(ontology.concept_types).length > 0);
+  const hasData = (stats?.concepts ?? 0) > 0;
+  if (stats && ontology && !hasData && !hasModel) {
+    return (
+      <>
+        {error && <div className="error-banner">{error}</div>}
+        <Onboarding hasModel={hasModel} hasData={hasData} onLoaded={() => setRefresh((n) => n + 1)} />
+      </>
+    );
+  }
 
   return (
     <>
@@ -414,10 +374,7 @@ export default function Dashboard() {
 
       {/* Row 2 — growth chart + network preview */}
       <div className="dash-row dash-row-chart">
-        <Card
-          title="Ontology Growth (Entities)"
-          actions={<Link to="/graph" className="btn-ghost-link">View Analytics</Link>}
-        >
+        <Card title="Ontology Growth (Entities)">
           <GrowthChart samples={samples.map((s) => ({ ts: s.ts, value: s.concepts }))} />
           <div className="chart-legend">
             <span><i style={{ background: "var(--accent)" }} /> Entities Added</span>
@@ -425,21 +382,13 @@ export default function Dashboard() {
           </div>
         </Card>
         <Card
-          title="Ontology Network Preview"
-          actions={<Link to="/graph" className="btn-ghost-link">Open Graph ↗</Link>}
-        >
-          <NetworkPreview ontology={ontology} />
-        </Card>
-      </div>
-
-      {/* Row 3 — recent concept types + ingestion + quick actions */}
-      <div className="dash-row dash-row-three">
-        <Card
           title="Recent Concept Types"
           actions={<Link to="/builder" className="btn-ghost-link">View All</Link>}
         >
           {conceptTypes.length === 0 ? (
-            <div className="empty">No ontology defined yet.</div>
+            <div className="empty">
+              No ontology defined yet. <Link to="/builder">Define the model</Link>
+            </div>
           ) : (
             <table className="table compact-table">
               <thead>
@@ -463,7 +412,10 @@ export default function Dashboard() {
             </table>
           )}
         </Card>
+      </div>
 
+      {/* Row 3 — ingestion + quick actions */}
+      <div className="dash-row dash-row-three">
         <Card
           title="Files / Ingestion Status"
           actions={<Link to="/files" className="btn-ghost-link">View All</Link>}

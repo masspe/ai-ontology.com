@@ -17,6 +17,8 @@ WORKDIR /web
 COPY web/package.json web/package-lock.json web/.npmrc ./
 RUN npm ci
 COPY web/ ./
+# The finance example is bundled with the UI (web/src/lib/example.ts).
+COPY examples/finance/ /examples/finance/
 # Same-origin: the UI calls the API and /auth on the host that served it.
 ENV VITE_API_BASE="" VITE_AUTH_API_BASE=""
 RUN npx vite build

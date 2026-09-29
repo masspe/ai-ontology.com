@@ -29,6 +29,7 @@ import {
   type Relation,
   type Stats,
   type StatsHistory,
+  exportGraphUrl,
 } from "../api";
 
 // ---------------------------------------------------------------------------
@@ -926,14 +927,7 @@ export default function Concepts() {
         </Card>
 
         <div className="concepts-side">
-          <Card
-            title="Concept Details"
-            actions={
-              <button className="icon-btn" title="Expand">
-                <span style={{ width: 16, height: 16, display: "inline-flex" }}>{Icon.expand}</span>
-              </button>
-            }
-          >
+          <Card title="Concept Details">
             {selected ? (
               <>
                 <ConceptDetails
@@ -955,7 +949,9 @@ export default function Concepts() {
 
           <Card title="Concept Hierarchy">
             {hierarchy.length === 0 ? (
-              <div className="empty">No concept types defined yet.</div>
+              <div className="empty">
+                Aucun type de fiche pour l'instant. <Link to="/builder">Définir le modèle</Link>
+              </div>
             ) : (
               <div className="concept-tree">
                 {hierarchy.map((n) => (
@@ -1046,17 +1042,6 @@ export default function Concepts() {
                 <div className="qa-sub muted">
                   {checked.size > 0 ? `Delete ${checked.size} selected` : "Select concepts, then delete"}
                 </div>
-              </div>
-            </button>
-            <button
-              type="button"
-              className="quick-action qa-green"
-              onClick={() => setInfo("Definition validation coming soon.")}
-            >
-              <span className="qa-icon">{Icon.check}</span>
-              <div style={{ textAlign: "left" }}>
-                <div className="qa-title">Validate Definitions</div>
-                <div className="qa-sub muted">Check quality &amp; consistency</div>
               </div>
             </button>
           </div>
@@ -1439,12 +1424,14 @@ function ConceptDetails({ concept, domain, onEdit, onDelete }: DetailsProps) {
             </span>
           </button>
         </Link>
-        <button>
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-            <span style={{ width: 14, height: 14, display: "inline-flex" }}>{Icon.download}</span>
-            Export
-          </span>
-        </button>
+        <a className="btn-link-wrap" href={exportGraphUrl("jsonl")} download>
+          <button>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+              <span style={{ width: 14, height: 14, display: "inline-flex" }}>{Icon.download}</span>
+              Export
+            </span>
+          </button>
+        </a>
         <button className="btn-danger" onClick={onDelete}>
           <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
             <span style={{ width: 14, height: 14, display: "inline-flex" }}>{Icon.trash}</span>

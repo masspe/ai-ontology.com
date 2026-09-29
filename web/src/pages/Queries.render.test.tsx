@@ -72,7 +72,7 @@ describe("Queries page", () => {
   it("shows the empty state when nothing is saved", async () => {
     mocked.getQueries.mockResolvedValue({ queries: [] });
     renderPage(<Queries />);
-    expect(await screen.findByText("No saved queries yet.")).toBeInTheDocument();
+    expect(await screen.findByText(/Aucune question enregistrée/)).toBeInTheDocument();
   });
 
   it("prefills the ask box from ?q=", async () => {
