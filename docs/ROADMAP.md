@@ -315,6 +315,21 @@ avant 3.8.3**, c'est-à-dire avant toute démonstration à un prospect) :
    terme technique hors Paramètres (pas de `ns`, `P1`, `payload`).
 5. Nettoyage des boutons qui ne mènent nulle part (tableau ci-dessous) :
    chacun est branché ou retiré, aucun ne reste inerte.
+6. **Guide interactif** derrière le « ? » de la barre du haut (demandé le
+   2026-09-29). Une visite pas à pas de chaque partie de l'application :
+   à chaque étape, l'écran s'assombrit sauf l'élément expliqué (entrée du
+   menu, barre de recherche, bouton), une carte dit à quoi il sert en deux
+   phrases, et l'application navigue d'elle-même vers la page concernée.
+   Boutons Précédent / Suivant / Terminer, touche Échap, et un sommaire
+   pour sauter directement à une partie. Le guide s'ouvre seul à la
+   première visite, et **reste accessible à tout moment** par le « ? » ; ce
+   qui a déjà été vu est mémorisé dans le navigateur. Une étape par
+   partie : tableau de bord, modèle de données, fichiers, import, graphe,
+   fiches, règles, questions, actions, paramètres, recherche, retour
+   d'expérience. Sans dépendance (une superposition et une carte), textes
+   en français, testé comme le reste (rendu, navigation, mémorisation,
+   réouverture). Il remplace le parcours guidé du point 1 pour la partie
+   « découvrir », le point 1 garde la partie « faire » (les trois étapes).
 
 **Lot B — quotidien** (au fil de l'eau, **après 3.8.4 sauvegarde**, guidé
 par ce que les premiers utilisateurs font réellement) :
@@ -344,7 +359,7 @@ TypeScript (testés à 97–100 %, conversion mécanique).
 
 | Où | Élément | Aujourd'hui | Décision |
 |---|---|---|---|
-| Barre du haut | « ? » Aide | rien | **Brancher** : ouvre le guide (lot A.1) ou la doc ; sinon retirer |
+| Barre du haut | « ? » Aide | rien | **Brancher** sur le guide interactif (lot A.6) |
 | Barre du haut | « ⚑ » Notifications | rien | **Retirer** jusqu'à ce qu'il existe des événements à notifier (lot B.3) |
 | Barre du haut | Avatar « U » | rien | **Brancher** : nom de l'utilisateur, déconnexion, Paramètres |
 | Tableau de bord | « View Analytics » | ouvre le Graphe | **Renommer** « Ouvrir le graphe » ou retirer (doublon de la carte voisine) |
