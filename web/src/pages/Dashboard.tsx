@@ -312,7 +312,7 @@ export default function Dashboard() {
   // steps instead of empty tiles; the dashboard returns with the data.
   const hasModel = Boolean(ontology && Object.keys(ontology.concept_types).length > 0);
   const hasData = (stats?.concepts ?? 0) > 0;
-  if (stats && ontology && !hasData && !hasModel) {
+  if (stats && ontology && !hasData) {
     return (
       <>
         {error && <div className="error-banner">{error}</div>}

@@ -7,14 +7,14 @@
 // (the same order `ontology serve --seed` uses). No server change: the
 // files are bundled with the UI at build time.
 
-import ontologyUrl from "../../../examples/finance/ontology.json?url";
-import seedUrl from "../../../examples/finance/seed.jsonl?url";
-import c1Url from "../../../examples/finance/contracts/C-2025-001.txt?url";
-import c2Url from "../../../examples/finance/contracts/C-2025-002.txt?url";
-import c3Url from "../../../examples/finance/contracts/C-2025-003.txt?url";
-import invoicesUrl from "../../../examples/finance/invoices.xlsx?url";
-import lineItemsUrl from "../../../examples/finance/line_items.xlsx?url";
-import relationsUrl from "../../../examples/finance/relations.jsonl?url";
+import ontologyUrl from "../../../examples/finance/ontology.json?url&no-inline";
+import seedUrl from "../../../examples/finance/seed.jsonl?url&no-inline";
+import c1Url from "../../../examples/finance/contracts/C-2025-001.txt?url&no-inline";
+import c2Url from "../../../examples/finance/contracts/C-2025-002.txt?url&no-inline";
+import c3Url from "../../../examples/finance/contracts/C-2025-003.txt?url&no-inline";
+import invoicesUrl from "../../../examples/finance/invoices.xlsx?url&no-inline";
+import lineItemsUrl from "../../../examples/finance/line_items.xlsx?url&no-inline";
+import relationsUrl from "../../../examples/finance/relations.jsonl?url&no-inline";
 import { upload } from "../api";
 
 /** The files, in loading order: relations last so every endpoint exists. */

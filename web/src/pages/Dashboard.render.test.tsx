@@ -295,7 +295,8 @@ describe("Dashboard page", () => {
     mocked.getStats.mockResolvedValue({ ...stats, concepts: 0, deltas: { ...stats.deltas, concepts_pct: 0 } });
     mocked.getStatsHistory.mockResolvedValue({ samples: [] });
     mocked.getFiles.mockResolvedValue({ files: [] });
-    // The optional requests failing must not break the page.
+    // The optional requests failing must not break the page (and with the
+    // schema unknown, the first-day steps stay out of the way).
     mocked.getQueries.mockRejectedValue(new Error("no queries"));
     mocked.getOntology.mockRejectedValue(new Error("no ontology"));
     mocked.listConcepts.mockRejectedValue(new Error("no concepts"));
@@ -364,10 +365,10 @@ describe("Dashboard — first day", () => {
     expect(screen.queryByRole("heading", { name: "Dashboard" })).not.toBeInTheDocument();
   });
 
-  it("shows the dashboard as soon as a model exists, even without data", async () => {
+  it("moves to step 2 once a model exists, and shows the dashboard once there is data", async () => {
     mocked.getStats.mockResolvedValue({ ...stats, concepts: 0 });
     renderPage(<Dashboard />);
-    await waitFor(() => expect(tileValue("Concept Types")).toBe("12"));
-    expect(screen.queryByRole("heading", { name: "Bienvenue" })).not.toBeInTheDocument();
+    expect(await screen.findByRole("link", { name: "Déposer des fichiers" })).toHaveAttribute("href", "/files");
+    expect(screen.queryByRole("heading", { name: "Dashboard" })).not.toBeInTheDocument();
   });
 });

@@ -711,8 +711,6 @@ export default function OntologyBuilder() {
         }
         .icon-square:hover { background: var(--panel-2); }
 
-        .link-btn { background: none; border: none; color: var(--accent); font-size: 12px; cursor: pointer; padding: 4px 6px; }
-        .link-btn:hover { text-decoration: underline; }
         .link-btn-sm { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 14px; margin-left: 4px; }
         .link-btn-sm:hover { color: var(--accent); }
 

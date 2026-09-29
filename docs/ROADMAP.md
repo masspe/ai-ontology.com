@@ -356,7 +356,7 @@ avant 3.8.3**, c'est-à-dire avant toute démonstration à un prospect) :
 **Livraison du lot A (2026-09-29, branche `feat/ui-lot-a`)** : les six
 points sont en place dans `web/src` — parcours en trois étapes à la place
 du tableau de bord vide (`components/Onboarding.tsx`, affiché tant que le
-schéma est vide et que le graphe n'a aucune fiche) ; « Essayer avec
+graphe n'a aucune fiche : l'étape 2 s'ouvre dès que le modèle existe) ; « Essayer avec
 l'exemple finance » envoie les huit fichiers d'`examples/finance` par
 l'API d'import existante, dans l'ordre du README (`lib/example.ts`, fichiers
 embarqués dans le bundle, copiés dans l'image) ; états vides orientés vers

@@ -1424,13 +1424,9 @@ function ConceptDetails({ concept, domain, onEdit, onDelete }: DetailsProps) {
             </span>
           </button>
         </Link>
-        <a className="btn-link-wrap" href={exportGraphUrl("jsonl")} download>
-          <button>
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-              <span style={{ width: 14, height: 14, display: "inline-flex" }}>{Icon.download}</span>
-              Export
-            </span>
-          </button>
+        <a className="btn btn-outline" href={exportGraphUrl("jsonl")} download style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <span style={{ width: 14, height: 14, display: "inline-flex" }}>{Icon.download}</span>
+          Export
         </a>
         <button className="btn-danger" onClick={onDelete}>
           <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
