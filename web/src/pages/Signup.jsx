@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Winven-Commercial
+// SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Mediasoft-Commercial
 import { useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { msBE } from "../lib/msBE";

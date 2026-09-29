@@ -1,5 +1,5 @@
-// SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Winven-Commercial
-// Copyright (C) 2026 Winven AI Sarl
+// SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Mediasoft-Commercial
+// Copyright (C) 2026 Mediasoft & Cie S.A.
 //
 // Hand-written OpenAPI 3.0 description of the ontology server, plus a
 // Swagger UI page served from `/docs`. Kept manual to avoid pulling in
@@ -63,7 +63,7 @@ const SPEC_JSON: &str = r##"{
         "version": "__VERSION__",
         "description": "Graph + RAG API for the ai-ontology.com stack. All endpoints except `/healthz`, `/openapi.json` and `/docs` require a bearer token when the server is started with `--bearer-token` or with `--jwt-*` flags.",
         "license": {
-            "name": "AGPL-3.0-or-later OR LicenseRef-Winven-Commercial",
+            "name": "AGPL-3.0-or-later OR LicenseRef-Mediasoft-Commercial",
             "url": "https://www.gnu.org/licenses/agpl-3.0.html"
         }
     },

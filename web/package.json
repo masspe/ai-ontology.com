@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "license": "AGPL-3.0-or-later",
-  "author": "Winven AI Sarl, Route de Crassier 7, 1262 Eysins, VD, CH",
+  "author": "Mediasoft & Cie S.A.",
   "type": "module",
   "scripts": {
     "dev": "concurrently -k -n server,auth,web -c blue,magenta,green \"npm:dev:server\" \"npm:dev:auth\" \"npm:dev:web\"",

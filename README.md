@@ -753,8 +753,7 @@ badges at the top of this file.
 
 ## License
 
-Copyright © 2026 **Winven AI Sarl**, Route de Crassier 7, 1262 Eysins,
-VD, Switzerland.
+Copyright © 2026 **Mediasoft & Cie S.A.**, Switzerland.
 
 This software is **dual-licensed**:
 
@@ -763,18 +762,18 @@ This software is **dual-licensed**:
    software (or a modified version) as a network/SaaS service, you must
    make the corresponding source code available to every user of that
    service.
-2. **Winven Commercial License** — proprietary track. See
+2. **Mediasoft Commercial License** — proprietary track. See
    [`LICENSE-COMMERCIAL.md`](./LICENSE-COMMERCIAL.md). Removes the
    AGPL's copyleft and SaaS-source-disclosure obligations; bundles
-   support and indemnification. Negotiated case by case with Winven AI
-   Sarl at the address above.
+   support and indemnification. Negotiated case by case with Mediasoft &
+   Cie S.A.
 
 You may pick whichever track fits your use, but you must comply with
 the chosen one in full. Every source file carries an SPDX dual
 expression in its header:
 
 ```
-SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Winven-Commercial
+SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Mediasoft-Commercial
 ```
 
 Use without an AGPL-compliant deployment **and** without a signed

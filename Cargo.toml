@@ -14,7 +14,7 @@ members = [
 version = "0.1.0"
 edition = "2021"
 license = "AGPL-3.0-or-later"
-authors = ["Winven AI Sarl, Route de Crassier 7, 1262 Eysins, VD, CH"]
+authors = ["Mediasoft & Cie S.A."]
 repository = "https://github.com/masspe/ai-ontology.com"
 
 [workspace.dependencies]
