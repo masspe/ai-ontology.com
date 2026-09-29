@@ -1,0 +1,47 @@
+# One container per client (STORAGE.md §10.8, ROADMAP §3.8.1): each tenant
+# has its own data volume, memory limit, users and secret. Routing between
+# tenants is the reverse proxy's job (one hostname per service).
+#
+#   docker compose up -d --build
+#   open http://localhost:5001  (tenant "acme"), http://localhost:5002 ("globex")
+#
+# The first account created on a tenant becomes its administrator and
+# sign-up then closes (the administrator creates the next accounts). The
+# JWT secret is generated in the volume on first start; to provide your
+# own, uncomment ONTOLOGY_JWT_SECRET and the `--jwt-secret-env` argument.
+#
+# `mem_limit` is what the binary reads as its budget (cgroup); with
+# `--memory-mode strict` (the image default) a store that does not fit
+# refuses to start and says by how much, instead of being killed later.
+
+x-tenant: &tenant
+  build: .
+  image: ontology:local
+  restart: unless-stopped
+  mem_limit: 4g
+  # environment:
+  #   ONTOLOGY_JWT_SECRET: change-me-to-a-long-random-string
+  # command: ["--memory-mode", "strict", "serve", "--bind", "0.0.0.0:5000",
+  #           "--web", "/srv/web", "--login", "--jwt-secret-env", "ONTOLOGY_JWT_SECRET"]
+  healthcheck:
+    test: ["CMD", "/usr/local/bin/ontology", "--data", "/data", "healthcheck", "http://127.0.0.1:5000/healthz"]
+    interval: 30s
+    timeout: 5s
+    retries: 3
+    start_period: 20s
+  # `docker stop` sends SIGTERM: in-flight requests finish, then exit 0.
+  stop_grace_period: 30s
+
+services:
+  acme:
+    <<: *tenant
+    ports: ["5001:5000"]
+    volumes: ["acme-data:/data"]
+  globex:
+    <<: *tenant
+    ports: ["5002:5000"]
+    volumes: ["globex-data:/data"]
+
+volumes:
+  acme-data:
+  globex-data:

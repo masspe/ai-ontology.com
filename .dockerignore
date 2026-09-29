@@ -8,3 +8,14 @@ data/
 .idea/
 .vscode/
 .DS_Store
+web/node_modules/
+web/dist/
+web/coverage/
+web/.env*
+auth-server/node_modules/
+auth-server/data/
+auth-server/.env*
+badges/
+lcov.info
+.ontology/
+out/

@@ -625,3 +625,102 @@ fn serve_refuses_bad_auth_env_and_seed_before_binding() {
     // Nothing is listening: every refusal happened before `bind`.
     assert!(http_get(port, "/healthz").is_none());
 }
+
+/// `serve --web <dir> --users-file` (ROADMAP §3.8.2-3): the built UI is
+/// served for every non-API path, the API stays the API, the built-in
+/// login is on (so the API needs a token) and its JWT secret is generated
+/// next to the data on first start. Misconfigurations fail before binding.
+#[test]
+fn serve_serves_the_web_ui_and_enables_the_built_in_login() {
+    let data = tempdir("serve-web");
+    let web = data.join("dist");
+    std::fs::create_dir_all(web.join("assets")).unwrap();
+    std::fs::write(
+        web.join("index.html"),
+        "<!doctype html><title>Studio</title>",
+    )
+    .unwrap();
+    std::fs::write(web.join("assets").join("a.js"), "1").unwrap();
+
+    let err = fail(
+        Some(&data),
+        &[
+            "serve",
+            "--bind",
+            "127.0.0.1:0",
+            "--web",
+            &p(&data.join("nope")),
+        ],
+    );
+    assert!(err.contains("no index.html"), "{err}");
+    let err = fail(None, &["serve", "--bind", "127.0.0.1:0", "--login"]);
+    assert!(err.contains("needs --data"), "{err}");
+
+    let mut cmd = ontology(Some(&data));
+    cmd.env("RUST_LOG", "info");
+    let srv = Server::start(&mut cmd, &["--web", &p(&web), "--login"]);
+
+    let (status, body) = http_get(srv.port, "/").unwrap();
+    assert_eq!(status, 200);
+    assert!(body.contains("<title>Studio</title>"), "{body}");
+    let (status, body) = http_get(srv.port, "/graph?seed=3").unwrap();
+    assert_eq!(status, 200, "client-side route");
+    assert!(body.contains("<title>Studio</title>"));
+    let (status, body) = http_get(srv.port, "/assets/a.js").unwrap();
+    assert_eq!(status, 200);
+    assert_eq!(body, "1");
+    // The API is still the API, and it is now protected.
+    let (status, _) = http_get(srv.port, "/stats").unwrap();
+    assert_eq!(status, 401);
+    let (status, _) = http_get(srv.port, "/auth/me").unwrap();
+    assert_eq!(status, 401);
+    // The secret was generated once, next to the data.
+    let secret = std::fs::read_to_string(data.join("jwt.secret")).unwrap();
+    assert_eq!(secret.len(), 64, "{secret}");
+    assert!(secret.chars().all(|c| c.is_ascii_hexdigit()));
+
+    let log = srv.stop();
+    assert!(log.contains("serving the web UI"), "{log}");
+    assert!(log.contains("built-in login enabled"), "{log}");
+    assert!(log.contains("generated a new JWT secret"), "{log}");
+
+    // A restart reuses the secret instead of logging everyone out.
+    let mut cmd = ontology(Some(&data));
+    cmd.env("RUST_LOG", "info");
+    let srv = Server::start(&mut cmd, &["--login"]);
+    let log = srv.stop();
+    assert!(!log.contains("generated a new JWT secret"), "{log}");
+    assert_eq!(
+        std::fs::read_to_string(data.join("jwt.secret")).unwrap(),
+        secret
+    );
+}
+
+/// `healthcheck <url>` is the container probe: exit 0 on a 2xx, 1 with the
+/// reason otherwise, and it never opens the store (the server holds it).
+#[test]
+fn healthcheck_probes_the_running_server_without_touching_the_store() {
+    let data = tempdir("healthcheck");
+    let mut cmd = ontology(Some(&data));
+    cmd.env("RUST_LOG", "info");
+    let srv = Server::start(&mut cmd, &[]);
+    let url = format!("http://127.0.0.1:{}/healthz", srv.port);
+    let out = ontology(Some(&data))
+        .args(["healthcheck", &url])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let err = fail(
+        Some(&data),
+        &[
+            "healthcheck",
+            &format!("http://127.0.0.1:{}/nope", srv.port),
+        ],
+    );
+    assert!(err.contains("HTTP 4"), "{err}");
+    srv.stop();
+    let err = fail(None, &["healthcheck", &url]);
+    assert!(err.contains(&url), "{err}");
+    let err = fail(None, &["healthcheck", "https://x"]);
+    assert!(err.contains("http://"), "{err}");
+}

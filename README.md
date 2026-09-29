@@ -546,11 +546,24 @@ header it's honored verbatim.
 
 ## Authentication
 
-`build_router_with_auth(state, Some(token))` (and `ontology serve --auth-env
-NAME`) wrap every route except `/healthz` with a bearer-token middleware.
-The CLI flag reads from a named environment variable rather than taking
-the literal value, so the token never appears in process listings or
-shell history. Comparison is constant-time.
+Two credentials open the API, both as `Authorization: Bearer …`:
+
+- **User tokens** from the built-in login (`ontology serve --login`, the
+  image's default): `POST /auth/signup` (the first account becomes the
+  administrator, sign-up then closes unless `--allow-signup`), `POST
+  /auth/login`, `GET /auth/me`, `POST /auth/logout`, and for the
+  administrator `GET/POST /auth/users`, `DELETE /auth/users/:id`. Accounts
+  live in `<data>/users.json` (bcrypt hashes; a file written by the former
+  Node `auth-server` is read as is), tokens are HS256 JWTs signed with
+  `<data>/jwt.secret` (generated on first start) or the variable named by
+  `--jwt-secret-env`. Login is rate-limited per IP. Google / Microsoft
+  sign-in is not served by the binary yet (ROADMAP §3.8.3b).
+- **A service token** (`--auth-env NAME`) for machine callers: the flag
+  names an environment variable rather than taking the literal value, so
+  the token never appears in process listings; comparison is constant-time.
+
+`ontology serve --web web/dist` serves the built UI on the same port, so
+the browser talks to one origin. Setup: [docs/DEPLOIEMENT.md](docs/DEPLOIEMENT.md).
 
 ## Deployment model: one store per tenant, one process per tenant
 
@@ -565,6 +578,13 @@ incompressible memory floor by the number of tenants for nothing. Routing a
 tenant to its process is the reverse proxy's job. In production this is one
 container per client, the container's memory limit being the budget the
 memory socle reads (see below).
+
+The image (`Dockerfile`) ships the binary and the built UI; `compose.yaml`
+shows two tenants, each with its volume, memory limit, health probe
+(`ontology healthcheck`) and clean stop. `scripts/e2e_image.sh` is what the
+CI runs against every build: seed, sign-up, login, API and UI on one port,
+`docker stop`, restart with data and account intact. Installation guide in
+French: [docs/DEPLOIEMENT.md](docs/DEPLOIEMENT.md).
 
 ## Memory budget (`--memory-mode`)
 
