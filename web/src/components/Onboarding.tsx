@@ -53,7 +53,6 @@ export default function Onboarding({ hasModel, hasData, onLoaded }: Props) {
             className="btn-outline"
             onClick={() => void loadExample()}
             disabled={progress !== null}
-            aria-label="Essayer avec l'exemple finance"
           >
             {progress
               ? `Chargement… ${progress[0]} / ${progress[1]}`

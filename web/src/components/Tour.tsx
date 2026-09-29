@@ -8,7 +8,7 @@
 // from the "?", remembers in the browser that it was seen. No dependency:
 // a fixed overlay, a spotlight drawn with a box-shadow, a card.
 
-import { useCallback, useEffect, useLayoutEffect, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { NAV_ITEMS } from "../layout/nav";
 
@@ -85,6 +85,8 @@ export default function Tour() {
   const [step, setStep] = useState<number | null>(null);
   const [rect, setRect] = useState<Rect | null>(null);
   const [summary, setSummary] = useState(false);
+  const cardRef = useRef<HTMLDivElement>(null);
+  const before = useRef<Element | null>(null);
 
   // First visit: open alone. Any time: the "?" button.
   useEffect(() => {
@@ -101,7 +103,15 @@ export default function Tour() {
     remember();
     setStep(null);
     setRect(null);
+    (before.current as HTMLElement | null)?.focus?.();
   }, []);
+
+  // The dialog takes the focus; whoever had it gets it back on close.
+  useEffect(() => {
+    if (step === null) return;
+    if (!before.current) before.current = document.activeElement;
+    cardRef.current?.focus();
+  }, [step]);
 
   // The step's page, then the element to spotlight once it is rendered.
   const current = step === null ? null : TOUR_STEPS[step] ?? null;
@@ -123,7 +133,11 @@ export default function Tour() {
     };
     measure();
     window.addEventListener("resize", measure);
-    return () => window.removeEventListener("resize", measure);
+    window.addEventListener("scroll", measure, true);
+    return () => {
+      window.removeEventListener("resize", measure);
+      window.removeEventListener("scroll", measure, true);
+    };
   }, [current, loc.pathname]);
 
   useEffect(() => {
@@ -163,7 +177,7 @@ export default function Tour() {
       ) : (
         <div className="tour-backdrop" />
       )}
-      <div className="tour-card" style={cardStyle}>
+      <div className="tour-card" style={cardStyle} ref={cardRef} tabIndex={-1}>
         <div className="tour-head">
           <span className="muted">
             Étape {step + 1} sur {TOUR_STEPS.length}

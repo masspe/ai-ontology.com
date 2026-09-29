@@ -34,7 +34,7 @@ describe("Onboarding", () => {
     expect(steps[1]).toHaveClass("locked");
     expect(steps[2]).toHaveClass("locked");
     expect(screen.getByRole("link", { name: "Définir le modèle" })).toHaveAttribute("href", "/builder");
-    expect(screen.getByRole("button", { name: "Essayer avec l'exemple finance" })).toHaveTextContent(/sociétés, contrats, factures/);
+    expect(screen.getByRole("button", { name: /Essayer avec l'exemple finance/ })).toHaveTextContent(/sociétés, contrats, factures/);
 
     rerender(<Onboarding hasModel hasData={false} />);
     expect(screen.getAllByRole("listitem")[0]).toHaveClass("done");
@@ -49,7 +49,7 @@ describe("Onboarding", () => {
   it("loads the finance example through the API and reports back", async () => {
     const onLoaded = vi.fn();
     const { user } = renderPage(<Onboarding hasModel={false} hasData={false} onLoaded={onLoaded} />);
-    await user.click(screen.getByRole("button", { name: "Essayer avec l'exemple finance" }));
+    await user.click(screen.getByRole("button", { name: /Essayer avec l'exemple finance/ }));
     await waitFor(() => expect(onLoaded).toHaveBeenCalledTimes(1));
     expect(mocked.upload).toHaveBeenCalledTimes(8);
     expect(mocked.upload.mock.calls[0]![0].name).toBe("ontology.json");
@@ -60,8 +60,8 @@ describe("Onboarding", () => {
   it("shows the API error and stays usable", async () => {
     mocked.upload.mockRejectedValue(new Error("API unreachable"));
     const { user } = renderPage(<Onboarding hasModel={false} hasData={false} />);
-    await user.click(screen.getByRole("button", { name: "Essayer avec l'exemple finance" }));
+    await user.click(screen.getByRole("button", { name: /Essayer avec l'exemple finance/ }));
     expect(await screen.findByText("API unreachable")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Essayer avec l'exemple finance" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /Essayer avec l'exemple finance/ })).toBeEnabled();
   });
 });
