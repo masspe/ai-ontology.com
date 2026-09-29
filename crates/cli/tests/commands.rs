@@ -694,6 +694,7 @@ fn serve_serves_the_web_ui_and_enables_the_built_in_login() {
         std::fs::read_to_string(data.join("jwt.secret")).unwrap(),
         secret
     );
+    let _ = std::fs::remove_dir_all(&data);
 }
 
 /// `healthcheck <url>` is the container probe: exit 0 on a 2xx, 1 with the
@@ -723,4 +724,5 @@ fn healthcheck_probes_the_running_server_without_touching_the_store() {
     assert!(err.contains(&url), "{err}");
     let err = fail(None, &["healthcheck", "https://x"]);
     assert!(err.contains("http://"), "{err}");
+    let _ = std::fs::remove_dir_all(&data);
 }

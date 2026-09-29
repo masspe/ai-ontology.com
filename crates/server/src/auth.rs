@@ -1,10 +1,9 @@
-// SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Winven-Commercial
-// Copyright (C) 2026 Winven AI Sarl
-// Route de Crassier 7, 1262 Eysins, VD, CH
+// SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Mediasoft-Commercial
+// Copyright (C) 2026 Mediasoft & Cie S.A.
 //
 // This file is part of ai-ontology.com.
 // Dual-licensed: AGPL-3.0-or-later OR a commercial license
-// from Winven AI Sarl. See LICENSE and LICENSE-COMMERCIAL.md.
+// from Mediasoft & Cie S.A. See LICENSE and LICENSE-COMMERCIAL.md.
 
 //! Built-in user authentication (ROADMAP.md §3.8.3, decided 2026-09-29):
 //! the `/auth/*` routes the web UI calls, served by the binary instead of
@@ -38,12 +37,22 @@ const BCRYPT_COST: u32 = 12;
 /// Token lifetime, as the Node server's `JWT_EXPIRES_IN` default (7 days).
 const TOKEN_TTL_SECS: u64 = 7 * 24 * 3600;
 
-/// Configuration of the built-in auth: where the users live and whether
-/// anyone may sign up once an administrator exists.
-#[derive(Debug, Clone)]
+/// Configuration of the built-in auth: the users store (opened by the
+/// caller, so a corrupt file is an error before anything listens) and
+/// whether anyone may sign up once an administrator exists.
+#[derive(Clone)]
 pub struct UserAuth {
-    pub users_file: PathBuf,
+    pub store: Arc<UserStore>,
     pub allow_signup: bool,
+}
+
+impl std::fmt::Debug for UserAuth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UserAuth")
+            .field("users_file", &self.store.path)
+            .field("allow_signup", &self.allow_signup)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -103,7 +112,7 @@ pub struct PublicUser {
     pub role: String,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 struct Db {
     #[serde(default)]
     users: Vec<User>,
@@ -111,6 +120,8 @@ struct Db {
 
 /// The users file, loaded once, written whole on every change (a few
 /// hundred accounts at most per tenant: the Node server did the same).
+/// Every change is written to disk first and adopted in memory only when
+/// the write succeeded, so memory never says yes to what disk lost.
 pub struct UserStore {
     path: PathBuf,
     db: Mutex<Db>,
@@ -122,6 +133,15 @@ pub enum UserStoreError {
     Io(PathBuf, std::io::Error),
     #[error("users file {0} is not valid JSON: {1}")]
     Parse(PathBuf, serde_json::Error),
+}
+
+/// What a `create` can refuse.
+#[derive(Debug)]
+enum CreateError {
+    EmailTaken,
+    /// Sign-up: the store already has accounts and sign-up is closed.
+    Closed,
+    Store(UserStoreError),
 }
 
 impl UserStore {
@@ -140,6 +160,10 @@ impl UserStore {
         })
     }
 
+    pub fn path(&self) -> &FsPath {
+        &self.path
+    }
+
     pub fn len(&self) -> usize {
         self.db.lock().users.len()
     }
@@ -148,16 +172,34 @@ impl UserStore {
         self.len() == 0
     }
 
+    /// `true` when `id` names an account: what `require_auth` asks so a
+    /// deleted user's token stops working at once, not at its expiry.
+    pub fn exists(&self, id: &str) -> bool {
+        self.db.lock().users.iter().any(|u| u.id == id)
+    }
+
     /// Write the whole file through a temporary neighbour and a rename, so
-    /// a crash mid-write leaves the previous file intact.
+    /// a crash mid-write leaves the previous file intact. The file holds
+    /// password hashes: owner-only on Unix.
     fn persist(&self, db: &Db) -> Result<(), UserStoreError> {
+        use std::io::Write;
         let io = |e| UserStoreError::Io(self.path.clone(), e);
         if let Some(dir) = self.path.parent() {
             std::fs::create_dir_all(dir).map_err(io)?;
         }
         let tmp = self.path.with_extension("json.tmp");
         let bytes = serde_json::to_vec_pretty(db).expect("users serialise");
-        std::fs::write(&tmp, bytes).map_err(io)?;
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let mut f = opts.open(&tmp).map_err(io)?;
+        f.write_all(&bytes).map_err(io)?;
+        f.sync_all().map_err(io)?;
+        drop(f);
         std::fs::rename(&tmp, &self.path).map_err(io)
     }
 
@@ -170,15 +212,25 @@ impl UserStore {
         self.db.lock().users.iter().find(|u| u.id == id).cloned()
     }
 
+    /// Add an account. The sign-up policy is decided here, under the lock,
+    /// so two simultaneous first sign-ups cannot both become administrator:
+    /// `signup = Some(allow)` means a self sign-up (the first account is the
+    /// administrator, later ones need `allow`); `None` is an administrator
+    /// creating a plain user.
     fn create(
         &self,
         email: &str,
         name: &str,
         password_hash: String,
-        role: Option<&str>,
+        signup: Option<bool>,
     ) -> Result<User, CreateError> {
         let lc = email.trim().to_lowercase();
         let mut db = self.db.lock();
+        let role = match signup {
+            Some(_) if db.users.is_empty() => Some("admin"),
+            Some(false) => return Err(CreateError::Closed),
+            _ => None,
+        };
         if db.users.iter().any(|u| u.email == lc) {
             return Err(CreateError::EmailTaken);
         }
@@ -197,19 +249,22 @@ impl UserStore {
             created_at: now_rfc3339(),
             role: role.map(str::to_string),
         };
-        db.users.push(user.clone());
-        self.persist(&db).map_err(CreateError::Store)?;
+        let mut next = db.clone();
+        next.users.push(user.clone());
+        self.persist(&next).map_err(CreateError::Store)?;
+        *db = next;
         Ok(user)
     }
 
     fn delete(&self, id: &str) -> Result<bool, UserStoreError> {
         let mut db = self.db.lock();
-        let before = db.users.len();
-        db.users.retain(|u| u.id != id);
-        if db.users.len() == before {
+        let mut next = db.clone();
+        next.users.retain(|u| u.id != id);
+        if next.users.len() == db.users.len() {
             return Ok(false);
         }
-        self.persist(&db)?;
+        self.persist(&next)?;
+        *db = next;
         Ok(true)
     }
 
@@ -218,14 +273,8 @@ impl UserStore {
     }
 }
 
-#[derive(Debug)]
-enum CreateError {
-    EmailTaken,
-    Store(UserStoreError),
-}
-
-/// Random-enough, unique id: the time in nanoseconds and a hashed counter,
-/// hex. Not a UUID, and nothing here needs one.
+/// Unique id: the time in nanoseconds and a hashed counter, hex. Not a
+/// UUID, and nothing here needs one.
 fn new_id() -> String {
     use std::hash::{BuildHasher, Hasher};
     static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -292,6 +341,36 @@ fn valid_email(email: &str) -> bool {
         && domain.contains('.')
         && !domain.starts_with('.')
         && !domain.ends_with('.')
+}
+
+// ---------------------------------------------------------------- bcrypt
+
+/// bcrypt at cost 12 is ~250 ms of CPU: never on a runtime worker.
+async fn hash_password(password: String) -> Result<String, Refused> {
+    tokio::task::spawn_blocking(move || bcrypt::hash(password, BCRYPT_COST))
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .ok_or((StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))
+}
+
+/// A hash to check against when there is nothing to check against, so an
+/// unknown email or a password-less (OAuth) account costs as much as a
+/// wrong password.
+fn dummy_hash() -> &'static str {
+    static DUMMY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    DUMMY.get_or_init(|| bcrypt::hash("not-a-password", BCRYPT_COST).unwrap_or_default())
+}
+
+async fn verify_password(password: String, hash: Option<String>) -> bool {
+    let (hash, real) = match hash {
+        Some(h) => (h, true),
+        None => (dummy_hash().to_string(), false),
+    };
+    let ok = tokio::task::spawn_blocking(move || bcrypt::verify(password, &hash).unwrap_or(false))
+        .await
+        .unwrap_or(false);
+    ok && real
 }
 
 // ---------------------------------------------------------------- tokens
@@ -393,20 +472,15 @@ struct Session {
     user: PublicUser,
 }
 
-fn error(status: StatusCode, msg: &str) -> Response {
-    (status, Json(serde_json::json!({ "error": msg }))).into_response()
-}
-
 /// Errors are `(status, message)` pairs, turned into a response at the
 /// edge (a `Response` in an `Err` is what clippy calls a large error).
 type Refused = (StatusCode, &'static str);
 
-fn hash_password(password: &str) -> Result<String, Refused> {
-    bcrypt::hash(password, BCRYPT_COST)
-        .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Internal error"))
+fn error(status: StatusCode, msg: &str) -> Response {
+    (status, Json(serde_json::json!({ "error": msg }))).into_response()
 }
 
-fn created(s: &AuthState, user: &User, status: StatusCode) -> Response {
+fn session(s: &AuthState, user: &User, status: StatusCode) -> Response {
     (
         status,
         Json(Session {
@@ -417,45 +491,57 @@ fn created(s: &AuthState, user: &User, status: StatusCode) -> Response {
         .into_response()
 }
 
-async fn signup(State(s): State<AuthState>, Json(c): Json<Credentials>) -> Response {
+fn validate(c: &Credentials, need_name: bool) -> Result<(), Refused> {
     if !valid_email(&c.email) {
-        return error(StatusCode::BAD_REQUEST, "Invalid email");
+        return Err((StatusCode::BAD_REQUEST, "Invalid email"));
     }
     if !strong_enough(&c.password) {
-        return error(
+        return Err((
             StatusCode::BAD_REQUEST,
             "Weak password (min 8 chars, mixed classes)",
-        );
+        ));
     }
-    if c.name.trim().is_empty() {
-        return error(StatusCode::BAD_REQUEST, "Name required");
+    if need_name && c.name.trim().is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "Name required"));
     }
-    // The first account administers the tenant; after it, sign-up is an
-    // administrator's decision unless the deployment opened it.
-    let first = s.store.is_empty();
-    if !first && !s.allow_signup {
+    Ok(())
+}
+
+fn store_error(e: UserStoreError) -> Response {
+    tracing::error!(%e, "users file");
+    error(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
+}
+
+async fn signup(State(s): State<AuthState>, Json(c): Json<Credentials>) -> Response {
+    if let Err((st, m)) = validate(&c, true) {
+        return error(st, m);
+    }
+    // Refuse before the hash when sign-up is visibly closed; `create`
+    // decides again under its lock, so a race cannot mint two admins.
+    if !s.allow_signup && !s.store.is_empty() {
         return error(
             StatusCode::FORBIDDEN,
             "Sign-up is closed: ask an administrator for an account",
         );
     }
-    let hash = match hash_password(&c.password) {
+    let hash = match hash_password(c.password).await {
         Ok(h) => h,
         Err((st, m)) => return error(st, m),
     };
     match s
         .store
-        .create(&c.email, &c.name, hash, first.then_some("admin"))
+        .create(&c.email, &c.name, hash, Some(s.allow_signup))
     {
         Ok(user) => {
-            tracing::info!(email = %user.email, admin = first, "user signed up");
-            created(&s, &user, StatusCode::CREATED)
+            tracing::info!(email = %user.email, admin = user.is_admin(), "user signed up");
+            session(&s, &user, StatusCode::CREATED)
         }
+        Err(CreateError::Closed) => error(
+            StatusCode::FORBIDDEN,
+            "Sign-up is closed: ask an administrator for an account",
+        ),
         Err(CreateError::EmailTaken) => error(StatusCode::CONFLICT, "Email already registered"),
-        Err(CreateError::Store(e)) => {
-            tracing::error!(%e, "users file");
-            error(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        }
+        Err(CreateError::Store(e)) => store_error(e),
     }
 }
 
@@ -463,23 +549,17 @@ async fn login(State(s): State<AuthState>, Json(c): Json<Credentials>) -> Respon
     if c.email.trim().is_empty() || c.password.is_empty() {
         return error(StatusCode::BAD_REQUEST, "Invalid credentials");
     }
-    let Some(user) = s.store.find_by_email(&c.email) else {
-        // Same cost as a real check, so an unknown email is not faster.
-        static DUMMY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-        let dummy =
-            DUMMY.get_or_init(|| bcrypt::hash("not-a-password", BCRYPT_COST).unwrap_or_default());
-        let _ = bcrypt::verify(&c.password, dummy);
-        return error(StatusCode::UNAUTHORIZED, "Invalid credentials");
-    };
-    let ok = user
-        .password_hash
-        .as_deref()
-        .map(|h| bcrypt::verify(&c.password, h).unwrap_or(false))
-        .unwrap_or(false);
-    if !ok {
-        return error(StatusCode::UNAUTHORIZED, "Invalid credentials");
+    let user = s.store.find_by_email(&c.email);
+    // Same cost whether the email exists, has a password or not.
+    let ok = verify_password(
+        c.password,
+        user.as_ref().and_then(|u| u.password_hash.clone()),
+    )
+    .await;
+    match user {
+        Some(user) if ok => session(&s, &user, StatusCode::OK),
+        _ => error(StatusCode::UNAUTHORIZED, "Invalid credentials"),
     }
-    created(&s, &user, StatusCode::OK)
 }
 
 async fn logout() -> Json<serde_json::Value> {
@@ -538,16 +618,10 @@ async fn create_user(
     if let Err((st, m)) = admin(&s, &ctx) {
         return error(st, m);
     }
-    if !valid_email(&c.email) {
-        return error(StatusCode::BAD_REQUEST, "Invalid email");
+    if let Err((st, m)) = validate(&c, false) {
+        return error(st, m);
     }
-    if !strong_enough(&c.password) {
-        return error(
-            StatusCode::BAD_REQUEST,
-            "Weak password (min 8 chars, mixed classes)",
-        );
-    }
-    let hash = match hash_password(&c.password) {
+    let hash = match hash_password(c.password).await {
         Ok(h) => h,
         Err((st, m)) => return error(st, m),
     };
@@ -558,10 +632,8 @@ async fn create_user(
         )
             .into_response(),
         Err(CreateError::EmailTaken) => error(StatusCode::CONFLICT, "Email already registered"),
-        Err(CreateError::Store(e)) => {
-            tracing::error!(%e, "users file");
-            error(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        }
+        Err(CreateError::Closed) => unreachable!("an administrator's create is never a sign-up"),
+        Err(CreateError::Store(e)) => store_error(e),
     }
 }
 
@@ -583,10 +655,7 @@ async fn delete_user(
     match s.store.delete(&id) {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => error(StatusCode::NOT_FOUND, "User not found"),
-        Err(e) => {
-            tracing::error!(%e, "users file");
-            error(StatusCode::INTERNAL_SERVER_ERROR, "Internal error")
-        }
+        Err(e) => store_error(e),
     }
 }
 
@@ -628,5 +697,30 @@ mod tests {
         assert_ne!(a, b);
         assert_eq!(a.len(), 32);
         assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn the_policy_is_decided_under_the_lock() {
+        let dir = std::env::temp_dir().join(format!("ontology-auth-unit-{}", new_id()));
+        let store = UserStore::open(dir.join("users.json")).unwrap();
+        let first = store
+            .create("a@b.co", "A", "h".into(), Some(false))
+            .unwrap();
+        assert!(first.is_admin());
+        assert!(matches!(
+            store.create("b@b.co", "B", "h".into(), Some(false)),
+            Err(CreateError::Closed)
+        ));
+        let second = store.create("b@b.co", "B", "h".into(), Some(true)).unwrap();
+        assert!(!second.is_admin());
+        assert!(matches!(
+            store.create("b@b.co", "B", "h".into(), None),
+            Err(CreateError::EmailTaken)
+        ));
+        assert!(store.exists(&first.id));
+        assert!(store.delete(&second.id).unwrap());
+        assert!(!store.exists(&second.id));
+        assert_eq!(store.path(), dir.join("users.json"));
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

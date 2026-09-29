@@ -22,7 +22,8 @@ ENV VITE_API_BASE="" VITE_AUTH_API_BASE=""
 RUN npx vite build
 
 # std::fs::File::try_lock (store LOCK) needs Rust >= 1.89; CI runs current stable.
-FROM rust:1.98-slim AS chef
+# bookworm: the same glibc as the distroless debian12 runtime below.
+FROM rust:1.98-slim-bookworm AS chef
 RUN cargo install --locked cargo-chef
 WORKDIR /workspace
 

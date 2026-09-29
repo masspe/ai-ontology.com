@@ -17,7 +17,7 @@ use axum::Router;
 use hardening_common::*;
 use http::{Request, StatusCode};
 use ontology_graph::{Ontology, OntologyGraph};
-use ontology_server::auth::UserAuth;
+use ontology_server::auth::{UserAuth, UserStore};
 use ontology_server::{build_router_with_config, JwtAuth, RouterConfig};
 use ontology_storage::{MemoryStore, Store};
 use serde_json::{json, Value};
@@ -47,16 +47,25 @@ fn tempdir(tag: &str) -> PathBuf {
 }
 
 fn app(users_file: PathBuf, allow_signup: bool, web_dir: Option<PathBuf>) -> Router {
+    app_with(users_file, allow_signup, web_dir, None)
+}
+
+fn app_with(
+    users_file: PathBuf,
+    allow_signup: bool,
+    web_dir: Option<PathBuf>,
+    bearer_token: Option<String>,
+) -> Router {
     let graph = OntologyGraph::with_arc(Ontology::new());
     let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
     build_router_with_config(
         state_with(store, graph),
         RouterConfig {
-            bearer_token: None,
+            bearer_token,
             jwt: Some(JwtAuth::from_secret(SECRET.to_vec())),
             rate_limit: None,
             users: Some(UserAuth {
-                users_file,
+                store: Arc::new(UserStore::open(users_file).expect("users file")),
                 allow_signup,
             }),
             web_dir,
@@ -94,6 +103,24 @@ async fn text(app: &Router, uri: &str) -> (StatusCode, String) {
     let resp = app
         .clone()
         .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let status = resp.status();
+    let bytes = to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+    (status, String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// A browser navigation: `Accept: text/html`.
+async fn browse(app: &Router, uri: &str) -> (StatusCode, String) {
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(uri)
+                .header("accept", "text/html,application/xhtml+xml,*/*;q=0.8")
+                .body(Body::empty())
+                .unwrap(),
+        )
         .await
         .unwrap();
     let status = resp.status();
@@ -294,9 +321,16 @@ async fn first_account_is_the_administrator_and_signup_then_closes() {
     )
     .await;
     assert_eq!(st, StatusCode::NOT_FOUND);
-    // Bob's token is still valid but Bob is gone.
+    // Bob's token names an account that no longer exists: refused
+    // everywhere, not only on /auth/me, until it would have expired.
     let (st, _, _) = call(&app, "GET", "/auth/me", Some(&bob_token), None).await;
     assert_eq!(st, StatusCode::UNAUTHORIZED);
+    let (st, _, _) = call(&app, "GET", "/stats", Some(&bob_token), None).await;
+    assert_eq!(
+        st,
+        StatusCode::UNAUTHORIZED,
+        "deleted user's token on the API"
+    );
 
     // Logout is stateless.
     let (st, v, _) = call(&app, "POST", "/auth/logout", None, None).await;
@@ -360,10 +394,48 @@ async fn a_users_file_written_by_the_node_server_still_logs_in() {
     )
     .await;
     assert_eq!(st, StatusCode::FORBIDDEN);
-    // A service token (static bearer) is not a user for /auth/me.
     let token = v["token"].as_str().unwrap();
     let (st, v, _) = call(&app, "GET", "/auth/me", Some(token), None).await;
     assert_eq!(st, StatusCode::OK, "{v}");
+}
+
+#[tokio::test]
+async fn a_service_token_opens_the_api_but_is_nobody_for_auth_me() {
+    let dir = tempdir("service");
+    let app = app_with(
+        dir.join("users.json"),
+        false,
+        None,
+        Some("svc-token".into()),
+    );
+    let (st, _, _) = call(&app, "GET", "/stats", Some("svc-token"), None).await;
+    assert_eq!(st, StatusCode::OK);
+    let (st, v, _) = call(&app, "GET", "/auth/me", Some("svc-token"), None).await;
+    assert_eq!(st, StatusCode::UNAUTHORIZED, "{v}");
+    let (st, _, _) = call(&app, "GET", "/auth/users", Some("svc-token"), None).await;
+    assert_eq!(st, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn login_attempts_are_rate_limited() {
+    // The bucket is 30 a minute per client; bcrypt makes a login slow
+    // enough to refill it, so the cheap route under the same limit shows
+    // the cut-off: 30 pass, the 31st is refused.
+    let dir = tempdir("rate");
+    let app = app(dir.join("users.json"), false, None);
+    let mut refused_at = None;
+    for i in 1..=40 {
+        let (st, _, _) = call(&app, "POST", "/auth/logout", None, None).await;
+        if st == StatusCode::TOO_MANY_REQUESTS {
+            refused_at = Some(i);
+            break;
+        }
+        assert_eq!(st, StatusCode::OK, "attempt {i}");
+    }
+    assert_eq!(refused_at, Some(31), "30 a minute, then 429");
+    // The limit guards /auth/* only: the rest is untouched.
+    let (st, _) = text(&app, "/healthz").await;
+    assert_eq!(st, StatusCode::OK);
 }
 
 #[tokio::test]
@@ -488,8 +560,28 @@ async fn the_web_ui_is_served_for_every_non_api_path() {
     let (st, body) = text(&app, "/login?next=%2Fgraph").await;
     assert_eq!(st, StatusCode::OK);
     assert!(body.contains("<title>UI</title>"));
-    // API routes win over the fallback: /concepts is the API, protected.
+    // API routes win over the fallback: /concepts is the API, protected …
     let (st, _) = text(&app, "/concepts").await;
+    assert_eq!(st, StatusCode::UNAUTHORIZED);
+    // … unless a browser navigates there (a reload of the Concepts page):
+    // then it is the UI, and the same for the other pages sharing a path.
+    for page in [
+        "/concepts",
+        "/files",
+        "/rules",
+        "/queries",
+        "/actions",
+        "/settings",
+    ] {
+        let (st, body) = browse(&app, page).await;
+        assert_eq!(st, StatusCode::OK, "{page}");
+        assert!(body.contains("<title>UI</title>"), "{page}: {body}");
+    }
+    // A browser navigating to an API-only path still gets the API.
+    let (st, body) = browse(&app, "/healthz").await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(body, "ok");
+    let (st, _) = browse(&app, "/auth/me").await;
     assert_eq!(st, StatusCode::UNAUTHORIZED);
     let (st, body) = text(&app, "/healthz").await;
     assert_eq!(st, StatusCode::OK);
