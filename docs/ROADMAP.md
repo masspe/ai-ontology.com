@@ -266,19 +266,28 @@ Ce que chaque étape applique du plan de stockage (vérifié le 2026-09-24) :
 
 Étapes, chacune sa branche, testée, fusionnée, dans cet ordre :
 
-1. **Image et déploiement de référence.** Le `Dockerfile` existant
+1. **Image et déploiement de référence** — **livré 2026-09-29** (passe 1 :
+   `Dockerfile` avec étape web, `compose.yaml` deux clients, `scripts/e2e_image.sh`,
+   job CI `image`, sonde `ontology healthcheck`, `docs/DEPLOIEMENT.md`). Le `Dockerfile` existant
    (cargo-chef, distroless, `serve` sur 5000) complété d'un `compose.yml`
    avec la limite mémoire, le volume de données, `--memory-mode strict`
    par défaut en conteneur ; un test CI construit l'image et vérifie
    `/healthz` et `/stats.memory.budget_source == "cgroup-v2"` dans le
    conteneur. Critère : `docker compose up` sert l'API sur un store vide,
    `docker stop` s'arrête proprement (fait : SIGTERM géré).
-2. **Interface servie par le binaire.** Les fichiers construits de `web/`
+2. **Interface servie par le binaire** — **livré 2026-09-29** (`serve --web`,
+   repli `index.html`, navigation navigateur distinguée de l'API par `Accept`).
+   Les fichiers construits de `web/`
    servis par `serve` sur `/` (Vite reste l'outil de développement, le
    proxy disparaît en production) ; TLS terminé devant par un reverse
    proxy, jamais dans le binaire. Critère : l'image seule sert l'API et la
    console ; la suite web passe toujours.
-3. **Authentification.** Décision à prendre : le service Node
+3. **Authentification** — **tranchée et livrée en Rust le 2026-09-29** pour
+   inscription, connexion, session, comptes (premier compte = administrateur,
+   inscription fermée ensuite, `users.json` du Node repris tel quel, jetons
+   révoqués à la suppression d'un compte) ; **reste 3.8.3b : OAuth Google et
+   Microsoft** dans le binaire, puis retrait de `auth-server/`. Texte d'origine :
+   décision à prendre : le service Node
    (`auth-server`) embarqué dans l'image, ou réécrit comme module Rust du
    serveur (un seul processus, une seule surface). Recommandation : Rust.
    Critère : inscription, connexion, JWT et OAuth couverts à ≥ 90 %.

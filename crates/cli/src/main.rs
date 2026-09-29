@@ -22,6 +22,7 @@ use ontology_storage::{
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 use tracing_subscriber::{fmt, EnvFilter};
 
 mod bench;
@@ -234,6 +235,12 @@ enum Cmd {
         #[arg(long, default_value_t = 6)]
         max_depth: u32,
     },
+    /// Container health probe: GET `url`, exit 0 on a 2xx, 1 otherwise. The
+    /// runtime image has no curl; this needs no dependency either.
+    Healthcheck {
+        #[arg(default_value = "http://127.0.0.1:5000/healthz")]
+        url: String,
+    },
     /// Run the HTTP server.
     Serve {
         #[arg(long, default_value = "127.0.0.1:5000")]
@@ -270,6 +277,22 @@ enum Cmd {
         /// Development aid for large stores; omit to load everything.
         #[arg(long, value_delimiter = ',')]
         ns: Option<Vec<String>>,
+        /// Serve the built web UI from this directory (`web/dist`): its files
+        /// for the paths no API route claims, `index.html` for the rest.
+        #[arg(long)]
+        web: Option<PathBuf>,
+        /// Enable the built-in login (`/auth/*`): users in `<data>/users.json`
+        /// (or `--users-file`), JWT secret from `--jwt-secret-env` or from
+        /// `<data>/jwt.secret`, generated on first start.
+        #[arg(long)]
+        login: bool,
+        /// Users file of the built-in login (implies `--login`).
+        #[arg(long)]
+        users_file: Option<PathBuf>,
+        /// Keep sign-up open after the first account (the first account is
+        /// the administrator; by default it then creates the others).
+        #[arg(long)]
+        allow_signup: bool,
     },
 }
 
@@ -290,6 +313,14 @@ async fn main() -> Result<()> {
 
     // Benchmarks manage the store themselves (they time its opening and
     // hydration), so they run before the generic open below.
+    if let Cmd::Healthcheck { url } = &cli.cmd {
+        // Never touches the store: the running server holds its LOCK.
+        return match healthcheck(url) {
+            Ok(status) if (200..300).contains(&status) => Ok(()),
+            Ok(status) => anyhow::bail!("{url}: HTTP {status}"),
+            Err(e) => anyhow::bail!("{url}: {e}"),
+        };
+    }
     if let Cmd::Bench { cmd, json } = &cli.cmd {
         let data = cli
             .data
@@ -656,6 +687,7 @@ async fn main() -> Result<()> {
                 }
             }
         }
+        Cmd::Healthcheck { .. } => unreachable!("handled before the store opens"),
         Cmd::Serve {
             bind,
             auth_env,
@@ -664,6 +696,10 @@ async fn main() -> Result<()> {
             jwt_audience,
             seed,
             ns: _,
+            web,
+            login,
+            users_file,
+            allow_signup,
         } => {
             // Resolve a seed directory: explicit --seed wins, otherwise look
             // for ONTOLOGY_SEED_DIR, then <data>/seed, then ./seed. Seeding
@@ -727,6 +763,26 @@ async fn main() -> Result<()> {
                 ),
                 None => None,
             };
+            // The built-in login keeps its users and its secret next to the
+            // data: it needs a data directory.
+            let login = login || users_file.is_some();
+            let auth_dir = match (login, &cli.data) {
+                (true, Some(d)) => Some(d.clone()),
+                (true, None) => anyhow::bail!("--login needs --data <dir>"),
+                (false, _) => None,
+            };
+            let users = match auth_dir.as_ref() {
+                Some(d) => {
+                    let path = users_file.unwrap_or_else(|| d.join("users.json"));
+                    let store = ontology_server::auth::UserStore::open(&path)
+                        .map_err(|e| anyhow::anyhow!("{e}"))?;
+                    Some(ontology_server::auth::UserAuth {
+                        store: Arc::new(store),
+                        allow_signup,
+                    })
+                }
+                None => None,
+            };
             let jwt = match jwt_secret_env {
                 Some(env_name) => {
                     let secret = std::env::var(&env_name)
@@ -741,26 +797,139 @@ async fn main() -> Result<()> {
                         leeway_secs: 60,
                     })
                 }
+                // The built-in login needs a secret to sign its tokens: one
+                // is generated once and kept next to the data (0600 on Unix).
+                None if users.is_some() => Some(ontology_server::JwtAuth {
+                    secret: jwt_secret_file(
+                        &auth_dir
+                            .clone()
+                            .expect("users imply a data dir")
+                            .join("jwt.secret"),
+                    )?,
+                    issuer: Some(jwt_issuer),
+                    audience: Some(jwt_audience),
+                    leeway_secs: 60,
+                }),
                 None => None,
             };
+            if let Some(dir) = &web {
+                anyhow::ensure!(
+                    dir.join("index.html").is_file(),
+                    "--web {}: no index.html there (build the UI with `npm run build` in web/)",
+                    dir.display()
+                );
+                tracing::info!(dir = %dir.display(), "serving the web UI");
+            }
+            if let Some(u) = &users {
+                tracing::info!(file = %u.store.path().display(), allow_signup, "built-in login enabled");
+            }
             let app = ontology_server::build_router_with_config(
                 state,
                 ontology_server::RouterConfig {
                     bearer_token: bearer,
                     jwt,
                     rate_limit: None,
+                    users,
+                    web_dir: web,
                 },
             );
             let listener = tokio::net::TcpListener::bind(&bind).await?;
             tracing::info!(addr = %bind, "server listening");
-            axum::serve(listener, app)
-                .with_graceful_shutdown(shutdown_signal())
-                .await?;
+            // With the peer address attached, the rate limit on /auth/* is
+            // per client IP (behind a reverse proxy: the proxy's address).
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .with_graceful_shutdown(shutdown_signal())
+            .await?;
             tracing::info!("server stopped");
         }
     }
 
     Ok(())
+}
+
+/// Minimal HTTP/1.0 GET over a plain socket, for `healthcheck`: returns
+/// the status code. Only `http://host:port/path` is accepted.
+fn healthcheck(url: &str) -> Result<u16> {
+    use std::io::{Read, Write};
+    let rest = url
+        .strip_prefix("http://")
+        .context("healthcheck needs an http:// URL")?;
+    let (host_port, path) = match rest.find('/') {
+        Some(i) => (&rest[..i], &rest[i..]),
+        None => (rest, "/"),
+    };
+    let addr = if host_port.contains(':') {
+        host_port.to_string()
+    } else {
+        format!("{host_port}:80")
+    };
+    // Try every address the name resolves to (localhost may be ::1 first).
+    let mut last = anyhow::anyhow!("unresolvable host");
+    for sa in std::net::ToSocketAddrs::to_socket_addrs(&addr)? {
+        let mut s = match std::net::TcpStream::connect_timeout(&sa, Duration::from_secs(3)) {
+            Ok(s) => s,
+            Err(e) => {
+                last = e.into();
+                continue;
+            }
+        };
+        s.set_read_timeout(Some(Duration::from_secs(3)))?;
+        write!(
+            s,
+            "GET {path} HTTP/1.0\r\nHost: {host_port}\r\nConnection: close\r\n\r\n"
+        )?;
+        let mut head = [0u8; 64];
+        let n = s.read(&mut head)?;
+        let line = String::from_utf8_lossy(&head[..n]);
+        return line
+            .split_whitespace()
+            .nth(1)
+            .and_then(|c| c.parse().ok())
+            .context("no HTTP status line");
+    }
+    Err(last)
+}
+
+/// The JWT secret of the built-in login: read from `path`, or generated
+/// (32 random bytes, hex) and written there on the first start. Losing the
+/// file only logs every user out.
+fn jwt_secret_file(path: &Path) -> Result<Vec<u8>> {
+    use std::io::Write;
+    match std::fs::read(path) {
+        Ok(bytes) if !bytes.trim_ascii().is_empty() => Ok(bytes.trim_ascii().to_vec()),
+        Ok(_) => anyhow::bail!(
+            "{} is empty: delete it to generate a new secret",
+            path.display()
+        ),
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+            Err(e).with_context(|| format!("reading {}", path.display()))
+        }
+        Err(_) => {
+            use rand::RngCore;
+            let mut raw = [0u8; 32];
+            rand::rng().fill_bytes(&mut raw);
+            let hex: String = raw.iter().map(|b| format!("{b:02x}")).collect();
+            if let Some(dir) = path.parent() {
+                std::fs::create_dir_all(dir)?;
+            }
+            // Created owner-only from the start (Unix), never world-readable.
+            let mut opts = std::fs::OpenOptions::new();
+            opts.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                opts.mode(0o600);
+            }
+            opts.open(path)
+                .and_then(|mut f| f.write_all(hex.as_bytes()))
+                .with_context(|| format!("writing {}", path.display()))?;
+            tracing::warn!(file = %path.display(), "generated a new JWT secret (every user will log in again)");
+            Ok(hex.into_bytes())
+        }
+    }
 }
 
 /// Resolves on Ctrl+C, SIGTERM (Unix: what `docker stop` sends) or

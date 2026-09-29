@@ -22,6 +22,7 @@
 //! The router is constructed via [`build_router`] so callers can mount it
 //! into a larger axum app or test it with `tower::ServiceExt`.
 
+pub mod auth;
 mod ingest_review;
 mod openapi;
 
@@ -868,6 +869,12 @@ pub struct RouterConfig {
     pub jwt: Option<JwtAuth>,
     /// Per-IP request limit. `None` disables rate limiting.
     pub rate_limit: Option<RateLimit>,
+    /// Built-in `/auth/*` (users file, sign-up policy); needs `jwt` to sign
+    /// the tokens it issues.
+    pub users: Option<auth::UserAuth>,
+    /// Directory of the built web UI, served for every path no API route
+    /// claims (`index.html` for the client-side routes).
+    pub web_dir: Option<PathBuf>,
 }
 
 /// JWT verification parameters. Mirrors the Node `auth-server` defaults
@@ -935,6 +942,8 @@ impl RouterConfig {
             bearer_token: None,
             jwt: None,
             rate_limit: None,
+            users: None,
+            web_dir: None,
         }
     }
 }
@@ -951,6 +960,8 @@ pub fn build_router_with_auth(state: AppState, bearer_token: Option<String>) -> 
             bearer_token,
             jwt: None,
             rate_limit: None,
+            users: None,
+            web_dir: None,
         },
     )
 }
@@ -964,6 +975,8 @@ pub fn build_router_with_jwt(state: AppState, jwt: JwtAuth) -> Router {
             bearer_token: None,
             jwt: Some(jwt),
             rate_limit: None,
+            users: None,
+            web_dir: None,
         },
     )
 }
@@ -973,19 +986,45 @@ pub fn build_router_with_jwt(state: AppState, jwt: JwtAuth) -> Router {
 /// 2. optional rate-limit by client IP,
 /// 3. optional bearer-token / JWT check.
 pub fn build_router_with_config(state: AppState, cfg: RouterConfig) -> Router {
-    build_router_inner(state, cfg.bearer_token, cfg.jwt, cfg.rate_limit)
+    build_router_inner(state, cfg)
 }
 
-fn build_router_inner(
-    state: AppState,
-    bearer_token: Option<String>,
-    jwt: Option<JwtAuth>,
-    rate_limit: Option<RateLimit>,
-) -> Router {
-    let healthz_router = Router::new()
+fn build_router_inner(state: AppState, cfg: RouterConfig) -> Router {
+    let RouterConfig {
+        bearer_token,
+        jwt,
+        rate_limit,
+        users,
+        web_dir,
+    } = cfg;
+    let mut healthz_router = Router::new()
         .route("/healthz", get(healthz))
         .route("/openapi.json", get(openapi::openapi_spec))
         .route("/docs", get(openapi::swagger_ui));
+
+    // Built-in auth (ROADMAP §3.8.3): the public half next to /healthz,
+    // behind its own rate limit (credential guessing), the private half
+    // inside the protected router below.
+    let auth_state = match (&users, &jwt) {
+        (Some(u), Some(j)) => Some(auth::AuthState {
+            store: u.store.clone(),
+            signer: StdArc::new(auth::Signer::new(j)),
+            allow_signup: u.allow_signup,
+        }),
+        (Some(_), None) => panic!("built-in auth needs a JWT secret to sign tokens"),
+        _ => None,
+    };
+    if let Some(a) = &auth_state {
+        let limiter = StdArc::new(RateLimiter::new(RateLimit {
+            max_requests: 30,
+            window: Duration::from_secs(60),
+        }));
+        let public = auth::public_routes(a.clone()).layer(middleware::from_fn(move |req, next| {
+            let limiter = limiter.clone();
+            async move { rate_limit_layer(req, next, limiter).await }
+        }));
+        healthz_router = healthz_router.merge(public);
+    }
 
     let protected = Router::new()
         .route("/stats", get(stats))
@@ -1057,20 +1096,68 @@ fn build_router_inner(
         .route("/feedbacks/:id", delete(delete_feedback))
         .route("/logs/tail", get(logs_tail))
         .with_state(state);
+    let protected = match &auth_state {
+        Some(a) => protected.merge(auth::protected_routes(a.clone())),
+        None => protected,
+    };
 
     let protected = if bearer_token.is_some() || jwt.is_some() {
         let static_token = bearer_token.map(StdArc::new);
         let jwt_cfg = jwt.map(|j| StdArc::new(BuiltJwt::new(j)));
+        // With the built-in login on, a token must also name an account that
+        // still exists: deleting a user revokes their tokens at once.
+        let accounts = auth_state.as_ref().map(|a| a.store.clone());
         protected.layer(middleware::from_fn(move |req, next| {
             let static_token = static_token.clone();
             let jwt_cfg = jwt_cfg.clone();
-            async move { require_auth(req, next, static_token, jwt_cfg).await }
+            let accounts = accounts.clone();
+            async move { require_auth(req, next, static_token, jwt_cfg, accounts).await }
         }))
     } else {
         protected
     };
 
     let mut app = healthz_router.merge(protected);
+
+    // The web UI (ROADMAP §3.8.2): files under `web_dir`, and `index.html`
+    // for any other path so the client-side router owns it. API routes are
+    // matched first; six UI pages share a path with a GET API route
+    // (`/concepts`, `/files`, …), so a browser *navigation* to one of them
+    // (a reload, a bookmark: `Accept: text/html`) is answered with
+    // `index.html` before routing, while API clients (`application/json`,
+    // `*/*`) reach the API as before.
+    if let Some(dir) = web_dir {
+        let index = tower_http::services::ServeFile::new(dir.join("index.html"));
+        let index_for_nav = index.clone();
+        app = app.layer(middleware::from_fn(
+            move |req: Request<axum::body::Body>, next: Next| {
+                let index = index_for_nav.clone();
+                async move {
+                    let path = req.uri().path();
+                    let api_only = path.starts_with("/auth/")
+                        || path == "/healthz"
+                        || path == "/docs"
+                        || path == "/openapi.json";
+                    let wants_html = req
+                        .headers()
+                        .get(axum::http::header::ACCEPT)
+                        .and_then(|v| v.to_str().ok())
+                        .is_some_and(|a| a.contains("text/html"));
+                    if req.method() == axum::http::Method::GET && wants_html && !api_only {
+                        let mut svc = index;
+                        return tower::ServiceExt::oneshot(&mut svc, req)
+                            .await
+                            .map(|r| r.into_response())
+                            .unwrap_or_else(|_| StatusCode::NOT_FOUND.into_response());
+                    }
+                    next.run(req).await
+                }
+            },
+        ));
+        // `fallback`, not `not_found_service`: a client-side route must get
+        // `index.html` with a 200, the browser then renders it.
+        app = app.fallback_service(tower_http::services::ServeDir::new(dir).fallback(index));
+    }
 
     if let Some(rl) = rate_limit {
         let limiter = StdArc::new(RateLimiter::new(rl));
@@ -1332,6 +1419,7 @@ async fn require_auth(
     next: Next,
     static_token: Option<StdArc<String>>,
     jwt: Option<StdArc<BuiltJwt>>,
+    accounts: Option<StdArc<auth::UserStore>>,
 ) -> Result<Response, StatusCode> {
     let provided = extract_bearer(&req).ok_or(StatusCode::UNAUTHORIZED)?;
 
@@ -1341,6 +1429,11 @@ async fn require_auth(
     if let Some(jwt) = jwt.as_ref() {
         match jwt.verify(&provided) {
             Ok(claims) => {
+                if let Some(store) = accounts.as_ref() {
+                    if !store.exists(&claims.sub) {
+                        return Err(StatusCode::UNAUTHORIZED);
+                    }
+                }
                 req.extensions_mut().insert(AuthContext {
                     subject: claims.sub,
                     email: claims.email,
