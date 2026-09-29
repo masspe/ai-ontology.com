@@ -2,32 +2,15 @@
 // Copyright (C) 2026 Mediasoft & Cie S.A.
 
 import { NavLink } from "react-router-dom";
-
-interface NavItem {
-  to: string;
-  label: string;
-  icon: string;
-  end?: boolean;
-}
-
-const NAV: NavItem[] = [
-  { to: "/", label: "Dashboard", icon: "▦", end: true },
-  { to: "/builder", label: "Ontology Builder", icon: "✦" },
-  { to: "/files", label: "Files", icon: "▤" },
-  { to: "/ingest", label: "Ingest (LLM)", icon: "✨" },
-  { to: "/graph", label: "Graph View", icon: "◈" },
-  { to: "/concepts", label: "Concepts", icon: "◉" },
-  { to: "/rules", label: "Rules", icon: "§" },
-  { to: "/queries", label: "Queries", icon: "✎" },
-  { to: "/actions", label: "Actions", icon: "⚡" },
-  { to: "/settings", label: "Settings", icon: "⚙" },
-];
+import { NAV_GROUPS } from "./nav";
 
 interface Props {
   collapsed: boolean;
   onToggle: () => void;
 }
 
+/// The menu follows the order of the work (prepare, explore, automate);
+/// every entry carries a `data-tour` anchor for the guide.
 export default function Sidebar({ collapsed, onToggle }: Props) {
   return (
     <aside className={`sidebar${collapsed ? " collapsed" : ""}`}>
@@ -36,30 +19,34 @@ export default function Sidebar({ collapsed, onToggle }: Props) {
         <span className="sidebar-brand-text">AI Ontology Studio</span>
       </div>
 
-      <div className="sidebar-section-title">Workspace</div>
-      <nav>
-        {NAV.map((item) => (
-          <NavLink
-            key={item.to}
-            to={item.to}
-            end={item.end}
-            className={({ isActive }) => `sidebar-item${isActive ? " active" : ""}`}
-            title={collapsed ? item.label : undefined}
-          >
-            <span className="sidebar-item-icon" aria-hidden>{item.icon}</span>
-            <span className="sidebar-item-label">{item.label}</span>
-          </NavLink>
-        ))}
-      </nav>
+      {NAV_GROUPS.map((group) => (
+        <nav key={group.title} aria-label={group.title}>
+          <div className="sidebar-section-title">{group.title}</div>
+          {group.items.map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              end={item.end}
+              data-tour={item.tour}
+              className={({ isActive }) => `sidebar-item${isActive ? " active" : ""}`}
+              title={collapsed ? item.label : undefined}
+            >
+              <span className="sidebar-item-icon">{item.icon}</span>
+              <span className="sidebar-item-label">{item.label}</span>
+            </NavLink>
+          ))}
+        </nav>
+      ))}
 
       <div className="sidebar-footer">
-        <div className="workspace-selector">
-          <span>📁</span>
-          <span>Default workspace</span>
-        </div>
-        <button className="btn-ghost" style={{ width: "100%", justifyContent: "flex-start" }} onClick={onToggle}>
+        <button
+          className="btn-ghost"
+          style={{ width: "100%", justifyContent: "flex-start" }}
+          onClick={onToggle}
+          aria-label={collapsed ? "Déployer le menu" : "Réduire le menu"}
+        >
           <span className="sidebar-item-icon">{collapsed ? "›" : "‹"}</span>
-          {!collapsed && <span style={{ marginLeft: 8 }}>Collapse</span>}
+          {!collapsed && <span style={{ marginLeft: 8 }}>Réduire</span>}
         </button>
       </div>
     </aside>

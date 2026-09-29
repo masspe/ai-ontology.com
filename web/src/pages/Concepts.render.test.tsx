@@ -494,8 +494,8 @@ describe("Concepts page — selection and bulk delete", () => {
     await answerConfirm(user, "Delete 1");
     await waitFor(() => expect(mocked.deleteConcepts).toHaveBeenCalledWith([4]));
 
-    await user.click(screen.getByRole("button", { name: /Validate Definitions/ }));
-    expect(screen.getByText("Definition validation coming soon.")).toBeInTheDocument();
+    // No inert "validate" button any more; the export is a real download link.
+    expect(screen.queryByRole("button", { name: /Validate Definitions/ })).not.toBeInTheDocument();
   });
 });
 
@@ -505,7 +505,7 @@ describe("Concepts page — create concept", () => {
   it("refuses to open the form when the ontology has no concept types", async () => {
     mocked.getOntology.mockResolvedValue({ concept_types: {}, relation_types: {} });
     const { user } = await mountLoaded();
-    expect(await screen.findByText("No concept types defined yet.")).toBeInTheDocument();
+    expect(await screen.findByText(/Aucun type de fiche/)).toBeInTheDocument();
     expect(screen.getByText("Loading domains…")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Create Concept" }));
     expect(

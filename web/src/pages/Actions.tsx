@@ -82,6 +82,9 @@ function typeColor(name: string): string {
 // ---------------------------------------------------------------------------
 
 const Icon = {
+  trash: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="M19 6l-1 14H6L5 6" /><path d="M10 11v6" /><path d="M14 11v6" /></svg>
+  ),
   bolt: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M13 2 3 14h7l-1 8 10-12h-7z" />
@@ -540,7 +543,7 @@ export default function Actions() {
                         aria-label="Delete action"
                         onClick={(e) => { e.stopPropagation(); onDelete(a.id); }}
                       >
-                        {Icon.more}
+                        {Icon.trash}
                       </button>
                     </td>
                   </tr>
@@ -557,7 +560,6 @@ export default function Actions() {
         <Card
           className="rule-details"
           title="Action Details"
-          actions={<button className="btn-ghost icon-btn" aria-label="Expand">{Icon.expand}</button>}
         >
           {selected && selectedAction ? (
             <>
@@ -604,9 +606,8 @@ export default function Actions() {
                 >
                   <span className="qa-icon-inline">{Icon.edit}</span> Edit Action
                 </button>
-                <button className="btn-ghost"><span className="qa-icon-inline">{Icon.play}</span> Run Now</button>
                 <button className="btn-ghost" onClick={() => onDelete(selected.id)}>
-                  <span className="qa-icon-inline">{Icon.download}</span> Delete
+                  <span className="qa-icon-inline">{Icon.trash}</span> Delete
                 </button>
               </div>
 
@@ -665,38 +666,6 @@ export default function Actions() {
           </ul>
         </Card>
 
-        <Card title="Quick Actions">
-          <div className="quick-actions rule-quick">
-            <a className="quick-action qa-blue" href="#" onClick={(e) => e.preventDefault()}>
-              <div className="qa-icon">{Icon.import}</div>
-              <div>
-                <div className="qa-title">Import Actions</div>
-                <div className="qa-sub muted">Import from files or sources</div>
-              </div>
-            </a>
-            <a className="quick-action qa-violet" href="#" onClick={(e) => e.preventDefault()}>
-              <div className="qa-icon">{Icon.spark}</div>
-              <div>
-                <div className="qa-title">Generate with AI</div>
-                <div className="qa-sub muted">Auto-generate actions</div>
-              </div>
-            </a>
-            <a className="quick-action qa-amber" href="#" onClick={(e) => e.preventDefault()}>
-              <div className="qa-icon">{Icon.bulk}</div>
-              <div>
-                <div className="qa-title">Bulk Edit</div>
-                <div className="qa-sub muted">Edit multiple actions</div>
-              </div>
-            </a>
-            <a className="quick-action qa-green" href="#" onClick={(e) => e.preventDefault()}>
-              <div className="qa-icon">{Icon.play}</div>
-              <div>
-                <div className="qa-title">Run All Active</div>
-                <div className="qa-sub muted">Run all active actions</div>
-              </div>
-            </a>
-          </div>
-        </Card>
       </div>
 
       {editing != null && (

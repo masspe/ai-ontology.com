@@ -553,7 +553,6 @@ export default function OntologyBuilder() {
               >
                 <span aria-hidden>✦</span> {busy === "generate" ? "Generating…" : "Generate Ontology"}
               </button>
-              <button className="btn-generate-split" aria-label="More options" title="More options">▾</button>
             </div>
           </Card>
 
@@ -636,15 +635,6 @@ export default function OntologyBuilder() {
         <div className="builder-right">
           <Card
             title={<span>Ontology Graph <span className="info-dot" title="Live view of the current ontology">ⓘ</span></span>}
-            actions={
-              <div className="graph-toolbar">
-                <button className="chip-btn"><span aria-hidden>⇵</span> Layout <span aria-hidden>▾</span></button>
-                <button className="icon-square" title="Zoom in">＋</button>
-                <button className="icon-square" title="Zoom out">－</button>
-                <button className="icon-square" title="Fit">⛶</button>
-                <button className="icon-square" title="Fullscreen">⛶</button>
-              </div>
-            }
             className="graph-card"
           >
             <div className="graph-area">
@@ -670,7 +660,6 @@ export default function OntologyBuilder() {
                 <button className="link-btn-sm" onClick={refresh} title="Refresh">↻</button>
               </span>
             }
-            actions={<button className="link-btn">View Details <span aria-hidden>›</span></button>}
             style={{ marginTop: 16 }}
           >
             <div className="insights-grid">
@@ -722,8 +711,6 @@ export default function OntologyBuilder() {
         }
         .icon-square:hover { background: var(--panel-2); }
 
-        .link-btn { background: none; border: none; color: var(--accent); font-size: 12px; cursor: pointer; padding: 4px 6px; }
-        .link-btn:hover { text-decoration: underline; }
         .link-btn-sm { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 14px; margin-left: 4px; }
         .link-btn-sm:hover { color: var(--accent); }
 

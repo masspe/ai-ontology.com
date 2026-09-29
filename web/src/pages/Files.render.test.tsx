@@ -210,7 +210,7 @@ describe("Files page — library", () => {
     expect(rowNames()[0]).toBe("report.pdf");
 
     await user.type(screen.getByPlaceholderText("Search files…"), "nothing-here");
-    expect(screen.getByText("No files match your filters.")).toBeInTheDocument();
+    expect(screen.getByText(/Aucun fichier ne correspond/)).toBeInTheDocument();
     expect(screen.queryByText(/Showing/)).not.toBeInTheDocument();
   });
 
@@ -262,7 +262,7 @@ describe("Files page — library", () => {
   it("shows the empty states when nothing has been uploaded", async () => {
     mocked.getFiles.mockResolvedValue({ files: [] });
     renderPage(<Files />);
-    expect(await screen.findByText("No files match your filters.")).toBeInTheDocument();
+    expect(await screen.findByText(/Aucun fichier ne correspond/)).toBeInTheDocument();
     expect(screen.getByText("No uploads yet.")).toBeInTheDocument();
     expect(screen.getByText("No activity yet.")).toBeInTheDocument();
     expect(screen.getByText("No data")).toBeInTheDocument();
