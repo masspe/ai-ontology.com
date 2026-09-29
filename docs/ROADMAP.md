@@ -208,10 +208,22 @@ au-delà de ~10⁶ concepts** ; en dessous, la tranche 1 suffit (70 ms à
 
 ### 3.8 Production — **chantier principal, validé le 2026-09-24** — **prochaine étape (reprise du 2026-09-29)**
 
+**Décisions du propriétaire, 2026-09-29** : (1) **authentification en Rust**
+dans le binaire, le serveur Node est retiré une fois le remplacement en
+place ; (2) **déploiement sur un serveur à nous** (image + compose, pas
+d'hébergeur managé) ; (3) **sauvegarde par copie des segments immuables et
+du MANIFEST vers un stockage externe** (objet compatible S3 ou second
+serveur), incrémentale, rétention 30 jours, restauration exercée en CI ;
+les instantanés disque restent un complément optionnel de l'hébergeur.
+Ordre d'exécution retenu : passe 1 = 3.8.1 + 3.8.2 (image, compose, web
+servie par le binaire, test de bout en bout) ; passe 2 = lot A de
+l'interface (§3.9) ; puis 3.8.3 auth Rust, 3.8.4 sauvegarde, lot B, 3.8.5,
+3.8.6.
+
 État à la fin du 2026-09-28 : tous les reliquats du plan sont livrés (T1,
 T2, T3, mesure §3.7, R tranche 2a) ; `main` = 44a47fd, CI verte, incident
-clos pour ce dépôt. Trois décisions du propriétaire ouvrent ce chantier,
-dans cet ordre : (1) auth en Rust dans le binaire (recommandé : un
+clos pour ce dépôt. Trois décisions du propriétaire ouvraient ce chantier
+(tranchées ci-dessus), dans cet ordre : (1) auth en Rust dans le binaire (recommandé : un
 processus par tenant, T5, plus de surface npm) ou conservation du serveur
 Node ; (2) cible de déploiement (image + compose sur un serveur géré, ou
 hébergeur managé) ; (3) sauvegarde (copie des segments immuables et du
