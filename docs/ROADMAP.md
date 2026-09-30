@@ -497,7 +497,21 @@ chacune avec ses tests. Le lot B est clos hors cette traduction.
 **Traduction livrée le 2026-09-30 (branche `feat/ui-french`)** : corps
 des sept pages, dialogue de confirmation, panneau de relecture d'import,
 assistant d'import, Questions, réponse en direct ; dates en `fr-CH`.
-Restent en anglais, à dessein : les identifiants techniques (types de
+**Retours du premier essai du propriétaire (2026-09-30, branche
+`feat/ui-feedback-1`)** : (1) un modèle installé sans fiche laissait
+Fiches et Graphe vides sans explication — les deux disent maintenant que le
+modèle est en place et que les fiches viendront des fichiers ; (2) un
+Excel ou CSV déposé sans type de fiche était refusé (« demande un type de
+fiche ») alors que le sélecteur était caché — la page demande le type sur
+place (« Chaque ligne de « invoices.xlsx » devient une fiche : de quel
+type ? ») puis importe ; (3) « Relire un document » n'était pas compris —
+renommé « Relecture d'un document » avec une phrase d'explication (un
+document déposé dans Fichiers y arrive de lui-même ; un fichier structuré se
+charge directement) ; (4) le graphe : jusqu'à 300 fiches il est dessiné en
+entier, au-delà il se charge uniquement autour d'une sélection (un ou
+plusieurs types de fiche, sélection multiple, ou une recherche, ou une
+fiche), 250 fiches au plus, sans rechargement automatique ; les types de
+lien se choisissent aussi à plusieurs. Restent en anglais, à dessein : les identifiants techniques (types de
 fiches et de liens venant des données, identifiants de modèles, `Top-K`,
 `BM25`), les messages d'erreur renvoyés par le serveur, et les nombres au
 format `1,234` (locale `en-US` dans `fmtNum`, à passer en `fr-CH` avec les

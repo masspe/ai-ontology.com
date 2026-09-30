@@ -838,7 +838,20 @@ export default function Concepts() {
             </thead>
             <tbody>
               {concepts.length === 0 && (
-                <tr><td colSpan={8} className="empty">Aucune fiche ne correspond aux filtres actuels.</td></tr>
+                <tr>
+                  <td colSpan={8} className="empty">
+                    {!search && !typeFilter && !statusFilter && Object.keys(types).length > 0 ? (
+                      <>
+                        Aucune fiche pour l'instant. Le modèle est en place ({Object.keys(types).length} type(s) de fiche :{" "}
+                        {Object.keys(types).slice(0, 5).join(", ")}
+                        {Object.keys(types).length > 5 ? "…" : ""}) ; les fiches viendront de vos fichiers.{" "}
+                        <Link to="/files">Déposer des fichiers</Link> ou <Link to="/">essayer l'exemple finance</Link>.
+                      </>
+                    ) : (
+                      "Aucune fiche ne correspond aux filtres actuels."
+                    )}
+                  </td>
+                </tr>
               )}
               {concepts.map((c) => {
                 const st = conceptStatus(c);
