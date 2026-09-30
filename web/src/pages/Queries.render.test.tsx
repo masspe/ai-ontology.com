@@ -83,11 +83,11 @@ describe("Queries page", () => {
   it("saves a query only once both fields are filled, then clears and reloads", async () => {
     const { user } = renderPage(<Queries />);
     await screen.findByText("Renewals");
-    const save = screen.getByRole("button", { name: "Save" });
+    const save = screen.getByRole("button", { name: "Enregistrer" });
     expect(save).toBeDisabled();
-    await user.type(screen.getByPlaceholderText("Renewal obligations"), "Mine");
+    await user.type(screen.getByPlaceholderText("Échéances de renouvellement"), "Mine");
     expect(save).toBeDisabled();
-    await user.type(screen.getByPlaceholderText(/upcoming renewals/), "who owes what");
+    await user.type(screen.getByPlaceholderText(/prochains renouvellements/), "who owes what");
     await user.clear(screen.getByRole("spinbutton"));
     await user.type(screen.getByRole("spinbutton"), "5");
     expect(save).toBeEnabled();
@@ -96,14 +96,14 @@ describe("Queries page", () => {
       expect(mocked.createQuery).toHaveBeenCalledWith({ name: "Mine", query: "who owes what", top_k: 5 }),
     );
     expect(mocked.getQueries).toHaveBeenCalledTimes(2);
-    expect(screen.getByPlaceholderText("Renewal obligations")).toHaveValue("");
+    expect(screen.getByPlaceholderText("Échéances de renouvellement")).toHaveValue("");
   });
 
   it("runs a query and shows the answer with citations", async () => {
     const { user } = renderPage(<Queries />);
     await screen.findByText("Renewals");
-    await user.click(screen.getAllByRole("button", { name: "Run" })[0]);
-    expect(await screen.findByText("Result · Renewals")).toBeInTheDocument();
+    await user.click(screen.getAllByRole("button", { name: "Exécuter" })[0]);
+    expect(await screen.findByText("Réponse · Renewals")).toBeInTheDocument();
     expect(screen.getByText("Two contracts renew in Q4.")).toBeInTheDocument();
     expect(screen.getByText("Contract · ACME master")).toBeInTheDocument();
     expect(mocked.runQuery).toHaveBeenCalledWith(1);
@@ -112,13 +112,13 @@ describe("Queries page", () => {
   it("deletes only after the confirm dialog is accepted", async () => {
     const { user } = renderPage(<Queries />);
     await screen.findByText("Renewals");
-    await user.click(screen.getAllByRole("button", { name: "Delete" })[0]);
+    await user.click(screen.getAllByRole("button", { name: "Supprimer" })[0]);
     // Cancel first: nothing happens.
-    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await user.click(screen.getByRole("button", { name: "Annuler" }));
     expect(mocked.deleteQuery).not.toHaveBeenCalled();
     // Accept: the API is called and the list reloads.
-    await user.click(screen.getAllByRole("button", { name: "Delete" })[0]);
-    const dialogDelete = screen.getAllByRole("button", { name: "Delete" }).at(-1)!;
+    await user.click(screen.getAllByRole("button", { name: "Supprimer" })[0]);
+    const dialogDelete = screen.getAllByRole("button", { name: "Supprimer" }).at(-1)!;
     await user.click(dialogDelete);
     await waitFor(() => expect(mocked.deleteQuery).toHaveBeenCalledWith(1));
     expect(mocked.getQueries).toHaveBeenCalledTimes(2);
@@ -132,14 +132,14 @@ describe("Queries page", () => {
     mocked.runQuery.mockRejectedValueOnce("boom");
     mocked.getQueries.mockResolvedValue({ queries: saved });
     const { user } = renderPage(<Queries />);
-    await user.click((await screen.findAllByRole("button", { name: "Run" }))[0]);
+    await user.click((await screen.findAllByRole("button", { name: "Exécuter" }))[0]);
     expect(await screen.findByText("boom")).toBeInTheDocument();
   });
 
   it("reloads on demand", async () => {
     const { user } = renderPage(<Queries />);
     await screen.findByText("Renewals");
-    await user.click(screen.getByRole("button", { name: "Reload" }));
+    await user.click(screen.getByRole("button", { name: "Recharger" }));
     await waitFor(() => expect(mocked.getQueries).toHaveBeenCalledTimes(2));
   });
 });

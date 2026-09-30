@@ -297,7 +297,7 @@ export default function IngestWizard() {
 
       {step === "applying" && (
         <Card>
-          <p>Writing accepted items to the graph…</p>
+          <p>Ajout des éléments acceptés à vos données…</p>
         </Card>
       )}
 
@@ -357,7 +357,7 @@ function UploadStep(props: {
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
           <label style={{ display: "grid", gap: 4 }}>
-            <span style={{ fontSize: 12, color: "#475569" }}>LLM provider</span>
+            <span style={{ fontSize: 12, color: "#475569" }}>Fournisseur d'IA</span>
             <select
               value={props.provider}
               onChange={(e) =>
@@ -366,14 +366,14 @@ function UploadStep(props: {
                 )
               }
             >
-              <option value="default">Default (server-configured)</option>
+              <option value="default">Par défaut (configuré sur le serveur)</option>
               <option value="openai">OpenAI</option>
               <option value="anthropic">Anthropic</option>
-              <option value="infomaniak">Infomaniak AI (Swiss cloud)</option>
+              <option value="infomaniak">Infomaniak AI (cloud suisse)</option>
             </select>
           </label>
           <label style={{ display: "grid", gap: 4 }}>
-            <span style={{ fontSize: 12, color: "#475569" }}>Model (optional)</span>
+            <span style={{ fontSize: 12, color: "#475569" }}>Modèle (facultatif)</span>
             <input
               type="text"
               placeholder="gpt-4o-mini / claude-3-7-sonnet-latest"
@@ -382,10 +382,10 @@ function UploadStep(props: {
             />
           </label>
           <label style={{ display: "grid", gap: 4 }}>
-            <span style={{ fontSize: 12, color: "#475569" }}>Language hint (ISO-639-1)</span>
+            <span style={{ fontSize: 12, color: "#475569" }}>Langue du document (ISO-639-1)</span>
             <input
               type="text"
-              placeholder="en, fr, it, … (auto-detect if blank)"
+              placeholder="fr, de, it, … (détection automatique si vide)"
               value={props.languageHint}
               onChange={(e) => props.onLanguageHint(e.target.value)}
               maxLength={5}

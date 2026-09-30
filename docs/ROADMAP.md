@@ -494,6 +494,14 @@ en français ; **le corps des pages Fichiers, Fiches, Règles, Actions,
 Graphe, Modèle de données et Réglages (tableaux, formulaires, boutons,
 messages) reste en anglais** — à traduire page par page au fil de l'eau,
 chacune avec ses tests. Le lot B est clos hors cette traduction.
+**Traduction livrée le 2026-09-30 (branche `feat/ui-french`)** : corps
+des sept pages, dialogue de confirmation, panneau de relecture d'import,
+assistant d'import, Questions, réponse en direct ; dates en `fr-CH`.
+Restent en anglais, à dessein : les identifiants techniques (types de
+fiches et de liens venant des données, identifiants de modèles, `Top-K`,
+`BM25`), les messages d'erreur renvoyés par le serveur, et les nombres au
+format `1,234` (locale `en-US` dans `fmtNum`, à passer en `fr-CH` avec les
+tests qui les vérifient si souhaité). Le lot B est clos.
 
 **Dette technique** (avec 3.8.3, inchangé) : migration `react-router` 7
 (deux vulnérabilités npm modérées) ; modules d'authentification `.jsx` en

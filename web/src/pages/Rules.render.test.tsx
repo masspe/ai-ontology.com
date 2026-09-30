@@ -142,16 +142,16 @@ function rowNames(): string[] {
 }
 
 async function openCreateModal(user: ReturnType<typeof renderPage>["user"]): Promise<HTMLFormElement> {
-  await user.click(screen.getByRole("button", { name: "Create Rule" }));
-  const heading = await screen.findByRole("heading", { name: "Create Rule" });
+  await user.click(screen.getByRole("button", { name: "Créer une règle" }));
+  const heading = await screen.findByRole("heading", { name: "Créer une règle" });
   return heading.closest("form") as HTMLFormElement;
 }
 
 describe("Rules page", () => {
   it("shows the loading state, then the library with derived status, scope and dates", async () => {
     renderPage(<Rules />);
-    expect(screen.getByText("Loading rules…")).toBeInTheDocument();
-    expect(screen.getByText("Loading…")).toBeInTheDocument();
+    expect(screen.getByText("Chargement des règles…")).toBeInTheDocument();
+    expect(screen.getByText("Chargement…")).toBeInTheDocument();
 
     await loaded();
     expect(mocked.listRules).toHaveBeenCalledTimes(1);
@@ -162,29 +162,29 @@ describe("Rules page", () => {
     const table = libraryTable();
     // Status derived from properties.status, else strict → Active / Draft.
     expect(within(table).getByText("Active")).toHaveClass("badge-success");
-    expect(within(table).getByText("Reviewed")).toHaveClass("badge-accent");
-    expect(within(table).getByText("Draft")).toHaveClass("badge-warn");
-    expect(within(table).getByText("Disabled")).toHaveClass("badge-danger");
+    expect(within(table).getByText("Vérifiée")).toHaveClass("badge-accent");
+    expect(within(table).getByText("Brouillon")).toHaveClass("badge-warn");
+    expect(within(table).getByText("Désactivée")).toHaveClass("badge-danger");
     // Scope = applies_to count or dash; description falls back to `when`.
-    expect(within(table).getByText("2 concept(s)")).toBeInTheDocument();
+    expect(within(table).getByText("2 fiche(s)")).toBeInTheDocument();
     expect(within(table).getByText("Every contract must have an owner.")).toBeInTheDocument();
     expect(within(table).getByText("invoice.amount == 0")).toBeInTheDocument();
     // Dates: epoch seconds, ISO string, unparsable string, missing.
-    expect(within(table).getByText("Nov 15, 2023")).toBeInTheDocument();
-    expect(within(table).getByText("Mar 10, 2024")).toBeInTheDocument();
+    expect(within(table).getByText("15 nov. 2023")).toBeInTheDocument();
+    expect(within(table).getByText("10 mars 2024")).toBeInTheDocument();
     expect(within(table).getAllByText("—").length).toBeGreaterThanOrEqual(3);
-    expect(screen.getByText("Showing 4 of 4 rules")).toBeInTheDocument();
+    expect(screen.getByText("4 règle(s) affichée(s) sur 4")).toBeInTheDocument();
   });
 
   it("renders stat tiles from /stats and the applied-concept total", async () => {
     renderPage(<Rules />);
     await loaded();
     const tile = (label: string) => screen.getByText(label).closest(".stat-rich") as HTMLElement;
-    expect(within(tile("Total Rules")).getByText("4")).toBeInTheDocument();
-    expect(within(tile("Active Rules")).getByText("1")).toBeInTheDocument();
-    expect(within(tile("Rule Types")).getByText("3")).toBeInTheDocument();
+    expect(within(tile("Règles au total")).getByText("4")).toBeInTheDocument();
+    expect(within(tile("Règles actives")).getByText("1")).toBeInTheDocument();
+    expect(within(tile("Types de règle")).getByText("3")).toBeInTheDocument();
     // 2 + 1 + 0 + 1 concepts referenced.
-    expect(within(tile("Applied Concepts")).getByText("4")).toBeInTheDocument();
+    expect(within(tile("Fiches concernées")).getByText("4")).toBeInTheDocument();
   });
 
   it("falls back to row counts when /stats is missing", async () => {
@@ -192,40 +192,40 @@ describe("Rules page", () => {
     renderPage(<Rules />);
     await loaded();
     const tile = (label: string) => screen.getByText(label).closest(".stat-rich") as HTMLElement;
-    expect(within(tile("Total Rules")).getByText("4")).toBeInTheDocument();
+    expect(within(tile("Règles au total")).getByText("4")).toBeInTheDocument();
     // Validation, Inference, Custom Audit, Constraint.
-    expect(within(tile("Rule Types")).getByText("4")).toBeInTheDocument();
+    expect(within(tile("Types de règle")).getByText("4")).toBeInTheDocument();
   });
 
   it("shows the empty states when there are no rules", async () => {
     mocked.listRules.mockResolvedValue([]);
     renderPage(<Rules />);
-    expect(await screen.findByText("No rules match the current filters.")).toBeInTheDocument();
-    expect(screen.getByText("No rule selected.")).toBeInTheDocument();
-    expect(screen.getByText("No activity yet.")).toBeInTheDocument();
-    expect(screen.getByText("No scopes.")).toBeInTheDocument();
-    expect(screen.getByText("Showing 0 of 0 rules")).toBeInTheDocument();
+    expect(await screen.findByText("Aucune règle ne correspond aux filtres.")).toBeInTheDocument();
+    expect(screen.getByText("Aucune règle sélectionnée.")).toBeInTheDocument();
+    expect(screen.getByText("Aucune activité pour l'instant.")).toBeInTheDocument();
+    expect(screen.getByText("Aucune portée.")).toBeInTheDocument();
+    expect(screen.getByText("0 règle(s) affichée(s) sur 0")).toBeInTheDocument();
   });
 
   it("shows the error banner when the rule list fails", async () => {
     mocked.listRules.mockRejectedValue(new Error("server down"));
     renderPage(<Rules />);
-    expect(await screen.findByText("Failed to load rules: server down")).toBeInTheDocument();
-    expect(screen.getByText("No rules match the current filters.")).toBeInTheDocument();
+    expect(await screen.findByText("Échec du chargement des règles : server down")).toBeInTheDocument();
+    expect(screen.getByText("Aucune règle ne correspond aux filtres.")).toBeInTheDocument();
   });
 
   it("selects the first rule and shows its details, logic, categories and scopes", async () => {
     renderPage(<Rules />);
     await loaded();
-    const details = screen.getByText("Rule Details").closest("section") as HTMLElement;
+    const details = screen.getByText("Détails de la règle").closest("section") as HTMLElement;
     expect(within(details).getByRole("heading", { level: 3 })).toHaveTextContent("Contract needs owner");
     expect(within(details).getByText("rule:1")).toBeInTheDocument();
-    expect(within(details).getByText("Yes")).toBeInTheDocument();
-    expect(within(details).getByText("Concept #10")).toBeInTheDocument();
-    expect(within(details).getByText("Concept #11")).toBeInTheDocument();
+    expect(within(details).getByText("Oui")).toBeInTheDocument();
+    expect(within(details).getByText("Fiche #10")).toBeInTheDocument();
+    expect(within(details).getByText("Fiche #11")).toBeInTheDocument();
     const code = details.querySelector(".rd-code") as HTMLElement;
-    expect(code).toHaveTextContent("WHEN contract.owner is null");
-    expect(code).toHaveTextContent("THEN flag(contract)");
+    expect(code).toHaveTextContent("SI contract.owner is null");
+    expect(code).toHaveTextContent("ALORS flag(contract)");
     // Rule Categories legend: one entry per type with its share.
     const legend = details.querySelector(".rd-cat-legend") as HTMLElement;
     expect(within(legend).getByText("Validation")).toBeInTheDocument();
@@ -233,27 +233,27 @@ describe("Rules page", () => {
     expect(within(legend).getAllByText("25.0%")).toHaveLength(4);
     expect(details.querySelectorAll(".donut circle")).toHaveLength(5);
     // Top Scopes grouped by first applies_to concept.
-    const scopes = screen.getByText("Top Scopes").closest("section") as HTMLElement;
-    expect(within(scopes).getByText("Concept #10")).toBeInTheDocument();
+    const scopes = screen.getByText("Portées principales").closest("section") as HTMLElement;
+    expect(within(scopes).getByText("Fiche #10")).toBeInTheDocument();
     expect(within(scopes).getByText("2 (50.0%)")).toBeInTheDocument();
-    expect(within(scopes).getByText("Unscoped")).toBeInTheDocument();
-    expect(within(scopes).getByText("Concept #12")).toBeInTheDocument();
+    expect(within(scopes).getByText("Sans portée")).toBeInTheDocument();
+    expect(within(scopes).getByText("Fiche #12")).toBeInTheDocument();
     // Recent activity lists every rule.
-    expect(screen.getByText('Rule "Archive stale drafts" present')).toBeInTheDocument();
+    expect(screen.getByText("Règle « Archive stale drafts » présente")).toBeInTheDocument();
   });
 
   it("switches the details panel when a row is clicked", async () => {
     const { user } = renderPage(<Rules />);
     await loaded();
     await user.click(within(libraryTable()).getByText("Archive stale drafts"));
-    const details = screen.getByText("Rule Details").closest("section") as HTMLElement;
+    const details = screen.getByText("Détails de la règle").closest("section") as HTMLElement;
     expect(within(details).getByRole("heading", { level: 3 })).toHaveTextContent("Archive stale drafts");
     expect(within(details).getByText("rule:3")).toBeInTheDocument();
-    expect(within(details).getByText("Yes")).toBeInTheDocument();
+    expect(within(details).getByText("Oui")).toBeInTheDocument();
     // No applies_to, no when/then, no description.
     expect(within(details).getAllByText("—").length).toBeGreaterThanOrEqual(2);
-    expect(details.querySelector(".rd-code")).toHaveTextContent("WHEN (no condition)");
-    expect(details.querySelector(".rd-code")).toHaveTextContent("THEN (no action)");
+    expect(details.querySelector(".rd-code")).toHaveTextContent("SI (aucune condition)");
+    expect(details.querySelector(".rd-code")).toHaveTextContent("ALORS (aucune action)");
     expect(within(libraryTable()).getByText("Archive stale drafts").closest("tr")).toHaveClass("is-selected");
   });
 
@@ -263,76 +263,76 @@ describe("Rules page", () => {
     const selects = screen.getAllByRole("combobox");
     const [typeSel, statusSel, sortSel] = selects as [HTMLSelectElement, HTMLSelectElement, HTMLSelectElement];
     expect(within(typeSel).getAllByRole("option").map((o) => o.textContent)).toEqual([
-      "All Types", "Constraint", "Custom Audit", "Inference", "Validation",
+      "Tous les types", "Constraint", "Custom Audit", "Inference", "Validation",
     ]);
 
     // Search matches name or description, case-insensitive.
-    await user.type(screen.getByPlaceholderText("Search rules..."), "OWNER");
+    await user.type(screen.getByPlaceholderText("Rechercher une règle..."), "OWNER");
     expect(rowNames()).toEqual(["Contract needs owner"]);
-    expect(screen.getByText("Showing 1 of 4 rules")).toBeInTheDocument();
-    await user.clear(screen.getByPlaceholderText("Search rules..."));
+    expect(screen.getByText("1 règle(s) affichée(s) sur 4")).toBeInTheDocument();
+    await user.clear(screen.getByPlaceholderText("Rechercher une règle..."));
 
     await user.selectOptions(typeSel, "Inference");
     expect(rowNames()).toEqual(["Bill on renewal"]);
-    await user.selectOptions(typeSel, "All Types");
+    await user.selectOptions(typeSel, "Tous les types");
 
-    await user.selectOptions(statusSel, "Disabled");
+    await user.selectOptions(statusSel, "Désactivée");
     expect(rowNames()).toEqual(["Zero-amount invoice"]);
     await user.selectOptions(statusSel, "Active");
     expect(rowNames()).toEqual(["Contract needs owner"]);
-    await user.selectOptions(statusSel, "All Statuses");
+    await user.selectOptions(statusSel, "Tous les statuts");
 
-    await user.selectOptions(sortSel, "Sort: Name");
+    await user.selectOptions(sortSel, "Tri : nom");
     expect(rowNames()).toEqual([
       "Archive stale drafts", "Bill on renewal", "Contract needs owner", "Zero-amount invoice",
     ]);
-    await user.selectOptions(sortSel, "Sort: Type");
+    await user.selectOptions(sortSel, "Tri : type");
     expect(rowNames()).toEqual([
       "Zero-amount invoice", "Archive stale drafts", "Bill on renewal", "Contract needs owner",
     ]);
-    await user.selectOptions(sortSel, "Sort: Last Updated");
+    await user.selectOptions(sortSel, "Tri : dernière mise à jour");
     expect(rowNames()).toEqual([
       "Contract needs owner", "Bill on renewal", "Archive stale drafts", "Zero-amount invoice",
     ]);
 
     // Combined filters with no match.
     await user.selectOptions(typeSel, "Validation");
-    await user.selectOptions(statusSel, "Draft");
-    expect(screen.getByText("No rules match the current filters.")).toBeInTheDocument();
+    await user.selectOptions(statusSel, "Brouillon");
+    expect(screen.getByText("Aucune règle ne correspond aux filtres.")).toBeInTheDocument();
   });
 
   it("deletes a rule from the row only after the confirm dialog is accepted", async () => {
     const { user } = renderPage(<Rules />);
     await loaded();
-    const deleteButtons = screen.getAllByRole("button", { name: "Delete rule" });
+    const deleteButtons = screen.getAllByRole("button", { name: "Supprimer la règle" });
     expect(deleteButtons).toHaveLength(4);
 
     await user.click(deleteButtons[1]!);
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText("Delete this rule?")).toBeInTheDocument();
-    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(within(dialog).getByText("Supprimer cette règle ?")).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Annuler" }));
     expect(mocked.deleteRule).not.toHaveBeenCalled();
     expect(screen.getByText("Bill on renewal")).toBeInTheDocument();
     // The row click did not bubble: the selection is unchanged.
     expect(within(libraryTable()).getByText("Contract needs owner").closest("tr")).toHaveClass("is-selected");
 
-    await user.click(screen.getAllByRole("button", { name: "Delete rule" })[1]!);
-    await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Delete" }));
+    await user.click(screen.getAllByRole("button", { name: "Supprimer la règle" })[1]!);
+    await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Supprimer" }));
     await waitFor(() => expect(mocked.deleteRule).toHaveBeenCalledWith(2));
-    expect(await screen.findByRole("status")).toHaveTextContent("Rule deleted.");
+    expect(await screen.findByRole("status")).toHaveTextContent("Règle supprimée.");
     expect(screen.queryByText("Bill on renewal")).not.toBeInTheDocument();
-    expect(screen.getByText("Showing 3 of 3 rules")).toBeInTheDocument();
+    expect(screen.getByText("3 règle(s) affichée(s) sur 3")).toBeInTheDocument();
   });
 
   it("deletes the selected rule from the details panel and reports failures", async () => {
     mocked.deleteRule.mockRejectedValue(new Error("locked"));
     const { user } = renderPage(<Rules />);
     await loaded();
-    const details = screen.getByText("Rule Details").closest("section") as HTMLElement;
-    await user.click(within(details).getByRole("button", { name: "Delete" }));
-    await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Delete" }));
+    const details = screen.getByText("Détails de la règle").closest("section") as HTMLElement;
+    await user.click(within(details).getByRole("button", { name: "Supprimer" }));
+    await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Supprimer" }));
     await waitFor(() => expect(mocked.deleteRule).toHaveBeenCalledWith(1));
-    expect(await screen.findByRole("status")).toHaveTextContent("Delete failed: locked");
+    expect(await screen.findByRole("status")).toHaveTextContent("Échec de la suppression : locked");
     expect(within(libraryTable()).getByText("Contract needs owner")).toBeInTheDocument();
   });
 
@@ -341,21 +341,21 @@ describe("Rules page", () => {
     await loaded();
     const form = await openCreateModal(user);
 
-    const typeSelect = within(form).getByLabelText("Rule Type") as HTMLSelectElement;
+    const typeSelect = within(form).getByLabelText("Type de règle") as HTMLSelectElement;
     expect(typeSelect).toBeEnabled();
     expect(typeSelect.value).toBe("Constraint"); // sorted first
     await user.selectOptions(typeSelect, "Inference");
-    await user.type(within(form).getByLabelText("Name"), "  New rule  ");
+    await user.type(within(form).getByLabelText("Nom"), "  New rule  ");
     await user.type(within(form).getByLabelText("Description"), "desc");
-    await user.type(within(form).getByLabelText("When"), "a");
-    await user.type(within(form).getByLabelText("Then"), "b");
-    const applies = within(form).getByLabelText(/Applies To/) as HTMLSelectElement;
+    await user.type(within(form).getByLabelText("Si"), "a");
+    await user.type(within(form).getByLabelText("Alors"), "b");
+    const applies = within(form).getByLabelText(/S'applique à/) as HTMLSelectElement;
     expect(within(applies).getAllByRole("option").map((o) => o.textContent)).toEqual([
       "Contract: ACME master", "Contract: Globex SLA", "Invoice: INV-001",
     ]);
     await user.selectOptions(applies, ["10", "12"]);
     await user.click(within(form).getByRole("checkbox"));
-    await user.click(within(form).getByRole("button", { name: "Create" }));
+    await user.click(within(form).getByRole("button", { name: "Créer" }));
 
     await waitFor(() =>
       expect(mocked.createRule).toHaveBeenCalledWith({
@@ -369,11 +369,11 @@ describe("Rules page", () => {
         properties: {},
       }),
     );
-    await waitFor(() => expect(screen.queryByRole("heading", { name: "Create Rule" })).not.toBeInTheDocument());
-    const details = screen.getByText("Rule Details").closest("section") as HTMLElement;
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "Créer une règle" })).not.toBeInTheDocument());
+    const details = screen.getByText("Détails de la règle").closest("section") as HTMLElement;
     expect(within(details).getByRole("heading", { level: 3 })).toHaveTextContent("New rule");
     expect(within(details).getByText("rule:99")).toBeInTheDocument();
-    expect(screen.getByText("Showing 5 of 5 rules")).toBeInTheDocument();
+    expect(screen.getByText("5 règle(s) affichée(s) sur 5")).toBeInTheDocument();
   });
 
   it("blocks submission without a name or without a concept", async () => {
@@ -384,19 +384,19 @@ describe("Rules page", () => {
     // No name: nothing happens.
     fireEvent.submit(form);
     expect(mocked.createRule).not.toHaveBeenCalled();
-    expect(screen.queryByText("Select at least one concept.")).not.toBeInTheDocument();
+    expect(screen.queryByText("Sélectionnez au moins une fiche.")).not.toBeInTheDocument();
 
     // Name but no concept: inline error, select flagged invalid.
-    await user.type(within(form).getByLabelText("Name"), "Nameless scope");
+    await user.type(within(form).getByLabelText("Nom"), "Nameless scope");
     fireEvent.submit(form);
     expect(mocked.createRule).not.toHaveBeenCalled();
-    expect(screen.getByText("Select at least one concept.")).toBeInTheDocument();
-    const applies = within(form).getByLabelText(/Applies To/);
+    expect(screen.getByText("Sélectionnez au moins une fiche.")).toBeInTheDocument();
+    const applies = within(form).getByLabelText(/S'applique à/);
     expect(applies).toHaveAttribute("aria-invalid", "true");
 
     // Picking a concept clears the error.
     await user.selectOptions(applies, "11");
-    expect(screen.queryByText("Select at least one concept.")).not.toBeInTheDocument();
+    expect(screen.queryByText("Sélectionnez au moins une fiche.")).not.toBeInTheDocument();
     expect(applies).toHaveAttribute("aria-invalid", "false");
   });
 
@@ -404,14 +404,14 @@ describe("Rules page", () => {
     const { user } = renderPage(<Rules />);
     await loaded();
     let form = await openCreateModal(user);
-    await user.click(within(form).getByRole("button", { name: "Cancel" }));
-    expect(screen.queryByRole("heading", { name: "Create Rule" })).not.toBeInTheDocument();
+    await user.click(within(form).getByRole("button", { name: "Annuler" }));
+    expect(screen.queryByRole("heading", { name: "Créer une règle" })).not.toBeInTheDocument();
 
     form = await openCreateModal(user);
-    await user.click(screen.getByRole("heading", { name: "Create Rule" }));
-    expect(screen.getByRole("heading", { name: "Create Rule" })).toBeInTheDocument();
+    await user.click(screen.getByRole("heading", { name: "Créer une règle" }));
+    expect(screen.getByRole("heading", { name: "Créer une règle" })).toBeInTheDocument();
     await user.click(form.parentElement as HTMLElement);
-    expect(screen.queryByRole("heading", { name: "Create Rule" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Créer une règle" })).not.toBeInTheDocument();
     expect(mocked.createRule).not.toHaveBeenCalled();
   });
 
@@ -420,23 +420,23 @@ describe("Rules page", () => {
     mocked.updateRule.mockResolvedValue(updated);
     const { user } = renderPage(<Rules />);
     await loaded();
-    await user.click(screen.getByRole("button", { name: "Edit Rule" }));
-    const form = (await screen.findByRole("heading", { name: "Edit Rule" })).closest("form") as HTMLFormElement;
+    await user.click(screen.getByRole("button", { name: "Modifier la règle" }));
+    const form = (await screen.findByRole("heading", { name: "Modifier la règle" })).closest("form") as HTMLFormElement;
 
-    const typeSelect = within(form).getByLabelText(/^Rule Type/) as HTMLSelectElement;
+    const typeSelect = within(form).getByLabelText(/^Type de règle/) as HTMLSelectElement;
     expect(typeSelect).toBeDisabled();
     expect(typeSelect.value).toBe("Validation");
-    expect(within(form).getByText("Type is immutable.")).toBeInTheDocument();
-    expect(within(form).getByLabelText("Name")).toHaveValue("Contract needs owner");
-    expect(within(form).getByLabelText("When")).toHaveValue("contract.owner is null");
+    expect(within(form).getByText("Le type ne peut pas être modifié.")).toBeInTheDocument();
+    expect(within(form).getByLabelText("Nom")).toHaveValue("Contract needs owner");
+    expect(within(form).getByLabelText("Si")).toHaveValue("contract.owner is null");
     expect(within(form).getByRole("checkbox")).toBeChecked();
-    const applies = within(form).getByLabelText(/Applies To/) as HTMLSelectElement;
+    const applies = within(form).getByLabelText(/S'applique à/) as HTMLSelectElement;
     expect(Array.from(applies.selectedOptions).map((o) => o.value)).toEqual(["10", "11"]);
 
-    await user.clear(within(form).getByLabelText("Name"));
-    await user.type(within(form).getByLabelText("Name"), "Renamed");
+    await user.clear(within(form).getByLabelText("Nom"));
+    await user.type(within(form).getByLabelText("Nom"), "Renamed");
     await user.click(within(form).getByRole("checkbox"));
-    await user.click(within(form).getByRole("button", { name: "Save" }));
+    await user.click(within(form).getByRole("button", { name: "Enregistrer" }));
 
     await waitFor(() =>
       expect(mocked.updateRule).toHaveBeenCalledWith(1, {
@@ -449,11 +449,11 @@ describe("Rules page", () => {
         properties: { updated_at: 1_700_050_000 },
       }),
     );
-    await waitFor(() => expect(screen.queryByRole("heading", { name: "Edit Rule" })).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "Modifier la règle" })).not.toBeInTheDocument());
     expect(within(libraryTable()).getByText("Renamed")).toBeInTheDocument();
     expect(screen.queryByText("Contract needs owner")).not.toBeInTheDocument();
-    const details = screen.getByText("Rule Details").closest("section") as HTMLElement;
-    expect(within(details).getByText("No")).toBeInTheDocument();
+    const details = screen.getByText("Détails de la règle").closest("section") as HTMLElement;
+    expect(within(details).getByText("Non")).toBeInTheDocument();
   });
 
   it("keeps the modal open and toasts when saving fails", async () => {
@@ -461,12 +461,12 @@ describe("Rules page", () => {
     const { user } = renderPage(<Rules />);
     await loaded();
     const form = await openCreateModal(user);
-    await user.type(within(form).getByLabelText("Name"), "Dup");
-    await user.selectOptions(within(form).getByLabelText(/Applies To/), "10");
-    await user.click(within(form).getByRole("button", { name: "Create" }));
-    expect(await screen.findByRole("status")).toHaveTextContent("Save failed: duplicate name");
-    expect(screen.getByRole("heading", { name: "Create Rule" })).toBeInTheDocument();
-    expect(screen.getByText("Showing 4 of 4 rules")).toBeInTheDocument();
+    await user.type(within(form).getByLabelText("Nom"), "Dup");
+    await user.selectOptions(within(form).getByLabelText(/S'applique à/), "10");
+    await user.click(within(form).getByRole("button", { name: "Créer" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("Échec de l'enregistrement : duplicate name");
+    expect(screen.getByRole("heading", { name: "Créer une règle" })).toBeInTheDocument();
+    expect(screen.getByText("4 règle(s) affichée(s) sur 4")).toBeInTheDocument();
   });
 
   it("generates the rule fields from a prompt once a concept and prompt are given", async () => {
@@ -478,27 +478,27 @@ describe("Rules page", () => {
     await loaded();
     const form = await openCreateModal(user);
 
-    const generate = within(form).getByRole("button", { name: "Generate" });
+    const generate = within(form).getByRole("button", { name: "Générer" });
     expect(generate).toBeDisabled();
-    expect(within(form).getByText("Select at least one concept under Applies To before generating.")).toBeInTheDocument();
+    expect(within(form).getByText("Sélectionnez au moins une fiche sous « S'applique à » avant de générer.")).toBeInTheDocument();
 
-    await user.selectOptions(within(form).getByLabelText(/Applies To/), "11");
-    expect(within(form).getByText("Describe the rule to enable generation.")).toBeInTheDocument();
+    await user.selectOptions(within(form).getByLabelText(/S'applique à/), "11");
+    expect(within(form).getByText("Décrivez la règle pour activer la génération.")).toBeInTheDocument();
     expect(generate).toBeDisabled();
 
-    await user.type(within(form).getByPlaceholderText("Describe the rule you want to create…"), "  flag orphans ");
-    expect(within(form).getByText("Fills in Name, When, Then, Description, Strict.")).toBeInTheDocument();
+    await user.type(within(form).getByPlaceholderText("Décrivez la règle à créer…"), "  flag orphans ");
+    expect(within(form).getByText("Remplit Nom, Si, Alors, Description, Stricte.")).toBeInTheDocument();
     expect(generate).toBeEnabled();
 
     await user.click(generate);
     expect(mocked.generateRule).toHaveBeenCalledWith("flag orphans", "Constraint", [11]);
-    expect(await within(form).findByRole("button", { name: "Generating…" })).toBeDisabled();
+    expect(await within(form).findByRole("button", { name: "Génération…" })).toBeDisabled();
 
     resolveGen({ name: "Generated rule", when: "gen.when", then: "gen.then", description: "gen description", strict: true });
-    expect(await within(form).findByRole("button", { name: "Generate" })).toBeEnabled();
-    expect(within(form).getByLabelText("Name")).toHaveValue("Generated rule");
-    expect(within(form).getByLabelText("When")).toHaveValue("gen.when");
-    expect(within(form).getByLabelText("Then")).toHaveValue("gen.then");
+    expect(await within(form).findByRole("button", { name: "Générer" })).toBeEnabled();
+    expect(within(form).getByLabelText("Nom")).toHaveValue("Generated rule");
+    expect(within(form).getByLabelText("Si")).toHaveValue("gen.when");
+    expect(within(form).getByLabelText("Alors")).toHaveValue("gen.then");
     expect(within(form).getByLabelText("Description")).toHaveValue("gen description");
     expect(within(form).getByRole("checkbox")).toBeChecked();
   });
@@ -508,12 +508,12 @@ describe("Rules page", () => {
     const { user } = renderPage(<Rules />);
     await loaded();
     const form = await openCreateModal(user);
-    await user.selectOptions(within(form).getByLabelText(/Applies To/), "10");
-    await user.type(within(form).getByPlaceholderText("Describe the rule you want to create…"), "x");
-    await user.click(within(form).getByRole("button", { name: "Generate" }));
+    await user.selectOptions(within(form).getByLabelText(/S'applique à/), "10");
+    await user.type(within(form).getByPlaceholderText("Décrivez la règle à créer…"), "x");
+    await user.click(within(form).getByRole("button", { name: "Générer" }));
     expect(await within(form).findByText("LLM unavailable")).toBeInTheDocument();
-    expect(within(form).getByLabelText("Name")).toHaveValue("");
-    expect(within(form).getByRole("button", { name: "Generate" })).toBeEnabled();
+    expect(within(form).getByLabelText("Nom")).toHaveValue("");
+    expect(within(form).getByRole("button", { name: "Générer" })).toBeEnabled();
   });
 
   it("falls back to a free-text rule type when the ontology declares none", async () => {
@@ -523,29 +523,29 @@ describe("Rules page", () => {
     await loaded();
     const form = await openCreateModal(user);
 
-    const typeInput = within(form).getByLabelText("Rule Type");
+    const typeInput = within(form).getByLabelText("Type de règle");
     expect(typeInput.tagName).toBe("INPUT");
     expect(typeInput).toHaveValue("");
     // No concepts loaded: the multi-select is empty and nothing can be generated.
-    expect(within(within(form).getByLabelText(/Applies To/)).queryAllByRole("option")).toHaveLength(0);
+    expect(within(within(form).getByLabelText(/S'applique à/)).queryAllByRole("option")).toHaveLength(0);
 
     await user.type(typeInput, "Custom Audit");
-    await user.type(within(form).getByLabelText("Name"), "Free type");
+    await user.type(within(form).getByLabelText("Nom"), "Free type");
     fireEvent.submit(form);
-    expect(screen.getByText("Select at least one concept.")).toBeInTheDocument();
+    expect(screen.getByText("Sélectionnez au moins une fiche.")).toBeInTheDocument();
     expect(mocked.createRule).not.toHaveBeenCalled();
   });
 
   it("has no inert quick actions any more", async () => {
     renderPage(<Rules />);
     await loaded();
-    for (const title of ["Import Rules", "Generate with AI", "Bulk Edit", "Run Validation"]) {
+    for (const title of ["Import Rules", "Generate with AI", "Générer avec l'IA", "Bulk Edit", "Run Validation"]) {
       expect(screen.queryByText(title)).not.toBeInTheDocument();
     }
     expect(screen.queryByRole("button", { name: "Expand" })).not.toBeInTheDocument();
     // Still on the page, no modal opened, nothing fetched.
     expect(screen.getByRole("heading", { name: "Règles" })).toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: "Create Rule" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Créer une règle" })).not.toBeInTheDocument();
     expect(mocked.generateRule).not.toHaveBeenCalled();
   });
 
@@ -554,10 +554,10 @@ describe("Rules page", () => {
     const { user } = renderPage(<Rules />);
     await loaded();
     const form = await openCreateModal(user);
-    await user.selectOptions(within(form).getByLabelText(/Applies To/), "10");
-    expect(within(form).getByText("Pick a rule type first.")).toBeInTheDocument();
-    expect(within(form).getByRole("button", { name: "Generate" })).toBeDisabled();
-    await user.type(within(form).getByLabelText("Rule Type"), "Validation");
-    expect(within(form).getByText("Describe the rule to enable generation.")).toBeInTheDocument();
+    await user.selectOptions(within(form).getByLabelText(/S'applique à/), "10");
+    expect(within(form).getByText("Choisissez d'abord un type de règle.")).toBeInTheDocument();
+    expect(within(form).getByRole("button", { name: "Générer" })).toBeDisabled();
+    await user.type(within(form).getByLabelText("Type de règle"), "Validation");
+    expect(within(form).getByText("Décrivez la règle pour activer la génération.")).toBeInTheDocument();
   });
 });

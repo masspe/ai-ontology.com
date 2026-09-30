@@ -124,7 +124,7 @@ describe("Diagnostics tab", () => {
 
     expect(row("Serveur ontologie")).toHaveTextContent("Injoignable");
     expect(row("Serveur ontologie")).toHaveTextContent("✕");
-    expect(row("Paramètres serveur")).toHaveTextContent("Settings chargés");
+    expect(row("Paramètres serveur")).toHaveTextContent("Réglages chargés");
     expect(row("Données")).toHaveTextContent("Impossible de charger les statistiques");
     expect(row("LLM (openai)")).toHaveTextContent("Non configuré ou injoignable");
     expect(row("LLM (openai)")).toHaveTextContent("⚠");
@@ -175,7 +175,7 @@ describe("Diagnostics tab", () => {
     await user.click(screen.getByText("Serveur ontologie"));
     expect(screen.getByText("GET http://api.test:5000/healthz → 200")).toBeInTheDocument();
     await user.click(screen.getByText("Données"));
-    expect(screen.getByText("Types — concepts:5, relations:6, rules:7, actions:8")).toBeInTheDocument();
+    expect(screen.getByText("Types — concepts:5, relations:6, règles:7, actions:8")).toBeInTheDocument();
     await user.click(screen.getByText("Paramètres serveur"));
     expect(screen.queryByText("provider actif: anthropic")).not.toBeInTheDocument();
     expect(row("Paramètres serveur")).toHaveTextContent("▸");
@@ -311,7 +311,7 @@ describe("Feedback tab", () => {
     expect(screen.getByText(/Steps:/)).toHaveTextContent("Steps: 1. upload 2. boom");
     expect(screen.getByText("http://app.test/ingest", { selector: "code" })).toBeInTheDocument();
     expect(screen.getByText("TestBrowser/1.0", { selector: "code" })).toBeInTheDocument();
-    expect(screen.getByRole("img", { name: "screenshot" })).toHaveAttribute("src", "data:image/png;base64,AAAA");
+    expect(screen.getByRole("img", { name: "capture d'écran" })).toHaveAttribute("src", "data:image/png;base64,AAAA");
     expect(screen.getByText("Logs frontend (3 lignes)")).toBeInTheDocument();
     expect(screen.getByText("Logs backend (1 lignes)")).toBeInTheDocument();
     // Two badges now: the row and the pane.

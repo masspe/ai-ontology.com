@@ -39,15 +39,15 @@ describe("truncate", () => {
 
 describe("conceptStatus", () => {
   it("maps the status property to a label and badge class, case-insensitively", () => {
-    expect(conceptStatus(concept({ properties: { status: "reviewed" } }))).toEqual({ label: "Reviewed", cls: "badge-accent" });
-    expect(conceptStatus(concept({ properties: { status: "DRAFT" } }))).toEqual({ label: "Draft", cls: "badge-warn" });
-    expect(conceptStatus(concept({ properties: { status: "Archived" } }))).toEqual({ label: "Archived", cls: "badge-danger" });
+    expect(conceptStatus(concept({ properties: { status: "reviewed" } }))).toEqual({ key: "reviewed", label: "Vérifiée", cls: "badge-accent" });
+    expect(conceptStatus(concept({ properties: { status: "DRAFT" } }))).toEqual({ key: "draft", label: "Brouillon", cls: "badge-warn" });
+    expect(conceptStatus(concept({ properties: { status: "Archived" } }))).toEqual({ key: "archived", label: "Archivée", cls: "badge-danger" });
   });
 
   it("defaults to Active when the status is missing or unknown", () => {
-    expect(conceptStatus(concept())).toEqual({ label: "Active", cls: "badge-success" });
-    expect(conceptStatus(concept({ properties: {} }))).toEqual({ label: "Active", cls: "badge-success" });
-    expect(conceptStatus(concept({ properties: { status: "whatever" } }))).toEqual({ label: "Active", cls: "badge-success" });
+    expect(conceptStatus(concept())).toEqual({ key: "active", label: "Active", cls: "badge-success" });
+    expect(conceptStatus(concept({ properties: {} }))).toEqual({ key: "active", label: "Active", cls: "badge-success" });
+    expect(conceptStatus(concept({ properties: { status: "whatever" } }))).toEqual({ key: "active", label: "Active", cls: "badge-success" });
   });
 });
 
