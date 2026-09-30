@@ -150,7 +150,18 @@ sauvegarde par l'API, restauration par la commande et comparaison du graphe
 vérifient l'aller-retour, l'incrémental et les refus
 (`crates/storage/tests/backup.rs`).
 
-## 6. Vérification de bout en bout
+## 6. Mettre à jour
+
+Une nouvelle image ouvre le store de la précédente telle quelle : le format
+est versionné et migré automatiquement à l'ouverture. La CI le vérifie à
+chaque changement (job `upgrade`, `scripts/upgrade_check.sh` : la version
+précédente de `main` écrit un store, la version courante l'ouvre, y écrit,
+compacte, sauvegarde et restaure). Procédure : sauvegarder (§5), `docker
+compose pull` ou `build`, `docker compose up -d` ; le journal du conteneur
+dit ce qui a été migré. Retour arrière : arrêter, restaurer la sauvegarde
+dans un volume neuf, repartir sur l'image précédente.
+
+## 7. Vérification de bout en bout
 
 `scripts/e2e_image.sh` est ce que la CI exécute à chaque changement (job
 `image`) : construction de l'image, démarrage sur un volume neuf avec

@@ -149,6 +149,33 @@ jobs:
           cache-to: type=gha,mode=max
       - run: bash scripts/e2e_image.sh ontology:e2e
 
+  upgrade:
+    # ROADMAP §3.8.5: a store written by the previous `main` must open with
+    # the commit under test — same graph, writable, compactable, restorable
+    # (scripts/upgrade_check.sh). The previous version is built from its
+    # own checkout; on main it is the parent commit, elsewhere the merge
+    # base with origin/main.
+    name: upgrade (previous main -> current)
+    needs: guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - name: build the current version
+        run: cargo build --locked --bin ontology
+      - name: build the previous version
+        run: |
+          if [ "$GITHUB_REF" = refs/heads/main ]; then prev=$(git rev-parse HEAD~1); else prev=$(git merge-base HEAD origin/main); fi
+          echo "previous: $(git log --oneline -1 "$prev")"
+          git worktree add --detach ../previous "$prev"
+          (cd ../previous && CARGO_TARGET_DIR="$PWD/target" cargo build --locked --bin ontology)
+          cp ../previous/target/debug/ontology /tmp/ontology-previous
+      - run: bash scripts/upgrade_check.sh /tmp/ontology-previous target/debug/ontology
+
   coverage:
     # Line coverage of the Rust workspace (cargo-llvm-cov, whole suite
     # including the end-to-end tests that spawn the binary) and of the web

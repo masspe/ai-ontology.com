@@ -220,7 +220,7 @@ servie par le binaire, test de bout en bout) — **livrée 2026-09-29**
 (`276d22e`) ; passe 2 = lot A de l'interface (§3.9) — **livrée
 2026-09-29** ; puis, **ordre révisé le 2026-09-30 avec le propriétaire** :
 3.8.4 sauvegarde (**livrée 2026-09-30**), lot B (première tranche,
-**livrée 2026-09-30**), 3.8.5 mise à jour, lot B
+**livrée 2026-09-30**), 3.8.5 mise à jour (**livrée 2026-09-30**), lot B
 (seconde tranche), 3.8.6 clés d'API et audit, et **3.8.3b OAuth reporté**
 (avec le retrait d'`auth-server/` et la dette web) jusqu'à la demande d'un
 client : le login intégré couvre le besoin, OAuth n'apporte que la
@@ -323,9 +323,17 @@ Ce que chaque étape applique du plan de stockage (vérifié le 2026-09-24) :
    l'ouverture du store), seconde sauvegarde sans changement 15 fichiers
    et 45 Mo copiés (les actifs et le MANIFEST), restauration 21 s avec
    relecture complète, mêmes comptes (500 000 / 1 000 000).
-5. **Mise à jour.** La CI ouvre un store produit par la version précédente
-   de `main` (artefact conservé) avec la version courante : migration de
-   format et hydratation vertes. Critère : job `upgrade` dans `ci.yml`.
+5. **Mise à jour** — **livré 2026-09-30** : job `upgrade` dans `ci.yml`
+   (`scripts/upgrade_check.sh`). La version précédente (`HEAD~1` sur
+   `main`, sinon la base de fusion avec `origin/main`) est construite depuis
+   son propre checkout et écrit deux stores (exemple finance complet,
+   20 000 concepts générés) ; la version courante les ouvre (`stats` et
+   `export` canonique identiques), y écrit, compacte, rouvre, sauvegarde et
+   restaure. Une rupture de format que la migration automatique ne couvre
+   pas fait échouer la CI avant la fusion. Texte d'origine : la CI ouvre un
+   store produit par la version précédente de `main` (artefact conservé)
+   avec la version courante : migration de format et hydratation vertes.
+   Critère : job `upgrade` dans `ci.yml`.
 6. **Clés d'API par client et journal d'audit** des écritures (qui, quoi,
    quand, sur quel record), en dernier : nécessaires à la facturation et
    au support, pas au premier déploiement.
