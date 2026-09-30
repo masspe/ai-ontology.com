@@ -46,9 +46,9 @@ diff "$D/old-big.stats" "$D/new-big.stats"
 
 echo "== current version writes, compacts, reopens"
 printf '{"kind":"concept","id":0,"concept_type":"Company","name":"Upgrade Corp","description":"added by the current version"}\n' > "$D/add.jsonl"
-"$NEW" --data "$D/data" ingest "$D/add.jsonl" | grep -q "ingested: 1 concepts,"
+"$NEW" --data "$D/data" ingest "$D/add.jsonl" | grep "ingested: 1 concepts," >/dev/null
 "$NEW" --data "$D/data" compact >/dev/null
-"$NEW" --data "$D/data" stats | grep -qx "concepts: $(( $(sed -n 's/^concepts: //p' "$D/old.stats") + 1 ))"
+"$NEW" --data "$D/data" stats | grep -x "concepts: $(( $(sed -n 's/^concepts: //p' " >/dev/null$D/old.stats") + 1 ))"
 
 echo "== current version backs up and restores the upgraded store"
 "$NEW" --data "$D/data" backup "$D/bak" >/dev/null
