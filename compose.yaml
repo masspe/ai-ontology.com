@@ -10,6 +10,10 @@
 # JWT secret is generated in the volume on first start; to provide your
 # own, uncomment ONTOLOGY_JWT_SECRET and the `--jwt-secret-env` argument.
 #
+# `POST /backup` (any authenticated caller; the destination is fixed at
+# start) copies the store to the tenant's backups volume: sealed segments
+# already there are skipped, so a daily call costs what changed.
+#
 # `mem_limit` is what the binary reads as its budget (cgroup); with
 # `--memory-mode strict` (the image default) a store that does not fit
 # refuses to start and says by how much, instead of being killed later.
@@ -21,7 +25,8 @@ x-tenant: &tenant
   # environment:
   #   ONTOLOGY_JWT_SECRET: change-me-to-a-long-random-string
   # command: ["--memory-mode", "strict", "serve", "--bind", "0.0.0.0:5000",
-  #           "--web", "/srv/web", "--login", "--jwt-secret-env", "ONTOLOGY_JWT_SECRET"]
+  #           "--web", "/srv/web", "--login", "--backup-dir", "/backups",
+  #           "--jwt-secret-env", "ONTOLOGY_JWT_SECRET"]
   healthcheck:
     test: ["CMD", "/usr/local/bin/ontology", "--data", "/data", "healthcheck", "http://127.0.0.1:5000/healthz"]
     interval: 30s
@@ -36,12 +41,17 @@ services:
     <<: *tenant
     build: .          # built once; globex reuses the image
     ports: ["5001:5000"]
-    volumes: ["acme-data:/data"]
+    volumes: ["acme-data:/data", "acme-backups:/backups"]
   globex:
     <<: *tenant
     ports: ["5002:5000"]
-    volumes: ["globex-data:/data"]
+    volumes: ["globex-data:/data", "globex-backups:/backups"]
 
 volumes:
   acme-data:
   globex-data:
+  # `POST /backup` copies the store here (incremental); point these at the
+  # external storage (a mounted share, a bucket via a FUSE mount) or copy
+  # them out of the host with your usual tool. See docs/DEPLOIEMENT.md §5.
+  acme-backups:
+  globex-backups:

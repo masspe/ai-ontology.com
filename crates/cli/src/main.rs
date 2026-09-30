@@ -222,6 +222,18 @@ enum Cmd {
     Migrate,
     /// Export the entire graph as a JSONL stream of tagged records.
     Export { path: PathBuf },
+    /// Copy the store to a directory (MANIFEST and segments, in the
+    /// store's layout). Sealed segments already there are skipped, so a
+    /// repeated backup to the same place is incremental. Needs the store:
+    /// while a server holds it, call `POST /backup` on the server instead
+    /// (`serve --backup-dir`).
+    Backup { dest: PathBuf },
+    /// Rebuild `<data>/store` from a backup directory: copied to a staging
+    /// directory, opened and replayed in full, then moved into place.
+    /// Refuses when `<data>/store` exists. Small files next to the store
+    /// (`settings.json`, `users.json`, `jwt.secret`) are not part of a
+    /// backup: copy them yourself.
+    Restore { src: PathBuf },
     /// Find a shortest path between two named concepts.
     Path {
         #[arg(long)]
@@ -293,6 +305,11 @@ enum Cmd {
         /// the administrator; by default it then creates the others).
         #[arg(long)]
         allow_signup: bool,
+        /// Directory `POST /backup` copies the store to (created on first
+        /// use; a repeated backup there is incremental). Without it the
+        /// route answers 400.
+        #[arg(long)]
+        backup_dir: Option<PathBuf>,
     },
 }
 
@@ -320,6 +337,24 @@ async fn main() -> Result<()> {
             Ok(status) => anyhow::bail!("{url}: HTTP {status}"),
             Err(e) => anyhow::bail!("{url}: {e}"),
         };
+    }
+    if let Cmd::Restore { src } = &cli.cmd {
+        let data = cli
+            .data
+            .clone()
+            .context("`restore` needs --data <dir> (where the store is rebuilt)")?;
+        let store_dir = store_dir_for(&data);
+        let r = ontology_storage::restore(src, &store_dir).await?;
+        println!(
+            "restored: {} files, {} bytes -> {} ({} records: {} concepts, {} relations)",
+            r.files,
+            r.bytes,
+            store_dir.display(),
+            r.records,
+            r.concepts,
+            r.relations
+        );
+        return Ok(());
     }
     if let Cmd::Bench { cmd, json } = &cli.cmd {
         let data = cli
@@ -618,7 +653,20 @@ async fn main() -> Result<()> {
             store.reset().await?;
             println!("reset: store emptied (schema and instances); settings kept");
         }
-        Cmd::Bench { .. } => unreachable!("bench runs before the store is opened"),
+        Cmd::Bench { .. } | Cmd::Restore { .. } => {
+            unreachable!("bench and restore run before the store is opened")
+        }
+        Cmd::Backup { dest } => {
+            let r = store.backup(&dest).await?;
+            println!(
+                "backup: {} files ({} copied, {} bytes) -> {} ({} records)",
+                r.files,
+                r.copied,
+                r.bytes,
+                dest.display(),
+                r.records
+            );
+        }
         Cmd::Migrate => {
             let dir = cli
                 .data
@@ -700,6 +748,7 @@ async fn main() -> Result<()> {
             login,
             users_file,
             allow_signup,
+            backup_dir,
         } => {
             // Resolve a seed directory: explicit --seed wins, otherwise look
             // for ONTOLOGY_SEED_DIR, then <data>/seed, then ./seed. Seeding
@@ -756,6 +805,11 @@ async fn main() -> Result<()> {
                 },
             )
             .with_memory_plan(memory_plan);
+            let mut state = state;
+            if let Some(dir) = &backup_dir {
+                tracing::info!(dir = %dir.display(), "POST /backup enabled");
+            }
+            state.backup_dir = backup_dir;
             let bearer = match auth_env {
                 Some(env_name) => Some(
                     std::env::var(&env_name)

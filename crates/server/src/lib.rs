@@ -101,6 +101,9 @@ pub struct AppState {
     /// process was started with a persistent store; exposed by `/stats` and
     /// `/metrics` so an operator sees which domains are (not) in memory.
     pub memory_plan: Arc<PlRwLock<Option<ontology_storage::LoadPlan>>>,
+    /// Where `POST /backup` copies the store (`serve --backup-dir`). The
+    /// destination is the operator's, never the caller's: `None` refuses.
+    pub backup_dir: Option<PathBuf>,
 }
 
 impl AppState {
@@ -126,6 +129,7 @@ impl AppState {
             settings_path: None,
             writer: Arc::new(tokio::sync::Mutex::new(())),
             memory_plan: Arc::new(PlRwLock::new(None)),
+            backup_dir: None,
         }
     }
 
@@ -1068,6 +1072,7 @@ fn build_router_inner(state: AppState, cfg: RouterConfig) -> Router {
         .route("/ask/stream", post(ask_stream))
         .route("/path", post(path))
         .route("/compact", post(compact))
+        .route("/backup", post(backup))
         .route("/reset", post(reset_all))
         .route("/upload", post(upload))
         .route("/ingest/analyze", post(ingest_review::analyze))
@@ -1536,6 +1541,24 @@ fn lookup<T>(
         }
         other => ApiError::Graph(other),
     })
+}
+
+/// Copy the store to the configured backup directory (ROADMAP §3.8.4):
+/// sealed partitions already there are skipped, so a daily call costs
+/// what changed. No writer runs during the copy.
+async fn backup(
+    State(s): State<AppState>,
+) -> Result<Json<ontology_storage::BackupReport>, ApiError> {
+    let dest = s.backup_dir.clone().ok_or_else(|| {
+        ApiError::BadRequest("no backup directory configured (serve --backup-dir)".into())
+    })?;
+    let _w = s.writer.lock().await;
+    let report = s
+        .store
+        .backup(&dest)
+        .await
+        .map_err(|e| ApiError::Store(e.to_string()))?;
+    Ok(Json(report))
 }
 
 async fn compact(State(s): State<AppState>) -> Result<StatusCode, ApiError> {

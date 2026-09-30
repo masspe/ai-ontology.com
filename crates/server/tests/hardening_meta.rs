@@ -137,6 +137,67 @@ async fn compact_keeps_the_graph_and_the_store_replays_identically_after_reopen(
     assert_eq!(graph.action_count(), 1);
 }
 
+/// `POST /backup` copies the store to the directory the operator
+/// configured — never to a path the caller names — and refuses without one;
+/// the copy restores to the same graph, and a second call is incremental.
+#[tokio::test]
+async fn backup_copies_the_store_to_the_configured_directory_and_restores() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Arc::new(SegmentStore::open(dir.path().join("store")).await.unwrap());
+    let graph = OntologyGraph::with_arc(Ontology::new());
+    store.load_into(&graph).await.unwrap();
+
+    // Not configured: refused, nothing written.
+    let app = build_router(state_with(store.clone(), graph.clone()));
+    let (st, v) = call(&app, "POST", "/backup", None).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST, "{v}");
+
+    let mut state = state_with(store.clone(), graph.clone());
+    let backups = dir.path().join("backups");
+    state.backup_dir = Some(backups.clone());
+    let app = build_router(state);
+    let (st, v) = call(
+        &app,
+        "PUT",
+        "/ontology",
+        Some(serde_json::to_value(ontology()).unwrap()),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    let a = create_topic(&app, "A").await;
+    let b = create_topic(&app, "B").await;
+    relate(&app, "related_to", a, b).await;
+    let expected = shape(&graph);
+
+    let (st, v) = call(&app, "POST", "/backup", None).await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert_eq!(v["files"], v["copied"], "{v}");
+    assert_eq!(v["records"].as_u64().unwrap(), store.record_count());
+    assert!(backups.join("MANIFEST.json").is_file());
+
+    let (st, v2) = call(&app, "POST", "/backup", None).await;
+    assert_eq!(st, StatusCode::OK, "{v2}");
+    assert_eq!(v2["files"], v["files"], "{v2}");
+
+    let restored = dir.path().join("restored");
+    ontology_storage::restore(&backups, &restored)
+        .await
+        .unwrap();
+    let store2 = SegmentStore::open(&restored).await.unwrap();
+    let fresh = OntologyGraph::with_arc(Ontology::new());
+    store2.load_into(&fresh).await.unwrap();
+    assert_eq!(shape(&fresh), expected);
+
+    // A memory store has nothing to copy: a store error, not a crash.
+    let mut state = state_with(
+        Arc::new(MemoryStore::new()),
+        OntologyGraph::with_arc(Ontology::new()),
+    );
+    state.backup_dir = Some(backups);
+    let (st, v) = call(&build_router(state), "POST", "/backup", None).await;
+    assert_eq!(st, StatusCode::INTERNAL_SERVER_ERROR, "{v}");
+}
+
 /// Every route `build_router` registers, with its methods. Kept by hand —
 /// axum does not expose its route table — so adding a route means adding it
 /// here **and** to `openapi.rs`; the test below fails otherwise.
@@ -165,6 +226,7 @@ const ROUTES: &[(&str, &[&str])] = &[
     ("/ask/stream", &["post"]),
     ("/path", &["post"]),
     ("/compact", &["post"]),
+    ("/backup", &["post"]),
     ("/reset", &["post"]),
     ("/upload", &["post"]),
     ("/ingest/analyze", &["post"]),
