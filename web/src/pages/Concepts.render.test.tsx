@@ -230,9 +230,9 @@ describe("Concepts page — stat tiles", () => {
   it("renders the counts, the month-over-month deltas and the coverage score", async () => {
     renderPage(<Concepts />);
     expect(await screen.findByText("1,234", { selector: ".stat-value" })).toBeInTheDocument();
-    expect(screen.getByText("↑ 10%")).toBeInTheDocument(); // concepts +10 %
-    expect(screen.getByText("↓ 20%")).toBeInTheDocument(); // relations −20 %
-    expect(screen.getByText("• 0%")).toBeInTheDocument(); // groups flat
+    expect(screen.getByText("↑ 10 %")).toBeInTheDocument(); // concepts +10 %
+    expect(screen.getByText("↓ 20 %")).toBeInTheDocument(); // relations −20 %
+    expect(screen.getByText("• 0 %")).toBeInTheDocument(); // groups flat
     expect(await screen.findByText("50%")).toBeInTheDocument();
     expect(mocked.getSubgraph).toHaveBeenCalledWith({ limit: 500, expansion_depth: 1 });
     // One trend line per tile (the sparkline component draws a polyline).
@@ -791,7 +791,7 @@ describe("Concepts page — relations panel", () => {
     const rows = within(panel).getAllByRole("listitem");
     expect(rows).toHaveLength(3);
     expect(rows[0]).toHaveTextContent("→works_forCompany: ACME");
-    expect(rows[1]).toHaveTextContent("→knowsFiche n° 99"); // peer not on this page
+    expect(rows[1]).toHaveTextContent("→knowsFiche #99"); // peer not on this page
     expect(rows[2]).toHaveTextContent("←knowsPerson: Bob");
   });
 

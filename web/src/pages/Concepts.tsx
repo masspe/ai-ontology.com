@@ -256,8 +256,8 @@ function RichStat({ label, value, display, deltaPct, icon, tone, spark, sparkCol
         <div className="stat-value">{display ?? fmtNum(value)}</div>
         {deltaPct != null && (
           <div className={`stat-delta ${cls}`}>
-            <span>{arrow} {Math.abs(deltaPct).toFixed(0)}%</span>
-            <span className="muted">vs mois dernier</span>
+            <span>{arrow} {Math.abs(deltaPct).toFixed(0)} %</span>
+            <span className="muted">vs le mois dernier</span>
           </div>
         )}
       </div>
@@ -1544,7 +1544,7 @@ function RelationsPanel({ concept, ontology, allConcepts }: RelationsPanelProps)
         <span className="rel-other">
           {other
             ? `${other.concept_type}: ${other.name}`
-            : `Fiche n° ${otherId}`}
+            : `Fiche #${otherId}`}
         </span>
         <button
           type="button"

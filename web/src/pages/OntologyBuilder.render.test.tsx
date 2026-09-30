@@ -458,7 +458,7 @@ describe("OntologyBuilder — ingest preview", () => {
 
     const panel = await screen.findByTestId("review-panel");
     expect(await infoBanner()).toHaveTextContent(
-      "deal.txt : 2 fiche(s) et 1 lien(s) proposés à partir de 1/1 fichier(s). Vérifiez ci-dessous, puis cliquez sur Appliquer.",
+      "deal.txt : 2 fiche(s) et 1 lien(s) proposés à partir de 1/1 fichier(s). Vérifiez ci-dessous, puis cliquez sur Ajouter aux données.",
     );
     expect(analyze).toHaveBeenCalledTimes(1);
     expect(analyze.mock.calls[0][0].file.name).toBe("deal.txt");
@@ -487,7 +487,7 @@ describe("OntologyBuilder — ingest preview", () => {
       "create_new",
     ]);
 
-    await user.click(within(panel).getByRole("button", { name: "Appliquer au graphe" }));
+    await user.click(within(panel).getByRole("button", { name: "Ajouter aux données" }));
     await waitFor(() => expect(apply).toHaveBeenCalledTimes(1));
     const opts = apply.mock.calls[0][0];
     expect(opts.defaultAction).toBe("skip");
@@ -514,7 +514,7 @@ describe("OntologyBuilder — ingest preview", () => {
 
     apply.mockRejectedValueOnce(new Error("apply exploded"));
     upload(dropzoneInput(container), [makeFile("deal.txt", "hello")]);
-    await user.click(within(await screen.findByTestId("review-panel")).getByRole("button", { name: "Appliquer au graphe" }));
+    await user.click(within(await screen.findByTestId("review-panel")).getByRole("button", { name: "Ajouter aux données" }));
     expect(await errorBanner()).toHaveTextContent("apply exploded");
     expect(screen.getByTestId("review-panel")).toBeInTheDocument();
   });
@@ -559,7 +559,7 @@ describe("OntologyBuilder — ingest preview", () => {
     upload(dropzoneInput(container), [zip]);
     await screen.findByTestId("review-panel");
     expect(await infoBanner()).toHaveTextContent(
-      "Archive pack.zip : 2 fiche(s) et 1 lien(s) proposés à partir de 1/2 fichier(s) · 1 en échec. Vérifiez ci-dessous, puis cliquez sur Appliquer.",
+      "Archive pack.zip : 2 fiche(s) et 1 lien(s) proposés à partir de 1/2 fichier(s) · 1 en échec. Vérifiez ci-dessous, puis cliquez sur Ajouter aux données.",
     );
     expect(screen.getByText("a.txt: boom")).toBeInTheDocument();
   });

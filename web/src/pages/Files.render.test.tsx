@@ -125,7 +125,7 @@ describe("Files page — library", () => {
     const row = libraryRow;
     expect(within(row("report.pdf")).getByText("PDF", { selector: "td" })).toBeInTheDocument();
     expect(within(row("report.pdf")).getByText("Contract", { selector: "td" })).toBeInTheDocument();
-    expect(within(row("report.pdf")).getByText("en Contract")).toBeInTheDocument();
+    expect(within(row("report.pdf")).getByText("type : Contract")).toBeInTheDocument();
     expect(within(row("report.pdf")).getByText("Analysé")).toHaveClass("info");
     expect(within(row("report.pdf")).getByText("2.5 Mo")).toBeInTheDocument();
 

@@ -223,7 +223,7 @@ export function ReviewPanel(props: ReviewPanelProps) {
 
       {proposal.relation_types.length > 0 && (
         <Section title={`Nouveaux types de lien (${proposal.relation_types.length})`}>
-          <Table headers={["Nom", "Domaine → Portée", "Conflit", "Confiance", "Décision"]}>
+          <Table headers={["Nom", "Domaine → Cible", "Conflit", "Confiance", "Décision"]}>
             {proposal.relation_types.map((rt) => (
               <tr key={rt.client_ref}>
                 <td>{rt.name}</td>

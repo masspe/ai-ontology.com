@@ -54,7 +54,7 @@ describe("ConfirmProvider", () => {
     expect(screen.queryByRole("dialog")).toBeInTheDocument();
     expect(dialog()).toHaveAttribute("aria-modal", "true");
     expect(screen.getByRole("heading", { name: "Confirmer" })).toBeInTheDocument();
-    expect(screen.getByText("Are you sure?")).toBeInTheDocument();
+    expect(screen.getByText("Êtes-vous sûr ?")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Annuler" })).toBeInTheDocument();
     const ok = screen.getByRole("button", { name: "Confirmer" });
     expect(ok).toHaveFocus();
@@ -112,7 +112,7 @@ describe("ConfirmProvider", () => {
 
   it("clicking the backdrop cancels, clicking inside the card does not", async () => {
     mount();
-    fireEvent.click(screen.getByText("Are you sure?"));
+    fireEvent.click(screen.getByText("Êtes-vous sûr ?"));
     expect(dialog()).toBeInTheDocument();
     expect(result()).toHaveTextContent("pending");
 

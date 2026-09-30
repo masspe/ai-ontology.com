@@ -27,7 +27,7 @@ import {
 // Rule row derived from the live API.
 // ---------------------------------------------------------------------------
 
-type RuleStatus = "Active" | "Revue" | "Brouillon" | "Désactivée";
+type RuleStatus = "Active" | "Vérifiée" | "Brouillon" | "Désactivée";
 
 interface RuleRow {
   id: number;
@@ -41,7 +41,7 @@ interface RuleRow {
 
 function ruleStatus(r: Rule): RuleStatus {
   const raw = (r.properties?.status as string | undefined)?.toLowerCase();
-  if (raw === "reviewed") return "Revue";
+  if (raw === "reviewed") return "Vérifiée";
   if (raw === "draft") return "Brouillon";
   if (raw === "disabled") return "Désactivée";
   return r.strict ? "Active" : "Brouillon";
@@ -202,7 +202,7 @@ function typeBadge(type: string): { cls: string; dot: string } {
 function statusBadge(s: RuleStatus): string {
   switch (s) {
     case "Active":   return "badge-success";
-    case "Revue":      return "badge-accent";
+    case "Vérifiée":      return "badge-accent";
     case "Brouillon":  return "badge-warn";
     case "Désactivée": return "badge-danger";
   }
@@ -298,7 +298,7 @@ export default function Rules() {
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState<string>("Tous les types");
   const [statusFilter, setStatusFilter] = useState<string>("Tous les statuts");
-  const [sort, setSort] = useState<string>("Dernière mise à jour");
+  const [sort, setSort] = useState<string>("Tri : dernière mise à jour");
   const [ontology, setOntology] = useState<Ontology | null>(null);
   const [allConcepts, setAllConcepts] = useState<Concept[]>([]);
   const [editing, setEditing] = useState<Rule | "new" | null>(null);
@@ -490,7 +490,7 @@ export default function Rules() {
             <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="rule-select">
               <option>Tous les statuts</option>
               <option>Active</option>
-              <option>Revue</option>
+              <option>Vérifiée</option>
               <option>Brouillon</option>
               <option>Désactivée</option>
             </select>
@@ -603,7 +603,7 @@ export default function Rules() {
                 <div className="rd-logic-title">Logique de la règle</div>
                 <pre className="rd-code">
                   <code>
-                    <span className="ln">1</span><span className="kw">QUAND</span> {selectedRule.when || "(aucune condition)"}{"\n"}
+                    <span className="ln">1</span><span className="kw">SI</span> {selectedRule.when || "(aucune condition)"}{"\n"}
                     <span className="ln">2</span><span className="kw">ALORS</span> {selectedRule.then || "(aucune action)"}
                   </code>
                 </pre>
@@ -801,7 +801,7 @@ function RuleModal({ initial, ontology, concepts, onCancel, onSave }: RuleModalP
                   ? "Choisissez d'abord un type de règle."
                   : !prompt.trim()
                     ? "Décrivez la règle pour activer la génération."
-                    : "Remplit Nom, Quand, Alors, Description, Stricte."}
+                    : "Remplit Nom, Si, Alors, Description, Stricte."}
             </small>
           </div>
           {genError && <div className="modal-ai-error">{genError}</div>}
@@ -842,7 +842,7 @@ function RuleModal({ initial, ontology, concepts, onCancel, onSave }: RuleModalP
         </label>
 
         <label className="modal-field">
-          <span>Quand</span>
+          <span>Si</span>
           <textarea value={when} onChange={(e) => setWhen(e.target.value)} rows={2} />
         </label>
 
