@@ -98,6 +98,7 @@ describe("ConceptSheet", () => {
     expect(screen.queryByText("ailleurs")).toBeNull();
     expect(screen.getByRole("link", { name: "relancer" })).toHaveAttribute("href", "/actions");
     expect(screen.getByText("stricte")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Voir dans le graphe" })).toHaveAttribute("href", "/graph?focus=7");
   });
 
   it("corrects the name and the description in place", async () => {

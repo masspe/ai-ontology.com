@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Mediasoft-Commercial
 // Copyright (C) 2026 Mediasoft & Cie S.A.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
+import { pinnedIds, togglePin } from "../lib/pins";
 import Card from "../components/Card";
 import StreamingAnswer from "../components/StreamingAnswer";
 // @ts-expect-error JSX module
@@ -20,6 +21,8 @@ export default function Queries() {
   const confirm = useConfirm();
   const [params] = useSearchParams();
   const initialQ = params.get("q") ?? "";
+  const runId = params.get("run");
+  const [pinned, setPinned] = useState<number[]>(() => pinnedIds());
 
   const [queries, setQueries] = useState<SavedQuery[]>([]);
   const [name, setName] = useState("");
@@ -41,6 +44,17 @@ export default function Queries() {
   useEffect(() => {
     refresh();
   }, []);
+
+  // `/queries?run=<id>` (a pinned question on the home page): replay it.
+  const replayed = useRef<string | null>(null);
+  useEffect(() => {
+    if (!runId || replayed.current === runId) return;
+    const q = queries.find((x) => String(x.id) === runId);
+    if (!q) return;
+    replayed.current = runId;
+    void run(q);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runId, queries]);
 
   const save = async () => {
     if (!name.trim() || !query.trim()) return;
@@ -143,6 +157,13 @@ export default function Queries() {
                     </td>
                     <td className="actions">
                       <button onClick={() => run(q)} disabled={busy}>Run</button>{" "}
+                      <button
+                        onClick={() => setPinned(togglePin(q.id))}
+                        aria-pressed={pinned.includes(q.id)}
+                        title={pinned.includes(q.id) ? "Retirer de l'accueil" : "Épingler à l'accueil"}
+                      >
+                        {pinned.includes(q.id) ? "★" : "☆"}
+                      </button>{" "}
                       <button className="btn-danger" onClick={() => remove(q.id)}>Delete</button>
                     </td>
                   </tr>

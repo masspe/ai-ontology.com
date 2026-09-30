@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Mediasoft-Commercial
 // Copyright (C) 2026 Mediasoft & Cie S.A.
 //
-// The menu, in the order of the work (ROADMAP §3.9 lot A): prepare, then
-// explore, then automate. One source for the sidebar and the guide: each
-// entry carries its `tour` anchor and the two sentences the guide says.
+// The menu (ROADMAP §3.9): one source for the top navigation and the
+// guide: each entry carries its `tour` anchor and the two sentences the
+// guide says.
 
 import type { ReactElement } from "react";
 
@@ -32,110 +32,114 @@ export interface NavItem {
   icon: ReactElement;
   /** Exact match (the index route). */
   end?: boolean;
-  /** `data-tour` anchor and guide step id. */
+  /** `data-tour` anchor the guide spotlights: the entry itself, or the
+   * menu it lives in. */
   tour: string;
   /** What the guide says about this part, two sentences at most. */
   guide: string;
 }
 
 export interface NavGroup {
+  /** `data-tour` anchor of the menu; also the id of the group. */
+  key: string;
   title: string;
   items: NavItem[];
 }
 
+// Four entries (decided with the owner on 2026-09-30): Accueil and
+// Réglages are one page each, Importer and Explorer open a menu.
 export const NAV_GROUPS: NavGroup[] = [
   {
+    key: "accueil",
     title: "Accueil",
     items: [
       {
         to: "/",
-        label: "Tableau de bord",
+        label: "Accueil",
         icon: NavIcon.home,
         end: true,
-        tour: "dashboard",
-        guide: "La vue d'ensemble : taille du graphe, fichiers importés, raccourcis. Au premier lancement, il vous guide en trois étapes.",
+        tour: "accueil",
+        guide: "Une question à poser, ce qui attend une action, ce qui a été importé cette semaine, les dernières questions. Au premier lancement, il vous guide en trois étapes.",
       },
     ],
   },
   {
-    title: "Préparer",
+    key: "importer",
+    title: "Importer",
     items: [
-      {
-        to: "/builder",
-        label: "Modèle de données",
-        icon: NavIcon.layers,
-        tour: "builder",
-        guide: "Les types de fiches (Personne, Contrat…), leurs propriétés et les relations permises. Il peut être généré à partir d'une description en langage courant.",
-      },
       {
         to: "/files",
         label: "Fichiers",
         icon: NavIcon.folder,
-        tour: "files",
-        guide: "Déposez ici vos Word, Excel, CSV, PDF ou textes. Chaque fichier reste listé avec l'état de son import.",
+        tour: "importer",
+        guide: "Déposez ici vos Word, Excel, CSV, PDF ou textes. Un document part en relecture, un fichier structuré se charge directement ; chacun reste listé avec l'état de son import.",
       },
       {
         to: "/ingest",
-        label: "Importer des documents",
+        label: "Relire un document",
         icon: NavIcon.upload,
-        tour: "ingest",
-        guide: "Un modèle de langage lit un fichier et propose des fiches et des relations. Vous relisez, corrigez, puis validez ce qui entre dans le graphe.",
+        tour: "importer",
+        guide: "Un modèle de langage lit un document et propose des fiches et des liens. Vous relisez, corrigez, puis ajoutez ce qui entre dans vos données.",
+      },
+      {
+        to: "/builder",
+        label: "Modèle de données",
+        icon: NavIcon.layers,
+        tour: "importer",
+        guide: "Les types de fiches (Personne, Contrat…), leurs propriétés et les liens permis. Il peut être généré à partir d'une description en langage courant.",
       },
     ],
   },
   {
+    key: "explorer",
     title: "Explorer",
     items: [
-      {
-        to: "/graph",
-        label: "Graphe",
-        icon: NavIcon.graph,
-        tour: "graph",
-        guide: "Les liens autour d'une fiche, à un ou deux pas, filtrés par type. Le bon endroit pour comprendre comment les choses se tiennent.",
-      },
       {
         to: "/concepts",
         label: "Fiches",
         icon: NavIcon.list,
-        tour: "concepts",
-        guide: "Toutes les fiches du graphe : création, modification, relations, suppression groupée.",
+        tour: "explorer",
+        guide: "Toutes les fiches. Chacune s'ouvre sur sa page : liens, informations, documents d'origine, règles, correction sur place.",
+      },
+      {
+        to: "/graph",
+        label: "Graphe",
+        icon: NavIcon.graph,
+        tour: "explorer",
+        guide: "Les liens autour d'une fiche, à un ou deux pas, filtrés par type. Le bon endroit pour comprendre comment les choses se tiennent.",
       },
       {
         to: "/queries",
         label: "Questions",
         icon: NavIcon.search,
-        tour: "queries",
-        guide: "Posez une question en langage courant ; la réponse cite les fiches d'où elle vient. Les questions utiles se gardent pour être rejouées.",
+        tour: "explorer",
+        guide: "Posez une question en langage courant ; la réponse cite les fiches d'où elle vient. Les questions utiles se gardent, se rejouent et s'épinglent à l'accueil.",
       },
-    ],
-  },
-  {
-    title: "Automatiser",
-    items: [
       {
         to: "/rules",
         label: "Règles",
         icon: NavIcon.shield,
-        tour: "rules",
-        guide: "Des règles de cohérence sur le graphe, qui signalent les exceptions plutôt que de les laisser passer.",
+        tour: "explorer",
+        guide: "Des règles de cohérence sur vos données, qui signalent les exceptions plutôt que de les laisser passer.",
       },
       {
         to: "/actions",
         label: "Actions",
         icon: NavIcon.bolt,
-        tour: "actions",
-        guide: "Des automatisations déclenchées par le contenu du graphe.",
+        tour: "explorer",
+        guide: "Des automatisations déclenchées par le contenu de vos données.",
       },
     ],
   },
   {
+    key: "reglages",
     title: "Réglages",
     items: [
       {
         to: "/settings",
-        label: "Paramètres",
+        label: "Réglages",
         icon: NavIcon.settings,
-        tour: "settings",
+        tour: "reglages",
         guide: "Le fournisseur d'IA et ses clés, les diagnostics, la mémoire. Rien ici n'est nécessaire pour commencer.",
       },
     ],

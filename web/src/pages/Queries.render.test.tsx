@@ -6,7 +6,7 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import Queries from "./Queries";
-import { renderPage, screen, waitFor } from "../test/render";
+import { flushPromises, renderPage, screen, waitFor } from "../test/render";
 import type { RagAnswer, SavedQuery } from "../api";
 
 vi.mock("../api", async () => {
@@ -141,5 +141,26 @@ describe("Queries page", () => {
     await screen.findByText("Renewals");
     await user.click(screen.getByRole("button", { name: "Reload" }));
     await waitFor(() => expect(mocked.getQueries).toHaveBeenCalledTimes(2));
+  });
+});
+
+describe("Queries — pinned to the home page", () => {
+  it("pins and unpins a saved question, remembered in the browser", async () => {
+    const { user } = renderPage(<Queries />);
+    const pin = (await screen.findAllByRole("button", { name: "☆" }))[0]!;
+    expect(pin).toHaveAttribute("aria-pressed", "false");
+    await user.click(pin);
+    expect(screen.getAllByRole("button", { name: "★" })).toHaveLength(1);
+    expect(JSON.parse(window.localStorage.getItem("queries.pinned.v1")!)).toEqual([saved[0]!.id]);
+    await user.click(screen.getByRole("button", { name: "★" }));
+    expect(JSON.parse(window.localStorage.getItem("queries.pinned.v1")!)).toEqual([]);
+  });
+
+  it("replays the question named by ?run once", async () => {
+    const { rerender } = renderPage(<Queries />, { route: `/queries?run=${saved[0]!.id}` });
+    await waitFor(() => expect(mocked.runQuery).toHaveBeenCalledWith(saved[0]!.id));
+    rerender(<Queries />);
+    await flushPromises();
+    expect(mocked.runQuery).toHaveBeenCalledTimes(1);
   });
 });

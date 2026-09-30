@@ -5,6 +5,7 @@ import { useNavigate } from "react-router-dom";
 import { useEffect, useRef, useState } from "react";
 import FeedbackModal from "../components/FeedbackModal";
 import { openTour } from "../components/Tour";
+import TopNav from "./TopNav";
 // @ts-expect-error JS module without types (shared with the auth pages)
 import { msBE } from "../lib/msBE";
 
@@ -55,6 +56,7 @@ export default function TopBar() {
 
   return (
     <header className="topbar">
+      <TopNav />
       <form className="topbar-search" onSubmit={onSubmit} data-tour="search">
         <span className="topbar-search-icon">⌕</span>
         <input

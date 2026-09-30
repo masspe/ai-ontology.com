@@ -98,20 +98,48 @@ label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px
 /* ---------- App layout ---------- */
 .app-shell {
   display: grid;
-  grid-template-columns: var(--sidebar-w) 1fr;
-  grid-template-rows: 100vh;
-  height: 100vh;
-}
-.app-shell.collapsed { --sidebar-w: 64px; }
-
-.main-area {
-  display: grid;
   grid-template-rows: var(--topbar-h) 1fr;
-  overflow: hidden;
+  height: 100vh;
 }
 .content {
   padding: 24px 28px;
   overflow: auto;
+  max-width: 1400px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+/* ---------- Top navigation (four entries) ---------- */
+.topnav { display: flex; align-items: center; gap: 4px; }
+.topnav-brand { display: inline-flex; margin-right: 12px; }
+.topnav-link {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 8px 12px; border-radius: var(--radius-sm);
+  color: var(--text); text-decoration: none; font-weight: 500; cursor: pointer;
+  list-style: none;
+}
+.topnav-link::-webkit-details-marker { display: none; }
+.topnav-link:hover { background: var(--panel-2); }
+.topnav-link.active { color: var(--accent); background: var(--accent-soft, #eff6ff); }
+.topnav-icon { width: 18px; height: 18px; display: inline-flex; }
+.topnav-group { position: relative; }
+.topnav-menu {
+  position: absolute; top: 100%; left: 0; z-index: 30; min-width: 220px;
+  margin-top: 4px; padding: 6px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  box-shadow: 0 8px 24px rgba(0,0,0,.12);
+  display: grid; gap: 2px;
+}
+.topnav-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 10px; border-radius: var(--radius-sm);
+  color: var(--text); text-decoration: none;
+}
+.topnav-item:hover { background: var(--panel-2); }
+.topnav-item.active { color: var(--accent); font-weight: 600; }
+@media (max-width: 900px) {
+  .topnav-link { padding: 8px; }
+  .topnav-link .topnav-icon + * { display: none; }
 }
 
 /* ---------- Sidebar ---------- */
@@ -200,7 +228,8 @@ label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px
 }
 .topbar-search {
   flex: 1;
-  max-width: 480px;
+  max-width: 420px;
+  margin-left: 16px;
   position: relative;
 }
 .topbar-search input { padding-left: 36px; background: var(--panel-2); border-color: transparent; }

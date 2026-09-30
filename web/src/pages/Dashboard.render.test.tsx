@@ -166,6 +166,16 @@ describe("Accueil", () => {
     expect(screen.getByRole("link", { name: "Never run" })).toHaveAttribute("href", "/queries?q=x%20%26%20y");
   });
 
+  it("lists the pinned questions first, replayable in one click", async () => {
+    window.localStorage.setItem("queries.pinned.v1", JSON.stringify([2]));
+    renderPage(<Dashboard />);
+    await loaded();
+    const items = card("Dernières questions").querySelectorAll("li");
+    expect(items[0]).toHaveTextContent("★ Never run rejouer");
+    expect(screen.getByRole("link", { name: "Never run" })).toHaveAttribute("href", "/queries?run=2");
+    expect(items[1]).toHaveTextContent("Renewals");
+  });
+
   it("counts the rules, the strict and the general ones", async () => {
     renderPage(<Dashboard />);
     await loaded();
