@@ -102,8 +102,8 @@ export default function Queries() {
     <>
       <div className="page-header">
         <div>
-          <h1 className="page-title">Queries</h1>
-          <p className="page-subtitle">Ask the graph or save reusable retrievals.</p>
+          <h1 className="page-title">Questions</h1>
+          <p className="page-subtitle">Posez une question à vos données, gardez celles qui servent, épinglez-les à l'accueil.</p>
         </div>
       </div>
 

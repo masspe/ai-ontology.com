@@ -703,9 +703,9 @@ export default function Concepts() {
     <>
       <div className="page-header">
         <div>
-          <h2 className="page-title">Concepts</h2>
+          <h2 className="page-title">Fiches</h2>
           <p className="page-subtitle">
-            Browse, organize, and inspect ontology concepts and their definitions.
+            Toutes les fiches de vos données : parcourir, filtrer, corriger, ouvrir la page de chacune.
           </p>
         </div>
       </div>
