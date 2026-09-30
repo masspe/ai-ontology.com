@@ -67,14 +67,15 @@ describe("App routes", () => {
     // Protected: the page is wrapped by ProtectedRoute and the Layout shell.
     expect(screen.getByTestId("protected")).toContainElement(screen.getByTestId("page"));
     expect(document.querySelector("main.content")).toContainElement(screen.getByTestId("page"));
-    expect(screen.getByText("AI Ontology Studio")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "AI Ontology Studio" })).toBeInTheDocument();
     expect(window.location.pathname).toBe(path);
   });
 
-  it("highlights the sidebar entry of the current section", () => {
+  it("marks the menu and the entry of the current section", () => {
     visit("/rules");
     expect(screen.getByRole("link", { name: "Règles" })).toHaveClass("active");
-    expect(screen.getByRole("link", { name: "Tableau de bord" })).not.toHaveClass("active");
+    expect(screen.getByText("Explorer", { selector: "summary .topnav-label" }).closest("summary")).toHaveClass("active");
+    expect(screen.getByRole("link", { name: "Accueil" })).not.toHaveClass("active");
   });
 
   it.each([

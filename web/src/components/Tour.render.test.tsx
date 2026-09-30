@@ -47,7 +47,7 @@ describe("Tour", () => {
   it("has one step per menu entry plus welcome, search and feedback", () => {
     expect(TOUR_STEPS.length).toBe(NAV_ITEMS.length + 3);
     expect(TOUR_STEPS[0]!.title).toBe("Bienvenue");
-    expect(TOUR_STEPS.map((s) => s.target)).toContain("queries");
+    expect(TOUR_STEPS.map((s) => s.target)).toContain("explorer");
   });
 
   it("stays closed once it was seen, and opens on the ? event", async () => {
@@ -69,14 +69,14 @@ describe("Tour", () => {
     expect(screen.getByTestId("tour-spot")).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Suivant" }));
-    expect(screen.getByRole("heading", { name: "Tableau de bord" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Accueil" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Suivant" }));
-    expect(screen.getByRole("heading", { name: "Modèle de données" })).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("/builder"));
-    await user.keyboard("{ArrowRight}");
     expect(screen.getByRole("heading", { name: "Fichiers" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("/files"));
+    await user.keyboard("{ArrowRight}");
+    expect(screen.getByRole("heading", { name: "Relire un document" })).toBeInTheDocument();
     await user.keyboard("{ArrowLeft}");
-    expect(screen.getByRole("heading", { name: "Modèle de données" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Fichiers" })).toBeInTheDocument();
 
     // The summary jumps anywhere.
     await user.click(screen.getByRole("button", { name: "Sommaire" }));

@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Mediasoft & Cie S.A.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, Link } from "react-router-dom";
+import { useNavigate, Link, useSearchParams } from "react-router-dom";
 import Card from "../components/Card";
 import Sparkline from "../components/Sparkline";
 import GraphCanvas, { type GraphCanvasHandle, type LayoutDir } from "../components/GraphCanvas";
@@ -280,17 +280,31 @@ export default function GraphView() {
 
   // ---------- Data loading ----------
 
+  // `/graph?focus=<id>`: the graph opens around that sheet, selected.
+  const focus = useSearchParams()[0].get("focus");
+  const focusId = focus && /^\d+$/.test(focus) ? Number(focus) : null;
+  // Once: later reloads (interval, depth) keep what the user selected since.
+  const focused = useRef(false);
+
   const loadSubgraph = async (d = depth) => {
     setBusy(true);
     setError(null);
     try {
       const res = await getSubgraph({
         seed_query: search.trim() || undefined,
+        seed_concept_ids: focusId !== null && !search.trim() ? [focusId] : undefined,
         seed_concept_types: nodeType !== "All Types" ? [nodeType] : [],
         expansion_depth: d,
         limit: 250,
       });
       setSubgraph(res.subgraph);
+      if (focusId !== null && !focused.current && res.subgraph.concepts.some((c) => c.id === focusId)) {
+        focused.current = true;
+        setSelectedId(String(focusId));
+        setTab("inspector");
+        // The canvas mounts with the subgraph: focus on the next frame.
+        window.setTimeout(() => canvasRef.current?.focusNode(String(focusId)), 0);
+      }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
