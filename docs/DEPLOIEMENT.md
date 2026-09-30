@@ -81,6 +81,23 @@ boutons renvoient vers la page de connexion avec `error=…_not_configured`.
 C'est l'étape 3.8.3b ; le serveur Node `auth-server/` est conservé jusque-là
 pour qui en a besoin, puis retiré.
 
+### Clés d'API et journal d'audit
+
+Pour un appelant machine (un ERP, un script), l'administrateur crée une
+**clé nommée** plutôt que de prêter son compte : `POST /auth/keys
+{"name":"ERP"}` renvoie le secret une seule fois (`ok_…`) ; `GET
+/auth/keys` liste les clés (nom, préfixe, création, par qui), `DELETE
+/auth/keys/<id>` révoque sur-le-champ. La clé se présente comme un jeton
+(`Authorization: Bearer ok_…`) ; elle ouvre l'API, pas la gestion des
+comptes. Le fichier `users.json` ne garde qu'une empreinte.
+
+Chaque écriture réussie est consignée dans `/data/audit.jsonl` (une ligne
+JSON : heure, appelant, méthode, chemin, statut, identifiant de requête).
+`GET /audit?limit=100` relit les dernières lignes, administrateurs
+seulement. Le fichier fait partie du volume `/data` ; il n'est pas dans
+la sauvegarde du store (§5), copiez-le avec le volume. Options :
+`--audit-log <chemin>`, `--no-audit`.
+
 ## 4. Mémoire
 
 La limite du conteneur (`mem_limit`) est ce que le binaire lit comme

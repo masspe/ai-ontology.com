@@ -565,6 +565,15 @@ Two credentials open the API, both as `Authorization: Bearer …`:
 `ontology serve --web web/dist` serves the built UI on the same port, so
 the browser talks to one origin. Setup: [docs/DEPLOIEMENT.md](docs/DEPLOIEMENT.md).
 
+**API keys and audit log.** An administrator mints named keys for machine
+callers (`POST /auth/keys`, the `ok_…` secret is shown once and stored
+hashed; `GET` lists, `DELETE` revokes at once); a key opens the API as a
+service caller, not the account management. Every successful write
+(POST/PUT/PATCH/DELETE) is appended to `<data>/audit.jsonl` with its
+time, caller, method, path, status and request id; `GET /audit?limit=`
+reads the last entries (administrators only with the built-in login).
+`--audit-log <path>` / `--no-audit`.
+
 ## Deployment model: one store per tenant, one process per tenant
 
 A storage domain (`ns`) is for locality, retention and access rights inside

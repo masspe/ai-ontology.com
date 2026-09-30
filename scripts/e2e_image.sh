@@ -81,6 +81,13 @@ stats=$(curl -fsS -H "authorization: Bearer $TOKEN" "$BASE/stats")
 echo "$stats" | json "d['concepts']" | grep -x 23 >/dev/null
 docker logs "$NAME" 2>&1 | grep "generated a new JWT secret" >/dev/null && { echo "secret regenerated on restart"; exit 1; }
 
+echo "== the writes are in the audit log, an API key opens the API"
+audit=$(curl -fsS -H "authorization: Bearer $TOKEN" "$BASE/audit?limit=5")
+echo "$audit" | json "[e['path'] for e in d['entries']]" | grep "/concepts" >/dev/null || { echo "write not audited: $audit"; exit 1; }
+echo "$audit" | json "d['entries'][-1]['who']" | grep -x "admin@example.com" >/dev/null
+key=$(curl -fsS -X POST -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' "$BASE/auth/keys" -d '{"name":"e2e"}' | json "d['key']")
+curl -fsS -H "authorization: Bearer $key" "$BASE/stats" | json "d['concepts']" | grep -x 23 >/dev/null
+
 echo "== healthcheck subcommand inside the container"
 docker exec "$NAME" /usr/local/bin/ontology --data /data healthcheck http://127.0.0.1:5000/healthz
 

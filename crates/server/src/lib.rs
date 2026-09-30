@@ -22,6 +22,7 @@
 //! The router is constructed via [`build_router`] so callers can mount it
 //! into a larger axum app or test it with `tower::ServiceExt`.
 
+pub mod audit;
 pub mod auth;
 mod ingest_review;
 mod openapi;
@@ -873,6 +874,9 @@ pub struct RouterConfig {
     pub jwt: Option<JwtAuth>,
     /// Per-IP request limit. `None` disables rate limiting.
     pub rate_limit: Option<RateLimit>,
+    /// Audit log of the writes (ROADMAP §3.8.6): every successful
+    /// mutating request with its caller; read back by `GET /audit`.
+    pub audit: Option<StdArc<audit::AuditLog>>,
     /// Built-in `/auth/*` (users file, sign-up policy); needs `jwt` to sign
     /// the tokens it issues.
     pub users: Option<auth::UserAuth>,
@@ -948,6 +952,7 @@ impl RouterConfig {
             rate_limit: None,
             users: None,
             web_dir: None,
+            audit: None,
         }
     }
 }
@@ -966,6 +971,7 @@ pub fn build_router_with_auth(state: AppState, bearer_token: Option<String>) -> 
             rate_limit: None,
             users: None,
             web_dir: None,
+            audit: None,
         },
     )
 }
@@ -981,6 +987,7 @@ pub fn build_router_with_jwt(state: AppState, jwt: JwtAuth) -> Router {
             rate_limit: None,
             users: None,
             web_dir: None,
+            audit: None,
         },
     )
 }
@@ -1000,6 +1007,7 @@ fn build_router_inner(state: AppState, cfg: RouterConfig) -> Router {
         rate_limit,
         users,
         web_dir,
+        audit,
     } = cfg;
     let mut healthz_router = Router::new()
         .route("/healthz", get(healthz))
@@ -1103,6 +1111,23 @@ fn build_router_inner(state: AppState, cfg: RouterConfig) -> Router {
         .with_state(state);
     let protected = match &auth_state {
         Some(a) => protected.merge(auth::protected_routes(a.clone())),
+        None => protected,
+    };
+    // The audit log: written inside the auth layer (the caller is known),
+    // read by administrators (anyone, without the built-in login). The
+    // route is always there and answers 400 without a log, like /backup.
+    let reader = Router::new()
+        .route("/audit", get(audit_tail))
+        .with_state((audit.clone(), auth_state.as_ref().map(|a| a.store.clone())));
+    let protected = protected.merge(reader);
+    let protected = match &audit {
+        Some(log) => {
+            let log = log.clone();
+            protected.layer(middleware::from_fn(move |req, next| {
+                let log = log.clone();
+                async move { audit::audit_layer(req, next, log).await }
+            }))
+        }
         None => protected,
     };
 
@@ -1428,6 +1453,20 @@ async fn require_auth(
 ) -> Result<Response, StatusCode> {
     let provided = extract_bearer(&req).ok_or(StatusCode::UNAUTHORIZED)?;
 
+    // A named API key (ROADMAP §3.8.6): a machine caller of the tenant.
+    if provided.starts_with(auth::API_KEY_PREFIX) {
+        if let Some(key) = accounts.as_ref().and_then(|s| s.key_by_secret(&provided)) {
+            req.extensions_mut().insert(AuthContext {
+                subject: format!("key:{}", key.id),
+                email: None,
+                name: Some(key.name),
+                service: true,
+            });
+            return Ok(next.run(req).await);
+        }
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
     // Try JWT first (user credentials), then fall back to the static
     // service token. Both paths attach an `AuthContext` extension so
     // downstream handlers can identify the caller.
@@ -1559,6 +1598,44 @@ async fn backup(
         .await
         .map_err(|e| ApiError::Store(e.to_string()))?;
     Ok(Json(report))
+}
+
+#[derive(Deserialize)]
+struct AuditQuery {
+    limit: Option<usize>,
+}
+
+/// `GET /audit?limit=N`: the last N audit entries (100 by default, 1000 at
+/// most). With the built-in login on, administrators only.
+/// What `GET /audit` needs: the log, and the accounts to tell an administrator.
+type AuditReader = (
+    Option<StdArc<audit::AuditLog>>,
+    Option<StdArc<auth::UserStore>>,
+);
+
+async fn audit_tail(
+    State((log, accounts)): State<AuditReader>,
+    ctx: Option<axum::Extension<AuthContext>>,
+    Query(q): Query<AuditQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let log = log.ok_or_else(|| {
+        ApiError::BadRequest("no audit log configured (serve --audit-log)".into())
+    })?;
+    if let Some(store) = accounts {
+        let admin = ctx
+            .as_ref()
+            .map(|c| !c.service && store.is_admin(&c.subject))
+            .unwrap_or(false);
+        if !admin {
+            return Err(ApiError::Forbidden("Administrator only".into()));
+        }
+    }
+    let n = q.limit.unwrap_or(100).clamp(1, 1000);
+    let entries = tokio::task::spawn_blocking(move || log.tail(n))
+        .await
+        .map_err(|e| ApiError::Store(e.to_string()))?
+        .map_err(|e| ApiError::Store(e.to_string()))?;
+    Ok(Json(serde_json::json!({ "entries": entries })))
 }
 
 async fn compact(State(s): State<AppState>) -> Result<StatusCode, ApiError> {
@@ -4123,6 +4200,8 @@ pub enum ApiError {
     NotFound(String),
     #[error("unprocessable: {0}")]
     Unprocessable(String),
+    #[error("forbidden: {0}")]
+    Forbidden(String),
 }
 
 #[derive(Serialize, Deserialize)]
@@ -4143,6 +4222,7 @@ impl IntoResponse for ApiError {
             }
             ApiError::Graph(_) => (StatusCode::BAD_REQUEST, self.to_string()),
             ApiError::Store(_) => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
+            ApiError::Forbidden(_) => (StatusCode::FORBIDDEN, self.to_string()),
             ApiError::Llm(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
             ApiError::BadRequest(_) => (StatusCode::BAD_REQUEST, self.to_string()),
             ApiError::NotFound(_) => (StatusCode::NOT_FOUND, self.to_string()),

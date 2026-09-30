@@ -198,6 +198,18 @@ async fn backup_copies_the_store_to_the_configured_directory_and_restores() {
     assert_eq!(st, StatusCode::INTERNAL_SERVER_ERROR, "{v}");
 }
 
+/// `GET /audit` without a log configured: a 400 that says so, never a crash.
+#[tokio::test]
+async fn audit_without_a_log_is_refused_with_the_flag_to_use() {
+    let (app, _, _) = flaky_app();
+    let (st, v) = call(&app, "GET", "/audit", None).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST, "{v}");
+    assert!(
+        v["error"].as_str().unwrap_or("").contains("--audit-log"),
+        "{v}"
+    );
+}
+
 /// Every route `build_router` registers, with its methods. Kept by hand —
 /// axum does not expose its route table — so adding a route means adding it
 /// here **and** to `openapi.rs`; the test below fails otherwise.
@@ -227,6 +239,7 @@ const ROUTES: &[(&str, &[&str])] = &[
     ("/path", &["post"]),
     ("/compact", &["post"]),
     ("/backup", &["post"]),
+    ("/audit", &["get"]),
     ("/reset", &["post"]),
     ("/upload", &["post"]),
     ("/ingest/analyze", &["post"]),
