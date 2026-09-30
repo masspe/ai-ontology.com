@@ -203,6 +203,7 @@ export interface ConceptTypeDef {
   description?: string | null;
   parent?: string | null;
   properties?: Record<string, any> | null;
+  disjoint_with?: string[];
 }
 
 export interface RelationTypeDef {

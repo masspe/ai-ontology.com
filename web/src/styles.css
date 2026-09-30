@@ -877,21 +877,16 @@ label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px
 /* Graph View                                                            */
 /* =================================================================== */
 
-/* Layout: filters | canvas | inspector */
-.gv-row-main {
-  display: grid;
-  grid-template-columns: 260px 1fr 320px;
-  gap: 16px;
-  align-items: stretch;
-}
-.gv-row-main.inspector-collapsed { grid-template-columns: 260px 1fr 56px; }
+/* Layout: the canvas card full width (filter bar above the canvas), the
+   inspector below it, then the three secondary cards. */
+.gv-row-main { display: flex; flex-direction: column; gap: 16px; margin-bottom: 16px; }
 .gv-row-main.inspector-collapsed .gv-inspector,
 .gv-row-main.inspector-collapsed .gv-tabs,
-.gv-row-main.inspector-collapsed .gv-rule-list { display: none; }
-@media (max-width: 1280px) { .gv-row-main { grid-template-columns: 1fr; } .gv-row-main.inspector-collapsed { grid-template-columns: 1fr; } }
+.gv-row-main.inspector-collapsed .gv-rule-list,
+.gv-row-main.inspector-collapsed .gv-inspector-card > .empty { display: none; }
+.gv-row-main.inspector-collapsed .gv-inspector-card .card-title { margin-bottom: 0; }
 
 /* ---------- Filters & Controls ---------- */
-.gv-filter-group { margin-bottom: 14px; }
 .gv-filter-label {
   display: block;
   font-size: 12px;
@@ -899,7 +894,6 @@ label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px
   color: var(--muted);
   margin-bottom: 6px;
 }
-.gv-slider-head { display: flex; justify-content: space-between; align-items: center; }
 .gv-depth-value { font-size: 12px; }
 .gv-slider {
   width: 100%;
@@ -930,18 +924,10 @@ label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px
   box-shadow: 0 1px 4px rgba(15, 23, 42, 0.2);
   cursor: pointer;
 }
-.gv-slider-ticks {
-  display: flex;
-  justify-content: space-between;
-  font-size: 11px;
-  color: var(--muted);
-  margin-top: 6px;
-  padding: 0 2px;
-}
 
-.gv-toggles { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
+.gv-toggles { display: flex; flex-wrap: wrap; gap: 8px 16px; }
 .gv-toggle {
-  display: flex; align-items: center; justify-content: space-between;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
   font-size: 13px;
   cursor: pointer;
 }
@@ -972,6 +958,63 @@ label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px
   transition: transform 0.15s;
 }
 .gv-switch.on .gv-switch-knob { transform: translateX(14px); }
+
+/* ---------- Filter bar (above the canvas) ---------- */
+.gv-filterbar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px;
+  margin-bottom: 12px;
+}
+.gv-fb-search { flex: 1 1 220px; max-width: 320px; }
+.gv-fb-depth { display: inline-flex; align-items: center; gap: 8px; }
+.gv-fb-depth .gv-filter-label { margin: 0; }
+.gv-fb-depth .gv-slider { width: 110px; }
+.gv-fb-depth .gv-depth-value { white-space: nowrap; }
+@media (max-width: 700px) {
+  .gv-filterbar > * { flex: 1 1 100%; max-width: none; }
+  .gv-canvas { height: 70vh; min-height: 380px; }
+}
+
+.gv-canvas-note {
+  position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+  z-index: 10; max-width: min(640px, calc(100% - 24px));
+  padding: 10px 14px; border-radius: var(--radius-sm);
+  background: var(--warn-soft); color: var(--text);
+  border: 1px solid var(--warn); font-size: 13px;
+  box-shadow: var(--shadow-sm);
+}
+
+/* ---------- MultiSelect (Power BI-like dropdown filter) ---------- */
+.ms { position: relative; }
+.ms-button {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 7px 10px; font-size: 13px;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--panel); color: var(--text); cursor: pointer;
+  max-width: 280px;
+}
+.ms-button:hover { background: var(--panel-2); }
+.ms-button.active { border-color: var(--accent); }
+.ms-label { color: var(--muted); font-size: 12px; white-space: nowrap; }
+.ms-value { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ms-panel {
+  position: absolute; top: 100%; left: 0; margin-top: 4px; z-index: 30;
+  width: 280px; max-width: calc(100vw - 32px);
+  padding: 8px; background: var(--panel);
+  border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow);
+}
+.ms-search { margin-bottom: 6px; padding: 6px 10px; font-size: 13px; }
+.ms-note { font-size: 12px; color: var(--muted); padding: 4px 6px 6px; }
+.ms-options { max-height: 260px; overflow-y: auto; }
+.ms-option {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 6px; border-radius: 4px; font-size: 13px; cursor: pointer;
+}
+.ms-option:hover { background: var(--panel-2); }
+.ms-option input { width: 15px; height: 15px; margin: 0; padding: 0; accent-color: var(--accent); flex-shrink: 0; }
+.ms-all { border-bottom: 1px solid var(--border); border-radius: 0; margin-bottom: 4px; font-weight: 500; }
+.ms-hint { margin-left: auto; font-size: 11px; white-space: nowrap; }
+.ms-empty { padding: 8px 6px; font-size: 12px; }
+.ms-foot { display: flex; justify-content: flex-end; border-top: 1px solid var(--border); margin-top: 4px; padding-top: 6px; }
 
 /* ---------- Canvas card ---------- */
 .gv-canvas-title { display: inline-flex; align-items: center; gap: 10px; }
@@ -1043,7 +1086,8 @@ label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px
 .gv-layout-item.active { background: var(--accent-soft); color: var(--accent); font-weight: 500; }
 
 .gv-canvas {
-  height: 360px;
+  height: calc(100vh - 260px);
+  min-height: 520px;
   border-radius: var(--radius-sm);
   background: linear-gradient(180deg, #fafbff 0%, #f3f6fd 100%);
   border: 1px solid var(--border);

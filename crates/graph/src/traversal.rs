@@ -233,9 +233,10 @@ impl OntologyGraph {
             if depth >= spec.max_depth {
                 continue;
             }
-            if concepts.len() >= spec.max_nodes {
-                break;
-            }
+            // At the node cap the walk goes on over the nodes already kept,
+            // adding none, so the links *between* them are still collected
+            // (seeding with a full page of one type used to return nodes
+            // without a single edge). Bounded: the queue only drains.
 
             // When a relation_type whitelist is supplied, jump straight to
             // the typed adjacency buckets and skip cloning edges of types
@@ -278,13 +279,14 @@ impl OntologyGraph {
                     continue;
                 }
 
-                if visited.insert(neighbor) {
+                if !visited.contains(&neighbor) {
+                    if concepts.len() >= spec.max_nodes {
+                        continue;
+                    }
+                    visited.insert(neighbor);
                     depth_of.insert(neighbor, depth + 1);
                     concepts.push(nc);
                     queue.push_back((neighbor, depth + 1));
-                    if concepts.len() >= spec.max_nodes {
-                        break;
-                    }
                 }
                 if emitted_edges.insert(rel.id) {
                     relations.push(rel);
