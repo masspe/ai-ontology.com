@@ -472,8 +472,9 @@ avant d'enregistrer un modèle, l'interface compte les fiches dont le type
 disparaît (`lib/impact.ts`, une requête `limit=1` par type retiré) et le
 dit (« 12 fiche(s) concernée(s) : Person (12). Un type encore utilisé ne
 peut pas être retiré : réaffectez ou supprimez ces fiches d'abord. »,
-dialogue de confirmation ; sinon « Rien à migrer »), et le répète après
-l'enregistrement. Traduction : titres et sous-titres de toutes les pages
+l'enregistrement est arrêté là, le brouillon reste ; sinon « Rien à
+migrer », répété après l'enregistrement ; si le comptage échoue, le
+serveur tranche). Traduction : titres et sous-titres de toutes les pages
 en français ; **le corps des pages Fichiers, Fiches, Règles, Actions,
 Graphe, Modèle de données et Réglages (tableaux, formulaires, boutons,
 messages) reste en anglais** — à traduire page par page au fil de l'eau,

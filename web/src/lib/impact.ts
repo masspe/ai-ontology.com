@@ -3,8 +3,10 @@
 //
 // What a change of the data model touches (ROADMAP §3.9 lot B, point 7):
 // the concept types the new model drops, with the number of sheets that
-// still carry each of them. The server refuses to drop a type in use, so
-// the figure is shown before the save, not after the refusal.
+// still carry each of them, exactly (no subtypes: the server's refusal
+// counts that way). The server refuses to drop a type in use, so the
+// figure is shown before the save, with what to do, instead of a bare
+// refusal.
 
 import { listConcepts, type Ontology } from "../api";
 
@@ -18,7 +20,7 @@ export async function modelImpact(current: Ontology | null, proposed: Ontology):
   const gone = Object.keys(current?.concept_types ?? {}).filter((t) => !(t in proposed.concept_types));
   const removed = await Promise.all(
     gone.map(async (type) => {
-      const page = await listConcepts({ type, limit: 1 });
+      const page = await listConcepts({ type, limit: 1, include_subtypes: false });
       return { type, count: page.total ?? page.concepts.length };
     }),
   );
