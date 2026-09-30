@@ -322,7 +322,7 @@ describe("Files page — upload", () => {
     const recent = screen.getByText("Dépôts récents").closest("section")!;
     const row = within(recent).getAllByRole("listitem")[0];
     expect(row).toHaveTextContent(name);
-    expect(within(row).getByText("Erreur")).toHaveClass("fail");
+    expect(row).toHaveTextContent("Traité");
   });
 
   it("shows the server's 422 and an unreachable API in the banner", async () => {
