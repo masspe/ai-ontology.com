@@ -100,13 +100,26 @@ impl AuditLog {
 
 /// Inside the authenticated router: every successful POST/PUT/PATCH/DELETE
 /// is appended with its caller.
+/// POST routes that read (a query, an analysis, a probe): not writes.
+const READ_ONLY_POSTS: &[&str] = &[
+    "/retrieve",
+    "/subgraph",
+    "/ask",
+    "/ask/stream",
+    "/path",
+    "/ingest/analyze",
+    "/settings/llm/test",
+    "/auth/logout",
+];
+
 pub async fn audit_layer(req: Request, next: Next, log: Arc<AuditLog>) -> Response {
     let method = req.method().clone();
-    let mutating = matches!(
-        method,
-        http::Method::POST | http::Method::PUT | http::Method::PATCH | http::Method::DELETE
-    );
     let path = req.uri().path().to_string();
+    let mutating = match method {
+        http::Method::PUT | http::Method::PATCH | http::Method::DELETE => true,
+        http::Method::POST => !READ_ONLY_POSTS.contains(&path.as_str()) && !path.ends_with("/run"),
+        _ => false,
+    };
     let who = req
         .extensions()
         .get::<AuthContext>()

@@ -695,7 +695,14 @@ async fn api_keys_are_minted_once_stored_hashed_and_revoked_at_once() {
     assert_eq!(st, StatusCode::UNAUTHORIZED);
     let (st, _, _) = call(&app, "GET", "/auth/keys", Some(&secret), None).await;
     assert_eq!(st, StatusCode::UNAUTHORIZED);
-    // An unknown key, or a key-shaped garbage, is refused.
+    // A key writes data but never wipes the tenant nor runs its backup.
+    let (st, v, _) = call(&app, "POST", "/reset", Some(&secret), None).await;
+    assert_eq!(st, StatusCode::FORBIDDEN, "{v}");
+    let (st, v, _) = call(&app, "POST", "/backup", Some(&secret), None).await;
+    assert_eq!(st, StatusCode::FORBIDDEN, "{v}");
+    let (st, v, _) = call(&app, "POST", "/backup", Some(&admin), None).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST, "{v}"); // not configured, but allowed
+                                                    // An unknown key, or a key-shaped garbage, is refused.
     let (st, _, _) = call(&app, "GET", "/stats", Some("ok_nope"), None).await;
     assert_eq!(st, StatusCode::UNAUTHORIZED);
 
@@ -783,6 +790,16 @@ async fn writes_are_audited_with_their_caller_and_read_by_administrators() {
     assert_eq!(st, StatusCode::OK, "{v}");
     let (st, _, _) = call(&app, "GET", "/stats", Some(&admin), None).await;
     assert_eq!(st, StatusCode::OK);
+    // A POST that reads (a retrieval) is not a write.
+    let (st, _, _) = call(
+        &app,
+        "POST",
+        "/retrieve",
+        Some(&admin),
+        Some(json!({ "query": "x" })),
+    )
+    .await;
+    assert!(st.is_success(), "{st}");
     let (st, _, _) = call(
         &app,
         "POST",
