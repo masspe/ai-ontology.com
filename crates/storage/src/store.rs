@@ -127,6 +127,15 @@ pub trait Store: Send + Sync + 'static {
     fn store_stats(&self) -> Option<crate::segment_store::StoreStats> {
         None
     }
+
+    /// Copy the store's files to `dest` (ROADMAP §3.8.4). Only the segment
+    /// store has files worth copying.
+    async fn backup(&self, dest: &std::path::Path) -> StoreResult<crate::BackupReport> {
+        Err(StoreError::Format(format!(
+            "this store has no files to back up (wanted {})",
+            dest.display()
+        )))
+    }
 }
 
 /// Convenience helpers used by callers that hold a graph + store together.
