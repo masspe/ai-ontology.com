@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Mediasoft & Cie S.A.
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, Link } from "react-router-dom";
 import Card from "../components/Card";
 import Sparkline from "../components/Sparkline";
 import GraphCanvas, { type GraphCanvasHandle, type LayoutDir } from "../components/GraphCanvas";
@@ -682,7 +682,7 @@ export default function GraphView() {
                   <span className="badge badge-accent">Class</span>
                 </div>
                 <div className="gv-inspector-uri">
-                  <span className="muted">URI:</span> <span className="mono">ex:{selectedConcept.name}</span>
+                  <Link to={`/concepts/${selectedConcept.id}`}>Ouvrir la fiche</Link>
                 </div>
                 {(selectedConcept.description || selectedTypeDef?.description) && (
                   <p className="gv-inspector-desc">{selectedConcept.description || selectedTypeDef?.description}</p>

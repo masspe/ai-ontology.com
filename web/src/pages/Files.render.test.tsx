@@ -10,6 +10,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import Files from "./Files";
 import { fireEvent, makeFile, renderPage, screen, waitFor, within } from "../test/render";
+import { Route, useLocation } from "react-router-dom";
 import { ApiError, type FileRecord, type Ontology, type UploadResponse } from "../api";
 
 vi.mock("../api", async () => {
@@ -303,7 +304,6 @@ describe("Files page — upload", () => {
   it.each([
     ["data.csv", "csv"],
     ["sheet.xlsx", "xlsx"],
-    ["scan.pdf", "text"],
   ])("refuses %s without a concept type", async (name, kind) => {
     const { user, container } = renderPage(<Files />);
     await loaded();
@@ -411,4 +411,25 @@ describe("Files page — delete and actions", () => {
       expect.stringContaining("/export?format=jsonl"),
     );
   });
+});
+
+describe("Files page — documents go to the review", () => {
+  function Probe() {
+    const loc = useLocation();
+    const file = (loc.state as { file?: File } | null)?.file;
+    return <div data-testid="handed">{loc.pathname}:{file?.name ?? "none"}</div>;
+  }
+
+  it.each(["contrat.pdf", "notes.txt", "memo.docx", "readme.md"])(
+    "hands %s to the assistant instead of loading it as one sheet",
+    async (name) => {
+      const { user, container } = renderPage(<Files />, {
+        extraRoutes: <Route path="/ingest" element={<Probe />} />,
+      });
+      await loaded();
+      await user.upload(hiddenInput(container), makeFile(name, "x"));
+      expect(await screen.findByTestId("handed")).toHaveTextContent(`/ingest:${name}`);
+      expect(mocked.upload).not.toHaveBeenCalled();
+    },
+  );
 });

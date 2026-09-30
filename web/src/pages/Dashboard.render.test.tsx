@@ -1,16 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Mediasoft-Commercial
 // Copyright (C) 2026 Mediasoft & Cie S.A.
 //
-// Rendering tests of the Dashboard: the six parallel requests, stat tiles
-// with deltas and sparklines, the growth chart, the
-// file / query / activity lists, the insights card, the 15 s poll, the
-// error banner and every empty state.
+// Rendering tests of the home page (ROADMAP §3.9 lot B, point 3): the
+// question box, the stat tiles, what is to do (a review in progress, a
+// failed import), this week's imports, the last questions, the rules, the
+// first-day steps while the graph is empty, the 15 s poll, the error
+// banner and the empty states.
 
 import { Route, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import Dashboard from "./Dashboard";
 import { renderPage, screen, waitFor } from "../test/render";
-import type { Concept, FileRecord, Ontology, SavedQuery, Stats, StatsHistory } from "../api";
+import type { FileRecord, Ontology, Rule, SavedQuery, Stats, StatsHistory } from "../api";
 
 vi.mock("../api", async () => {
   const actual = await vi.importActual<typeof import("../api")>("../api");
@@ -21,7 +22,7 @@ vi.mock("../api", async () => {
     getFiles: vi.fn(),
     getQueries: vi.fn(),
     getOntology: vi.fn(),
-    listConcepts: vi.fn(),
+    listRules: vi.fn(),
   };
 });
 
@@ -33,27 +34,23 @@ const mocked = api as unknown as {
   getFiles: ReturnType<typeof vi.fn>;
   getQueries: ReturnType<typeof vi.fn>;
   getOntology: ReturnType<typeof vi.fn>;
-  listConcepts: ReturnType<typeof vi.fn>;
+  listRules: ReturnType<typeof vi.fn>;
 };
-
-// ---- fixtures ---------------------------------------------------------------
 
 const NOW = Math.floor(Date.now() / 1000);
 
 const stats: Stats = {
   concepts: 1234,
   relations: 567,
-  rules: 0,
+  rules: 3,
   actions: 0,
   concept_types: 12,
   relation_types: 8,
-  rule_types: 0,
+  rule_types: 1,
   action_types: 0,
-  // up / down / flat / flat(negative within tolerance)
   deltas: { concepts_pct: 12.4, relations_pct: -7.6, concept_types_pct: 0.02, relation_types_pct: -0.04 },
 };
 
-// Six samples (≤ 7 → every x label shown) with a max ≥ 1000 for the "k" ticks.
 const history: StatsHistory = {
   samples: [0, 1, 2, 3, 4, 5].map((i) => ({
     ts: NOW - (5 - i) * 86_400,
@@ -65,49 +62,36 @@ const history: StatsHistory = {
 };
 
 const ontology: Ontology = {
-  concept_types: {
-    Person: { name: "Person", properties: { age: "integer", name: "string" } },
-    Company: { name: "Company", parent: "Organisation" },
-    City: { name: "City", properties: null },
-    Country: { name: "Country" },
-    Product: { name: "Product" },
-    Invoice: { name: "Invoice" },
-    Hidden: { name: "Hidden" },
-  },
+  concept_types: { Person: { name: "Person" } },
   relation_types: {},
 };
 
 const files: FileRecord[] = [
-  { id: 1, name: "report.pdf", size: 512, kind: "pdf", status: "processed", uploaded_at: NOW - 5 },
-  { id: 2, name: "data.csv", size: 20_480, kind: "csv", status: "pending", uploaded_at: NOW - 120 },
-  { id: 3, name: "memo.docx", size: 3 * 1024 * 1024, kind: "docx", status: "failed", uploaded_at: NOW - 7_200 },
-  { id: 4, name: "sheet.xlsx", size: 1, kind: "xlsx", status: "analyzed", uploaded_at: NOW - 200_000 },
-  { id: 5, name: "dump.bin", size: 1, kind: "binary", status: "weird", uploaded_at: NOW - 1 },
-  { id: 6, name: "", size: 1, kind: "json", status: "", uploaded_at: NOW - 1 },
+  { id: 1, name: "report.pdf", size: 512, kind: "pdf", status: "processed", uploaded_at: NOW - 5, concepts: 10, relations: 4 },
+  { id: 2, name: "data.csv", size: 20_480, kind: "csv", status: "pending", uploaded_at: NOW - 120, concepts: 30, relations: 0 },
+  { id: 3, name: "memo.docx", size: 3 * 1024 * 1024, kind: "docx", status: "failed", uploaded_at: NOW - 7_200, concepts: 0, relations: 0 },
+  { id: 4, name: "old.xlsx", size: 1, kind: "xlsx", status: "analyzed", uploaded_at: NOW - 30 * 86_400, concepts: 99, relations: 99 },
 ] as unknown as FileRecord[];
 
 const queries: SavedQuery[] = [
-  { id: 1, name: "Renewals", query: "Which contracts renew?", last_run_at: NOW - 30 },
-  { id: 2, name: "Never run", query: "x", last_run_at: null },
+  { id: 1, name: "Renewals", query: "Which contracts renew?", created_at: NOW - 1000, last_run_at: NOW - 30 },
+  { id: 2, name: "Never run", query: "x & y", created_at: NOW - 500, last_run_at: null },
 ] as unknown as SavedQuery[];
 
-const concepts: Concept[] = [
-  { id: 1, concept_type: "Person", name: "a" },
-  { id: 2, concept_type: "Person", name: "b" },
-  { id: 3, concept_type: "Person", name: "c" },
-  { id: 4, concept_type: "Company", name: "d" },
-  { id: 5, concept_type: "City", name: "e" },
-  { id: 6, concept_type: "City", name: "f" },
-];
+const rules: Rule[] = [
+  { id: 1, rule_type: "check", name: "invoice has contract", applies_to: [], strict: true },
+  { id: 2, rule_type: "check", name: "only Acme", applies_to: [7], strict: false },
+  { id: 3, rule_type: "check", name: "soft", applies_to: [], strict: false },
+] as unknown as Rule[];
 
 function LocationProbe() {
   const loc = useLocation();
-  return <div data-testid="location">{loc.pathname}</div>;
+  return <div data-testid="location">{loc.pathname + loc.search}</div>;
 }
 
 const tile = (label: string) => screen.getByText(label, { selector: ".stat-label" }).closest(".stat-rich") as HTMLElement;
+const card = (title: string) => screen.getByText(title, { selector: ".card-title > span" }).closest(".card") as HTMLElement;
 const tileValue = (label: string) => tile(label).querySelector(".stat-value")!.textContent;
-const tileDelta = (label: string) => tile(label).querySelector(".stat-delta");
 
 beforeEach(() => {
   mocked.getStats.mockResolvedValue(stats);
@@ -115,260 +99,125 @@ beforeEach(() => {
   mocked.getFiles.mockResolvedValue({ files });
   mocked.getQueries.mockResolvedValue({ queries });
   mocked.getOntology.mockResolvedValue(ontology);
-  mocked.listConcepts.mockResolvedValue({ total: concepts.length, concepts });
+  mocked.listRules.mockResolvedValue(rules);
 });
 
-describe("Dashboard page", () => {
-  it("fills the stat tiles with formatted values, deltas and sparklines", async () => {
+async function loaded() {
+  await waitFor(() => expect(tileValue("Fiches")).toBe("1,234"));
+}
+
+describe("Accueil", () => {
+  it("fills the tiles and words the subtitle from the stats", async () => {
     renderPage(<Dashboard />);
-    await waitFor(() => expect(tileValue("Entities")).toBe("1,234"));
-    expect(mocked.listConcepts).toHaveBeenCalledWith({ limit: 500 });
-    expect(tileValue("Concept Types")).toBe("12");
-    expect(tileValue("Relations")).toBe("567");
-    expect(tileValue("Relation Types")).toBe("8");
-    expect(tileDelta("Entities")).toHaveClass("up");
-    expect(tileDelta("Entities")).toHaveTextContent(/↑ 12%\s*vs last period/);
-    expect(tileDelta("Relations")).toHaveClass("down");
-    expect(tileDelta("Relations")).toHaveTextContent("↓ 8%");
-    expect(tileDelta("Concept Types")).toHaveClass("flat");
-    expect(tileDelta("Concept Types")).toHaveTextContent("• 0%");
-    expect(tileDelta("Relation Types")).toHaveClass("flat");
-    // Sparklines are fed the history series: six points each.
-    const points = tile("Entities").querySelector("polyline")!.getAttribute("points")!.split(" ");
-    expect(points).toHaveLength(6);
+    await loaded();
+    expect(screen.getByText("1,234 fiches et 567 liens, 12 types de fiches.")).toBeInTheDocument();
+    expect(tileValue("Liens")).toBe("567");
+    expect(tileValue("Types de fiches")).toBe("12");
+    expect(tileValue("Règles")).toBe("3");
+    expect(tile("Fiches").querySelector(".stat-delta")).toHaveClass("up");
+    expect(tile("Fiches").querySelector("polyline")!.getAttribute("points")!.split(" ")).toHaveLength(6);
   });
 
-  it("renders the growth chart with a point per sample, k-ticks and a date label per sample", async () => {
-    renderPage(<Dashboard />);
-    await waitFor(() => expect(tileValue("Entities")).toBe("1,234"));
-    const chart = document.querySelector(".growth-chart")!;
-    expect(chart.querySelectorAll("circle")).toHaveLength(6);
-    const texts = Array.from(chart.querySelectorAll("text")).map((t) => t.textContent);
-    // Max 1234 → top tick abbreviated to "1.2k", the others rounded integers.
-    expect(texts.slice(0, 5)).toEqual(["1.2k", "926", "617", "309", "0"]);
-    // ≤ 7 samples: one x label per sample.
-    expect(texts).toHaveLength(5 + 6);
-    expect(chart.querySelector("polyline")!.getAttribute("points")!.split(" ")).toHaveLength(6);
-  });
-
-  it("thins the x labels to five when there are more than seven samples", async () => {
-    mocked.getStatsHistory.mockResolvedValue({
-      samples: Array.from({ length: 12 }, (_, i) => ({
-        ts: NOW - (11 - i) * 3600,
-        concepts: 10 + i,
-        relations: i,
-        concept_types: 1,
-        relation_types: 1,
-      })),
+  it("sends the question to the Questions page, and ignores a blank one", async () => {
+    const { user } = renderPage(<Dashboard />, {
+      extraRoutes: <Route path="*" element={<LocationProbe />} />,
+      path: "/",
     });
-    renderPage(<Dashboard />);
-    await waitFor(() => expect(tileValue("Entities")).toBe("1,234"));
-    const chart = document.querySelector(".growth-chart")!;
-    expect(chart.querySelectorAll("circle")).toHaveLength(12);
-    // 5 y ticks (all < 1000 → plain integers) + 5 x labels.
-    const texts = Array.from(chart.querySelectorAll("text")).map((t) => t.textContent);
-    expect(texts).toHaveLength(10);
-    expect(texts[0]).toBe("21");
+    await loaded();
+    const ask = screen.getByRole("button", { name: "Demander" });
+    expect(ask).toBeDisabled();
+    await user.type(screen.getByRole("textbox", { name: "Question" }), "  ");
+    expect(ask).toBeDisabled();
+    await user.type(screen.getByRole("textbox", { name: "Question" }), "contrats & échéances{Enter}");
+    // The probe is mounted on "*": leaving "/" renders it.
+    expect(await screen.findByTestId("location")).toHaveTextContent("/queries?q=contrats%20%26%20%C3%A9ch%C3%A9ances");
   });
 
-  it("tables the first five concept types with parent and property count", async () => {
-    renderPage(<Dashboard />);
-    await waitFor(() => expect(tileValue("Entities")).toBe("1,234"));
-    const rows = Array.from(document.querySelectorAll(".compact-table tbody tr")).map((tr) =>
-      Array.from(tr.querySelectorAll("td")).map((td) => td.textContent),
+  it("lists what is to do: the review in progress and the failed imports", async () => {
+    window.sessionStorage.setItem(
+      "ingest.draft.v1",
+      JSON.stringify({ proposal: { concepts: [1, 2, 3], relations: [1], source: { name: "contrat.pdf" } }, decisions: {} }),
     );
-    expect(rows).toHaveLength(5);
-    expect(rows[0]).toEqual(["Person", "—", "2", "Active"]);
-    expect(rows[1]).toEqual(["Company", "Organisation", "0", "Active"]);
-    expect(rows[2]).toEqual(["City", "—", "0", "Active"]);
-    expect(rows.map((r) => r[0])).not.toContain("Invoice");
+    renderPage(<Dashboard />);
+    await loaded();
+    expect(card("À faire (2)")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Relecture en cours : contrat.pdf" })).toHaveAttribute("href", "/ingest");
+    expect(screen.getByText(/3 fiche\(s\) et 1 lien\(s\) proposés/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Import en échec : memo.docx" })).toHaveAttribute("href", "/files");
   });
 
-  it("lists the first five files with kind icon, size, status badge and age", async () => {
+  it("sums this week's imports and lists the latest files with their status", async () => {
     renderPage(<Dashboard />);
-    await waitFor(() => expect(tileValue("Entities")).toBe("1,234"));
-    const rows = Array.from(document.querySelectorAll(".file-row"));
-    expect(rows).toHaveLength(5);
-    const row = (i: number) => ({
-      icon: rows[i].querySelector(".file-icon")!,
-      sub: rows[i].querySelector(".file-sub")!.textContent,
-      badge: rows[i].querySelector(".badge")!,
-      time: rows[i].querySelector(".file-time")!.textContent,
-    });
-    expect(row(0).icon).toHaveClass("pdf");
-    expect(row(0).icon).toHaveTextContent("PDF");
-    expect(row(0).sub).toBe("512 B · pdf");
-    expect(row(0).badge).toHaveClass("badge-success");
-    expect(row(0).badge).toHaveTextContent("Processed");
-    expect(row(0).time).toMatch(/^\d+s ago$/);
-
-    expect(row(1).icon).toHaveClass("csv");
-    expect(row(1).sub).toBe("20.0 KB · csv");
-    expect(row(1).badge).toHaveClass("badge-warn");
-    expect(row(1).badge).toHaveTextContent("Pending");
-    expect(row(1).time).toBe("2m ago");
-
-    expect(row(2).icon).toHaveClass("doc");
-    expect(row(2).icon).toHaveTextContent("DOCX");
-    expect(row(2).sub).toBe("3.0 MB · docx");
-    expect(row(2).badge).toHaveClass("badge-danger");
-    expect(row(2).badge).toHaveTextContent("Failed");
-    expect(row(2).time).toBe("2h ago");
-
-    expect(row(3).icon).toHaveClass("xls");
-    expect(row(3).badge).toHaveClass("badge-accent");
-    expect(row(3).badge).toHaveTextContent("Analyzed");
-    expect(row(3).time).toBe("2d ago");
-
-    // Unknown kind → generic icon, clipped to four letters; unknown status →
-    // shown verbatim with the plain badge class.
-    expect(row(4).icon).toHaveClass("generic");
-    expect(row(4).icon).toHaveTextContent("BINA");
-    expect(row(4).badge).toHaveTextContent("weird");
-    expect(row(4).badge.className).toBe("badge badge");
-    // Only five files are listed.
-    expect(screen.queryByText("json")).toBeNull();
+    await loaded();
+    // old.xlsx is 30 days old: not this week, but still among the latest.
+    const week = card("Cette semaine") as HTMLElement;
+    expect(week).toHaveTextContent("3 document(s) importé(s) : 40 fiche(s) et 4 lien(s) ajoutés.");
+    expect(week).toHaveTextContent("old.xlsx");
+    expect(week).toHaveTextContent("report.pdf");
+    expect(screen.getByRole("link", { name: "Déposer des fichiers" })).toHaveAttribute("href", "/files");
   });
 
-  it("shows the recent queries with their last run, and the team activity from files", async () => {
+  it("orders the last questions by their last run and links each to its query", async () => {
     renderPage(<Dashboard />);
-    await waitFor(() => expect(tileValue("Entities")).toBe("1,234"));
-    const items = Array.from(document.querySelectorAll(".query-list li"));
+    await loaded();
+    const items = card("Dernières questions")!.querySelectorAll("li");
     expect(items).toHaveLength(2);
     expect(items[0]).toHaveTextContent("Renewals");
-    expect(items[0].querySelector(".query-time")!.textContent).toMatch(/^\d+s ago$/);
-    expect(items[0].querySelector(".query-text")).toHaveAttribute("title", "Which contracts renew?");
-    expect(items[1].querySelector(".query-time")!.textContent).toBe("—");
-
-    const activity = Array.from(document.querySelectorAll(".activity-item"));
-    expect(activity).toHaveLength(4);
-    expect(activity[0].querySelector(".activity-avatar")!.textContent).toBe("R");
-    expect(activity[0]).toHaveTextContent("System ingested report.pdf");
-    expect(activity[3].querySelector(".activity-avatar")!.textContent).toBe("S");
+    expect(screen.getByRole("link", { name: "Never run" })).toHaveAttribute("href", "/queries?q=x%20%26%20y");
   });
 
-  it("ranks the top entity types and sizes the bars relative to the leader", async () => {
+  it("counts the rules, the strict and the general ones", async () => {
     renderPage(<Dashboard />);
-    await waitFor(() => expect(tileValue("Entities")).toBe("1,234"));
-    expect(screen.getByText("Across 6 entities")).toBeInTheDocument();
-    const rows = Array.from(document.querySelectorAll(".bar-row"));
-    expect(rows.map((r) => r.querySelector(".bar-label")!.textContent)).toEqual(["Person", "City", "Company"]);
-    expect(rows.map((r) => r.querySelector(".bar-value")!.textContent)).toEqual(["3", "2", "1"]);
-    const width = (i: number) => (rows[i].querySelector(".bar-fill") as HTMLElement).style.width;
-    expect(width(0)).toBe("100%");
-    expect(parseFloat(width(1))).toBeCloseTo(66.67, 1);
-    expect(parseFloat(width(2))).toBeCloseTo(33.33, 1);
+    await loaded();
+    const rulesCard = card("Règles");
+    expect(rulesCard).toHaveTextContent("3 règle(s), dont 1 stricte(s) ; 2 générale(s).");
+    expect(screen.getByRole("link", { name: "Gérer" })).toHaveAttribute("href", "/rules");
   });
 
-  it("words the insights from the stats", async () => {
-    renderPage(<Dashboard />);
-    await waitFor(() => expect(tileValue("Entities")).toBe("1,234"));
-    expect(screen.getByText("Entity growth is up 12%")).toBeInTheDocument();
-    expect(
-      screen.getByText("You have 1,234 entities across 12 concept types and 567 relations."),
-    ).toBeInTheDocument();
-  });
-
-  it("uses the neutral insight title when growth is not positive", async () => {
-    mocked.getStats.mockResolvedValue({ ...stats, deltas: { ...stats.deltas, concepts_pct: -2 } });
-    renderPage(<Dashboard />);
-    await waitFor(() => expect(tileValue("Entities")).toBe("1,234"));
-    expect(screen.getByText("Graph activity overview")).toBeInTheDocument();
-  });
-
-  it("links to the other pages", async () => {
-    const { user } = renderPage(<Dashboard />, {
-      route: "/",
-      extraRoutes: <Route path="/builder" element={<LocationProbe />} />,
-    });
-    await waitFor(() => expect(tileValue("Entities")).toBe("1,234"));
-    expect(screen.queryByRole("link", { name: "View Analytics" })).not.toBeInTheDocument();
-    expect(screen.queryByText("Ontology Network Preview")).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /Upload Files.*Import and process data/ })).toHaveAttribute("href", "/files");
-    expect(screen.getByRole("link", { name: /Run Query/ })).toHaveAttribute("href", "/queries");
-    expect(screen.getByRole("link", { name: /Drag & drop files anywhere/ })).toHaveAttribute("href", "/files");
-    await user.click(screen.getByRole("link", { name: /Create Ontology/ }));
-    expect(screen.getByTestId("location")).toHaveTextContent("/builder");
-  });
-
-  it("shows every empty state while nothing is loaded yet", async () => {
-    mocked.getStats.mockResolvedValue({ ...stats, concepts: 0, deltas: { ...stats.deltas, concepts_pct: 0 } });
-    mocked.getStatsHistory.mockResolvedValue({ samples: [] });
+  it("shows the empty states when nothing happened yet (but there is data)", async () => {
     mocked.getFiles.mockResolvedValue({ files: [] });
-    // The optional requests failing must not break the page (and with the
-    // schema unknown, the first-day steps stay out of the way).
     mocked.getQueries.mockRejectedValue(new Error("no queries"));
-    mocked.getOntology.mockRejectedValue(new Error("no ontology"));
-    mocked.listConcepts.mockRejectedValue(new Error("no concepts"));
+    mocked.listRules.mockRejectedValue(new Error("no rules"));
+    mocked.getStatsHistory.mockResolvedValue({ samples: [] });
     renderPage(<Dashboard />);
-    await waitFor(() => expect(tileValue("Concept Types")).toBe("12"));
+    await loaded();
+    expect(card("À faire (0)")).toBeInTheDocument();
+    expect(screen.getByText(/Rien en attente/)).toBeInTheDocument();
+    expect(screen.getByText(/Aucun document importé ces 7 derniers jours/)).toBeInTheDocument();
+    expect(screen.getByText(/Aucune question enregistrée/)).toBeInTheDocument();
+    expect(screen.getByText(/Aucune règle\./)).toBeInTheDocument();
     expect(screen.queryByRole("alert")).toBeNull();
-    expect(document.querySelector(".error-banner")).toBeNull();
-    expect(screen.getByText("No samples yet. The dashboard auto-refreshes every 15s.")).toBeInTheDocument();
-    expect(screen.getByText(/No ontology defined yet/)).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Define the model" })).toHaveAttribute("href", "/builder");
-    expect(screen.getByText("No files uploaded yet.")).toBeInTheDocument();
-    expect(screen.getByText("No saved queries yet.")).toBeInTheDocument();
-    expect(screen.getByText("No activity yet.")).toBeInTheDocument();
-    expect(screen.getByText("No entities yet.")).toBeInTheDocument();
-    expect(screen.getByText("Across 0 entities")).toBeInTheDocument();
-    // Empty spark series are drawn as a flat [0, 0] line.
-    expect(tile("Entities").querySelector("polyline")!.getAttribute("points")).toBe("0.00,34.00 100.00,34.00");
+  });
+
+  it("shows the first-day steps while the graph is empty, the dashboard once there is data", async () => {
+    mocked.getStats.mockResolvedValue({ ...stats, concepts: 0 });
+    renderPage(<Dashboard />);
+    expect(await screen.findByRole("heading", { name: "Bienvenue" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Accueil" })).not.toBeInTheDocument();
   });
 
   it("shows the error banner when a required request fails, and clears it on the next tick", async () => {
-    mocked.getStats.mockRejectedValueOnce(new Error("stats down"));
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    renderPage(<Dashboard />);
-    expect(await screen.findByText("stats down")).toBeInTheDocument();
-    // Before any stats: zero tiles and the waiting insight.
-    expect(tileValue("Entities")).toBe("0");
-    expect(tileDelta("Entities")).toBeNull();
-    expect(screen.getByText("Awaiting stats from the server.")).toBeInTheDocument();
-    // 15 s later the poll succeeds and the banner goes away.
-    await vi.advanceTimersByTimeAsync(15_000);
-    await waitFor(() => expect(tileValue("Entities")).toBe("1,234"));
-    expect(screen.queryByText("stats down")).toBeNull();
-    expect(mocked.getStats).toHaveBeenCalledTimes(2);
-    vi.useRealTimers();
-  });
-
-  it("stringifies non-Error rejections", async () => {
-    mocked.getFiles.mockRejectedValueOnce("files gone");
-    renderPage(<Dashboard />);
-    expect(await screen.findByText("files gone")).toBeInTheDocument();
+    try {
+      mocked.getStats.mockRejectedValueOnce(new Error("stats down"));
+      renderPage(<Dashboard />);
+      expect(await screen.findByText("stats down")).toHaveClass("error-banner");
+      await vi.advanceTimersByTimeAsync(15_000);
+      await loaded();
+      expect(screen.queryByText("stats down")).toBeNull();
+      expect(mocked.getStats).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("ignores responses that arrive after unmount", async () => {
-    let resolveStats: (s: Stats) => void = () => {};
-    mocked.getStats.mockReturnValue(new Promise<Stats>((r) => (resolveStats = r)));
+    let resolve: (v: Stats) => void = () => {};
+    mocked.getStats.mockReturnValue(new Promise<Stats>((r) => (resolve = r)));
     const { unmount } = renderPage(<Dashboard />);
-    expect(tileValue("Entities")).toBe("0");
     unmount();
-    resolveStats(stats);
-    // Nothing observable remains: React 18 no longer warns about state
-    // updates on an unmounted tree. The test exercises the `cancelled`
-    // branch for coverage and only checks that the late resolution does
-    // not throw.
-    await expect(Promise.resolve().then(() => undefined)).resolves.toBeUndefined();
-  });
-});
-
-describe("Dashboard — first day", () => {
-  it("replaces the empty dashboard by the three steps until there is data", async () => {
-    mocked.getStats.mockResolvedValue({ ...stats, concepts: 0, concept_types: 0 });
-    mocked.getOntology.mockResolvedValue({ concept_types: {}, relation_types: {} });
-    mocked.listConcepts.mockResolvedValue({ total: 0, concepts: [] });
-    renderPage(<Dashboard />);
-    expect(await screen.findByRole("heading", { name: "Bienvenue" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Définir le modèle" })).toHaveAttribute("href", "/builder");
-    expect(screen.queryByRole("heading", { name: "Dashboard" })).not.toBeInTheDocument();
-  });
-
-  it("moves to step 2 once a model exists, and shows the dashboard once there is data", async () => {
-    mocked.getStats.mockResolvedValue({ ...stats, concepts: 0 });
-    renderPage(<Dashboard />);
-    expect(await screen.findByRole("link", { name: "Déposer des fichiers" })).toHaveAttribute("href", "/files");
-    expect(screen.queryByRole("heading", { name: "Dashboard" })).not.toBeInTheDocument();
+    resolve(stats);
+    await Promise.resolve();
+    expect(screen.queryByText(/fiches et/)).toBeNull();
   });
 });

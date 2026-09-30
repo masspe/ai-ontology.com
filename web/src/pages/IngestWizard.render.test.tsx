@@ -130,7 +130,7 @@ function json(body: unknown, status = 200, statusText = "OK"): Response {
 }
 
 async function pickAndAnalyze(user: ReturnType<typeof renderPage>["user"], file: File) {
-  const analyze = screen.getByRole("button", { name: "Analyze document" });
+  const analyze = screen.getByRole("button", { name: "Analyser le document" });
   expect(analyze).toBeDisabled();
   await user.upload(screen.getByLabelText("Document"), file);
   expect(analyze).toBeEnabled();
@@ -156,9 +156,9 @@ afterEach(() => {
 describe("IngestWizard — upload step", () => {
   it("mirrors the provider configured in Settings", async () => {
     renderPage(<IngestWizard />);
-    expect(screen.getByRole("heading", { name: "LLM-assisted ingest" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Importer un document" })).toBeInTheDocument();
     await waitFor(() => expect(screen.getByRole("combobox")).toHaveValue("openai"));
-    expect(screen.getByRole("button", { name: "Analyze document" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Analyser le document" })).toBeDisabled();
   });
 
   it("stays on the server default when Settings are unreachable", async () => {
@@ -204,7 +204,7 @@ describe("IngestWizard — analyze", () => {
 
     const file = makeFile("doc.txt", "Some contract text.");
     await pickAndAnalyze(user, file);
-    expect(await screen.findByText(/Calling the LLM/)).toBeInTheDocument();
+    expect(await screen.findByText(/Lecture du document/)).toBeInTheDocument();
     analyze.release(json(proposal));
 
     expect(await screen.findByText("New concept types (1)")).toBeInTheDocument();
@@ -256,13 +256,13 @@ describe("IngestWizard — analyze", () => {
     });
     const { user } = renderPage(<IngestWizard />);
     await pickAndAnalyze(user, makeFile("empty.txt", ""));
-    expect(await screen.findByText("Something went wrong")).toBeInTheDocument();
+    expect(await screen.findByText("Un problème est survenu")).toBeInTheDocument();
     expect(
       screen.getByText("analyze failed: 422 Unprocessable Entity — no text could be extracted"),
     ).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Start over" }));
+    await user.click(screen.getByRole("button", { name: "Recommencer" }));
     // Back on the upload step, with the file cleared.
-    expect(screen.getByRole("button", { name: "Analyze document" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Analyser le document" })).toBeDisabled();
     expect((screen.getByLabelText("Document") as HTMLInputElement).value).toBe("");
   });
 
@@ -329,7 +329,7 @@ describe("IngestWizard — review and apply", () => {
     expect(screen.getByText("merged #3")).toBeInTheDocument();
     expect(window.sessionStorage.getItem(STORAGE_KEY)).toBeNull();
     await user.click(screen.getByRole("button", { name: "Ingest another document" }));
-    expect(screen.getByRole("button", { name: "Analyze document" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Analyser le document" })).toBeDisabled();
   });
 
   it("goes to the error step when apply fails", async () => {
@@ -347,7 +347,7 @@ describe("IngestWizard — review and apply", () => {
     expect(window.sessionStorage.getItem(STORAGE_KEY)).not.toBeNull();
     await user.click(screen.getByRole("button", { name: "Cancel" }));
     expect(window.sessionStorage.getItem(STORAGE_KEY)).toBeNull();
-    expect(screen.getByRole("button", { name: "Analyze document" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Analyser le document" })).toBeInTheDocument();
   });
 });
 
@@ -369,7 +369,7 @@ describe("IngestWizard — draft persistence", () => {
     window.sessionStorage.setItem(STORAGE_KEY, "{not json");
     renderPage(<IngestWizard />);
     await flushPromises();
-    expect(screen.getByRole("button", { name: "Analyze document" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Analyser le document" })).toBeInTheDocument();
   });
 
   it("survives a storage that throws on write and on remove", async () => {
@@ -386,6 +386,29 @@ describe("IngestWizard — draft persistence", () => {
     expect(setItem).toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "Cancel" }));
     expect(removeItem).toHaveBeenCalled();
-    expect(screen.getByRole("button", { name: "Analyze document" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Analyser le document" })).toBeInTheDocument();
+  });
+});
+
+describe("IngestWizard — handed a document by the Files page", () => {
+  it("analyses it at once, then words what was found above the review", async () => {
+    mockedPrepare.mockResolvedValue(makeFile("contrat.pdf", "texte"));
+    const fetchMock = routeFetch({ "/ingest/analyze": () => json({ ...proposal, source: { name: "contrat.pdf" } }) });
+    renderPage(<IngestWizard />, { route: "/ingest", state: { file: makeFile("contrat.pdf", "x") } });
+    expect(await screen.findByTestId("ingest-summary")).toHaveTextContent(
+      /1 Contract, 1 Clause et 1 lien\(s\) trouvés dans contrat\.pdf\. Vérifiez, corrigez si besoin, puis ajoutez\./,
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not analyse it twice, and says so when a review is already pending", async () => {
+    window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify({ proposal, decisions: {} }));
+    const fetchMock = routeFetch({ "/ingest/analyze": () => json(proposal) });
+    const { rerender } = renderPage(<IngestWizard />, { route: "/ingest", state: { file: makeFile("contrat.pdf", "x") } });
+    expect(await screen.findByText(/Relecture en cours : terminez-la/)).toBeInTheDocument();
+    rerender(<IngestWizard />);
+    await flushPromises();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(mockedPrepare).not.toHaveBeenCalled();
   });
 });
