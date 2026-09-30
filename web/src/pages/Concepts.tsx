@@ -53,19 +53,20 @@ export function truncate(s: string, max: number): string {
 
 function fmtDate(ts?: number | null): string {
   if (!ts) return "—";
-  return new Date(ts * 1000).toLocaleDateString("en-US", {
+  return new Date(ts * 1000).toLocaleDateString("fr-CH", {
     year: "numeric",
     month: "short",
     day: "numeric",
   });
 }
 
-export function conceptStatus(c: Concept): { label: string; cls: string } {
+// `key` is the filter value (the server's status word); `label` is what the user sees.
+export function conceptStatus(c: Concept): { key: string; label: string; cls: string } {
   const raw = (c.properties?.status as string | undefined)?.toLowerCase();
-  if (raw === "reviewed") return { label: "Reviewed", cls: "badge-accent" };
-  if (raw === "draft") return { label: "Draft", cls: "badge-warn" };
-  if (raw === "archived") return { label: "Archived", cls: "badge-danger" };
-  return { label: "Active", cls: "badge-success" };
+  if (raw === "reviewed") return { key: "reviewed", label: "Vérifiée", cls: "badge-accent" };
+  if (raw === "draft") return { key: "draft", label: "Brouillon", cls: "badge-warn" };
+  if (raw === "archived") return { key: "archived", label: "Archivée", cls: "badge-danger" };
+  return { key: "active", label: "Active", cls: "badge-success" };
 }
 
 export function conceptUpdatedAt(c: Concept): number | null {
@@ -255,8 +256,8 @@ function RichStat({ label, value, display, deltaPct, icon, tone, spark, sparkCol
         <div className="stat-value">{display ?? fmtNum(value)}</div>
         {deltaPct != null && (
           <div className={`stat-delta ${cls}`}>
-            <span>{arrow} {Math.abs(deltaPct).toFixed(0)}%</span>
-            <span className="muted">vs last month</span>
+            <span>{arrow} {Math.abs(deltaPct).toFixed(0)} %</span>
+            <span className="muted">vs le mois dernier</span>
           </div>
         )}
       </div>
@@ -306,7 +307,7 @@ function HierarchyNode({ node, depth }: { node: TreeNode; depth: number }) {
             type="button"
             className="tree-toggle"
             onClick={() => setOpen((v) => !v)}
-            aria-label={open ? "Collapse" : "Expand"}
+            aria-label={open ? "Replier" : "Déplier"}
           >
             <span className="tree-toggle-icon">{open ? Icon.chevDown : Icon.chevRight}</span>
           </button>
@@ -490,7 +491,7 @@ export default function Concepts() {
         if (cancelled) return;
         let rows = r.concepts;
         if (statusFilter) {
-          rows = rows.filter((c) => conceptStatus(c).label.toLowerCase() === statusFilter);
+          rows = rows.filter((c) => conceptStatus(c).key === statusFilter);
         }
         if (sort === "name") rows = [...rows].sort((a, b) => a.name.localeCompare(b.name));
         else if (sort === "type") rows = [...rows].sort((a, b) => a.concept_type.localeCompare(b.concept_type));
@@ -524,7 +525,7 @@ export default function Concepts() {
   const openCreate = () => {
     const types = ontology ? Object.keys(ontology.concept_types) : [];
     if (types.length === 0) {
-      setError("No concept types are defined yet. Create one in Ontology Builder first.");
+      setError("Aucun type de fiche n'est défini pour l'instant. Créez-en un d'abord dans le modèle de données.");
       return;
     }
     setError(null);
@@ -540,7 +541,7 @@ export default function Concepts() {
     setError(null);
     try {
       await createConcept(data);
-      setInfo(`Concept "${data.name}" created.`);
+      setInfo(`Fiche « ${data.name} » créée.`);
       setCreateOpen(false);
       setCursors([]);
       setReloadTick((t) => t + 1);
@@ -564,7 +565,7 @@ export default function Concepts() {
         name: data.name,
         description: data.description,
       });
-      setInfo(`Concept "${updated.name}" updated.`);
+      setInfo(`Fiche « ${updated.name} » mise à jour.`);
       setSelected(updated);
       setEditingConcept(null);
       setConcepts((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
@@ -579,16 +580,17 @@ export default function Concepts() {
 
   const handleDelete = async (c: Concept) => {
     const ok = await confirm({
-      title: "Delete concept",
-      message: `Delete concept "${c.name}"? This cannot be undone.`,
-      confirmLabel: "Delete",
+      title: "Supprimer la fiche",
+      message: `Supprimer la fiche « ${c.name} » ? Cette action est irréversible.`,
+      confirmLabel: "Supprimer",
+      cancelLabel: "Annuler",
       danger: true,
     });
     if (!ok) return;
     setBusy(true);
     try {
       await deleteConcept(c.id);
-      setInfo(`Deleted "${c.name}".`);
+      setInfo(`Fiche « ${c.name} » supprimée.`);
       removeFromView([c.id]);
       await Promise.all([refreshSidecar(), refreshRecent()]);
     } catch (e: unknown) {
@@ -635,9 +637,10 @@ export default function Concepts() {
     const ids = [...checked];
     if (ids.length === 0) return;
     const ok = await confirm({
-      title: "Delete selected concepts",
-      message: `Delete ${ids.length} concept${ids.length > 1 ? "s" : ""} and every relation attached to them? This cannot be undone.`,
-      confirmLabel: `Delete ${ids.length}`,
+      title: "Supprimer les fiches sélectionnées",
+      message: `Supprimer ${ids.length} fiche${ids.length > 1 ? "s" : ""} et tous les liens qui y sont attachés ? Cette action est irréversible.`,
+      confirmLabel: `Supprimer ${ids.length}`,
+      cancelLabel: "Annuler",
       danger: true,
     });
     if (!ok) return;
@@ -645,8 +648,8 @@ export default function Concepts() {
     setError(null);
     try {
       const r = await deleteConcepts(ids);
-      const rel = r.relations > 0 ? ` and ${r.relations} relation${r.relations > 1 ? "s" : ""}` : "";
-      setInfo(`Deleted ${r.deleted} concept${r.deleted > 1 ? "s" : ""}${rel}.`);
+      const rel = r.relations > 0 ? ` et ${r.relations} lien${r.relations > 1 ? "s" : ""}` : "";
+      setInfo(`Supprimé : ${r.deleted} fiche${r.deleted > 1 ? "s" : ""}${rel}.`);
       removeFromView(ids);
       await Promise.all([refreshSidecar(), refreshRecent()]);
     } catch (e: unknown) {
@@ -716,7 +719,7 @@ export default function Concepts() {
       {/* Stat row */}
       <div className="dash-row dash-row-stats">
         <RichStat
-          label="Total Concepts"
+          label="Fiches au total"
           value={stats?.concepts ?? 0}
           deltaPct={stats ? stats.deltas.concepts_pct * 100 : undefined}
           icon={Icon.layers}
@@ -725,7 +728,7 @@ export default function Concepts() {
           sparkColor="#2563eb"
         />
         <RichStat
-          label="Concept Groups"
+          label="Types de fiches"
           value={stats?.concept_types ?? 0}
           deltaPct={stats ? stats.deltas.concept_types_pct * 100 : undefined}
           icon={Icon.group}
@@ -734,7 +737,7 @@ export default function Concepts() {
           sparkColor="#7c3aed"
         />
         <RichStat
-          label="Mapped Relations"
+          label="Liens établis"
           value={stats?.relations ?? 0}
           deltaPct={stats ? stats.deltas.relations_pct * 100 : undefined}
           icon={Icon.share}
@@ -743,7 +746,7 @@ export default function Concepts() {
           sparkColor="#d97706"
         />
         <RichStat
-          label="Coverage Score"
+          label="Taux de couverture"
           value={coverage ?? 0}
           display={coverage == null ? "—" : `${coverage}%`}
           icon={Icon.shield}
@@ -756,12 +759,12 @@ export default function Concepts() {
       {/* Library + Details */}
       <div className="concepts-grid">
         <Card
-          title="Concept Library"
+          title="Bibliothèque de fiches"
           actions={
             <button className="btn-primary" onClick={openCreate} disabled={busy}>
               <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
                 <span style={{ width: 14, height: 14, display: "inline-flex" }}>{Icon.plus}</span>
-                Create Concept
+                Créer une fiche
               </span>
             </button>
           }
@@ -770,44 +773,44 @@ export default function Concepts() {
             <div className="search-input">
               <span className="search-icon">{Icon.search}</span>
               <input
-                placeholder="Search concepts…"
+                placeholder="Rechercher une fiche…"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
               />
             </div>
             <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
-              <option value="">All Domains</option>
+              <option value="">Tous les domaines</option>
               {typeNames.map((t) => (
                 <option key={t} value={t}>{t}</option>
               ))}
             </select>
             <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
-              <option value="">All Statuses</option>
+              <option value="">Tous les statuts</option>
               <option value="active">Active</option>
-              <option value="reviewed">Reviewed</option>
-              <option value="draft">Draft</option>
-              <option value="archived">Archived</option>
+              <option value="reviewed">Vérifiée</option>
+              <option value="draft">Brouillon</option>
+              <option value="archived">Archivée</option>
             </select>
             <select value={sort} onChange={(e) => setSort(e.target.value as typeof sort)}>
-              <option value="updated">Sort: Last Updated</option>
-              <option value="name">Sort: Name</option>
-              <option value="type">Sort: Type</option>
+              <option value="updated">Tri : dernière mise à jour</option>
+              <option value="name">Tri : nom</option>
+              <option value="type">Tri : type</option>
             </select>
           </div>
 
           {checked.size > 0 && (
-            <div className="bulk-bar" role="toolbar" aria-label="Bulk actions">
+            <div className="bulk-bar" role="toolbar" aria-label="Actions groupées">
               <span>
-                <strong>{checked.size}</strong> selected
+                <strong>{checked.size}</strong> sélectionnée{checked.size > 1 ? "s" : ""}
               </span>
               <button className="btn-danger" onClick={handleBulkDelete} disabled={busy}>
                 <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
                   <span style={{ width: 14, height: 14, display: "inline-flex" }}>{Icon.trash}</span>
-                  Delete selected
+                  Supprimer la sélection
                 </span>
               </button>
               <button className="btn-outline" onClick={() => setChecked(new Set())} disabled={busy}>
-                Clear selection
+                Vider la sélection
               </button>
             </div>
           )}
@@ -818,24 +821,24 @@ export default function Concepts() {
                 <th className="check-col">
                   <input
                     type="checkbox"
-                    aria-label="Select all concepts on this page"
+                    aria-label="Sélectionner toutes les fiches de cette page"
                     checked={allOnPageChecked}
                     onChange={toggleAllOnPage}
                     disabled={concepts.length === 0}
                   />
                 </th>
-                <th>Concept Name</th>
-                <th>Domain</th>
-                <th>Definition</th>
-                <th>Status</th>
-                <th>Linked</th>
-                <th>Last Updated</th>
+                <th>Nom</th>
+                <th>Domaine</th>
+                <th>Description</th>
+                <th>Statut</th>
+                <th>Liens</th>
+                <th>Dernière mise à jour</th>
                 <th className="actions">Actions</th>
               </tr>
             </thead>
             <tbody>
               {concepts.length === 0 && (
-                <tr><td colSpan={8} className="empty">No concepts match the current filters.</td></tr>
+                <tr><td colSpan={8} className="empty">Aucune fiche ne correspond aux filtres actuels.</td></tr>
               )}
               {concepts.map((c) => {
                 const st = conceptStatus(c);
@@ -851,7 +854,7 @@ export default function Concepts() {
                     <td className="check-col" onClick={(e) => e.stopPropagation()}>
                       <input
                         type="checkbox"
-                        aria-label={`Select concept ${c.name}`}
+                        aria-label={`Sélectionner la fiche ${c.name}`}
                         checked={checked.has(c.id)}
                         onChange={() => toggleChecked(c.id)}
                       />
@@ -882,15 +885,15 @@ export default function Concepts() {
                     <td className="actions">
                       <button
                         className="icon-btn"
-                        title="Edit"
+                        title="Modifier"
                         onClick={(e) => { e.stopPropagation(); handleEdit(c); }}
                       >
                         <span style={{ width: 16, height: 16, display: "inline-flex" }}>{Icon.pencil}</span>
                       </button>
                       <button
                         className="icon-btn icon-btn-danger"
-                        title="Delete concept"
-                        aria-label={`Delete concept ${c.name}`}
+                        title="Supprimer la fiche"
+                        aria-label={`Supprimer la fiche ${c.name}`}
                         onClick={(e) => { e.stopPropagation(); handleDelete(c); }}
                       >
                         <span style={{ width: 16, height: 16, display: "inline-flex" }}>{Icon.trash}</span>
@@ -904,11 +907,11 @@ export default function Concepts() {
 
           <div className="pagination">
             <span className="muted">
-              Showing {showingFrom}–{showingTo} of {fmtNum(total)} concepts
+              Fiches {showingFrom}–{showingTo} sur {fmtNum(total)}
             </span>
             <div className="pager">
               <button
-                aria-label="Previous page"
+                aria-label="Page précédente"
                 disabled={page === 0}
                 onClick={() => setCursors((c) => c.slice(0, -1))}
               >
@@ -916,7 +919,7 @@ export default function Concepts() {
               </button>
               <span className="pager-active">Page {page + 1}</span>
               <button
-                aria-label="Next page"
+                aria-label="Page suivante"
                 disabled={!nextCursor}
                 onClick={() => nextCursor && setCursors((c) => [...c, nextCursor])}
               >
@@ -927,7 +930,7 @@ export default function Concepts() {
         </Card>
 
         <div className="concepts-side">
-          <Card title="Concept Details">
+          <Card title="Détail de la fiche">
             {selected ? (
               <>
                 <ConceptDetails
@@ -943,11 +946,11 @@ export default function Concepts() {
                 />
               </>
             ) : (
-              <div className="empty">Select a concept from the library.</div>
+              <div className="empty">Sélectionnez une fiche dans la bibliothèque.</div>
             )}
           </Card>
 
-          <Card title="Concept Hierarchy">
+          <Card title="Hiérarchie des types">
             {hierarchy.length === 0 ? (
               <div className="empty">
                 Aucun type de fiche pour l'instant. <Link to="/builder">Définir le modèle</Link>
@@ -966,18 +969,18 @@ export default function Concepts() {
       {/* Activity + Domains + Quick Actions */}
       <div className="dash-row dash-row-three">
         <Card
-          title="Recent Concept Activity"
-          actions={<Link to="/builder" className="btn-ghost-link">View All</Link>}
+          title="Activité récente"
+          actions={<Link to="/builder" className="btn-ghost-link">Tout voir</Link>}
         >
           {recent.length === 0 ? (
-            <div className="empty">No recent activity.</div>
+            <div className="empty">Aucune activité récente.</div>
           ) : (
             <ul className="activity-list">
               {recent.map((c) => (
                 <li key={c.id}>
                   <span className="activity-dot" style={{ background: conceptIconColor(c.name) }} />
                   <span className="activity-text">
-                    Concept <strong>“{c.name}”</strong> added
+                    Fiche <strong>« {c.name} »</strong> ajoutée
                   </span>
                   <span className="activity-time muted">{fmtDate(conceptUpdatedAt(c))}</span>
                 </li>
@@ -987,11 +990,11 @@ export default function Concepts() {
         </Card>
 
         <Card
-          title="Top Domains"
-          actions={<Link to="/builder" className="btn-ghost-link">View All</Link>}
+          title="Principaux domaines"
+          actions={<Link to="/builder" className="btn-ghost-link">Tout voir</Link>}
         >
           {domainList.length === 0 ? (
-            <div className="empty">Loading domains…</div>
+            <div className="empty">Chargement des domaines…</div>
           ) : (
             <ul className="domain-list">
               {domainList.map((d) => (
@@ -1012,20 +1015,20 @@ export default function Concepts() {
           )}
         </Card>
 
-        <Card title="Quick Actions">
+        <Card title="Actions rapides">
           <div className="quick-actions">
             <Link to="/files" className="quick-action qa-blue">
               <span className="qa-icon">{Icon.upload}</span>
               <div>
-                <div className="qa-title">Import Concepts</div>
-                <div className="qa-sub muted">Import from files or sources</div>
+                <div className="qa-title">Importer des fiches</div>
+                <div className="qa-sub muted">Depuis des fichiers ou des sources</div>
               </div>
             </Link>
             <Link to="/builder" className="quick-action qa-violet">
               <span className="qa-icon">{Icon.spark}</span>
               <div>
-                <div className="qa-title">Generate with AI</div>
-                <div className="qa-sub muted">Auto-generate concepts</div>
+                <div className="qa-title">Générer avec l'IA</div>
+                <div className="qa-sub muted">Générer des fiches automatiquement</div>
               </div>
             </Link>
             <button
@@ -1033,14 +1036,14 @@ export default function Concepts() {
               className="quick-action qa-amber"
               onClick={() => {
                 if (checked.size > 0) void handleBulkDelete();
-                else setInfo("Tick the boxes in the library to select concepts, then delete them together.");
+                else setInfo("Cochez les cases de la bibliothèque pour sélectionner des fiches, puis supprimez-les ensemble.");
               }}
             >
               <span className="qa-icon">{Icon.trash}</span>
               <div style={{ textAlign: "left" }}>
-                <div className="qa-title">Bulk Delete</div>
+                <div className="qa-title">Suppression groupée</div>
                 <div className="qa-sub muted">
-                  {checked.size > 0 ? `Delete ${checked.size} selected` : "Select concepts, then delete"}
+                  {checked.size > 0 ? `Supprimer ${checked.size} fiche${checked.size > 1 ? "s" : ""}` : "Sélectionnez des fiches, puis supprimez-les"}
                 </div>
               </div>
             </button>
@@ -1103,7 +1106,7 @@ function CreateConceptModal({ typeNames, busy, onClose, onSubmit }: CreateConcep
         if (!name) setName(firstType);
         if (firstDef?.description && !description) setDescription(firstDef.description);
       } else {
-        setAiError("AI did not return any concepts. Try a more specific prompt.");
+        setAiError("L'IA n'a renvoyé aucune fiche. Essayez une consigne plus précise.");
       }
     } catch (e) {
       setAiError(e instanceof Error ? e.message : String(e));
@@ -1132,16 +1135,16 @@ function CreateConceptModal({ typeNames, busy, onClose, onSubmit }: CreateConcep
         onClick={(e) => e.stopPropagation()}
       >
         <div className="modal-head">
-          <h3 id="create-concept-title">Create Concept</h3>
-          <button className="modal-close" onClick={onClose} aria-label="Close">×</button>
+          <h3 id="create-concept-title">Créer une fiche</h3>
+          <button className="modal-close" onClick={onClose} aria-label="Fermer">×</button>
         </div>
 
         <div className="modal-section">
-          <label className="modal-label">Generate with AI from a prompt</label>
+          <label className="modal-label">Générer avec l'IA à partir d'une consigne</label>
           <textarea
             className="modal-input"
             rows={2}
-            placeholder='e.g. "A French software vendor specializing in industrial automation"'
+            placeholder="p. ex. « Un éditeur de logiciels suisse spécialisé dans la construction »"
             value={aiPrompt}
             onChange={(e) => setAiPrompt(e.target.value)}
           />
@@ -1152,22 +1155,22 @@ function CreateConceptModal({ typeNames, busy, onClose, onSubmit }: CreateConcep
               disabled={aiBusy || !aiPrompt.trim()}
               onClick={handleGenerate}
             >
-              {aiBusy ? "Generating…" : "Generate"}
+              {aiBusy ? "Génération…" : "Générer"}
             </button>
             {aiError && <span className="modal-ai-error">{aiError}</span>}
             {!aiError && (
               <span className="muted" style={{ fontSize: 12 }}>
-                Drafts will populate the fields below — you can edit before saving.
+                Le brouillon remplira les champs ci-dessous — vous pourrez les modifier avant d'enregistrer.
               </span>
             )}
           </div>
         </div>
 
-        <div className="modal-divider"><span>or fill manually</span></div>
+        <div className="modal-divider"><span>ou remplir à la main</span></div>
 
         <form onSubmit={handleSubmit} className="modal-form">
           <label className="modal-label">
-            Concept name
+            Nom de la fiche
             <input
               className="modal-input"
               autoFocus
@@ -1177,7 +1180,7 @@ function CreateConceptModal({ typeNames, busy, onClose, onSubmit }: CreateConcep
             />
           </label>
           <label className="modal-label">
-            Concept type
+            Type de fiche
             <select
               className="modal-input"
               value={conceptType}
@@ -1190,7 +1193,7 @@ function CreateConceptModal({ typeNames, busy, onClose, onSubmit }: CreateConcep
             </select>
           </label>
           <label className="modal-label">
-            Definition (optional)
+            Description (facultative)
             <textarea
               className="modal-input"
               rows={3}
@@ -1200,10 +1203,10 @@ function CreateConceptModal({ typeNames, busy, onClose, onSubmit }: CreateConcep
           </label>
           <div className="modal-actions">
             <button type="button" className="btn-ghost" onClick={onClose} disabled={busy}>
-              Cancel
+              Annuler
             </button>
             <button type="submit" className="btn-primary" disabled={!canSubmit}>
-              {busy ? "Creating…" : "Create"}
+              {busy ? "Création…" : "Créer"}
             </button>
           </div>
         </form>
@@ -1275,13 +1278,13 @@ function EditConceptModal({ concept, busy, onClose, onSubmit }: EditConceptModal
         onClick={(e) => e.stopPropagation()}
       >
         <div className="modal-head">
-          <h3 id="edit-concept-title">Edit Concept</h3>
-          <button className="modal-close" onClick={onClose} aria-label="Close">×</button>
+          <h3 id="edit-concept-title">Modifier la fiche</h3>
+          <button className="modal-close" onClick={onClose} aria-label="Fermer">×</button>
         </div>
 
         <form className="modal-form" onSubmit={handleSubmit}>
           <label className="modal-label">
-            Name
+            Nom
             <input
               className="modal-input"
               type="text"
@@ -1292,7 +1295,7 @@ function EditConceptModal({ concept, busy, onClose, onSubmit }: EditConceptModal
             />
           </label>
           <label className="modal-label">
-            Definition
+            Description
             <textarea
               className="modal-input"
               rows={4}
@@ -1302,10 +1305,10 @@ function EditConceptModal({ concept, busy, onClose, onSubmit }: EditConceptModal
           </label>
           <div className="modal-actions">
             <button type="button" className="btn-ghost" onClick={onClose} disabled={busy}>
-              Cancel
+              Annuler
             </button>
             <button type="submit" className="btn-primary" disabled={!canSubmit}>
-              {busy ? "Saving…" : "Save"}
+              {busy ? "Enregistrement…" : "Enregistrer"}
             </button>
           </div>
         </form>
@@ -1361,7 +1364,7 @@ function ConceptDetails({ concept, domain, onEdit, onDelete }: DetailsProps) {
             <span className="badge badge-accent">{concept.concept_type}</span>
           </div>
           <p className="cd-desc muted">
-            {concept.description ? truncate(concept.description, 2000) : "No definition provided."}
+            {concept.description ? truncate(concept.description, 2000) : "Aucune description."}
           </p>
         </div>
       </div>
@@ -1370,7 +1373,7 @@ function ConceptDetails({ concept, domain, onEdit, onDelete }: DetailsProps) {
         <dt>URI</dt>
         <dd className="mono">urn:concept:{concept.concept_type.toLowerCase()}:{concept.id}</dd>
 
-        <dt>Synonyms / Tags</dt>
+        <dt>Synonymes / mots-clés</dt>
         <dd>
           {synonyms.length === 0 ? (
             <span className="muted">—</span>
@@ -1381,16 +1384,16 @@ function ConceptDetails({ concept, domain, onEdit, onDelete }: DetailsProps) {
           )}
         </dd>
 
-        <dt>Domain</dt>
+        <dt>Domaine</dt>
         <dd>{domain}</dd>
 
-        <dt>Owner</dt>
+        <dt>Responsable</dt>
         <dd>{owner}</dd>
 
-        <dt>Last Updated</dt>
+        <dt>Dernière mise à jour</dt>
         <dd>{fmtDate(updated)}</dd>
 
-        <dt>Properties ({propEntries.length})</dt>
+        <dt>Propriétés ({propEntries.length})</dt>
         <dd>
           {propEntries.length === 0 ? (
             <span className="muted">—</span>
@@ -1413,25 +1416,25 @@ function ConceptDetails({ concept, domain, onEdit, onDelete }: DetailsProps) {
         <button onClick={onEdit}>
           <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
             <span style={{ width: 14, height: 14, display: "inline-flex" }}>{Icon.pencil}</span>
-            Edit Concept
+            Modifier la fiche
           </span>
         </button>
         <Link to={`/graph?seed=${concept.id}`} className="btn-link-wrap">
           <button>
             <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
               <span style={{ width: 14, height: 14, display: "inline-flex" }}>{Icon.share}</span>
-              View Relations
+              Voir les liens
             </span>
           </button>
         </Link>
         <a className="btn btn-outline" href={exportGraphUrl("jsonl")} download style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
           <span style={{ width: 14, height: 14, display: "inline-flex" }}>{Icon.download}</span>
-          Export
+          Exporter
         </a>
         <button className="btn-danger" onClick={onDelete}>
           <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
             <span style={{ width: 14, height: 14, display: "inline-flex" }}>{Icon.trash}</span>
-            Delete
+            Supprimer
           </span>
         </button>
       </div>
@@ -1518,17 +1521,17 @@ function RelationsPanel({ concept, ontology, allConcepts }: RelationsPanelProps)
       setTargetId("");
       await refresh();
     } catch (err) {
-      toast.error("Add failed: " + (err as Error).message);
+      toast.error("Ajout impossible : " + (err as Error).message);
     }
   }
 
   async function onDelete(id: number) {
-    if (!(await confirm({ title: "Delete relation", message: "Delete this relation?", confirmLabel: "Delete", danger: true }))) return;
+    if (!(await confirm({ title: "Supprimer le lien", message: "Supprimer ce lien ?", confirmLabel: "Supprimer", cancelLabel: "Annuler", danger: true }))) return;
     try {
       await deleteRelation(id);
       await refresh();
     } catch (err) {
-      toast.error("Delete failed: " + (err as Error).message);
+      toast.error("Suppression impossible : " + (err as Error).message);
     }
   }
 
@@ -1541,12 +1544,12 @@ function RelationsPanel({ concept, ontology, allConcepts }: RelationsPanelProps)
         <span className="rel-other">
           {other
             ? `${other.concept_type}: ${other.name}`
-            : `Concept #${otherId}`}
+            : `Fiche #${otherId}`}
         </span>
         <button
           type="button"
           className="rel-del"
-          aria-label="Delete relation"
+          aria-label="Supprimer le lien"
           onClick={() => onDelete(r.id)}
         >
           ×
@@ -1558,7 +1561,7 @@ function RelationsPanel({ concept, ontology, allConcepts }: RelationsPanelProps)
   return (
     <div className="rel-panel">
       <div className="rel-head">
-        <strong>Relations</strong>
+        <strong>Liens</strong>
         <button
           type="button"
           className="btn-ghost"
@@ -1566,11 +1569,11 @@ function RelationsPanel({ concept, ontology, allConcepts }: RelationsPanelProps)
           disabled={relTypeOptions.length === 0}
           title={
             relTypeOptions.length === 0
-              ? "No relation types defined with this concept's type as domain."
+              ? "Aucun type de lien n'a le type de cette fiche comme domaine."
               : ""
           }
         >
-          {adding ? "Cancel" : "+ Add"}
+          {adding ? "Annuler" : "+ Ajouter"}
         </button>
       </div>
 
@@ -1584,7 +1587,7 @@ function RelationsPanel({ concept, ontology, allConcepts }: RelationsPanelProps)
             }}
             required
           >
-            <option value="" disabled>Relation type…</option>
+            <option value="" disabled>Type de lien…</option>
             {relTypeOptions.map((rt) => (
               <option key={rt.name} value={rt.name}>
                 {rt.name} ({rt.domain} → {rt.range})
@@ -1598,7 +1601,7 @@ function RelationsPanel({ concept, ontology, allConcepts }: RelationsPanelProps)
             }
             required
           >
-            <option value="" disabled>Target concept…</option>
+            <option value="" disabled>Fiche cible…</option>
             {targetOptions
               .filter((c) => c.id !== concept.id)
               .map((c) => (
@@ -1607,20 +1610,20 @@ function RelationsPanel({ concept, ontology, allConcepts }: RelationsPanelProps)
                 </option>
               ))}
           </select>
-          <button type="submit" className="btn-primary">Add</button>
+          <button type="submit" className="btn-primary">Ajouter</button>
         </form>
       )}
 
       {error && <div className="banner banner-error">{error}</div>}
       {loading ? (
-        <div className="muted">Loading relations…</div>
+        <div className="muted">Chargement des liens…</div>
       ) : outgoing.length === 0 && incoming.length === 0 ? (
-        <div className="muted">No relations.</div>
+        <div className="muted">Aucun lien.</div>
       ) : (
         <>
           {outgoing.length > 0 && (
             <>
-              <div className="rel-section-title muted">Outgoing</div>
+              <div className="rel-section-title muted">Sortants</div>
               <ul className="rel-list">
                 {outgoing.map((r) => renderRow(r, r.target, "out"))}
               </ul>
@@ -1628,7 +1631,7 @@ function RelationsPanel({ concept, ontology, allConcepts }: RelationsPanelProps)
           )}
           {incoming.length > 0 && (
             <>
-              <div className="rel-section-title muted">Incoming</div>
+              <div className="rel-section-title muted">Entrants</div>
               <ul className="rel-list">
                 {incoming.map((r) => renderRow(r, r.source, "in"))}
               </ul>
