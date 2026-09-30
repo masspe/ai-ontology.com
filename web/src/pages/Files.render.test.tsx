@@ -319,6 +319,10 @@ describe("Files page — upload", () => {
     await user.click(go);
     await waitFor(() => expect(mocked.upload).toHaveBeenCalledWith(file, { kind, conceptType: "Contract" }));
     expect(screen.queryByRole("form", { name: "Type de fiche du fichier déposé" })).toBeNull();
+    // The next drop is asked again: the type does not stick.
+    await user.upload(hiddenInput(container), makeFile(name, "y"));
+    expect(await screen.findByRole("form", { name: "Type de fiche du fichier déposé" })).toBeInTheDocument();
+    expect(mocked.upload).toHaveBeenCalledTimes(1);
     const recent = screen.getByText("Dépôts récents").closest("section")!;
     const row = within(recent).getAllByRole("listitem")[0];
     expect(row).toHaveTextContent(name);

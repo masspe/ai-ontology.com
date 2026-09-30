@@ -415,7 +415,10 @@ export default function Files() {
               aria-label="Type de fiche du fichier déposé"
               onSubmit={(e) => {
                 e.preventDefault();
-                if (conceptType.trim()) void onUpload(pending, conceptType);
+                if (conceptType.trim()) {
+                  void onUpload(pending, conceptType);
+                  setConceptType(""); // the next drop is asked again
+                }
               }}
             >
               <label className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
