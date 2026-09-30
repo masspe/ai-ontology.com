@@ -157,6 +157,8 @@ describe("Queries — pinned to the home page", () => {
   });
 
   it("replays the question named by ?run once", async () => {
+    // A fresh array per call: `refresh()` after the run re-renders for real.
+    mocked.getQueries.mockImplementation(async () => ({ queries: [...saved] }));
     const { rerender } = renderPage(<Queries />, { route: `/queries?run=${saved[0]!.id}` });
     await waitFor(() => expect(mocked.runQuery).toHaveBeenCalledWith(saved[0]!.id));
     rerender(<Queries />);

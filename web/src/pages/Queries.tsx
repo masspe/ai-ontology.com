@@ -91,6 +91,7 @@ export default function Queries() {
     if (!(await confirm({ title: "Delete saved query", message: "Delete this saved query?", confirmLabel: "Delete", danger: true }))) return;
     try {
       await deleteQuery(id);
+      if (pinned.includes(id)) setPinned(togglePin(id));
       await refresh();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));

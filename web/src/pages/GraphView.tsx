@@ -283,6 +283,8 @@ export default function GraphView() {
   // `/graph?focus=<id>`: the graph opens around that sheet, selected.
   const focus = useSearchParams()[0].get("focus");
   const focusId = focus && /^\d+$/.test(focus) ? Number(focus) : null;
+  // Once: later reloads (interval, depth) keep what the user selected since.
+  const focused = useRef(false);
 
   const loadSubgraph = async (d = depth) => {
     setBusy(true);
@@ -296,7 +298,8 @@ export default function GraphView() {
         limit: 250,
       });
       setSubgraph(res.subgraph);
-      if (focusId !== null && res.subgraph.concepts.some((c) => c.id === focusId)) {
+      if (focusId !== null && !focused.current && res.subgraph.concepts.some((c) => c.id === focusId)) {
+        focused.current = true;
         setSelectedId(String(focusId));
         setTab("inspector");
         // The canvas mounts with the subgraph: focus on the next frame.

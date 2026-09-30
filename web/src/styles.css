@@ -139,7 +139,7 @@ label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px
 .topnav-item.active { color: var(--accent); font-weight: 600; }
 @media (max-width: 900px) {
   .topnav-link { padding: 8px; }
-  .topnav-link .topnav-icon + * { display: none; }
+  .topnav-label { display: none; }
 }
 
 /* ---------- Sidebar ---------- */
