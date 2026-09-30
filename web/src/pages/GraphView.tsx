@@ -636,6 +636,12 @@ export default function GraphView() {
           }
         >
           <div id="gv-canvas-wrap" className="gv-canvas">
+            {subgraph && subgraph.concepts.length === 0 && conceptTypes.length > 0 && !search.trim() && (
+              <div className="empty" data-testid="model-only">
+                Le modèle est en place ({conceptTypes.length} type(s) de fiche) mais il n'y a pas encore de fiche à
+                afficher : le graphe se remplit avec vos fichiers.
+              </div>
+            )}
             <GraphCanvas
               ref={canvasRef}
               subgraph={filteredSubgraph}

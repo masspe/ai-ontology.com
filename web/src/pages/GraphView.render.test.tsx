@@ -592,3 +592,11 @@ describe("GraphView — opened on a sheet", () => {
     expect(screen.queryByRole("link", { name: "Ouvrir la fiche" })).toBeNull();
   });
 });
+
+describe("GraphView — a model without sheets", () => {
+  it("says the model is in place and the graph waits for files", async () => {
+    mocked.getSubgraph.mockResolvedValue({ subgraph: { concepts: [], relations: [] } });
+    renderPage(<GraphView />, { route: "/graph", extraRoutes: probeRoutes });
+    expect(await screen.findByTestId("model-only")).toHaveTextContent(/Le modèle est en place \(\d+ type\(s\) de fiche\)/);
+  });
+});
