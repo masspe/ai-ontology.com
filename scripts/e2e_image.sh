@@ -44,8 +44,8 @@ docker volume create "$VOL" >/dev/null
 start
 
 echo "== the UI is served on the same port"
-curl -fsS "$BASE/" | grep "<div id=\" >/dev/nullroot\"" || { echo "no UI at /"; exit 1; }
-curl -fsS "$BASE/concepts/edit/1" | grep "<div id=\" >/dev/nullroot\"" || { echo "client-side route not served"; exit 1; }
+curl -fsS "$BASE/" | grep "<div id=\"root\"" >/dev/null || { echo "no UI at /"; exit 1; }
+curl -fsS "$BASE/concepts/edit/1" | grep "<div id=\"root\"" >/dev/null || { echo "client-side route not served"; exit 1; }
 
 echo "== the API needs a login"
 code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/stats")
