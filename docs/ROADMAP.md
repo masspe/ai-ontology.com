@@ -511,7 +511,25 @@ charge directement) ; (4) le graphe : jusqu'à 300 fiches il est dessiné en
 entier, au-delà il se charge uniquement autour d'une sélection (un ou
 plusieurs types de fiche, sélection multiple, ou une recherche, ou une
 fiche), 250 fiches au plus, sans rechargement automatique ; les types de
-lien se choisissent aussi à plusieurs. Restent en anglais, à dessein : les identifiants techniques (types de
+lien se choisissent aussi à plusieurs. **Retours, deuxième série
+(2026-09-30, branche `feat/ui-feedback-2`)** : (5) gérer les modèles
+installés — carte « Types du modèle » sur Modèle de données
+(`components/ModelTypes.tsx`) : types de fiche et de lien listés avec
+recherche et nombre de fiches, modification (description, parent,
+propriétés ; de/vers et cardinalité pour un lien), ajout, suppression
+bloquée tant que des fiches, des liens ou des sous-types en dépendent (le
+nom reste fixe : le renommer orphelinerait les fiches) ; (6) filtres du
+graphe façon Power BI (`components/MultiSelect.tsx` : menu déroulant,
+recherche sans accents, « Tout sélectionner », « Effacer ») et filtrage
+croisé (les types de lien proposés sont ceux qui relient les types de
+fiche choisis) ; (7) graphe plein largeur et haut, filtres en barre au-dessus,
+inspecteur sous le graphe ; (8) « liens absents » : serveur — à la limite
+de fiches, le parcours s'arrêtait avant de lire le moindre lien quand les
+fiches de départ remplissaient déjà la limite (grand graphe filtré par
+type) ; il continue désormais de relever les liens entre les fiches
+retenues ; page — un message dit quand les types choisis n'ont pas de lien
+direct et propose le type intermédiaire ; (9) le chargement d'exemple
+ignore les fichiers verrou d'Office (`~$…`). Restent en anglais, à dessein : les identifiants techniques (types de
 fiches et de liens venant des données, identifiants de modèles, `Top-K`,
 `BM25`), les messages d'erreur renvoyés par le serveur, et les nombres au
 format `1,234` (locale `en-US` dans `fmtNum`, à passer en `fr-CH` avec les

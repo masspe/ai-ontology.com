@@ -6,6 +6,7 @@ import JSZip from "jszip";
 import Card from "../components/Card";
 import Dropzone from "../components/Dropzone";
 import OntologyGraph from "../components/OntologyGraph";
+import ModelTypes from "../components/ModelTypes";
 // @ts-expect-error JSX module
 import { useConfirm } from "../components/ConfirmDialog.jsx";
 import { modelImpact, wordImpact } from "../lib/impact";
@@ -441,6 +442,8 @@ export default function OntologyBuilder() {
 
       {error && <div className="error-banner">{error}</div>}
       {info && <div className="success-banner">{info}</div>}
+
+      <ModelTypes ontology={ontology} onChanged={refresh} />
 
       {ingestProposal && (
         <Card
