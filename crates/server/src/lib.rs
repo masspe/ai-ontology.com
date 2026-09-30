@@ -1454,7 +1454,7 @@ async fn require_auth(
     let provided = extract_bearer(&req).ok_or(StatusCode::UNAUTHORIZED)?;
 
     // A named API key (ROADMAP §3.8.6): a machine caller of the tenant.
-    if provided.starts_with(auth::API_KEY_PREFIX) {
+    if provided.starts_with(auth::API_KEY_PREFIX) && accounts.is_some() {
         if let Some(key) = accounts.as_ref().and_then(|s| s.key_by_secret(&provided)) {
             req.extensions_mut().insert(AuthContext {
                 subject: format!("key:{}", key.id),
@@ -1585,9 +1585,22 @@ fn lookup<T>(
 /// Copy the store to the configured backup directory (ROADMAP §3.8.4):
 /// sealed partitions already there are skipped, so a daily call costs
 /// what changed. No writer runs during the copy.
+/// A named API key is an integration, not an operator: it may write the
+/// data, never wipe the tenant or run its backup.
+fn not_a_key(ctx: &Option<axum::Extension<AuthContext>>) -> Result<(), ApiError> {
+    match ctx {
+        Some(c) if c.service && c.subject.starts_with("key:") => Err(ApiError::Forbidden(
+            "an API key cannot do this; sign in as an administrator".into(),
+        )),
+        _ => Ok(()),
+    }
+}
+
 async fn backup(
     State(s): State<AppState>,
+    ctx: Option<axum::Extension<AuthContext>>,
 ) -> Result<Json<ontology_storage::BackupReport>, ApiError> {
+    not_a_key(&ctx)?;
     let dest = s.backup_dir.clone().ok_or_else(|| {
         ApiError::BadRequest("no backup directory configured (serve --backup-dir)".into())
     })?;
@@ -2234,7 +2247,11 @@ async fn delete_concepts(
 /// `POST /reset` — start over: the store first (disk before memory, R8),
 /// then the live graph, its schema, the retrieval index, the uploaded-file
 /// registry and the stats history. Irreversible; server settings are kept.
-async fn reset_all(State(s): State<AppState>) -> Result<StatusCode, ApiError> {
+async fn reset_all(
+    State(s): State<AppState>,
+    ctx: Option<axum::Extension<AuthContext>>,
+) -> Result<StatusCode, ApiError> {
+    not_a_key(&ctx)?;
     let _w = s.writer.lock().await;
     s.store
         .reset()

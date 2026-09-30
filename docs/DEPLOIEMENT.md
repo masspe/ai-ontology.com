@@ -89,9 +89,11 @@ Pour un appelant machine (un ERP, un script), l'administrateur crée une
 /auth/keys` liste les clés (nom, préfixe, création, par qui), `DELETE
 /auth/keys/<id>` révoque sur-le-champ. La clé se présente comme un jeton
 (`Authorization: Bearer ok_…`) ; elle ouvre l'API, pas la gestion des
-comptes. Le fichier `users.json` ne garde qu'une empreinte.
+comptes, ni la remise à zéro ni la sauvegarde (un administrateur connecté
+seulement). Le fichier `users.json` ne garde qu'une empreinte.
 
-Chaque écriture réussie est consignée dans `/data/audit.jsonl` (une ligne
+Chaque écriture réussie (les POST de lecture — recherche, question,
+analyse — exclus) est consignée dans `/data/audit.jsonl` (une ligne
 JSON : heure, appelant, méthode, chemin, statut, identifiant de requête).
 `GET /audit?limit=100` relit les dernières lignes, administrateurs
 seulement. Le fichier fait partie du volume `/data` ; il n'est pas dans
