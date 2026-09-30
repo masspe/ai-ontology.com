@@ -84,15 +84,15 @@ function panelProps(overrides: Partial<ReviewPanelProps> = {}): ReviewPanelProps
 describe("ConflictBadge", () => {
   it("labels each conflict kind, with the summary as tooltip", () => {
     const { rerender } = render(<ConflictBadge />);
-    expect(screen.getByText("new")).toBeInTheDocument();
+    expect(screen.getByText("nouveau")).toBeInTheDocument();
     rerender(<ConflictBadge conflict={null} />);
-    expect(screen.getByText("new")).toBeInTheDocument();
+    expect(screen.getByText("nouveau")).toBeInTheDocument();
     rerender(<ConflictBadge conflict={exists} />);
-    expect(screen.getByText("exists")).toHaveAttribute("title", "Alice already exists");
+    expect(screen.getByText("existe déjà")).toHaveAttribute("title", "Alice already exists");
     rerender(<ConflictBadge conflict={mismatch} />);
-    expect(screen.getByText("type mismatch")).toBeInTheDocument();
+    expect(screen.getByText("type différent")).toBeInTheDocument();
     rerender(<ConflictBadge conflict={dangling} />);
-    expect(screen.getByText("dangling ref")).toBeInTheDocument();
+    expect(screen.getByText("référence manquante")).toBeInTheDocument();
   });
 });
 
@@ -101,7 +101,7 @@ describe("DecisionPicker", () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
     const { rerender } = render(<DecisionPicker value="skip" onChange={onChange} allowMerge={false} />);
-    expect(screen.queryByRole("option", { name: "Merge with existing" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Fusionner avec l'existant" })).not.toBeInTheDocument();
     rerender(<DecisionPicker value="skip" onChange={onChange} allowMerge />);
     await user.selectOptions(screen.getByRole("combobox"), "merge");
     expect(onChange).toHaveBeenCalledWith("merge");
@@ -111,15 +111,15 @@ describe("DecisionPicker", () => {
 describe("ConfidenceBar", () => {
   it("clamps the value to 0..100 % and treats a missing value as 0", () => {
     const { rerender } = render(<ConfidenceBar value={0.85} />);
-    expect(screen.getByTitle("confidence 85%")).toBeInTheDocument();
+    expect(screen.getByTitle("confiance 85%")).toBeInTheDocument();
     rerender(<ConfidenceBar value={1.7} />);
-    expect(screen.getByTitle("confidence 100%")).toBeInTheDocument();
+    expect(screen.getByTitle("confiance 100%")).toBeInTheDocument();
     rerender(<ConfidenceBar value={-3} />);
-    expect(screen.getByTitle("confidence 0%")).toBeInTheDocument();
+    expect(screen.getByTitle("confiance 0%")).toBeInTheDocument();
     rerender(<ConfidenceBar />);
-    expect(screen.getByTitle("confidence 0%")).toBeInTheDocument();
+    expect(screen.getByTitle("confiance 0%")).toBeInTheDocument();
     rerender(<ConfidenceBar value={0.5} />);
-    expect(screen.getByTitle("confidence 50%")).toBeInTheDocument();
+    expect(screen.getByTitle("confiance 50%")).toBeInTheDocument();
   });
 });
 
@@ -133,15 +133,15 @@ describe("ReviewPanel", () => {
     expect(screen.getByText(/\(88%\)/)).toBeInTheDocument();
 
     // ct2, rt1, r1, ru2, a1 create; ct1, c1 merge; c2, ru1 skip.
-    expect(screen.getByText("Create:").parentElement).toHaveTextContent("Create: 5");
-    expect(screen.getByText("Merge:").parentElement).toHaveTextContent("Merge: 2");
-    expect(screen.getByText("Skip:").parentElement).toHaveTextContent("Skip: 2");
+    expect(screen.getByText("Créer :").parentElement).toHaveTextContent("Créer : 5");
+    expect(screen.getByText("Fusionner :").parentElement).toHaveTextContent("Fusionner : 2");
+    expect(screen.getByText("Ignorer :").parentElement).toHaveTextContent("Ignorer : 2");
 
-    expect(screen.getByText("New concept types (2)")).toBeInTheDocument();
-    expect(screen.getByText("New relation types (1)")).toBeInTheDocument();
-    expect(screen.getByText("Concepts (2)")).toBeInTheDocument();
-    expect(screen.getByText("Relations (1)")).toBeInTheDocument();
-    expect(screen.getByText("Rules (2)")).toBeInTheDocument();
+    expect(screen.getByText("Nouveaux types de fiche (2)")).toBeInTheDocument();
+    expect(screen.getByText("Nouveaux types de lien (1)")).toBeInTheDocument();
+    expect(screen.getByText("Fiches (2)")).toBeInTheDocument();
+    expect(screen.getByText("Liens (1)")).toBeInTheDocument();
+    expect(screen.getByText("Règles (2)")).toBeInTheDocument();
     expect(screen.getByText("Actions (2)")).toBeInTheDocument();
 
     // Parent fallback, domain → range, property chips, rule when/then, action object fallback.
@@ -151,18 +151,18 @@ describe("ReviewPanel", () => {
     expect(screen.getByTitle("value: 1M")).toBeInTheDocument();
     expect(screen.getByText(/termination/).textContent).toContain("90 days");
     const emptyRule = screen.getByText("Empty rule").closest("tr")!;
-    expect(emptyRule).toHaveTextContent("when — then —");
+    expect(emptyRule).toHaveTextContent("si — alors —");
     const noObject = screen.getByText("No object").closest("tr")!;
     expect(within(noObject).getByText("—")).toBeInTheDocument();
     // a2 has no decision → picker falls back to "skip".
     expect(within(noObject).getByRole("combobox")).toHaveValue("skip");
     // Merge is only offered on "exists" conflicts.
-    const ctSection = screen.getByText("New concept types (2)").closest("section")!;
+    const ctSection = screen.getByText("Nouveaux types de fiche (2)").closest("section")!;
     const ct1 = within(ctSection).getByText("Contract").closest("tr")!;
-    expect(within(ct1).getByRole("option", { name: "Merge with existing" })).toBeInTheDocument();
-    const rtSection = screen.getByText("New relation types (1)").closest("section")!;
+    expect(within(ct1).getByRole("option", { name: "Fusionner avec l'existant" })).toBeInTheDocument();
+    const rtSection = screen.getByText("Nouveaux types de lien (1)").closest("section")!;
     const rt1 = within(rtSection).getByText("contains").closest("tr")!;
-    expect(within(rt1).queryByRole("option", { name: "Merge with existing" })).not.toBeInTheDocument();
+    expect(within(rt1).queryByRole("option", { name: "Fusionner avec l'existant" })).not.toBeInTheDocument();
   });
 
   it("falls back to 'Document' and hides the sections of an empty proposal", () => {
@@ -176,10 +176,10 @@ describe("ReviewPanel", () => {
     };
     render(<ReviewPanel {...panelProps({ proposal: empty, decisions: {} })} />);
     expect(screen.getByText("Document")).toBeInTheDocument();
-    expect(screen.queryByText(/encoding:/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/language:/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/Concepts \(/)).not.toBeInTheDocument();
-    expect(screen.getByText("Create:").parentElement).toHaveTextContent("Create: 0");
+    expect(screen.queryByText(/encodage :/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/langue :/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Fiches \(/)).not.toBeInTheDocument();
+    expect(screen.getByText("Créer :").parentElement).toHaveTextContent("Créer : 0");
   });
 
   it("forwards bulk decisions, per-item decisions and concept edits", async () => {
@@ -187,22 +187,22 @@ describe("ReviewPanel", () => {
     const props = panelProps();
     render(<ReviewPanel {...props} />);
 
-    await user.click(screen.getByRole("button", { name: "Accept all" }));
+    await user.click(screen.getByRole("button", { name: "Tout accepter" }));
     expect(props.onBulkDecision).toHaveBeenCalledWith("create_new");
-    await user.click(screen.getByRole("button", { name: "Skip all" }));
+    await user.click(screen.getByRole("button", { name: "Tout ignorer" }));
     expect(props.onBulkDecision).toHaveBeenCalledWith("skip");
 
-    const ctSection = screen.getByText("New concept types (2)").closest("section")!;
+    const ctSection = screen.getByText("Nouveaux types de fiche (2)").closest("section")!;
     const clauseRow = within(ctSection).getByText("Clause").closest("tr")!;
     await user.selectOptions(within(clauseRow).getByRole("combobox"), "skip");
     expect(props.onDecision).toHaveBeenCalledWith("ct2", "skip");
 
-    const rtSection = screen.getByText("New relation types (1)").closest("section")!;
+    const rtSection = screen.getByText("Nouveaux types de lien (1)").closest("section")!;
     const rtRow = within(rtSection).getByText("contains").closest("tr")!;
     await user.selectOptions(within(rtRow).getByRole("combobox"), "skip");
     expect(props.onDecision).toHaveBeenCalledWith("rt1", "skip");
 
-    const relRow = screen.getByText("Relations (1)").closest("section")!.querySelector("tbody tr")!;
+    const relRow = screen.getByText("Liens (1)").closest("section")!.querySelector("tbody tr")!;
     await user.selectOptions(within(relRow as HTMLElement).getByRole("combobox"), "skip");
     expect(props.onDecision).toHaveBeenCalledWith("r1", "skip");
 
@@ -232,9 +232,9 @@ describe("ReviewPanel", () => {
     const user = userEvent.setup();
     const props = panelProps();
     render(<ReviewPanel {...props} />);
-    await user.click(screen.getByRole("button", { name: "Apply to graph" }));
+    await user.click(screen.getByRole("button", { name: "Ajouter aux données" }));
     expect(props.onApply).toHaveBeenCalledTimes(1);
-    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await user.click(screen.getByRole("button", { name: "Annuler" }));
     expect(props.onCancel).toHaveBeenCalledTimes(1);
   });
 
@@ -273,19 +273,19 @@ describe("ApplyReportView", () => {
     const user = userEvent.setup();
     const onReset = vi.fn();
     render(<ApplyReportView report={report} onReset={onReset} />);
-    expect(screen.getByText("Apply complete")).toBeInTheDocument();
-    for (const label of ["Created", "Merged", "Skipped", "Failed"]) {
+    expect(screen.getByText("Ajout terminé")).toBeInTheDocument();
+    for (const label of ["Créés", "Fusionnés", "Ignorés", "Échoués"]) {
       expect(screen.getByText(label).previousElementSibling).toHaveTextContent("1");
     }
-    expect(screen.getByText("Concept types (1)")).toBeInTheDocument();
-    expect(screen.getByText("Concepts (3)")).toBeInTheDocument();
-    expect(screen.queryByText(/Relation types/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/^Rules/)).not.toBeInTheDocument();
-    expect(screen.getByText("created #1")).toBeInTheDocument();
-    expect(screen.getByText("merged #42")).toBeInTheDocument();
-    expect(screen.getByText("skipped")).toBeInTheDocument();
+    expect(screen.getByText("Types de fiche (1)")).toBeInTheDocument();
+    expect(screen.getByText("Fiches (3)")).toBeInTheDocument();
+    expect(screen.queryByText(/Types de lien/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Règles/)).not.toBeInTheDocument();
+    expect(screen.getByText("créé #1")).toBeInTheDocument();
+    expect(screen.getByText("fusionné #42")).toBeInTheDocument();
+    expect(screen.getByText("ignoré")).toBeInTheDocument();
     expect(screen.getByText("duplicate name")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Ingest another document" }));
+    await user.click(screen.getByRole("button", { name: "Importer un autre document" }));
     expect(onReset).toHaveBeenCalledTimes(1);
   });
 

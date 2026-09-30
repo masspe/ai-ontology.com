@@ -88,7 +88,7 @@ export default function Queries() {
   };
 
   const remove = async (id: number) => {
-    if (!(await confirm({ title: "Delete saved query", message: "Delete this saved query?", confirmLabel: "Delete", danger: true }))) return;
+    if (!(await confirm({ title: "Supprimer la question", message: "Supprimer cette question enregistrée ?", confirmLabel: "Supprimer", cancelLabel: "Annuler", danger: true }))) return;
     try {
       await deleteQuery(id);
       if (pinned.includes(id)) setPinned(togglePin(id));
@@ -109,39 +109,39 @@ export default function Queries() {
 
       {error && <div className="error-banner">{error}</div>}
 
-      <Card title="Ask now" subtitle="Streams the LLM response with grounding citations." style={{ marginBottom: 16 }}>
+      <Card title="Poser une question" subtitle="La réponse arrive au fil de l'eau et cite les fiches sur lesquelles elle s'appuie." style={{ marginBottom: 16 }}>
         <StreamingAnswer defaultQuery={initialQ} />
       </Card>
 
       <div className="grid grid-2" style={{ alignItems: "start" }}>
-        <Card title="Save a query">
+        <Card title="Enregistrer une question">
           <div className="field">
-            <label>Name</label>
-            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Renewal obligations" />
+            <label>Nom</label>
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Échéances de renouvellement" />
           </div>
           <div className="field">
-            <label>Query</label>
-            <textarea value={query} onChange={(e) => setQuery(e.target.value)} rows={3} placeholder="What are the upcoming renewals…" />
+            <label>Question</label>
+            <textarea value={query} onChange={(e) => setQuery(e.target.value)} rows={3} placeholder="Quels sont les prochains renouvellements…" />
           </div>
           <div className="field" style={{ maxWidth: 160 }}>
-            <label>Top-K</label>
+            <label>Fiches consultées (Top-K)</label>
             <input type="number" min={1} max={50} value={topK} onChange={(e) => setTopK(Number(e.target.value))} />
           </div>
           <button className="btn-primary" onClick={save} disabled={busy || !name.trim() || !query.trim()}>
-            Save
+            Enregistrer
           </button>
         </Card>
 
-        <Card title="Saved queries" actions={<button onClick={refresh}>Reload</button>}>
+        <Card title="Questions enregistrées" actions={<button onClick={refresh}>Recharger</button>}>
           {queries.length === 0 ? (
             <div className="empty">Aucune question enregistrée. Posez-en une ci-dessus : la réponse cite les fiches d'où elle vient, et vous pourrez la garder.</div>
           ) : (
             <table className="table">
               <thead>
                 <tr>
-                  <th>Name</th>
-                  <th>Top-K</th>
-                  <th>Last run</th>
+                  <th>Nom</th>
+                  <th>Fiches consultées</th>
+                  <th>Dernière exécution</th>
                   <th className="actions">Actions</th>
                 </tr>
               </thead>
@@ -157,7 +157,7 @@ export default function Queries() {
                       {q.last_run_at ? new Date(q.last_run_at * 1000).toLocaleString() : "—"}
                     </td>
                     <td className="actions">
-                      <button onClick={() => run(q)} disabled={busy}>Run</button>{" "}
+                      <button onClick={() => run(q)} disabled={busy}>Exécuter</button>{" "}
                       <button
                         onClick={() => setPinned(togglePin(q.id))}
                         aria-pressed={pinned.includes(q.id)}
@@ -165,7 +165,7 @@ export default function Queries() {
                       >
                         {pinned.includes(q.id) ? "★" : "☆"}
                       </button>{" "}
-                      <button className="btn-danger" onClick={() => remove(q.id)}>Delete</button>
+                      <button className="btn-danger" onClick={() => remove(q.id)}>Supprimer</button>
                     </td>
                   </tr>
                 ))}
@@ -176,7 +176,7 @@ export default function Queries() {
       </div>
 
       {lastResult && (
-        <Card title={`Result · ${lastResult.name}`} style={{ marginTop: 16 }}>
+        <Card title={`Réponse · ${lastResult.name}`} style={{ marginTop: 16 }}>
           <div className="answer-box">{lastResult.answer.answer}</div>
           {lastResult.answer.subgraph && lastResult.answer.subgraph.concepts.length > 0 && (
             <div className="citations">

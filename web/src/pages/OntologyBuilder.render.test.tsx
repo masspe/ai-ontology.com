@@ -246,18 +246,18 @@ describe("OntologyBuilder — load and insights", () => {
     // Insight tiles: 1200 -> "1.2k", deltas up / down / flat, classes from the ontology.
     expect(screen.getByText("1.2k")).toBeInTheDocument();
     expect(screen.getByText("3.0k")).toBeInTheDocument();
-    expect(screen.getByText("↑ 12% vs last run")).toBeInTheDocument();
-    expect(screen.getByText("↓ 8% vs last run")).toBeInTheDocument();
-    expect(screen.getByText("• 0% vs last run")).toBeInTheDocument();
-    const classes = screen.getByText("Classes").closest(".insight-tile")!;
+    expect(screen.getByText("↑ 12 % vs dernière exécution")).toBeInTheDocument();
+    expect(screen.getByText("↓ 8 % vs dernière exécution")).toBeInTheDocument();
+    expect(screen.getByText("• 0 % vs dernière exécution")).toBeInTheDocument();
+    const classes = screen.getByText("Types de fiches").closest(".insight-tile")!;
     expect(within(classes as HTMLElement).getByText("2")).toBeInTheDocument();
-    // confidence = min(99, 70 + round(3000/1200*10)) = 95 -> High
+    // confidence = min(99, 70 + round(3000/1200*10)) = 95 -> Élevée
     expect(screen.getByText("95%")).toBeInTheDocument();
-    expect(screen.getByText(/^High/)).toBeInTheDocument();
-    expect(screen.getByText(/Last updated: 0s ago/)).toBeInTheDocument();
+    expect(screen.getByText(/^Élevée/)).toBeInTheDocument();
+    expect(screen.getByText(/Dernière mise à jour : il y a 0 s/)).toBeInTheDocument();
 
     // Export link points at the API.
-    expect(screen.getByRole("link", { name: /Export/ })).toHaveAttribute("href", expect.stringContaining("/export?format=jsonl"));
+    expect(screen.getByRole("link", { name: /Exporter/ })).toHaveAttribute("href", expect.stringContaining("/export?format=jsonl"));
 
     // The OCR worker is released on unmount.
     unmount();
@@ -271,10 +271,10 @@ describe("OntologyBuilder — load and insights", () => {
     const [pdf, docx, json, bin] = items.map((li) => within(li as HTMLElement));
     expect(pdf.getByText("PDF")).toBeInTheDocument();
     expect(pdf.getByText("500 B · TEXT")).toBeInTheDocument();
-    expect(pdf.getByText("Processed")).toBeInTheDocument();
+    expect(pdf.getByText("Traité")).toBeInTheDocument();
     expect(docx.getByText("W")).toBeInTheDocument();
     expect(docx.getByText("2.0 KB · TEXT")).toBeInTheDocument();
-    expect(docx.getByText("Analyzed")).toBeInTheDocument();
+    expect(docx.getByText("Analysé")).toBeInTheDocument();
     expect(json.getByText("{ }")).toBeInTheDocument();
     expect(json.getByText("3.0 MB · ONTOLOGY")).toBeInTheDocument();
     expect(bin.getByText("CUS")).toBeInTheDocument();
@@ -285,44 +285,44 @@ describe("OntologyBuilder — load and insights", () => {
     renderPage(<OntologyBuilder />);
     expect(await errorBanner()).toHaveTextContent("stats unavailable");
     expect(screen.getByText("92%")).toBeInTheDocument();
-    expect(screen.getByText(/Last updated: —/)).toBeInTheDocument();
-    expect(screen.queryByText("Uploaded Files")).toBeNull();
+    expect(screen.getByText(/Dernière mise à jour : —/)).toBeInTheDocument();
+    expect(screen.queryByText("Fichiers importés")).toBeNull();
     // Generate is disabled without a description and without files.
-    expect(screen.getByRole("button", { name: /Generate Ontology/ })).toBeDisabled();
-    expect(screen.getByRole("button", { name: /Clear All/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Générer le modèle/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Tout retirer/ })).toBeDisabled();
   });
 
   it("rates a sparse graph as Medium confidence", async () => {
     getStats.mockResolvedValue({ ...stats, concepts: 10, relations: 0 });
     await renderLoaded();
     expect(screen.getByText("70%")).toBeInTheDocument();
-    expect(screen.getByText(/^Medium/)).toBeInTheDocument();
+    expect(screen.getByText(/^Moyenne/)).toBeInTheDocument();
   });
 
   it("formats the last-updated age in minutes, hours and days", async () => {
     const base = 1_800_000_000_000;
     const now = vi.spyOn(Date, "now").mockReturnValue(base);
     await renderLoaded();
-    expect(screen.getByText(/Last updated: 0s ago/)).toBeInTheDocument();
-    const rerender = () => fireEvent.click(screen.getByRole("button", { name: /Examples/ }));
+    expect(screen.getByText(/Dernière mise à jour : il y a 0 s/)).toBeInTheDocument();
+    const rerender = () => fireEvent.click(screen.getByRole("button", { name: /Exemples/ }));
     now.mockReturnValue(base + 2 * 60_000);
     rerender();
-    expect(screen.getByText(/Last updated: 2 min ago/)).toBeInTheDocument();
+    expect(screen.getByText(/Dernière mise à jour : il y a 2 min/)).toBeInTheDocument();
     now.mockReturnValue(base + 3 * 3_600_000);
     rerender();
-    expect(screen.getByText(/Last updated: 3 h ago/)).toBeInTheDocument();
+    expect(screen.getByText(/Dernière mise à jour : il y a 3 h/)).toBeInTheDocument();
     now.mockReturnValue(base + 4 * 86_400_000);
     rerender();
-    expect(screen.getByText(/Last updated: 4 d ago/)).toBeInTheDocument();
+    expect(screen.getByText(/Dernière mise à jour : il y a 4 j/)).toBeInTheDocument();
   });
 
   it("refreshes from the toolbar buttons", async () => {
     const { user } = await renderLoaded();
-    await user.click(screen.getByRole("button", { name: /Analyze Files/ }));
+    await user.click(screen.getByRole("button", { name: /Analyser les fichiers/ }));
     await waitFor(() => expect(getOntology).toHaveBeenCalledTimes(2));
-    await user.click(screen.getByRole("button", { name: /Merge Sources/ }));
+    await user.click(screen.getByRole("button", { name: /Fusionner les sources/ }));
     await waitFor(() => expect(getOntology).toHaveBeenCalledTimes(3));
-    await user.click(screen.getByTitle("Refresh"));
+    await user.click(screen.getByTitle("Actualiser"));
     await waitFor(() => expect(getOntology).toHaveBeenCalledTimes(4));
   });
 });
@@ -330,42 +330,42 @@ describe("OntologyBuilder — load and insights", () => {
 describe("OntologyBuilder — describe, generate, save", () => {
   it("offers examples that fill the description and updates the counter", async () => {
     const { user } = await renderLoaded();
-    expect(screen.queryByText(/contract management system/)).toBeNull();
-    await user.click(screen.getByRole("button", { name: /Examples/ }));
-    const chip = screen.getByText(/contract management system/);
+    expect(screen.queryByText(/suivi des contrats/)).toBeNull();
+    await user.click(screen.getByRole("button", { name: /Exemples/ }));
+    const chip = screen.getByText(/suivi des contrats/);
     await user.click(chip);
-    const textarea = screen.getByPlaceholderText(/Describe the ontology structure/) as HTMLTextAreaElement;
-    expect(textarea.value).toMatch(/^A contract management system/);
+    const textarea = screen.getByPlaceholderText(/Décrivez la structure du modèle/) as HTMLTextAreaElement;
+    expect(textarea.value).toMatch(/^Un suivi des contrats/);
     expect(screen.getByText(`${textarea.value.length} / 4000`)).toBeInTheDocument();
-    expect(screen.queryByText(/research knowledge base/)).toBeNull();
+    expect(screen.queryByText(/base de connaissances de recherche/)).toBeNull();
   });
 
   it("generates a draft from the description and the ingested files, then saves it", async () => {
     const pending = deferred<{ ontology: Ontology; model: string }>();
     generateOntology.mockReturnValueOnce(pending.promise);
     const { user } = await renderLoaded();
-    const generate = screen.getByRole("button", { name: /Generate Ontology/ });
+    const generate = screen.getByRole("button", { name: /Générer le modèle/ });
     // Files are present: the button is enabled even with an empty description.
     expect(generate).toBeEnabled();
-    await user.type(screen.getByPlaceholderText(/Describe the ontology structure/), "Contracts and parties");
+    await user.type(screen.getByPlaceholderText(/Décrivez la structure du modèle/), "Contracts and parties");
     await user.click(generate);
-    expect(screen.getByRole("button", { name: /Generating…/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Génération…/ })).toBeDisabled();
     const prompt = generateOntology.mock.calls[0][0];
     expect(prompt).toMatch(/^Contracts and parties\n## Source documents already ingested into the graph/);
     expect(prompt).toContain("- report.pdf (text, ingested as Report): 3 concepts, 1 relations");
     expect(prompt).toContain("- notes.docx (text, uploaded): 0 concepts, 0 relations");
 
     pending.resolve({ ontology: draft, model: "test" });
-    expect(await infoBanner()).toHaveTextContent("Draft generated from your description and 4 file(s). Click Save Ontology to apply.");
-    expect(screen.getByText(/Proposed schema/)).toBeInTheDocument();
+    expect(await infoBanner()).toHaveTextContent("Brouillon généré à partir de votre description et de 4 fichier(s). Cliquez sur Enregistrer le modèle pour l'appliquer.");
+    expect(screen.getByText(/Schéma proposé/)).toBeInTheDocument();
     expect(screen.getByText(/"Contract"/)).toBeInTheDocument();
 
-    const save = screen.getByRole("button", { name: /Save Ontology/ });
+    const save = screen.getByRole("button", { name: /Enregistrer le modèle/ });
     expect(save).toBeEnabled();
     await user.click(save);
     await waitFor(() => expect(replaceOntology).toHaveBeenCalledWith(draft));
     expect(await screen.findByText("Modèle enregistré. Rien à migrer : aucune fiche ne perd son type.")).toBeInTheDocument();
-    expect(screen.queryByText(/Proposed schema/)).toBeNull();
+    expect(screen.queryByText(/Schéma proposé/)).toBeNull();
     expect(save).toBeDisabled();
     // The page reloads after a save.
     await waitFor(() => expect(getOntology).toHaveBeenCalledTimes(2));
@@ -375,20 +375,20 @@ describe("OntologyBuilder — describe, generate, save", () => {
     getFiles.mockResolvedValue({ files: [] });
     const { user } = renderPage(<OntologyBuilder />);
     await screen.findByText("1.2k");
-    await user.type(screen.getByPlaceholderText(/Describe the ontology structure/), "  Papers  ");
-    await user.click(screen.getByRole("button", { name: /Generate Ontology/ }));
+    await user.type(screen.getByPlaceholderText(/Décrivez la structure du modèle/), "  Papers  ");
+    await user.click(screen.getByRole("button", { name: /Générer le modèle/ }));
     await waitFor(() => expect(generateOntology).toHaveBeenCalledWith("Papers"));
-    expect(await infoBanner()).toHaveTextContent("Draft ontology generated. Click Save Ontology to apply.");
+    expect(await infoBanner()).toHaveTextContent("Brouillon du modèle généré. Cliquez sur Enregistrer le modèle pour l'appliquer.");
   });
 
   it("reports LLM failures in the error banner", async () => {
     generateOntology.mockRejectedValueOnce(new Error("LLM quota exceeded"));
     const { user } = await renderLoaded();
-    await user.type(screen.getByPlaceholderText(/Describe the ontology structure/), "x");
-    await user.click(screen.getByRole("button", { name: /Generate Ontology/ }));
+    await user.type(screen.getByPlaceholderText(/Décrivez la structure du modèle/), "x");
+    await user.click(screen.getByRole("button", { name: /Générer le modèle/ }));
     expect(await errorBanner()).toHaveTextContent("LLM quota exceeded");
-    expect(screen.getByRole("button", { name: /Save Ontology/ })).toBeDisabled();
-    expect(screen.getByRole("button", { name: /Generate Ontology/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /Enregistrer le modèle/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Générer le modèle/ })).toBeEnabled();
   });
 
   it("keeps the draft and shows the schema-guard message when the save is refused", async () => {
@@ -396,21 +396,21 @@ describe("OntologyBuilder — describe, generate, save", () => {
       new Error("schema change refused: concept type 'Person' still has 12 instances"),
     );
     const { user } = await renderLoaded();
-    await user.type(screen.getByPlaceholderText(/Describe the ontology structure/), "x");
-    await user.click(screen.getByRole("button", { name: /Generate Ontology/ }));
-    await screen.findByText(/Proposed schema/);
-    await user.click(screen.getByRole("button", { name: /Save Ontology/ }));
+    await user.type(screen.getByPlaceholderText(/Décrivez la structure du modèle/), "x");
+    await user.click(screen.getByRole("button", { name: /Générer le modèle/ }));
+    await screen.findByText(/Schéma proposé/);
+    await user.click(screen.getByRole("button", { name: /Enregistrer le modèle/ }));
     expect(await errorBanner()).toHaveTextContent(
       "schema change refused: concept type 'Person' still has 12 instances",
     );
     // The unsaved draft survives so the user can adjust and retry.
-    expect(screen.getByText(/Proposed schema/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Save Ontology/ })).toBeEnabled();
+    expect(screen.getByText(/Schéma proposé/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Enregistrer le modèle/ })).toBeEnabled();
     expect(getOntology).toHaveBeenCalledTimes(1);
 
     // A non-Error rejection is stringified.
     replaceOntology.mockRejectedValueOnce("plain failure");
-    await user.click(screen.getByRole("button", { name: /Save Ontology/ }));
+    await user.click(screen.getByRole("button", { name: /Enregistrer le modèle/ }));
     expect(await screen.findByText("plain failure")).toBeInTheDocument();
   });
 });
@@ -418,7 +418,7 @@ describe("OntologyBuilder — describe, generate, save", () => {
 describe("OntologyBuilder — file records", () => {
   it("removes a single file record and reloads", async () => {
     const { user } = await renderLoaded();
-    await user.click(screen.getAllByTitle("Remove")[1]);
+    await user.click(screen.getAllByTitle("Retirer")[1]);
     await waitFor(() => expect(deleteFile).toHaveBeenCalledWith(2));
     await waitFor(() => expect(getFiles).toHaveBeenCalledTimes(2));
   });
@@ -426,24 +426,24 @@ describe("OntologyBuilder — file records", () => {
   it("surfaces a failed removal", async () => {
     deleteFile.mockRejectedValueOnce(new Error("record locked"));
     const { user } = await renderLoaded();
-    await user.click(screen.getAllByTitle("Remove")[0]);
+    await user.click(screen.getAllByTitle("Retirer")[0]);
     expect(await errorBanner()).toHaveTextContent("record locked");
     expect(getFiles).toHaveBeenCalledTimes(1);
   });
 
   it("clears all records only after the confirm dialog is accepted, ignoring individual failures", async () => {
     const { user } = await renderLoaded();
-    await user.click(screen.getByRole("button", { name: /Clear All/ }));
+    await user.click(screen.getByRole("button", { name: /Tout retirer/ }));
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText("Remove file records")).toBeInTheDocument();
-    expect(within(dialog).getByText("Remove 4 file records? Ingested data stays in the graph.")).toBeInTheDocument();
-    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(within(dialog).getByText("Retirer les fichiers importés")).toBeInTheDocument();
+    expect(within(dialog).getByText("Retirer 4 fichier(s) de la liste ? Les données déjà importées restent dans le graphe.")).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Annuler" }));
     expect(deleteFile).not.toHaveBeenCalled();
     expect(screen.queryByRole("dialog")).toBeNull();
 
     deleteFile.mockRejectedValueOnce(new Error("gone already"));
-    await user.click(screen.getByRole("button", { name: /Clear All/ }));
-    await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Remove" }));
+    await user.click(screen.getByRole("button", { name: /Tout retirer/ }));
+    await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Retirer" }));
     await waitFor(() => expect(deleteFile).toHaveBeenCalledTimes(4));
     expect(deleteFile.mock.calls.map((c) => c[0])).toEqual([1, 2, 3, 4]);
     await waitFor(() => expect(getFiles).toHaveBeenCalledTimes(2));
@@ -458,12 +458,12 @@ describe("OntologyBuilder — ingest preview", () => {
 
     const panel = await screen.findByTestId("review-panel");
     expect(await infoBanner()).toHaveTextContent(
-      "deal.txt: previewed 2 concept(s) and 1 relation(s) from 1/1 file(s). Review below, then click Apply.",
+      "deal.txt : 2 fiche(s) et 1 lien(s) proposés à partir de 1/1 fichier(s). Vérifiez ci-dessous, puis cliquez sur Appliquer.",
     );
     expect(analyze).toHaveBeenCalledTimes(1);
     expect(analyze.mock.calls[0][0].file.name).toBe("deal.txt");
     // Header counts + the graph overlay receive the merged proposal.
-    expect(screen.getByText(/2 concept\(s\) · 1 relation\(s\) · 1 new concept type\(s\)/)).toBeInTheDocument();
+    expect(screen.getByText(/2 fiche\(s\) · 1 lien\(s\) · 1 nouveau\(x\) type\(s\) de fiche/)).toBeInTheDocument();
     expect(screen.getByTestId("ontology-graph")).toHaveTextContent("Alice|2");
     // Default decisions: "exists" conflict -> merge, otherwise create_new.
     expect(JSON.parse(screen.getByTestId("decisions").textContent!)).toEqual({
@@ -487,7 +487,7 @@ describe("OntologyBuilder — ingest preview", () => {
       "create_new",
     ]);
 
-    await user.click(within(panel).getByRole("button", { name: "Apply to graph" }));
+    await user.click(within(panel).getByRole("button", { name: "Appliquer au graphe" }));
     await waitFor(() => expect(apply).toHaveBeenCalledTimes(1));
     const opts = apply.mock.calls[0][0];
     expect(opts.defaultAction).toBe("skip");
@@ -495,12 +495,12 @@ describe("OntologyBuilder — ingest preview", () => {
       expect.arrayContaining([{ client_ref: "f0/c0", action: "create_new" }, { client_ref: "f0/r0", action: "create_new" }]),
     );
     expect(opts.proposal.concepts[0].name).toBe("Renamed");
-    expect(await screen.findByText("Applied: 1 created, 0 merged, 1 skipped, 0 failed.")).toBeInTheDocument();
+    expect(await screen.findByText("Appliqué : 1 créé(s), 0 fusionné(s), 1 ignoré(s), 0 en échec.")).toBeInTheDocument();
     expect(screen.queryByTestId("review-panel")).toBeNull();
     const reportView = screen.getByTestId("apply-report");
     expect(reportView).toHaveTextContent("created=1");
     await waitFor(() => expect(getOntology).toHaveBeenCalledTimes(2));
-    await user.click(within(reportView).getByRole("button", { name: "Dismiss" }));
+    await user.click(within(reportView).getByRole("button", { name: "Fermer" }));
     expect(screen.queryByTestId("apply-report")).toBeNull();
   });
 
@@ -508,13 +508,13 @@ describe("OntologyBuilder — ingest preview", () => {
     const { user, container } = await renderLoaded();
     upload(dropzoneInput(container), [makeFile("deal.txt", "hello")]);
     const panel = await screen.findByTestId("review-panel");
-    await user.click(within(panel).getByRole("button", { name: "Discard" }));
+    await user.click(within(panel).getByRole("button", { name: "Abandonner" }));
     expect(screen.queryByTestId("review-panel")).toBeNull();
-    expect(screen.queryByText(/previewed/)).toBeNull();
+    expect(screen.queryByText(/proposés à partir de/)).toBeNull();
 
     apply.mockRejectedValueOnce(new Error("apply exploded"));
     upload(dropzoneInput(container), [makeFile("deal.txt", "hello")]);
-    await user.click(within(await screen.findByTestId("review-panel")).getByRole("button", { name: "Apply to graph" }));
+    await user.click(within(await screen.findByTestId("review-panel")).getByRole("button", { name: "Appliquer au graphe" }));
     expect(await errorBanner()).toHaveTextContent("apply exploded");
     expect(screen.getByTestId("review-panel")).toBeInTheDocument();
   });
@@ -525,13 +525,13 @@ describe("OntologyBuilder — ingest preview", () => {
     analyze.mockReturnValueOnce(pending.promise);
     const { container } = await renderLoaded();
     upload(dropzoneInput(container), [makeFile("scan.png", "img")]);
-    // The status goes: OCR notice -> progress callback -> "Analyzing 1/1: scan.png…".
-    expect(await screen.findByText("Analyzing 1/1: scan.png…")).toBeInTheDocument();
+    // The status goes: OCR notice -> progress callback -> "Analyse 1/1 : scan.png…".
+    expect(await screen.findByText("Analyse 1/1 : scan.png…")).toBeInTheDocument();
     expect(vi.mocked(prepareForIngest)).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole("button", { name: /Generate Ontology/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Générer le modèle/ })).toBeDisabled();
     pending.resolve(proposal);
     await screen.findByTestId("review-panel");
-    expect(screen.getByRole("button", { name: /Generate Ontology/ })).toBeEnabled();
+    expect(screen.getByRole("button", { name: /Générer le modèle/ })).toBeEnabled();
   });
 
   it("shows the OCR notice while the first file is being prepared", async () => {
@@ -541,7 +541,7 @@ describe("OntologyBuilder — ingest preview", () => {
     const { container } = await renderLoaded();
     const img = makeFile("scan.png", "img");
     upload(dropzoneInput(container), [img]);
-    expect(await screen.findByText(/scan\.png: preparing 1 file\(s\) — OCR may take a moment/)).toBeInTheDocument();
+    expect(await screen.findByText(/scan\.png : préparation de 1 fichier\(s\) — l'OCR peut prendre un moment/)).toBeInTheDocument();
     pending.resolve(img);
     await screen.findByTestId("review-panel");
   });
@@ -559,7 +559,7 @@ describe("OntologyBuilder — ingest preview", () => {
     upload(dropzoneInput(container), [zip]);
     await screen.findByTestId("review-panel");
     expect(await infoBanner()).toHaveTextContent(
-      "Archive pack.zip: previewed 2 concept(s) and 1 relation(s) from 1/2 file(s) · 1 failed. Review below, then click Apply.",
+      "Archive pack.zip : 2 fiche(s) et 1 lien(s) proposés à partir de 1/2 fichier(s) · 1 en échec. Vérifiez ci-dessous, puis cliquez sur Appliquer.",
     );
     expect(screen.getByText("a.txt: boom")).toBeInTheDocument();
   });
@@ -581,18 +581,18 @@ describe("OntologyBuilder — ingest preview", () => {
     upload(dropzoneInput(container), [zip]);
     await screen.findByTestId("review-panel");
     expect(analyze.mock.calls.map((c) => c[0].file.name).sort()).toEqual(["a.txt", "inner.md"]);
-    expect(await infoBanner()).toHaveTextContent("Archive bundle.zip: previewed");
+    expect(await infoBanner()).toHaveTextContent("Archive bundle.zip : 2 fiche(s)");
   });
 
   it("tells the user when an archive holds nothing ingestible, and when it cannot be read", async () => {
     const { container } = await renderLoaded();
     upload(dropzoneInput(container), [await zipFile("empty.zip", { ".DS_Store": "x" })]);
-    expect(await screen.findByText("Archive empty.zip: no ingestible files found.")).toBeInTheDocument();
+    expect(await screen.findByText("Archive empty.zip : aucun fichier importable trouvé.")).toBeInTheDocument();
     expect(analyze).not.toHaveBeenCalled();
 
     upload(dropzoneInput(container), [makeFile("broken.zip", "definitely not a zip")]);
     expect(await errorBanner()).toBeInTheDocument();
-    expect(screen.queryByText(/no ingestible files/)).toBeNull();
+    expect(screen.queryByText(/aucun fichier importable/)).toBeNull();
   });
 
   it("scans a connected folder, filtering by extension and expanding archives", async () => {
@@ -607,7 +607,7 @@ describe("OntologyBuilder — ingest preview", () => {
     ]);
     await screen.findByTestId("review-panel");
     expect(analyze.mock.calls.map((c) => c[0].file.name).sort()).toEqual(["a.txt", "b.md", "ignored.txt"]);
-    expect(await infoBanner()).toHaveTextContent("Folder proj: previewed");
+    expect(await infoBanner()).toHaveTextContent("Dossier proj : 2 fiche(s)");
     expect(folderInput(container).value).toBe("");
   });
 
@@ -618,7 +618,7 @@ describe("OntologyBuilder — ingest preview", () => {
 
     upload(folderInput(container), [withRelPath(makeFile("a.txt", "a"), undefined)]);
     await screen.findByTestId("review-panel");
-    expect(await infoBanner()).toHaveTextContent("Folder folder: previewed");
+    expect(await infoBanner()).toHaveTextContent("Dossier dossier : 2 fiche(s)");
   });
 
   it("reports an unreadable archive inside a folder", async () => {
@@ -637,27 +637,27 @@ describe("OntologyBuilder — what a model change touches", () => {
       next_cursor: null,
     }));
     const { user } = await renderLoaded();
-    await user.type(screen.getByPlaceholderText(/Describe the ontology structure/), "x");
-    await user.click(screen.getByRole("button", { name: /Generate Ontology/ }));
-    await screen.findByText(/Proposed schema/);
-    await user.click(screen.getByRole("button", { name: /Save Ontology/ }));
+    await user.type(screen.getByPlaceholderText(/Décrivez la structure du modèle/), "x");
+    await user.click(screen.getByRole("button", { name: /Générer le modèle/ }));
+    await screen.findByText(/Schéma proposé/);
+    await user.click(screen.getByRole("button", { name: /Enregistrer le modèle/ }));
     expect(await errorBanner()).toHaveTextContent(
       "12 fiche(s) concernée(s) : Person (12). Un type encore utilisé ne peut pas être retiré : réaffectez ou supprimez ces fiches d'abord.",
     );
     expect(listConcepts).toHaveBeenCalledWith({ type: "Person", limit: 1, include_subtypes: false });
     expect(listConcepts).toHaveBeenCalledWith({ type: "Org", limit: 1, include_subtypes: false });
     expect(replaceOntology).not.toHaveBeenCalled();
-    expect(screen.getByText(/Proposed schema/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Save Ontology/ })).toBeEnabled();
+    expect(screen.getByText(/Schéma proposé/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Enregistrer le modèle/ })).toBeEnabled();
   });
 
   it("lets the server decide when the count cannot be made", async () => {
     listConcepts.mockRejectedValue(new Error("HTTP 429"));
     const { user } = await renderLoaded();
-    await user.type(screen.getByPlaceholderText(/Describe the ontology structure/), "x");
-    await user.click(screen.getByRole("button", { name: /Generate Ontology/ }));
-    await screen.findByText(/Proposed schema/);
-    await user.click(screen.getByRole("button", { name: /Save Ontology/ }));
+    await user.type(screen.getByPlaceholderText(/Décrivez la structure du modèle/), "x");
+    await user.click(screen.getByRole("button", { name: /Générer le modèle/ }));
+    await screen.findByText(/Schéma proposé/);
+    await user.click(screen.getByRole("button", { name: /Enregistrer le modèle/ }));
     await waitFor(() => expect(replaceOntology).toHaveBeenCalledWith(draft));
     expect(await screen.findByText("Modèle enregistré.")).toBeInTheDocument();
   });

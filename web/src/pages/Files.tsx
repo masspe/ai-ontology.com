@@ -45,10 +45,10 @@ function iconFor(f: { name: string; kind?: string }): { label: string; bg: strin
 }
 
 function fmtBytes(b: number): string {
-  if (b < 1024) return `${b} B`;
-  if (b < 1024 * 1024) return `${(b / 1024).toFixed(0)} KB`;
-  if (b < 1024 * 1024 * 1024) return `${(b / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(b / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+  if (b < 1024) return `${b} o`;
+  if (b < 1024 * 1024) return `${(b / 1024).toFixed(0)} Ko`;
+  if (b < 1024 * 1024 * 1024) return `${(b / (1024 * 1024)).toFixed(1)} Mo`;
+  return `${(b / (1024 * 1024 * 1024)).toFixed(1)} Go`;
 }
 
 function fmtDate(ts: number): string {
@@ -60,10 +60,10 @@ function fmtDate(ts: number): string {
 function fmtAgo(ts: number): string {
   if (!ts) return "—";
   const diff = Date.now() / 1000 - ts;
-  if (diff < 60) return "just now";
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-  return `${Math.floor(diff / 86400)}d ago`;
+  if (diff < 60) return "à l'instant";
+  if (diff < 3600) return `il y a ${Math.floor(diff / 60)} min`;
+  if (diff < 86400) return `il y a ${Math.floor(diff / 3600)} h`;
+  return `il y a ${Math.floor(diff / 86400)} j`;
 }
 
 function fileType(f: FileRecord): string {
@@ -71,21 +71,21 @@ function fileType(f: FileRecord): string {
   if (["pdf", "csv", "xlsx", "docx", "json", "jsonl"].includes(ext)) return ext.toUpperCase();
   if (ext === "triples") return "TRIPLES";
   if (ext === "txt" || ext === "md") return "TEXT";
-  return f.kind?.toUpperCase() ?? "FILE";
+  return f.kind?.toUpperCase() ?? "FICHIER";
 }
 
 function fileSource(f: FileRecord): string {
-  return f.concept_type?.trim() || "General";
+  return f.concept_type?.trim() || "Général";
 }
 
 function fileStatus(f: FileRecord): { label: string; cls: string } {
   const s = (f.status ?? "").toLowerCase();
-  if (s === "failed" || s === "error") return { label: "Failed", cls: "fail" };
-  if (s === "pending" || s === "queued") return { label: "Pending", cls: "warn" };
-  if (s === "analyzing" || s === "processing") return { label: "Analyzing", cls: "info" };
-  if (f.concepts > 0 || f.relations > 0) return { label: "Processed", cls: "ok" };
-  if (s === "analyzed") return { label: "Analyzed", cls: "info" };
-  return { label: "Pending", cls: "warn" };
+  if (s === "failed" || s === "error") return { label: "Échec", cls: "fail" };
+  if (s === "pending" || s === "queued") return { label: "En attente", cls: "warn" };
+  if (s === "analyzing" || s === "processing") return { label: "Analyse en cours", cls: "info" };
+  if (f.concepts > 0 || f.relations > 0) return { label: "Traité", cls: "ok" };
+  if (s === "analyzed") return { label: "Analysé", cls: "info" };
+  return { label: "En attente", cls: "warn" };
 }
 
 interface TrendBucket { count: number; size: number; }
@@ -175,14 +175,14 @@ export default function Files() {
       const effectiveKind = autoKind ? (KIND_BY_EXT[ext] ?? kind) : kind;
       const needsCt = ["csv", "xlsx", "text"].includes(effectiveKind);
       if (needsCt && !conceptType.trim()) {
-        throw new Error(`Kind "${effectiveKind}" requires a concept type.`);
+        throw new Error(`Le format « ${effectiveKind} » demande un type de fiche.`);
       }
       setRecentUploads((u) => u.map((r) => r.id === tmpId ? { ...r, progress: 70 } : r));
       const res = await upload(file, {
         kind: effectiveKind,
         conceptType: needsCt ? conceptType : undefined,
       });
-      setInfo(`Ingested ${res.ingested.concepts} concepts, ${res.ingested.relations} relations from ${file.name}.`);
+      setInfo(`${res.ingested.concepts} fiches et ${res.ingested.relations} liens importés depuis ${file.name}.`);
       setRecentUploads((u) => u.map((r): UploadRow => r.id === tmpId ? { ...r, progress: 100, status: "done" } : r));
       await refresh();
     } catch (e: unknown) {
@@ -194,7 +194,7 @@ export default function Files() {
   };
 
   const onDelete = async (id: number) => {
-    if (!(await confirm({ title: "Remove file record", message: "Remove this file record? Already ingested data stays in the graph.", confirmLabel: "Remove", danger: true }))) return;
+    if (!(await confirm({ title: "Retirer le fichier de la liste", message: "Retirer ce fichier de la liste ? Les données déjà importées restent dans le graphe.", confirmLabel: "Retirer", danger: true }))) return;
     try {
       await deleteFile(id);
       await refresh();
@@ -301,12 +301,12 @@ export default function Files() {
       .slice(0, 5)
       .map((f) => {
         const s = fileStatus(f);
-        let verb = "uploaded";
+        let verb = "déposé";
         let tone: "info" | "ok" | "warn" | "fail" = "info";
-        if (s.cls === "ok") { verb = "processed"; tone = "ok"; }
-        else if (s.cls === "fail") { verb = "failed to process"; tone = "fail"; }
-        else if (s.cls === "info") { verb = "is being analyzed"; tone = "info"; }
-        else { verb = "is pending"; tone = "warn"; }
+        if (s.cls === "ok") { verb = "a été traité"; tone = "ok"; }
+        else if (s.cls === "fail") { verb = "n'a pas pu être traité"; tone = "fail"; }
+        else if (s.cls === "info") { verb = "est en cours d'analyse"; tone = "info"; }
+        else { verb = "est en attente"; tone = "warn"; }
         return { id: f.id, name: f.name, verb, tone, ago: fmtAgo(f.uploaded_at) };
       });
   }, [files]);
@@ -329,22 +329,22 @@ export default function Files() {
       <div className="files-stats">
         <TrendStat
           icon="📄" iconBg="#dbeafe" iconFg="#2563eb"
-          label="Total Files" value={stats.total.toLocaleString()}
+          label="Fichiers au total" value={stats.total.toLocaleString()}
           series={stats.totalSeries} color="#2563eb"
         />
         <TrendStat
           icon="✓" iconBg="#dcfce7" iconFg="#16a34a"
-          label="Processed" value={stats.processed.toLocaleString()}
+          label="Traités" value={stats.processed.toLocaleString()}
           series={stats.processedSeries} color="#16a34a"
         />
         <TrendStat
           icon="⏱" iconBg="#fef3c7" iconFg="#d97706"
-          label="Pending Review" value={stats.pending.toLocaleString()}
+          label="En attente" value={stats.pending.toLocaleString()}
           series={stats.pendingSeries} color="#d97706"
         />
         <TrendStat
           icon="🗄" iconBg="#ede9fe" iconFg="#7c3aed"
-          label="Storage Used" value={fmtBytes(stats.size)}
+          label="Espace utilisé" value={fmtBytes(stats.size)}
           series={stats.sizeSeries} color="#7c3aed"
         />
       </div>
@@ -353,38 +353,38 @@ export default function Files() {
       <div className="files-main">
         {/* LEFT — File library */}
         <Card
-          title="File Library"
+          title="Bibliothèque de fichiers"
           actions={
             <div className="toolbar-row">
               <div className="search-wrap">
                 <span className="search-ic">⌕</span>
                 <input
                   className="lib-search"
-                  placeholder="Search files…"
+                  placeholder="Rechercher un fichier…"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                 />
               </div>
               <select className="lib-select" value={filterType} onChange={(e) => setFilterType(e.target.value)}>
-                <option value="">All Types</option>
+                <option value="">Tous les types</option>
                 {allTypes.map((t) => <option key={t} value={t}>{t}</option>)}
               </select>
               <select className="lib-select" value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
-                <option value="">All Statuses</option>
-                <option value="processed">Processed</option>
-                <option value="analyzing">Analyzing</option>
-                <option value="analyzed">Analyzed</option>
-                <option value="pending">Pending</option>
-                <option value="failed">Failed</option>
+                <option value="">Tous les états</option>
+                <option value="traité">Traité</option>
+                <option value="analyse en cours">Analyse en cours</option>
+                <option value="analysé">Analysé</option>
+                <option value="en attente">En attente</option>
+                <option value="échec">Échec</option>
               </select>
               <select className="lib-select" value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
-                <option value="updated">Sort: Last Updated</option>
-                <option value="name">Sort: Name</option>
-                <option value="type">Sort: Type</option>
-                <option value="size">Sort: Size</option>
+                <option value="updated">Tri : dernière mise à jour</option>
+                <option value="name">Tri : nom</option>
+                <option value="type">Tri : type</option>
+                <option value="size">Tri : taille</option>
               </select>
               <button className="btn-primary upload-btn" onClick={pickFile} disabled={busy}>
-                <span aria-hidden>⤒</span> Upload Files
+                <span aria-hidden>⤒</span> Déposer des fichiers
               </button>
               <input
                 ref={fileInputRef}
@@ -401,14 +401,14 @@ export default function Files() {
         >
           {(kind === "csv" || kind === "xlsx" || kind === "text") && (
             <div className="ct-row">
-              <label className="muted" style={{ fontSize: 12, marginBottom: 4 }}>Concept type for CSV/XLSX/text uploads</label>
+              <label className="muted" style={{ fontSize: 12, marginBottom: 4 }}>Type de fiche pour les dépôts CSV/XLSX/texte</label>
               {conceptTypeOptions.length > 0 ? (
                 <select value={conceptType} onChange={(e) => setConceptType(e.target.value)} style={{ maxWidth: 260 }}>
-                  <option value="">— select —</option>
+                  <option value="">— choisir —</option>
                   {conceptTypeOptions.map((t) => <option key={t}>{t}</option>)}
                 </select>
               ) : (
-                <input value={conceptType} onChange={(e) => setConceptType(e.target.value)} placeholder="e.g. Contract" style={{ maxWidth: 260 }} />
+                <input value={conceptType} onChange={(e) => setConceptType(e.target.value)} placeholder="p. ex. Contrat" style={{ maxWidth: 260 }} />
               )}
             </div>
           )}
@@ -419,12 +419,12 @@ export default function Files() {
             <table className="table files-table">
               <thead>
                 <tr>
-                  <th>File Name</th>
+                  <th>Nom du fichier</th>
                   <th>Type</th>
                   <th>Source</th>
-                  <th>Last Updated <span aria-hidden style={{ opacity: 0.5 }}>↓</span></th>
-                  <th>Status</th>
-                  <th>Size</th>
+                  <th>Dernière mise à jour <span aria-hidden style={{ opacity: 0.5 }}>↓</span></th>
+                  <th>État</th>
+                  <th>Taille</th>
                   <th className="actions">Actions</th>
                 </tr>
               </thead>
@@ -439,7 +439,7 @@ export default function Files() {
                           <span className="file-icon" style={{ background: ic.bg, color: ic.fg }}>{ic.label}</span>
                           <div>
                             <div className="file-name">{f.name}</div>
-                            {f.concept_type && <div className="muted" style={{ fontSize: 11 }}>as {f.concept_type}</div>}
+                            {f.concept_type && <div className="muted" style={{ fontSize: 11 }}>en {f.concept_type}</div>}
                           </div>
                         </div>
                       </td>
@@ -449,7 +449,7 @@ export default function Files() {
                       <td><span className={`status-pill ${s.cls}`}>{s.label}</span></td>
                       <td className="muted">{fmtBytes(f.size)}</td>
                       <td className="actions">
-                        <button className="icon-act" aria-label="Actions" onClick={() => onDelete(f.id)} title="Delete">⋮</button>
+                        <button className="icon-act" aria-label="Actions" onClick={() => onDelete(f.id)} title="Retirer">⋮</button>
                       </td>
                     </tr>
                   );
@@ -461,7 +461,7 @@ export default function Files() {
           {filtered.length > 0 && (
             <div className="pager">
               <div className="muted" style={{ fontSize: 12 }}>
-                Showing {(page - 1) * PAGE_SIZE + 1} to {Math.min(filtered.length, page * PAGE_SIZE)} of {filtered.length} files
+                Fichiers {(page - 1) * PAGE_SIZE + 1} à {Math.min(filtered.length, page * PAGE_SIZE)} sur {filtered.length}
               </div>
               <div className="pages">
                 <button className="page-btn" disabled={page === 1} onClick={() => setPage((p) => Math.max(1, p - 1))}>‹</button>
@@ -482,7 +482,7 @@ export default function Files() {
 
         {/* RIGHT — Upload, recent, storage */}
         <div className="files-side">
-          <Card title="Upload & Ingestion">
+          <Card title="Dépôt et import">
             <div
               className={`dz${dragActive ? " active" : ""}`}
               onDragOver={(e) => { e.preventDefault(); setDragActive(true); }}
@@ -497,20 +497,20 @@ export default function Files() {
               onClick={pickFile}
             >
               <div className="dz-ic">⤒</div>
-              <div className="dz-title">Drag &amp; drop files here, or click to browse</div>
-              <div className="dz-sub">Supports PDF, DOCX, CSV, JSON (Max 100 MB per file)</div>
+              <div className="dz-title">Glissez-déposez vos fichiers ici, ou cliquez pour parcourir</div>
+              <div className="dz-sub">PDF, DOCX, CSV, JSON acceptés (100 Mo max par fichier)</div>
               <button className="btn-primary" type="button" onClick={(e) => { e.stopPropagation(); pickFile(); }}>
-                Browse Files
+                Parcourir
               </button>
             </div>
           </Card>
 
           <Card
-            title="Recent Uploads"
-            actions={<a className="muted small-link" href="#" onClick={(e) => e.preventDefault()}>View All</a>}
+            title="Dépôts récents"
+            actions={<a className="muted small-link" href="#" onClick={(e) => e.preventDefault()}>Tout voir</a>}
           >
             {recentUploads.length === 0 && files.length === 0 ? (
-              <div className="muted" style={{ fontSize: 12, padding: "8px 0" }}>No uploads yet.</div>
+              <div className="muted" style={{ fontSize: 12, padding: "8px 0" }}>Aucun dépôt pour l'instant.</div>
             ) : (
               <ul className="recent">
                 {(recentUploads.length > 0
@@ -531,16 +531,16 @@ export default function Files() {
                         {r.status === "uploading" ? (
                           <div className="bar"><div className="bar-fill" style={{ width: `${r.progress}%` }} /></div>
                         ) : r.status === "error" ? (
-                          <div className="muted" style={{ fontSize: 11, color: "var(--danger)" }}>Failed</div>
+                          <div className="muted" style={{ fontSize: 11, color: "var(--danger)" }}>Échec</div>
                         ) : (
-                          <div className="muted" style={{ fontSize: 11 }}>Processed</div>
+                          <div className="muted" style={{ fontSize: 11 }}>Traité</div>
                         )}
                       </div>
                       <div className="recent-status">
                         {r.status === "uploading" ? (
                           <span className="muted small">{r.progress}%</span>
                         ) : r.status === "error" ? (
-                          <span className="status-pill fail">Error</span>
+                          <span className="status-pill fail">Erreur</span>
                         ) : (
                           <span className="check">✓</span>
                         )}
@@ -552,7 +552,7 @@ export default function Files() {
             )}
           </Card>
 
-          <Card title="Storage by Type">
+          <Card title="Espace par type">
             <div className="storage">
               <Donut slices={storage} total={totalSize} />
               <ul className="legend">
@@ -564,7 +564,7 @@ export default function Files() {
                     <span className="pct">{s.pct.toFixed(1)}%</span>
                   </li>
                 ))}
-                {storage.length === 0 && <li className="muted small">No data</li>}
+                {storage.length === 0 && <li className="muted small">Aucune donnée</li>}
               </ul>
             </div>
           </Card>
@@ -574,30 +574,30 @@ export default function Files() {
       {/* Bottom row */}
       <div className="files-bottom">
         <Card
-          title="Folders / Collections"
-          actions={<a className="muted small-link" href="#" onClick={(e) => e.preventDefault()}>View All</a>}
+          title="Dossiers / collections"
+          actions={<a className="muted small-link" href="#" onClick={(e) => e.preventDefault()}>Tout voir</a>}
         >
           <div className="folders">
             {folders.map((f) => (
               <div key={f.name} className="folder">
                 <div className="folder-ic">📁</div>
                 <div className="folder-name">{f.name}</div>
-                <div className="muted small">{f.count} file{f.count === 1 ? "" : "s"}</div>
+                <div className="muted small">{f.count} fichier{f.count === 1 ? "" : "s"}</div>
               </div>
             ))}
             <div className="folder folder-new" onClick={pickFile} role="button" tabIndex={0}>
               <div className="folder-ic">＋</div>
-              <div className="folder-name">New Folder</div>
+              <div className="folder-name">Nouveau dossier</div>
             </div>
           </div>
         </Card>
 
         <Card
-          title="Recent Activity"
-          actions={<a className="muted small-link" href="#" onClick={(e) => e.preventDefault()}>View All</a>}
+          title="Activité récente"
+          actions={<a className="muted small-link" href="#" onClick={(e) => e.preventDefault()}>Tout voir</a>}
         >
           {activity.length === 0 ? (
-            <div className="muted" style={{ fontSize: 12 }}>No activity yet.</div>
+            <div className="muted" style={{ fontSize: 12 }}>Aucune activité pour l'instant.</div>
           ) : (
             <ul className="activity">
               {activity.map((a) => (
@@ -615,34 +615,34 @@ export default function Files() {
           )}
         </Card>
 
-        <Card title="Quick Actions">
+        <Card title="Actions rapides">
           <div className="quick">
             <button className="qa qa-blue" onClick={pickFile}>
               <span className="qa-ic">⤒</span>
               <div>
-                <div className="qa-title">Upload Files</div>
-                <div className="qa-sub">Add new files to your library</div>
+                <div className="qa-title">Déposer des fichiers</div>
+                <div className="qa-sub">Ajouter des fichiers à votre bibliothèque</div>
               </div>
             </button>
             <button className="qa qa-green" onClick={pickFile}>
               <span className="qa-ic">📁</span>
               <div>
-                <div className="qa-title">Create Folder</div>
-                <div className="qa-sub">Organize files and collections</div>
+                <div className="qa-title">Créer un dossier</div>
+                <div className="qa-sub">Organiser fichiers et collections</div>
               </div>
             </button>
             <button className="qa qa-orange" onClick={refresh}>
               <span className="qa-ic">↻</span>
               <div>
-                <div className="qa-title">Reprocess Failed</div>
-                <div className="qa-sub">Retry failed or errored files</div>
+                <div className="qa-title">Relancer les échecs</div>
+                <div className="qa-sub">Réessayer les fichiers en échec ou en erreur</div>
               </div>
             </button>
             <a className="qa qa-purple" href={exportGraphUrl("jsonl")}>
               <span className="qa-ic">⤓</span>
               <div>
-                <div className="qa-title">Export Metadata</div>
-                <div className="qa-sub">Download file metadata</div>
+                <div className="qa-title">Exporter les métadonnées</div>
+                <div className="qa-sub">Télécharger les métadonnées des fichiers</div>
               </div>
             </a>
           </div>

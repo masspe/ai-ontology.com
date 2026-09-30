@@ -56,10 +56,10 @@ function fileKindClass(kind: string): string {
 
 function ingestStatus(f: FileRecord): { label: string; cls: string } {
   const s = (f.status || "").toLowerCase();
-  if (s === "processed" || s === "ingested" || s === "done") return { label: "Processed", cls: "badge-success" };
-  if (s === "pending" || s === "queued") return { label: "Pending", cls: "badge-warn" };
-  if (s === "failed" || s === "error") return { label: "Failed", cls: "badge-danger" };
-  if (s === "analyzed") return { label: "Analyzed", cls: "badge-accent" };
+  if (s === "processed" || s === "ingested" || s === "done") return { label: "Traité", cls: "badge-success" };
+  if (s === "pending" || s === "queued") return { label: "En attente", cls: "badge-warn" };
+  if (s === "failed" || s === "error") return { label: "Échec", cls: "badge-danger" };
+  if (s === "analyzed") return { label: "Analysé", cls: "badge-accent" };
   return { label: f.status || "—", cls: "badge" };
 }
 

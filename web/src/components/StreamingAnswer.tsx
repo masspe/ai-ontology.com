@@ -4,6 +4,8 @@
 import { useState } from "react";
 import { askStream, type Subgraph } from "../api";
 
+const plural = (n: number, word: string) => `${n} ${word}${n > 1 ? "s" : ""}`;
+
 interface Props {
   defaultQuery?: string;
 }
@@ -47,7 +49,7 @@ export default function StreamingAnswer({ defaultQuery = "" }: Props) {
       <div className="field-row" style={{ marginBottom: 12 }}>
         <div className="field" style={{ flex: 1 }}>
           <textarea
-            placeholder="Ask the ontology…"
+            placeholder="Posez votre question…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             rows={3}
@@ -56,10 +58,10 @@ export default function StreamingAnswer({ defaultQuery = "" }: Props) {
       </div>
       <div className="row" style={{ marginBottom: 12 }}>
         <button className="btn-primary" onClick={run} disabled={streaming || !query.trim()}>
-          {streaming ? "Streaming…" : "Ask"}
+          {streaming ? "Réponse en cours…" : "Demander"}
         </button>
         <span className="muted" style={{ fontSize: 12 }}>
-          {retrieved ? `Grounded on ${retrieved.concepts.length} concepts, ${retrieved.relations.length} relations` : ""}
+          {retrieved ? `Réponse fondée sur ${plural(retrieved.concepts.length, "fiche")} et ${plural(retrieved.relations.length, "lien")}` : ""}
         </span>
       </div>
       {error && <div className="error-banner">{error}</div>}

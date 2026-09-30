@@ -13,10 +13,10 @@ export function ConfirmProvider({ children }) {
       resolverRef.current = resolve;
       setState({
         opts: {
-          title: opts?.title ?? "Confirm",
+          title: opts?.title ?? "Confirmer",
           message: opts?.message ?? "Are you sure?",
-          confirmLabel: opts?.confirmLabel ?? "Confirm",
-          cancelLabel: opts?.cancelLabel ?? "Cancel",
+          confirmLabel: opts?.confirmLabel ?? "Confirmer",
+          cancelLabel: opts?.cancelLabel ?? "Annuler",
           danger: opts?.danger ?? false,
         },
       });

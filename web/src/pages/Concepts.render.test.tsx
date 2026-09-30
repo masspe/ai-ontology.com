@@ -56,7 +56,7 @@ const ontology: Ontology = {
   },
 };
 
-// Noon UTC so the en-US date is the same in every time zone.
+// Noon UTC so the fr-CH date is the same in every time zone.
 const T_ALICE = 1_709_985_600; // 2024-03-09T12:00:00Z
 const LONG_DEF = "Lead architect. " + "x".repeat(200); // 216 chars → clipped at 160
 
@@ -243,7 +243,7 @@ describe("Concepts page — stat tiles", () => {
     mocked.getSubgraph.mockResolvedValue({ subgraph: { concepts: [], relations: [] } });
     renderPage(<Concepts />);
     await screen.findByText("1,234", { selector: ".stat-value" });
-    expect(screen.getByText("Coverage Score").nextElementSibling).toHaveTextContent("—");
+    expect(screen.getByText("Taux de couverture").nextElementSibling).toHaveTextContent("—");
   });
 
   it("surfaces a failing stats call in the error banner", async () => {
@@ -271,71 +271,71 @@ describe("Concepts page — library list", () => {
     const def = within(alice).getByText(/^Lead architect\. x+…$/);
     expect(def.textContent).toHaveLength(161);
     expect(def).toHaveAttribute("title", LONG_DEF); // 216 chars < 300: full title
-    expect(within(alice).getByText("Reviewed")).toHaveClass("badge-accent");
+    expect(within(alice).getByText("Vérifiée")).toHaveClass("badge-accent");
     expect(within(alice).getByText("3")).toBeInTheDocument();
-    expect(within(alice).getByText("Mar 9, 2024")).toBeInTheDocument();
+    expect(within(alice).getByText("9 mars 2024")).toBeInTheDocument();
 
     expect(within(acme).getByText("—")).toBeInTheDocument(); // no definition
-    expect(within(acme).getByText("Draft")).toHaveClass("badge-warn");
-    expect(within(acme).getByText("Jan 2, 2024")).toBeInTheDocument(); // created_at string
+    expect(within(acme).getByText("Brouillon")).toHaveClass("badge-warn");
+    expect(within(acme).getByText("2 janv. 2024")).toBeInTheDocument(); // created_at string
     expect(within(sla).getByText("Contract")).toBeInTheDocument(); // type without parent
-    expect(within(sla).getByText("Archived")).toHaveClass("badge-danger");
+    expect(within(sla).getByText("Archivée")).toHaveClass("badge-danger");
     expect(within(bob).getByText("Active")).toHaveClass("badge-success");
     expect(within(bob).getAllByText("—")).toHaveLength(2); // no definition, no date
 
-    expect(screen.getByText("Showing 1–4 of 4 concepts")).toBeInTheDocument();
+    expect(screen.getByText("Fiches 1–4 sur 4")).toBeInTheDocument();
   });
 
   it("shows the empty state, the details placeholder and disables select-all when nothing matches", async () => {
     db = [];
     renderPage(<Concepts />);
-    expect(await screen.findByText("No concepts match the current filters.")).toBeInTheDocument();
-    expect(screen.getByText("Select a concept from the library.")).toBeInTheDocument();
-    expect(screen.getByText("Showing 0–0 of 0 concepts")).toBeInTheDocument();
-    expect(screen.getByRole("checkbox", { name: "Select all concepts on this page" })).toBeDisabled();
-    expect(await screen.findByText("No recent activity.")).toBeInTheDocument();
+    expect(await screen.findByText("Aucune fiche ne correspond aux filtres actuels.")).toBeInTheDocument();
+    expect(screen.getByText("Sélectionnez une fiche dans la bibliothèque.")).toBeInTheDocument();
+    expect(screen.getByText("Fiches 0–0 sur 0")).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Sélectionner toutes les fiches de cette page" })).toBeDisabled();
+    expect(await screen.findByText("Aucune activité récente.")).toBeInTheDocument();
   });
 
   it("debounces the search and queries the server with the trimmed text", async () => {
     await mountLoaded();
-    fireEvent.change(screen.getByPlaceholderText("Search concepts…"), { target: { value: "  ali " } });
+    fireEvent.change(screen.getByPlaceholderText("Rechercher une fiche…"), { target: { value: "  ali " } });
     // Nothing is fetched synchronously: the query waits for the debounce.
     expect(pageCalls().some((p) => p.q)).toBe(false);
     await waitFor(() =>
       expect(mocked.listConcepts).toHaveBeenCalledWith({ type: undefined, q: "ali", limit: 7, cursor: undefined }),
     );
     await waitFor(() => expect(rowNames()).toEqual(["Alice"]));
-    expect(screen.getByText("Showing 1–1 of 1 concepts")).toBeInTheDocument();
+    expect(screen.getByText("Fiches 1–1 sur 1")).toBeInTheDocument();
   });
 
   it("filters by type on the server and by status on the client, and sorts by name or type", async () => {
     const { user } = await mountLoaded();
-    await user.selectOptions(screen.getByDisplayValue("All Domains"), "Company");
+    await user.selectOptions(screen.getByDisplayValue("Tous les domaines"), "Company");
     await waitFor(() =>
       expect(mocked.listConcepts).toHaveBeenCalledWith({ type: "Company", q: undefined, limit: 7, cursor: undefined }),
     );
     await waitFor(() => expect(rowNames()).toEqual(["ACME"]));
 
     await user.selectOptions(screen.getByDisplayValue("Company"), "");
-    await user.selectOptions(screen.getByDisplayValue("All Statuses"), "archived");
+    await user.selectOptions(screen.getByDisplayValue("Tous les statuts"), "archived");
     await waitFor(() => expect(rowNames()).toEqual(["Master SLA"]));
     // The server never sees the status: the slice is filtered on the client.
     expect(pageCalls().every((p) => !("status" in p))).toBe(true);
 
-    await user.selectOptions(screen.getByDisplayValue("Archived"), "");
-    await user.selectOptions(screen.getByDisplayValue("Sort: Last Updated"), "name");
+    await user.selectOptions(screen.getByDisplayValue("Archivée"), "");
+    await user.selectOptions(screen.getByDisplayValue("Tri : dernière mise à jour"), "name");
     await waitFor(() => expect(rowNames()).toEqual(["ACME", "Alice", "Bob", "Master SLA"]));
-    await user.selectOptions(screen.getByDisplayValue("Sort: Name"), "type");
+    await user.selectOptions(screen.getByDisplayValue("Tri : nom"), "type");
     await waitFor(() => expect(rowNames()).toEqual(["ACME", "Master SLA", "Alice", "Bob"]));
   });
 
   it("pages by cursor: next pushes the server cursor, previous pops it, total comes from page 1", async () => {
     db = many(16);
     const { user } = await mountLoaded("Concept 01");
-    expect(screen.getByText("Showing 1–7 of 16 concepts")).toBeInTheDocument();
+    expect(screen.getByText("Fiches 1–7 sur 16")).toBeInTheDocument();
     expect(screen.getByText("Page 1")).toBeInTheDocument();
-    const prev = screen.getByRole("button", { name: "Previous page" });
-    const next = screen.getByRole("button", { name: "Next page" });
+    const prev = screen.getByRole("button", { name: "Page précédente" });
+    const next = screen.getByRole("button", { name: "Page suivante" });
     expect(prev).toBeDisabled();
     expect(next).toBeEnabled();
     // The first page is fetched without a cursor (and without an offset).
@@ -345,37 +345,37 @@ describe("Concepts page — library list", () => {
     await waitFor(() =>
       expect(mocked.listConcepts).toHaveBeenCalledWith(expect.objectContaining({ cursor: "7" })),
     );
-    expect(await screen.findByText("Showing 8–14 of 16 concepts")).toBeInTheDocument();
+    expect(await screen.findByText("Fiches 8–14 sur 16")).toBeInTheDocument();
     expect(screen.getByText("Page 2")).toBeInTheDocument();
     expect(rowNames()[0]).toBe("Concept 08");
 
-    await user.click(screen.getByRole("button", { name: "Next page" }));
+    await user.click(screen.getByRole("button", { name: "Page suivante" }));
     await waitFor(() =>
       expect(mocked.listConcepts).toHaveBeenCalledWith(expect.objectContaining({ cursor: "14" })),
     );
-    expect(await screen.findByText("Showing 15–16 of 16 concepts")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Next page" })).toBeDisabled();
+    expect(await screen.findByText("Fiches 15–16 sur 16")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Page suivante" })).toBeDisabled();
 
-    await user.click(screen.getByRole("button", { name: "Previous page" }));
-    expect(await screen.findByText("Showing 8–14 of 16 concepts")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Page précédente" }));
+    expect(await screen.findByText("Fiches 8–14 sur 16")).toBeInTheDocument();
     // Back on page 2 through the stack: the same cursor, not an offset.
     expect(mocked.listConcepts).toHaveBeenLastCalledWith(expect.objectContaining({ cursor: "7" }));
-    await user.click(screen.getByRole("button", { name: "Previous page" }));
-    expect(await screen.findByText("Showing 1–7 of 16 concepts")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Previous page" })).toBeDisabled();
+    await user.click(screen.getByRole("button", { name: "Page précédente" }));
+    expect(await screen.findByText("Fiches 1–7 sur 16")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Page précédente" })).toBeDisabled();
   });
 
   it("steps back when the current page empties under it", async () => {
     db = many(8);
     const { user } = await mountLoaded("Concept 01");
-    await user.click(screen.getByRole("button", { name: "Next page" }));
-    await screen.findByText("Showing 8–8 of 8 concepts");
+    await user.click(screen.getByRole("button", { name: "Page suivante" }));
+    await screen.findByText("Fiches 8–8 sur 8");
     // Deleting the only row of page 2 leaves an empty last page: the pager
     // steps back to page 1 by itself.
-    await user.click(screen.getByRole("button", { name: "Delete concept Concept 08" }));
-    await answerConfirm(user, "Delete");
+    await user.click(screen.getByRole("button", { name: "Supprimer la fiche Concept 08" }));
+    await answerConfirm(user, "Supprimer");
     expect(await screen.findByText("Page 1")).toBeInTheDocument();
-    expect(await screen.findByText("Showing 1–7 of 7 concepts")).toBeInTheDocument();
+    expect(await screen.findByText("Fiches 1–7 sur 7")).toBeInTheDocument();
     expect(rowNames()[0]).toBe("Concept 01");
   });
 
@@ -396,102 +396,102 @@ describe("Concepts page — selection and bulk delete", () => {
     const { user } = await mountLoaded();
     expect(screen.queryByRole("toolbar")).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("checkbox", { name: "Select concept Bob" }));
-    const toolbar = screen.getByRole("toolbar", { name: "Bulk actions" });
-    expect(toolbar).toHaveTextContent("1 selected");
-    expect(screen.getByText("Delete 1 selected")).toBeInTheDocument(); // quick action mirrors it
+    await user.click(screen.getByRole("checkbox", { name: "Sélectionner la fiche Bob" }));
+    const toolbar = screen.getByRole("toolbar", { name: "Actions groupées" });
+    expect(toolbar).toHaveTextContent("1 sélectionnée");
+    expect(screen.getByText("Supprimer 1 fiche")).toBeInTheDocument(); // quick action mirrors it
     expect(libraryRows()[3]).toHaveClass("row-checked");
     // Ticking does not select the row for the details panel.
     expect(within(details()).getByRole("heading", { level: 3 })).toHaveTextContent("Alice");
 
-    const all = screen.getByRole("checkbox", { name: "Select all concepts on this page" });
+    const all = screen.getByRole("checkbox", { name: "Sélectionner toutes les fiches de cette page" });
     await user.click(all);
-    expect(toolbar).toHaveTextContent("4 selected");
+    expect(toolbar).toHaveTextContent("4 sélectionnées");
     expect(all).toBeChecked();
     await user.click(all);
     expect(screen.queryByRole("toolbar")).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("checkbox", { name: "Select concept Alice" }));
-    await user.click(screen.getByRole("checkbox", { name: "Select concept Alice" }));
+    await user.click(screen.getByRole("checkbox", { name: "Sélectionner la fiche Alice" }));
+    await user.click(screen.getByRole("checkbox", { name: "Sélectionner la fiche Alice" }));
     expect(screen.queryByRole("toolbar")).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("checkbox", { name: "Select concept Alice" }));
-    await user.click(screen.getByRole("button", { name: "Clear selection" }));
+    await user.click(screen.getByRole("checkbox", { name: "Sélectionner la fiche Alice" }));
+    await user.click(screen.getByRole("button", { name: "Vider la sélection" }));
     expect(screen.queryByRole("toolbar")).not.toBeInTheDocument();
-    expect(screen.getByText("Select concepts, then delete")).toBeInTheDocument();
+    expect(screen.getByText("Sélectionnez des fiches, puis supprimez-les")).toBeInTheDocument();
   });
 
   it("drops ticked rows that leave the page when a filter changes", async () => {
     const { user } = await mountLoaded();
-    await user.click(screen.getByRole("checkbox", { name: "Select concept Alice" }));
+    await user.click(screen.getByRole("checkbox", { name: "Sélectionner la fiche Alice" }));
     expect(screen.getByRole("toolbar")).toBeInTheDocument();
-    await user.selectOptions(screen.getByDisplayValue("All Domains"), "Company");
+    await user.selectOptions(screen.getByDisplayValue("Tous les domaines"), "Company");
     await waitFor(() => expect(rowNames()).toEqual(["ACME"]));
     expect(screen.queryByRole("toolbar")).not.toBeInTheDocument();
   });
 
   it("bulk-deletes the ticked concepts only after confirmation, then refreshes the list", async () => {
     const { user } = await mountLoaded();
-    await user.click(screen.getByRole("checkbox", { name: "Select concept Alice" }));
-    await user.click(screen.getByRole("checkbox", { name: "Select concept ACME" }));
-    await user.click(screen.getByRole("button", { name: "Delete selected" }));
+    await user.click(screen.getByRole("checkbox", { name: "Sélectionner la fiche Alice" }));
+    await user.click(screen.getByRole("checkbox", { name: "Sélectionner la fiche ACME" }));
+    await user.click(screen.getByRole("button", { name: "Supprimer la sélection" }));
 
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText("Delete selected concepts")).toBeInTheDocument();
+    expect(within(dialog).getByText("Supprimer les fiches sélectionnées")).toBeInTheDocument();
     expect(
-      within(dialog).getByText("Delete 2 concepts and every relation attached to them? This cannot be undone."),
+      within(dialog).getByText("Supprimer 2 fiches et tous les liens qui y sont attachés ? Cette action est irréversible."),
     ).toBeInTheDocument();
-    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await user.click(within(dialog).getByRole("button", { name: "Annuler" }));
     expect(mocked.deleteConcepts).not.toHaveBeenCalled();
     expect(rowNames()).toHaveLength(4);
 
-    await user.click(screen.getByRole("button", { name: "Delete selected" }));
-    await answerConfirm(user, "Delete 2");
+    await user.click(screen.getByRole("button", { name: "Supprimer la sélection" }));
+    await answerConfirm(user, "Supprimer 2");
     await waitFor(() => expect(mocked.deleteConcepts).toHaveBeenCalledWith([1, 2]));
-    expect(await screen.findByText("Deleted 2 concepts and 3 relations.")).toBeInTheDocument();
+    expect(await screen.findByText("Supprimé : 2 fiches et 3 liens.")).toBeInTheDocument();
     await waitFor(() => expect(rowNames()).toEqual(["Master SLA", "Bob"]));
-    expect(screen.getByText("Showing 1–2 of 2 concepts")).toBeInTheDocument();
+    expect(screen.getByText("Fiches 1–2 sur 2")).toBeInTheDocument();
     expect(screen.queryByRole("toolbar")).not.toBeInTheDocument();
     // The deleted selection is replaced by the first remaining row.
     await waitFor(() => expect(within(details()).getByRole("heading", { level: 3 })).toHaveTextContent("Master SLA"));
     // Stats and recent activity are refreshed.
     await waitFor(() => expect(mocked.getStats).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(screen.queryByText("“Alice”")).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText("« Alice »")).not.toBeInTheDocument());
   });
 
   it("words a single deletion without relations in the singular", async () => {
     const { user } = await mountLoaded();
-    await user.click(screen.getByRole("checkbox", { name: "Select concept Bob" }));
-    await user.click(screen.getByRole("button", { name: "Delete selected" }));
+    await user.click(screen.getByRole("checkbox", { name: "Sélectionner la fiche Bob" }));
+    await user.click(screen.getByRole("button", { name: "Supprimer la sélection" }));
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText(/^Delete 1 concept and every relation/)).toBeInTheDocument();
-    await user.click(within(dialog).getByRole("button", { name: "Delete 1" }));
-    expect(await screen.findByText("Deleted 1 concept.")).toBeInTheDocument();
+    expect(within(dialog).getByText(/^Supprimer 1 fiche et tous les liens/)).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Supprimer 1" }));
+    expect(await screen.findByText("Supprimé : 1 fiche.")).toBeInTheDocument();
     expect(mocked.deleteConcepts).toHaveBeenCalledWith([4]);
   });
 
   it("shows the API error when the bulk delete fails and keeps the rows", async () => {
     mocked.deleteConcepts.mockRejectedValue(new Error("bulk failed"));
     const { user } = await mountLoaded();
-    await user.click(screen.getByRole("checkbox", { name: "Select concept Bob" }));
-    await user.click(screen.getByRole("button", { name: "Delete selected" }));
-    await answerConfirm(user, "Delete 1");
+    await user.click(screen.getByRole("checkbox", { name: "Sélectionner la fiche Bob" }));
+    await user.click(screen.getByRole("button", { name: "Supprimer la sélection" }));
+    await answerConfirm(user, "Supprimer 1");
     expect(await screen.findByText("bulk failed")).toBeInTheDocument();
     expect(rowNames()).toHaveLength(4);
   });
 
   it("quick action: hints when nothing is ticked, otherwise opens the bulk confirmation", async () => {
     const { user } = await mountLoaded();
-    const quick = screen.getByRole("button", { name: /Bulk Delete/ });
+    const quick = screen.getByRole("button", { name: /Suppression groupée/ });
     await user.click(quick);
     expect(
-      screen.getByText("Tick the boxes in the library to select concepts, then delete them together."),
+      screen.getByText("Cochez les cases de la bibliothèque pour sélectionner des fiches, puis supprimez-les ensemble."),
     ).toBeInTheDocument();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 
-    await user.click(screen.getByRole("checkbox", { name: "Select concept Bob" }));
+    await user.click(screen.getByRole("checkbox", { name: "Sélectionner la fiche Bob" }));
     await user.click(quick);
-    await answerConfirm(user, "Delete 1");
+    await answerConfirm(user, "Supprimer 1");
     await waitFor(() => expect(mocked.deleteConcepts).toHaveBeenCalledWith([4]));
 
     // No inert "validate" button any more; the export is a real download link.
@@ -506,41 +506,41 @@ describe("Concepts page — create concept", () => {
     mocked.getOntology.mockResolvedValue({ concept_types: {}, relation_types: {} });
     const { user } = await mountLoaded();
     expect(await screen.findByText(/Aucun type de fiche/)).toBeInTheDocument();
-    expect(screen.getByText("Loading domains…")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Create Concept" }));
+    expect(screen.getByText("Chargement des domaines…")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Créer une fiche" }));
     expect(
-      screen.getByText("No concept types are defined yet. Create one in Ontology Builder first."),
+      screen.getByText("Aucun type de fiche n'est défini pour l'instant. Créez-en un d'abord dans le modèle de données."),
     ).toBeInTheDocument();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   it("creates a concept from the form, closes the modal and refreshes the list", async () => {
     const { user } = await mountLoaded();
-    await screen.findByText("Coverage Score"); // ontology loaded → types known
+    await screen.findByText("Taux de couverture"); // ontology loaded → types known
     await waitFor(() => expect(screen.getByRole("option", { name: "Person" })).toBeInTheDocument());
-    await user.click(screen.getByRole("button", { name: "Create Concept" }));
-    const dialog = await screen.findByRole("dialog", { name: "Create Concept" });
-    const create = within(dialog).getByRole("button", { name: "Create" });
+    await user.click(screen.getByRole("button", { name: "Créer une fiche" }));
+    const dialog = await screen.findByRole("dialog", { name: "Créer une fiche" });
+    const create = within(dialog).getByRole("button", { name: "Créer" });
     expect(create).toBeDisabled();
-    expect(within(dialog).getByLabelText("Concept type")).toHaveValue("Company"); // first sorted type
+    expect(within(dialog).getByLabelText("Type de fiche")).toHaveValue("Company"); // first sorted type
 
     // The submit guard also holds when the form is forced through.
     fireEvent.submit(dialog.querySelector("form.modal-form")!);
     expect(mocked.createConcept).not.toHaveBeenCalled();
 
-    await user.type(within(dialog).getByLabelText("Concept name"), "  Globex ");
-    await user.selectOptions(within(dialog).getByLabelText("Concept type"), "Person");
-    await user.type(within(dialog).getByLabelText("Definition (optional)"), "A rival ");
+    await user.type(within(dialog).getByLabelText("Nom de la fiche"), "  Globex ");
+    await user.selectOptions(within(dialog).getByLabelText("Type de fiche"), "Person");
+    await user.type(within(dialog).getByLabelText("Description (facultative)"), "A rival ");
     expect(create).toBeEnabled();
     await user.click(create);
 
     await waitFor(() =>
       expect(mocked.createConcept).toHaveBeenCalledWith({ name: "Globex", concept_type: "Person", description: "A rival" }),
     );
-    expect(await screen.findByText('Concept "Globex" created.')).toBeInTheDocument();
+    expect(await screen.findByText('Fiche « Globex » créée.')).toBeInTheDocument();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     await waitFor(() => expect(rowNames()).toContain("Globex"));
-    expect(await screen.findByText("“Globex”")).toBeInTheDocument(); // recent activity
+    expect(await screen.findByText("« Globex »")).toBeInTheDocument(); // recent activity
     await waitFor(() => expect(mocked.getStats).toHaveBeenCalledTimes(2));
   });
 
@@ -548,30 +548,30 @@ describe("Concepts page — create concept", () => {
     mocked.createConcept.mockRejectedValue(new Error("create failed"));
     const { user } = await mountLoaded();
     await waitFor(() => expect(screen.getByRole("option", { name: "Person" })).toBeInTheDocument());
-    await user.click(screen.getByRole("button", { name: "Create Concept" }));
-    const dialog = await screen.findByRole("dialog", { name: "Create Concept" });
-    await user.type(within(dialog).getByLabelText("Concept name"), "Globex");
-    await user.click(within(dialog).getByRole("button", { name: "Create" }));
+    await user.click(screen.getByRole("button", { name: "Créer une fiche" }));
+    const dialog = await screen.findByRole("dialog", { name: "Créer une fiche" });
+    await user.type(within(dialog).getByLabelText("Nom de la fiche"), "Globex");
+    await user.click(within(dialog).getByRole("button", { name: "Créer" }));
     expect(await screen.findByText("create failed")).toBeInTheDocument();
-    expect(screen.getByRole("dialog", { name: "Create Concept" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Créer une fiche" })).toBeInTheDocument();
   });
 
   it("closes through Cancel, the × button and the backdrop, but not from inside", async () => {
     const { user } = await mountLoaded();
     await waitFor(() => expect(screen.getByRole("option", { name: "Person" })).toBeInTheDocument());
-    const open = () => user.click(screen.getByRole("button", { name: "Create Concept" }));
+    const open = () => user.click(screen.getByRole("button", { name: "Créer une fiche" }));
 
     await open();
-    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await user.click(screen.getByRole("button", { name: "Annuler" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 
     await open();
-    await user.click(screen.getByRole("button", { name: "Close" }));
+    await user.click(screen.getByRole("button", { name: "Fermer" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 
     await open();
-    await user.click(screen.getByRole("dialog", { name: "Create Concept" }));
-    expect(screen.getByRole("dialog", { name: "Create Concept" })).toBeInTheDocument();
+    await user.click(screen.getByRole("dialog", { name: "Créer une fiche" }));
+    expect(screen.getByRole("dialog", { name: "Créer une fiche" })).toBeInTheDocument();
     await user.click(document.querySelector(".modal-backdrop")!);
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
@@ -581,52 +581,52 @@ describe("Concepts page — create concept", () => {
     mocked.generateOntology.mockReturnValue(new Promise((r) => (resolve = r)));
     const { user } = await mountLoaded();
     await waitFor(() => expect(screen.getByRole("option", { name: "Person" })).toBeInTheDocument());
-    await user.click(screen.getByRole("button", { name: "Create Concept" }));
-    const dialog = await screen.findByRole("dialog", { name: "Create Concept" });
+    await user.click(screen.getByRole("button", { name: "Créer une fiche" }));
+    const dialog = await screen.findByRole("dialog", { name: "Créer une fiche" });
 
-    const generate = within(dialog).getByRole("button", { name: "Generate" });
+    const generate = within(dialog).getByRole("button", { name: "Générer" });
     expect(generate).toBeDisabled();
-    await user.type(within(dialog).getByPlaceholderText(/French software vendor/), "  a person ");
+    await user.type(within(dialog).getByPlaceholderText(/éditeur de logiciels/), "  a person ");
     expect(generate).toBeEnabled();
     await user.click(generate);
-    expect(await within(dialog).findByText("Generating…")).toBeInTheDocument();
+    expect(await within(dialog).findByText("Génération…")).toBeInTheDocument();
     expect(mocked.generateOntology).toHaveBeenCalledWith("a person");
     resolve({
       ontology: { concept_types: { Person: { name: "Person", description: "A human being" } }, relation_types: {} },
       model: "m",
     });
-    await waitFor(() => expect(within(dialog).getByLabelText("Concept name")).toHaveValue("Person"));
-    expect(within(dialog).getByLabelText("Concept type")).toHaveValue("Person");
-    expect(within(dialog).getByLabelText("Definition (optional)")).toHaveValue("A human being");
+    await waitFor(() => expect(within(dialog).getByLabelText("Nom de la fiche")).toHaveValue("Person"));
+    expect(within(dialog).getByLabelText("Type de fiche")).toHaveValue("Person");
+    expect(within(dialog).getByLabelText("Description (facultative)")).toHaveValue("A human being");
 
     // A second draft of an unknown type keeps the name, type and definition already set.
     mocked.generateOntology.mockResolvedValue({
       ontology: { concept_types: { Alien: { name: "Alien", description: "Other" } }, relation_types: {} },
       model: "m",
     });
-    await user.click(within(dialog).getByRole("button", { name: "Generate" }));
+    await user.click(within(dialog).getByRole("button", { name: "Générer" }));
     await waitFor(() => expect(mocked.generateOntology).toHaveBeenCalledTimes(2));
-    expect(within(dialog).getByLabelText("Concept name")).toHaveValue("Person");
-    expect(within(dialog).getByLabelText("Concept type")).toHaveValue("Person");
-    expect(within(dialog).getByLabelText("Definition (optional)")).toHaveValue("A human being");
+    expect(within(dialog).getByLabelText("Nom de la fiche")).toHaveValue("Person");
+    expect(within(dialog).getByLabelText("Type de fiche")).toHaveValue("Person");
+    expect(within(dialog).getByLabelText("Description (facultative)")).toHaveValue("A human being");
   });
 
   it("reports an empty AI answer and a failed AI call next to the button", async () => {
     mocked.generateOntology.mockResolvedValueOnce({ ontology: { concept_types: {}, relation_types: {} }, model: "m" });
     const { user } = await mountLoaded();
     await waitFor(() => expect(screen.getByRole("option", { name: "Person" })).toBeInTheDocument());
-    await user.click(screen.getByRole("button", { name: "Create Concept" }));
-    const dialog = await screen.findByRole("dialog", { name: "Create Concept" });
-    expect(within(dialog).getByText(/Drafts will populate the fields below/)).toBeInTheDocument();
-    await user.type(within(dialog).getByPlaceholderText(/French software vendor/), "nothing");
-    await user.click(within(dialog).getByRole("button", { name: "Generate" }));
+    await user.click(screen.getByRole("button", { name: "Créer une fiche" }));
+    const dialog = await screen.findByRole("dialog", { name: "Créer une fiche" });
+    expect(within(dialog).getByText(/Le brouillon remplira les champs ci-dessous/)).toBeInTheDocument();
+    await user.type(within(dialog).getByPlaceholderText(/éditeur de logiciels/), "nothing");
+    await user.click(within(dialog).getByRole("button", { name: "Générer" }));
     expect(
-      await within(dialog).findByText("AI did not return any concepts. Try a more specific prompt."),
+      await within(dialog).findByText("L'IA n'a renvoyé aucune fiche. Essayez une consigne plus précise."),
     ).toBeInTheDocument();
-    expect(within(dialog).queryByText(/Drafts will populate/)).not.toBeInTheDocument();
+    expect(within(dialog).queryByText(/Le brouillon remplira/)).not.toBeInTheDocument();
 
     mocked.generateOntology.mockRejectedValueOnce(new Error("llm down"));
-    await user.click(within(dialog).getByRole("button", { name: "Generate" }));
+    await user.click(within(dialog).getByRole("button", { name: "Générer" }));
     expect(await within(dialog).findByText("llm down")).toBeInTheDocument();
   });
 });
@@ -636,19 +636,19 @@ describe("Concepts page — create concept", () => {
 describe("Concepts page — edit concept", () => {
   it("edits from the row's pencil button and saves the trimmed name and definition", async () => {
     const { user } = await mountLoaded();
-    await user.click(screen.getAllByRole("button", { name: "Edit" })[0]);
-    const dialog = await screen.findByRole("dialog", { name: "Edit Concept" });
-    const name = within(dialog).getByLabelText("Name");
+    await user.click(screen.getAllByRole("button", { name: "Modifier" })[0]);
+    const dialog = await screen.findByRole("dialog", { name: "Modifier la fiche" });
+    const name = within(dialog).getByLabelText("Nom");
     expect(name).toHaveValue("Alice");
-    expect(within(dialog).getByLabelText("Definition")).toHaveValue(LONG_DEF);
+    expect(within(dialog).getByLabelText("Description")).toHaveValue(LONG_DEF);
     await user.clear(name);
     await user.type(name, " Alicia ");
-    await user.clear(within(dialog).getByLabelText("Definition"));
-    await user.type(within(dialog).getByLabelText("Definition"), "Architect ");
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await user.clear(within(dialog).getByLabelText("Description"));
+    await user.type(within(dialog).getByLabelText("Description"), "Architect ");
+    await user.click(within(dialog).getByRole("button", { name: "Enregistrer" }));
 
     await waitFor(() => expect(mocked.updateConcept).toHaveBeenCalledWith(1, { name: "Alicia", description: "Architect" }));
-    expect(await screen.findByText('Concept "Alicia" updated.')).toBeInTheDocument();
+    expect(await screen.findByText('Fiche « Alicia » mise à jour.')).toBeInTheDocument();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(rowNames()[0]).toBe("Alicia");
     expect(within(details()).getByRole("heading", { level: 3 })).toHaveTextContent("Alicia");
@@ -657,19 +657,19 @@ describe("Concepts page — edit concept", () => {
 
   it("edits from the details panel; Cancel discards, an empty name cannot be saved", async () => {
     const { user } = await mountLoaded();
-    await user.click(within(details()).getByRole("button", { name: "Edit Concept" }));
-    const dialog = await screen.findByRole("dialog", { name: "Edit Concept" });
-    const save = within(dialog).getByRole("button", { name: "Save" });
-    await user.clear(within(dialog).getByLabelText("Name"));
+    await user.click(within(details()).getByRole("button", { name: "Modifier la fiche" }));
+    const dialog = await screen.findByRole("dialog", { name: "Modifier la fiche" });
+    const save = within(dialog).getByRole("button", { name: "Enregistrer" });
+    await user.clear(within(dialog).getByLabelText("Nom"));
     expect(save).toBeDisabled();
     fireEvent.submit(dialog.querySelector("form")!);
     expect(mocked.updateConcept).not.toHaveBeenCalled();
-    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await user.click(within(dialog).getByRole("button", { name: "Annuler" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 
     // The × button closes too.
-    await user.click(within(details()).getByRole("button", { name: "Edit Concept" }));
-    await user.click(screen.getByRole("button", { name: "Close" }));
+    await user.click(within(details()).getByRole("button", { name: "Modifier la fiche" }));
+    await user.click(screen.getByRole("button", { name: "Fermer" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(rowNames()[0]).toBe("Alice");
   });
@@ -677,10 +677,10 @@ describe("Concepts page — edit concept", () => {
   it("shows the error when the update fails", async () => {
     mocked.updateConcept.mockRejectedValue(new Error("update failed"));
     const { user } = await mountLoaded();
-    await user.click(screen.getAllByRole("button", { name: "Edit" })[1]);
-    const dialog = await screen.findByRole("dialog", { name: "Edit Concept" });
-    await user.type(within(dialog).getByLabelText("Name"), " Corp");
-    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await user.click(screen.getAllByRole("button", { name: "Modifier" })[1]);
+    const dialog = await screen.findByRole("dialog", { name: "Modifier la fiche" });
+    await user.type(within(dialog).getByLabelText("Nom"), " Corp");
+    await user.click(within(dialog).getByRole("button", { name: "Enregistrer" }));
     expect(await screen.findByText("update failed")).toBeInTheDocument();
     expect(mocked.updateConcept).toHaveBeenCalledWith(2, { name: "ACME Corp", description: "" });
   });
@@ -693,29 +693,29 @@ describe("Concepts page — delete a concept", () => {
     db = many(9);
     const { user } = await mountLoaded("Concept 01");
     expect(rowNames()).toHaveLength(7);
-    await user.click(screen.getByRole("button", { name: "Delete concept Concept 01" }));
+    await user.click(screen.getByRole("button", { name: "Supprimer la fiche Concept 01" }));
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText('Delete concept "Concept 01"? This cannot be undone.')).toBeInTheDocument();
-    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(within(dialog).getByText('Supprimer la fiche « Concept 01 » ? Cette action est irréversible.')).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Annuler" }));
     expect(mocked.deleteConcept).not.toHaveBeenCalled();
     expect(rowNames()).toHaveLength(7);
 
-    await user.click(screen.getByRole("button", { name: "Delete concept Concept 01" }));
-    await answerConfirm(user, "Delete");
+    await user.click(screen.getByRole("button", { name: "Supprimer la fiche Concept 01" }));
+    await answerConfirm(user, "Supprimer");
     await waitFor(() => expect(mocked.deleteConcept).toHaveBeenCalledWith(1));
-    expect(await screen.findByText('Deleted "Concept 01".')).toBeInTheDocument();
+    expect(await screen.findByText('Fiche « Concept 01 » supprimée.')).toBeInTheDocument();
     // No manual refresh: the eighth concept fills the page.
     await waitFor(() => expect(rowNames()).toContain("Concept 08"));
     expect(rowNames()).not.toContain("Concept 01");
     expect(rowNames()).toHaveLength(7);
-    expect(screen.getByText("Showing 1–7 of 8 concepts")).toBeInTheDocument();
+    expect(screen.getByText("Fiches 1–7 sur 8")).toBeInTheDocument();
     await waitFor(() => expect(mocked.getStats).toHaveBeenCalledTimes(2));
   });
 
   it("deletes the selected concept from the details panel and selects the next row", async () => {
     const { user } = await mountLoaded();
-    await user.click(within(details()).getByRole("button", { name: "Delete" }));
-    await answerConfirm(user, "Delete");
+    await user.click(within(details()).getByRole("button", { name: "Supprimer" }));
+    await answerConfirm(user, "Supprimer");
     await waitFor(() => expect(mocked.deleteConcept).toHaveBeenCalledWith(1));
     await waitFor(() => expect(within(details()).getByRole("heading", { level: 3 })).toHaveTextContent("ACME"));
     expect(rowNames()).toEqual(["ACME", "Master SLA", "Bob"]);
@@ -724,8 +724,8 @@ describe("Concepts page — delete a concept", () => {
   it("shows the error when the delete fails", async () => {
     mocked.deleteConcept.mockRejectedValue(new Error("delete failed"));
     const { user } = await mountLoaded();
-    await user.click(screen.getByRole("button", { name: "Delete concept Bob" }));
-    await answerConfirm(user, "Delete");
+    await user.click(screen.getByRole("button", { name: "Supprimer la fiche Bob" }));
+    await answerConfirm(user, "Supprimer");
     expect(await screen.findByText("delete failed")).toBeInTheDocument();
     expect(rowNames()).toHaveLength(4);
   });
@@ -744,8 +744,8 @@ describe("Concepts page — details panel", () => {
     expect(within(d).getByText("Ally")).toHaveClass("tag-chip");
     expect(within(d).getByText("A.")).toHaveClass("tag-chip");
     expect(within(d).getByText("Bob")).toBeInTheDocument(); // owner
-    expect(within(d).getByText("Mar 9, 2024")).toBeInTheDocument();
-    expect(within(d).getByText("Properties (5)")).toBeInTheDocument();
+    expect(within(d).getByText("9 mars 2024")).toBeInTheDocument();
+    expect(within(d).getByText("Propriétés (5)")).toBeInTheDocument();
     const props = within(d).getByRole("table");
     expect([...props.querySelectorAll("th")].map((th) => th.textContent)).toEqual([
       "linked",
@@ -757,7 +757,7 @@ describe("Concepts page — details panel", () => {
     expect(within(props).getByText("1,234")).toBeInTheDocument(); // number → formatted
     expect(within(props).getByText('{"vip":true}')).toBeInTheDocument(); // object → JSON
     expect(within(props).getByText("1,709,985,600")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "View Relations" })).toHaveAttribute("href", "/graph?seed=1");
+    expect(screen.getByRole("link", { name: "Voir les liens" })).toHaveAttribute("href", "/graph?seed=1");
   });
 
   it("switches on row click and falls back for a concept without properties", async () => {
@@ -765,8 +765,8 @@ describe("Concepts page — details panel", () => {
     await user.click(within(libraryRows()[3]).getByText("Bob"));
     const d = details();
     expect(within(d).getByRole("heading", { level: 3 })).toHaveTextContent("Bob");
-    expect(within(d).getByText("No definition provided.")).toBeInTheDocument();
-    expect(within(d).getByText("Properties (0)")).toBeInTheDocument();
+    expect(within(d).getByText("Aucune description.")).toBeInTheDocument();
+    expect(within(d).getByText("Propriétés (0)")).toBeInTheDocument();
     expect(within(d).getAllByText("—")).toHaveLength(4); // synonyms, owner, date, properties
     expect(libraryRows()[3]).toHaveClass("row-active");
 
@@ -784,45 +784,45 @@ describe("Concepts page — relations panel", () => {
   it("lists outgoing and incoming relations, naming the peer when it is on the page", async () => {
     await mountLoaded();
     const panel = relPanel();
-    expect(await within(panel).findByText("Outgoing")).toBeInTheDocument();
-    expect(within(panel).getByText("Incoming")).toBeInTheDocument();
+    expect(await within(panel).findByText("Sortants")).toBeInTheDocument();
+    expect(within(panel).getByText("Entrants")).toBeInTheDocument();
     expect(mocked.listRelations).toHaveBeenCalledWith({ source: 1, limit: 200 });
     expect(mocked.listRelations).toHaveBeenCalledWith({ target: 1, limit: 200 });
     const rows = within(panel).getAllByRole("listitem");
     expect(rows).toHaveLength(3);
     expect(rows[0]).toHaveTextContent("→works_forCompany: ACME");
-    expect(rows[1]).toHaveTextContent("→knowsConcept #99"); // peer not on this page
+    expect(rows[1]).toHaveTextContent("→knowsFiche n° 99"); // peer not on this page
     expect(rows[2]).toHaveTextContent("←knowsPerson: Bob");
   });
 
-  it("shows 'No relations.' and disables + Add when no relation type has the concept's type as domain", async () => {
+  it("shows 'Aucun lien.' and disables + Ajouter when no relation type has the concept's type as domain", async () => {
     const { user } = await mountLoaded();
-    await within(relPanel()).findByText("Outgoing");
+    await within(relPanel()).findByText("Sortants");
     await user.click(within(libraryRows()[2]).getByText("Master SLA"));
-    expect(await within(relPanel()).findByText("No relations.")).toBeInTheDocument();
-    const add = within(relPanel()).getByRole("button", { name: "+ Add" });
+    expect(await within(relPanel()).findByText("Aucun lien.")).toBeInTheDocument();
+    const add = within(relPanel()).getByRole("button", { name: "+ Ajouter" });
     expect(add).toBeDisabled();
-    expect(add).toHaveAttribute("title", "No relation types defined with this concept's type as domain.");
+    expect(add).toHaveAttribute("title", "Aucun type de lien n'a le type de cette fiche comme domaine.");
   });
 
   it("adds a relation whose targets are restricted to the chosen type's range", async () => {
     const { user } = await mountLoaded();
     const panel = relPanel();
-    await within(panel).findByText("Outgoing");
-    const add = within(panel).getByRole("button", { name: "+ Add" });
+    await within(panel).findByText("Sortants");
+    const add = within(panel).getByRole("button", { name: "+ Ajouter" });
     expect(add).toBeEnabled();
     await user.click(add);
-    expect(within(panel).getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+    expect(within(panel).getByRole("button", { name: "Annuler" })).toBeInTheDocument();
 
     const [typeSel, targetSel] = within(panel).getAllByRole("combobox");
     expect(within(typeSel).getAllByRole("option").map((o) => o.textContent)).toEqual([
-      "Relation type…",
+      "Type de lien…",
       "works_for (Person → Company)",
       "knows (Person → Person)",
     ]);
     // No type yet: every other concept is a candidate.
     expect(within(targetSel).getAllByRole("option").map((o) => o.textContent)).toEqual([
-      "Target concept…",
+      "Fiche cible…",
       "Company: ACME",
       "Contract: Master SLA",
       "Person: Bob",
@@ -833,21 +833,21 @@ describe("Concepts page — relations panel", () => {
 
     await user.selectOptions(typeSel, "works_for");
     expect(within(targetSel).getAllByRole("option").map((o) => o.textContent)).toEqual([
-      "Target concept…",
+      "Fiche cible…",
       "Company: ACME",
     ]);
     await user.selectOptions(targetSel, "2");
-    await user.click(within(panel).getByRole("button", { name: "Add" }));
+    await user.click(within(panel).getByRole("button", { name: "Ajouter" }));
     await waitFor(() =>
       expect(mocked.createRelation).toHaveBeenCalledWith({ relation_type: "works_for", source: 1, target: 2 }),
     );
     await waitFor(() => expect(within(panel).getAllByRole("listitem")).toHaveLength(4));
     expect(within(panel).queryByRole("combobox")).not.toBeInTheDocument(); // form closed
-    expect(within(panel).getByRole("button", { name: "+ Add" })).toBeInTheDocument();
+    expect(within(panel).getByRole("button", { name: "+ Ajouter" })).toBeInTheDocument();
 
     // Cancel folds the form away again.
-    await user.click(within(panel).getByRole("button", { name: "+ Add" }));
-    await user.click(within(panel).getByRole("button", { name: "Cancel" }));
+    await user.click(within(panel).getByRole("button", { name: "+ Ajouter" }));
+    await user.click(within(panel).getByRole("button", { name: "Annuler" }));
     expect(within(panel).queryByRole("combobox")).not.toBeInTheDocument();
   });
 
@@ -855,41 +855,41 @@ describe("Concepts page — relations panel", () => {
     mocked.createRelation.mockRejectedValue(new Error("duplicate edge"));
     const { user } = await mountLoaded();
     const panel = relPanel();
-    await within(panel).findByText("Outgoing");
-    await user.click(within(panel).getByRole("button", { name: "+ Add" }));
+    await within(panel).findByText("Sortants");
+    await user.click(within(panel).getByRole("button", { name: "+ Ajouter" }));
     const [typeSel, targetSel] = within(panel).getAllByRole("combobox");
     await user.selectOptions(typeSel, "knows");
     await user.selectOptions(targetSel, "4");
-    await user.click(within(panel).getByRole("button", { name: "Add" }));
-    expect(await screen.findByRole("status")).toHaveTextContent("Add failed: duplicate edge");
+    await user.click(within(panel).getByRole("button", { name: "Ajouter" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("Ajout impossible : duplicate edge");
   });
 
   it("deletes a relation after confirmation and toasts when that fails", async () => {
     const { user } = await mountLoaded();
     const panel = relPanel();
-    await within(panel).findByText("Outgoing");
-    await user.click(within(panel).getAllByRole("button", { name: "Delete relation" })[0]);
+    await within(panel).findByText("Sortants");
+    await user.click(within(panel).getAllByRole("button", { name: "Supprimer le lien" })[0]);
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText("Delete this relation?")).toBeInTheDocument();
-    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(within(dialog).getByText("Supprimer ce lien ?")).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Annuler" }));
     expect(mocked.deleteRelation).not.toHaveBeenCalled();
 
-    await user.click(within(panel).getAllByRole("button", { name: "Delete relation" })[0]);
-    await answerConfirm(user, "Delete");
+    await user.click(within(panel).getAllByRole("button", { name: "Supprimer le lien" })[0]);
+    await answerConfirm(user, "Supprimer");
     await waitFor(() => expect(mocked.deleteRelation).toHaveBeenCalledWith(10));
     await waitFor(() => expect(within(panel).getAllByRole("listitem")).toHaveLength(2));
 
     mocked.deleteRelation.mockRejectedValue(new Error("locked"));
-    await user.click(within(panel).getAllByRole("button", { name: "Delete relation" })[0]);
-    await answerConfirm(user, "Delete");
-    expect(await screen.findByRole("status")).toHaveTextContent("Delete failed: locked");
+    await user.click(within(panel).getAllByRole("button", { name: "Supprimer le lien" })[0]);
+    await answerConfirm(user, "Supprimer");
+    expect(await screen.findByRole("status")).toHaveTextContent("Suppression impossible : locked");
   });
 
   it("shows the error when the relations fail to load", async () => {
     mocked.listRelations.mockRejectedValue(new Error("relations down"));
     await mountLoaded();
     expect(await within(relPanel()).findByText("relations down")).toBeInTheDocument();
-    expect(within(relPanel()).getByText("No relations.")).toBeInTheDocument();
+    expect(within(relPanel()).getByText("Aucun lien.")).toBeInTheDocument();
   });
 });
 
@@ -902,19 +902,19 @@ describe("Concepts page — side cards", () => {
     const labels = () => within(tree as HTMLElement).getAllByText(/.+/, { selector: ".tree-label" }).map((e) => e.textContent);
     expect(labels()).toEqual(["Contract", "Entity", "Company", "Person"]);
     // Only Entity has children, so it is the only toggle.
-    const toggle = within(tree as HTMLElement).getByRole("button", { name: "Collapse" });
+    const toggle = within(tree as HTMLElement).getByRole("button", { name: "Replier" });
     await user.click(toggle);
     expect(labels()).toEqual(["Contract", "Entity"]);
-    await user.click(within(tree as HTMLElement).getByRole("button", { name: "Expand" }));
+    await user.click(within(tree as HTMLElement).getByRole("button", { name: "Déplier" }));
     expect(labels()).toEqual(["Contract", "Entity", "Company", "Person"]);
   });
 
   it("lists the five most recent concepts and the per-domain counts", async () => {
     db = [...seed(), ...many(9).slice(4).map((c) => ({ ...c, id: c.id + 10 }))]; // ids 15..19 newest
     await mountLoaded();
-    const activity = (await screen.findByText("“Concept 09”")).closest(".activity-list")!;
+    const activity = (await screen.findByText("« Concept 09 »")).closest(".activity-list")!;
     expect(within(activity as HTMLElement).getAllByRole("listitem")).toHaveLength(5);
-    expect(within(activity as HTMLElement).queryByText("“Alice”")).not.toBeInTheDocument();
+    expect(within(activity as HTMLElement).queryByText("« Alice »")).not.toBeInTheDocument();
 
     // Types are counted with limit 1 and grouped under their root type.
     expect(await screen.findByText("8 (88.9%)")).toBeInTheDocument(); // Entity = 7 persons + 1 company
@@ -951,7 +951,7 @@ describe("Concepts page — side cards", () => {
       return { total: rows.length, concepts: rows.slice(off, off + (params.limit ?? 7)), next_cursor: null };
     });
     await mountLoaded();
-    expect(await screen.findByText("No recent activity.")).toBeInTheDocument();
+    expect(await screen.findByText("Aucune activité récente.")).toBeInTheDocument();
     // Entity = Company (1) only, Contract = 1 → 50 / 50.
     expect(await screen.findAllByText("1 (50.0%)")).toHaveLength(2);
     expect(screen.queryByText(/down/)).not.toBeInTheDocument();

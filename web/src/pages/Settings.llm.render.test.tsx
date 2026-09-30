@@ -139,7 +139,7 @@ describe("LLM card — initial state", () => {
     expect(card.getByRole("option", { name: "gpt-4o-mini" })).toBeInTheDocument();
     expect(card.getByDisplayValue("— aucun —")).toBeInTheDocument();
     expect(card.getByText("Température (0.70)")).toBeInTheDocument();
-    expect(card.getByLabelText("Max tokens")).toHaveValue(2048);
+    expect(card.getByLabelText("Tokens max")).toHaveValue(2048);
     // Probing the catalogue needs a key (typed or saved).
     expect(loadModelsButton(card)).toBeDisabled();
     expect(card.getByRole("button", { name: /Tester OpenAI/ })).toBeEnabled();
@@ -462,7 +462,7 @@ describe("LLM card — apply", () => {
     await user.selectOptions(card.getByDisplayValue("— aucun —"), "gpt-4o");
     fireEvent.change(card.getByRole("slider"), { target: { value: "0.3" } });
     expect(card.getByText("Température (0.30)")).toBeInTheDocument();
-    fireEvent.change(card.getByLabelText("Max tokens"), { target: { value: "4096" } });
+    fireEvent.change(card.getByLabelText("Tokens max"), { target: { value: "4096" } });
     await user.click(card.getByRole("button", { name: /Appliquer/ }));
     expect(await card.findByText("OpenAI appliqué avec le modèle gpt-4o. Effectif immédiatement.")).toBeInTheDocument();
     expect(mocked.patchSettings).toHaveBeenCalledWith({
@@ -476,7 +476,7 @@ describe("LLM card — apply", () => {
       },
     });
     expect(card.getByPlaceholderText("sk-…")).toHaveValue("");
-    expect(screen.getByText("Settings saved.")).toBeInTheDocument();
+    expect(screen.getByText("Réglages enregistrés.")).toBeInTheDocument();
     // The echoed settings re-sync the "Actif" line.
     expect(card.getByText(/^Actif :/).closest("p")).toHaveTextContent("Actif : OpenAI · gpt-4o");
   });

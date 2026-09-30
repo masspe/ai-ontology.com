@@ -200,14 +200,14 @@ describe("IngestWizard — analyze", () => {
     const { user } = renderPage(<IngestWizard />);
     await waitFor(() => expect(screen.getByRole("combobox")).toHaveValue("openai"));
     await user.type(screen.getByPlaceholderText(/gpt-4o-mini/), "  gpt-4o-mini ");
-    await user.type(screen.getByPlaceholderText(/auto-detect/), "fr");
+    await user.type(screen.getByPlaceholderText(/détection automatique/), "fr");
 
     const file = makeFile("doc.txt", "Some contract text.");
     await pickAndAnalyze(user, file);
     expect(await screen.findByText(/Lecture du document/)).toBeInTheDocument();
     analyze.release(json(proposal));
 
-    expect(await screen.findByText("New concept types (1)")).toBeInTheDocument();
+    expect(await screen.findByText("Nouveaux types de fiche (1)")).toBeInTheDocument();
     expect(mockedPrepare).toHaveBeenCalledWith(file, expect.objectContaining({ onProgress: expect.any(Function) }));
 
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
@@ -220,9 +220,9 @@ describe("IngestWizard — analyze", () => {
     expect(form.get("language_hint")).toBe("fr");
 
     // exists → merge, type_mismatch → create_new, dangling_ref → skip, none → create_new.
-    expect(screen.getByText("Create:").parentElement).toHaveTextContent("Create: 5");
-    expect(screen.getByText("Merge:").parentElement).toHaveTextContent("Merge: 1");
-    expect(screen.getByText("Skip:").parentElement).toHaveTextContent("Skip: 1");
+    expect(screen.getByText("Créer :").parentElement).toHaveTextContent("Créer : 5");
+    expect(screen.getByText("Fusionner :").parentElement).toHaveTextContent("Fusionner : 1");
+    expect(screen.getByText("Ignorer :").parentElement).toHaveTextContent("Ignorer : 1");
     // The draft is mirrored to sessionStorage while reviewing.
     const draft = JSON.parse(window.sessionStorage.getItem(STORAGE_KEY)!);
     expect(draft.decisions).toEqual({ ct1: "merge", rt1: "create_new", c1: "create_new", c2: "create_new", r1: "skip", ru1: "create_new", a1: "create_new" });
@@ -241,7 +241,7 @@ describe("IngestWizard — analyze", () => {
     const fetchMock = routeFetch({ "/ingest/analyze": () => json(proposal) });
     const { user } = renderPage(<IngestWizard />);
     await pickAndAnalyze(user, makeFile(name, "payload", type));
-    await screen.findByText("Concepts (2)");
+    await screen.findByText("Fiches (2)");
     const form = (fetchMock.mock.calls[0] as [string, RequestInit])[1].body as FormData;
     expect((form.get("file") as File).name).toBe(sentName);
     // No model / hint typed: the optional fields are left out of the form.
@@ -287,7 +287,7 @@ describe("IngestWizard — review and apply", () => {
     const fetchMock = routeFetch({ "/ingest/analyze": () => json(proposal), ...routes });
     const page = renderPage(<IngestWizard />);
     await pickAndAnalyze(page.user, makeFile("doc.txt", "text"));
-    await screen.findByText("Concepts (2)");
+    await screen.findByText("Fiches (2)");
     return { ...page, fetchMock };
   }
 
@@ -295,8 +295,8 @@ describe("IngestWizard — review and apply", () => {
     const apply = deferred();
     const { user, fetchMock } = await reachReview({ "/ingest/apply": apply.route });
 
-    await user.click(screen.getByRole("button", { name: "Accept all" }));
-    expect(screen.getByText("Create:").parentElement).toHaveTextContent("Create: 7");
+    await user.click(screen.getByRole("button", { name: "Tout accepter" }));
+    expect(screen.getByText("Créer :").parentElement).toHaveTextContent("Créer : 7");
     // Per-item override on the Clause concept, then an inline rename.
     const clause = screen.getByDisplayValue("Termination").closest("tr")!;
     await user.selectOptions(within(clause).getByRole("combobox"), "skip");
@@ -305,10 +305,10 @@ describe("IngestWizard — review and apply", () => {
     await user.click(screen.getByRole("button", { name: "edit relation" }));
     expect(screen.getByText("supersedes")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Apply to graph" }));
-    expect(await screen.findByText(/Writing accepted items/)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Ajouter aux données" }));
+    expect(await screen.findByText(/Ajout des éléments acceptés/)).toBeInTheDocument();
     apply.release(json(report));
-    expect(await screen.findByText("Apply complete")).toBeInTheDocument();
+    expect(await screen.findByText("Ajout terminé")).toBeInTheDocument();
 
     const applyCall = fetchMock.mock.calls.find(([u]) => (u as string).endsWith("/ingest/apply"))!;
     const body = JSON.parse((applyCall[1] as RequestInit).body as string);
@@ -326,9 +326,9 @@ describe("IngestWizard — review and apply", () => {
       { client_ref: "a1", action: "create_new" },
     ]);
 
-    expect(screen.getByText("merged #3")).toBeInTheDocument();
+    expect(screen.getByText("fusionné #3")).toBeInTheDocument();
     expect(window.sessionStorage.getItem(STORAGE_KEY)).toBeNull();
-    await user.click(screen.getByRole("button", { name: "Ingest another document" }));
+    await user.click(screen.getByRole("button", { name: "Importer un autre document" }));
     expect(screen.getByRole("button", { name: "Analyser le document" })).toBeDisabled();
   });
 
@@ -336,16 +336,16 @@ describe("IngestWizard — review and apply", () => {
     const { user } = await reachReview({
       "/ingest/apply": () => json({ error: "boom" }, 500, "Internal Server Error"),
     });
-    await user.click(screen.getByRole("button", { name: "Skip all" }));
-    expect(screen.getByText("Skip:").parentElement).toHaveTextContent("Skip: 7");
-    await user.click(screen.getByRole("button", { name: "Apply to graph" }));
+    await user.click(screen.getByRole("button", { name: "Tout ignorer" }));
+    expect(screen.getByText("Ignorer :").parentElement).toHaveTextContent("Ignorer : 7");
+    await user.click(screen.getByRole("button", { name: "Ajouter aux données" }));
     expect(await screen.findByText("apply failed: 500 Internal Server Error")).toBeInTheDocument();
   });
 
   it("cancelling the review clears the draft and returns to upload", async () => {
     const { user } = await reachReview();
     expect(window.sessionStorage.getItem(STORAGE_KEY)).not.toBeNull();
-    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await user.click(screen.getByRole("button", { name: "Annuler" }));
     expect(window.sessionStorage.getItem(STORAGE_KEY)).toBeNull();
     expect(screen.getByRole("button", { name: "Analyser le document" })).toBeInTheDocument();
   });
@@ -358,9 +358,9 @@ describe("IngestWizard — draft persistence", () => {
       JSON.stringify({ proposal, decisions: { ct1: "merge", c1: "skip" } }),
     );
     const { user } = renderPage(<IngestWizard />);
-    expect(await screen.findByText("Concepts (2)")).toBeInTheDocument();
-    expect(screen.getByText("Merge:").parentElement).toHaveTextContent("Merge: 1");
-    await user.click(screen.getByRole("button", { name: "Skip all" }));
+    expect(await screen.findByText("Fiches (2)")).toBeInTheDocument();
+    expect(screen.getByText("Fusionner :").parentElement).toHaveTextContent("Fusionner : 1");
+    await user.click(screen.getByRole("button", { name: "Tout ignorer" }));
     const saved = JSON.parse(window.sessionStorage.getItem(STORAGE_KEY)!);
     expect(Object.values(saved.decisions)).toEqual(Array(7).fill("skip"));
   });
@@ -381,10 +381,10 @@ describe("IngestWizard — draft persistence", () => {
       throw new Error("locked");
     });
     const { user } = renderPage(<IngestWizard />);
-    expect(await screen.findByText("Concepts (2)")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Accept all" }));
+    expect(await screen.findByText("Fiches (2)")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Tout accepter" }));
     expect(setItem).toHaveBeenCalled();
-    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await user.click(screen.getByRole("button", { name: "Annuler" }));
     expect(removeItem).toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "Analyser le document" })).toBeInTheDocument();
   });
