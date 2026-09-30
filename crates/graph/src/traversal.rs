@@ -271,6 +271,12 @@ impl OntologyGraph {
                 } else {
                     rel.source
                 };
+                let known = visited.contains(&neighbor);
+                // At the cap an unknown neighbour is never kept: skip it before
+                // reading (and cloning) it, so a hub costs its edge list only.
+                if !known && concepts.len() >= spec.max_nodes {
+                    continue;
+                }
                 let nc = match self.get_concept(neighbor) {
                     Ok(c) => c,
                     Err(_) => continue,
@@ -279,10 +285,7 @@ impl OntologyGraph {
                     continue;
                 }
 
-                if !visited.contains(&neighbor) {
-                    if concepts.len() >= spec.max_nodes {
-                        continue;
-                    }
+                if !known {
                     visited.insert(neighbor);
                     depth_of.insert(neighbor, depth + 1);
                     concepts.push(nc);

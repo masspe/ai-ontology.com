@@ -102,6 +102,10 @@ export default function ModelTypes({ ontology, onChanged }: Props) {
     if (rels.length) out.push(`utilisé par le(s) type(s) de lien : ${rels.join(", ")}`);
     const kids = typeNames.filter((c) => ct[c].parent === t);
     if (kids.length) out.push(`parent de : ${kids.join(", ")}`);
+    const rules = Object.values(ontology?.rule_types ?? {}).filter((r) => r.applies_to?.includes(t)).map((r) => r.name);
+    if (rules.length) out.push(`visé par le(s) type(s) de règle : ${rules.join(", ")}`);
+    const acts = Object.values(ontology?.action_types ?? {}).filter((a) => a.subject === t || a.object === t).map((a) => a.name);
+    if (acts.length) out.push(`visé par le(s) type(s) d'action : ${acts.join(", ")}`);
     return out;
   };
 
@@ -136,7 +140,9 @@ export default function ModelTypes({ ontology, onChanged }: Props) {
         name,
         description,
         parent: form.parent || null,
-        properties: properties.length ? properties : null,
+        // An emptied list keeps a closed type closed ([]); only a type that
+        // was open (null) stays open.
+        properties: properties.length ? properties : ct[name]?.properties === null || ct[name]?.properties === undefined ? null : [],
       };
       save({ ...ontology, concept_types: { ...ct, [name]: def } });
     } else {
@@ -256,7 +262,7 @@ export default function ModelTypes({ ontology, onChanged }: Props) {
 
   return (
     <Card title="Types du modèle" style={{ marginBottom: 16 }}>
-      {error && <div className="error-banner">{error}</div>}
+      {error && <div className="error-banner" role="alert">{error}</div>}
       {typeNames.length + relNames.length === 0 && (
         <p className="muted">
           Aucun type pour l'instant : installez un modèle prêt à l'emploi depuis l'accueil, ou générez-en un ci-dessous.
