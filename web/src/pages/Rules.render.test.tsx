@@ -544,7 +544,7 @@ describe("Rules page", () => {
     }
     expect(screen.queryByRole("button", { name: "Expand" })).not.toBeInTheDocument();
     // Still on the page, no modal opened, nothing fetched.
-    expect(screen.getByRole("heading", { name: "Rules" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Règles" })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Create Rule" })).not.toBeInTheDocument();
     expect(mocked.generateRule).not.toHaveBeenCalled();
   });

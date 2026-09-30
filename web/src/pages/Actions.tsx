@@ -447,7 +447,7 @@ export default function Actions() {
       <div className="page-header">
         <div>
           <h1 className="page-title">Actions</h1>
-          <p className="page-subtitle">Create, schedule, monitor, and manage ontology actions and automations.</p>
+          <p className="page-subtitle">Les automatisations déclenchées par le contenu de vos données.</p>
         </div>
       </div>
 
