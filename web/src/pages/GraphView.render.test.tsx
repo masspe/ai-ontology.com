@@ -604,6 +604,7 @@ describe("GraphView — opened on a sheet", () => {
 
 describe("GraphView — a model without sheets", () => {
   it("says the model is in place and the graph waits for files", async () => {
+    mocked.getStats.mockResolvedValue({ concepts: 0, relations: 0 });
     mocked.getSubgraph.mockResolvedValue({ subgraph: { concepts: [], relations: [] } });
     renderPage(<GraphView />, { route: "/graph", extraRoutes: probeRoutes });
     expect(await screen.findByTestId("model-only")).toHaveTextContent(/Le modèle est en place \(\d+ type\(s\) de fiche\)/);
@@ -630,6 +631,11 @@ describe("GraphView — a large graph loads by selection only", () => {
       expect(mocked.getSubgraph).toHaveBeenCalledTimes(calls);
       await user.click(screen.getByRole("button", { name: "Vider la sélection" }));
       expect(await screen.findByTestId("select-first")).toBeInTheDocument();
+      // A search seeds the load on Enter.
+      await user.type(screen.getByPlaceholderText(/Rechercher une fiche/), "acme{Enter}");
+      await waitFor(() =>
+        expect(mocked.getSubgraph).toHaveBeenLastCalledWith(expect.objectContaining({ seed_query: "acme", seed_concept_types: [] })),
+      );
     } finally {
       vi.useRealTimers();
     }

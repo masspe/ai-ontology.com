@@ -286,6 +286,8 @@ export default function GraphView() {
 
   // State
   const [busy, setBusy] = useState(false);
+  // Only the latest request may land (fast type changes).
+  const seq = useRef(0);
   const [error, setError] = useState<string | null>(null);
 
   // ---------- Data loading ----------
@@ -301,6 +303,7 @@ export default function GraphView() {
   const canLoad = !large || nodeTypes.length > 0 || search.trim() !== "" || focusId !== null;
 
   const loadSubgraph = async (d = depth) => {
+    const mine = ++seq.current;
     if (!canLoad) {
       setSubgraph(null);
       return;
@@ -315,6 +318,7 @@ export default function GraphView() {
         expansion_depth: d,
         limit: large ? SUBGRAPH_LIMIT : FULL_GRAPH_MAX,
       });
+      if (mine !== seq.current) return;
       setSubgraph(res.subgraph);
       if (focusId !== null && !focused.current && res.subgraph.concepts.some((c) => c.id === focusId)) {
         focused.current = true;
@@ -324,9 +328,9 @@ export default function GraphView() {
         window.setTimeout(() => canvasRef.current?.focusNode(String(focusId)), 0);
       }
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : String(e));
+      if (mine === seq.current) setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
+      if (mine === seq.current) setBusy(false);
     }
   };
 
@@ -572,7 +576,15 @@ export default function GraphView() {
           <div className="gv-filter-group">
             <div className="files-search">
               <span className="files-search-icon">{Icon.search}</span>
-              <input placeholder="Rechercher une fiche…" value={search} onChange={(e) => setSearch(e.target.value)} />
+              <input
+                placeholder={large ? "Rechercher une fiche… (Entrée)" : "Rechercher une fiche…"}
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                onKeyDown={(e) => {
+                  // On a large graph the search is what seeds the load.
+                  if (e.key === "Enter") void loadSubgraph();
+                }}
+              />
             </div>
           </div>
 
@@ -581,7 +593,7 @@ export default function GraphView() {
               Types de fiche{" "}
               <span className="muted">
                 ({nodeTypes.length === 0 ? "tous" : `${nodeTypes.length} choisi(s)`}
-                {large ? ", au moins un sur un grand graphe" : ""})
+                {large ? ", au moins un sur un grand graphe" : ""} ; Ctrl+clic pour plusieurs)
               </span>
             </label>
             <select
@@ -695,7 +707,7 @@ export default function GraphView() {
                 {SUBGRAPH_LIMIT} fiches autour de la sélection.
               </div>
             )}
-            {subgraph && subgraph.concepts.length === 0 && conceptTypes.length > 0 && !search.trim() && (
+            {total === 0 && subgraph && subgraph.concepts.length === 0 && conceptTypes.length > 0 && !search.trim() && (
               <div className="empty" data-testid="model-only">
                 Le modèle est en place ({conceptTypes.length} type(s) de fiche) mais il n'y a pas encore de fiche à
                 afficher : le graphe se remplit avec vos fichiers.
