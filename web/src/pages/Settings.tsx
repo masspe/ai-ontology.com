@@ -107,8 +107,8 @@ export default function Settings() {
     <>
       <div className="page-header">
         <div>
-          <h1 className="page-title">Settings</h1>
-          <p className="page-subtitle">Retrieval defaults, UI preferences, providers and server connection.</p>
+          <h1 className="page-title">Réglages</h1>
+          <p className="page-subtitle">Recherche, préférences d'affichage, fournisseur d'IA et connexion au serveur.</p>
         </div>
       </div>
 

@@ -221,6 +221,8 @@ servie par le binaire, test de bout en bout) — **livrée 2026-09-29**
 2026-09-29** ; puis, **ordre révisé le 2026-09-30 avec le propriétaire** :
 3.8.4 sauvegarde (**livrée 2026-09-30**), lot B (première tranche,
 **livrée 2026-09-30**), 3.8.5 mise à jour (**livrée 2026-09-30**), lot B
+(tranches 2a et 2b **livrées 2026-09-30**, traduction du corps des pages
+au fil de l'eau)
 (seconde tranche), 3.8.6 clés d'API et audit, et **3.8.3b OAuth reporté**
 (avec le retrait d'`auth-server/` et la dette web) jusqu'à la demande d'un
 client : le login intégré couvre le besoin, OAuth n'apporte que la
@@ -465,8 +467,18 @@ la contient). Point 6 (début) — le graphe s'ouvre sur une fiche :
 la cadre ; la fiche y renvoie. Point 5 — questions épinglables à l'accueil
 depuis la page Questions (★, mémorisé dans le navigateur), rejouées en un
 clic depuis l'accueil (`/queries?run=<id>`). Couverture web 99,4 %.
-**Reste (tranche 2b)** : point 7 (impact d'une évolution du modèle),
-traduction des pages restantes.
+**Tranche 2b livrée le 2026-09-30 (branche `feat/ui-lot-b2b`)** : point 7 —
+avant d'enregistrer un modèle, l'interface compte les fiches dont le type
+disparaît (`lib/impact.ts`, une requête `limit=1` par type retiré) et le
+dit (« 12 fiche(s) concernée(s) : Person (12). Un type encore utilisé ne
+peut pas être retiré : réaffectez ou supprimez ces fiches d'abord. »,
+l'enregistrement est arrêté là, le brouillon reste ; sinon « Rien à
+migrer », répété après l'enregistrement ; si le comptage échoue, le
+serveur tranche). Traduction : titres et sous-titres de toutes les pages
+en français ; **le corps des pages Fichiers, Fiches, Règles, Actions,
+Graphe, Modèle de données et Réglages (tableaux, formulaires, boutons,
+messages) reste en anglais** — à traduire page par page au fil de l'eau,
+chacune avec ses tests. Le lot B est clos hors cette traduction.
 
 **Dette technique** (avec 3.8.3, inchangé) : migration `react-router` 7
 (deux vulnérabilités npm modérées) ; modules d'authentification `.jsx` en

@@ -444,8 +444,8 @@ export default function Rules() {
     <>
       <div className="page-header">
         <div>
-          <h1 className="page-title">Rules</h1>
-          <p className="page-subtitle">Create, validate, and manage ontology rules, constraints, and inference logic.</p>
+          <h1 className="page-title">Règles</h1>
+          <p className="page-subtitle">Ce qui doit être vrai dans vos données, et les exceptions à signaler.</p>
         </div>
       </div>
 

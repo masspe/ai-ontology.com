@@ -498,8 +498,8 @@ export default function GraphView() {
     <>
       <div className="page-header">
         <div>
-          <h1 className="page-title">Graph View</h1>
-          <p className="page-subtitle">Explore ontology entities, classes, and relationships visually.</p>
+          <h1 className="page-title">Graphe</h1>
+          <p className="page-subtitle">Les fiches et leurs liens, autour d'un point de départ, filtrés par type.</p>
         </div>
       </div>
 

@@ -27,6 +27,7 @@ vi.mock("../api", async () => {
     getSubgraph: vi.fn(),
     generateOntology: vi.fn(),
     replaceOntology: vi.fn(),
+    listConcepts: vi.fn(),
     deleteFile: vi.fn(),
   };
 });
@@ -84,6 +85,7 @@ const getFiles = vi.mocked(api.getFiles);
 const getSubgraph = vi.mocked(api.getSubgraph);
 const generateOntology = vi.mocked(api.generateOntology);
 const replaceOntology = vi.mocked(api.replaceOntology);
+const listConcepts = vi.mocked(api.listConcepts);
 const deleteFile = vi.mocked(api.deleteFile);
 const analyze = vi.mocked(analyzeIngest);
 const apply = vi.mocked(applyIngest);
@@ -204,6 +206,7 @@ const errorBanner = () => screen.findByText((_, el) => el?.className === "error-
 const infoBanner = () => screen.findByText((_, el) => el?.className === "success-banner", { selector: "div" });
 
 beforeEach(() => {
+  listConcepts.mockResolvedValue({ total: 0, concepts: [], next_cursor: null });
   getOntology.mockResolvedValue(ontology);
   getStats.mockResolvedValue(stats);
   getFiles.mockResolvedValue({ files });
@@ -361,7 +364,7 @@ describe("OntologyBuilder — describe, generate, save", () => {
     expect(save).toBeEnabled();
     await user.click(save);
     await waitFor(() => expect(replaceOntology).toHaveBeenCalledWith(draft));
-    expect(await screen.findByText("Ontology saved.")).toBeInTheDocument();
+    expect(await screen.findByText("Modèle enregistré. Rien à migrer : aucune fiche ne perd son type.")).toBeInTheDocument();
     expect(screen.queryByText(/Proposed schema/)).toBeNull();
     expect(save).toBeDisabled();
     // The page reloads after a save.
@@ -623,5 +626,39 @@ describe("OntologyBuilder — ingest preview", () => {
     upload(folderInput(container), [withRelPath(makeFile("bad.zip", "nope"), "proj/bad.zip")]);
     expect(await errorBanner()).toBeInTheDocument();
     expect(analyze).not.toHaveBeenCalled();
+  });
+});
+
+describe("OntologyBuilder — what a model change touches", () => {
+  it("counts the sheets whose type the new model drops and refuses to save with what to do", async () => {
+    listConcepts.mockImplementation(async (params) => ({
+      total: params?.type === "Person" ? 12 : 0,
+      concepts: [],
+      next_cursor: null,
+    }));
+    const { user } = await renderLoaded();
+    await user.type(screen.getByPlaceholderText(/Describe the ontology structure/), "x");
+    await user.click(screen.getByRole("button", { name: /Generate Ontology/ }));
+    await screen.findByText(/Proposed schema/);
+    await user.click(screen.getByRole("button", { name: /Save Ontology/ }));
+    expect(await errorBanner()).toHaveTextContent(
+      "12 fiche(s) concernée(s) : Person (12). Un type encore utilisé ne peut pas être retiré : réaffectez ou supprimez ces fiches d'abord.",
+    );
+    expect(listConcepts).toHaveBeenCalledWith({ type: "Person", limit: 1, include_subtypes: false });
+    expect(listConcepts).toHaveBeenCalledWith({ type: "Org", limit: 1, include_subtypes: false });
+    expect(replaceOntology).not.toHaveBeenCalled();
+    expect(screen.getByText(/Proposed schema/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Save Ontology/ })).toBeEnabled();
+  });
+
+  it("lets the server decide when the count cannot be made", async () => {
+    listConcepts.mockRejectedValue(new Error("HTTP 429"));
+    const { user } = await renderLoaded();
+    await user.type(screen.getByPlaceholderText(/Describe the ontology structure/), "x");
+    await user.click(screen.getByRole("button", { name: /Generate Ontology/ }));
+    await screen.findByText(/Proposed schema/);
+    await user.click(screen.getByRole("button", { name: /Save Ontology/ }));
+    await waitFor(() => expect(replaceOntology).toHaveBeenCalledWith(draft));
+    expect(await screen.findByText("Modèle enregistré.")).toBeInTheDocument();
   });
 });
