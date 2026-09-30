@@ -10,6 +10,7 @@ import {
   getFiles,
   getOntology,
   getQueries,
+  getStats,
   getStatsHistory,
   getSubgraph,
   type ActionTypeDef,
@@ -244,6 +245,11 @@ const LAYOUTS: { value: LayoutDir; label: string }[] = [
 
 type InspectorTab = "inspector" | "rules" | "actions";
 
+/** Up to this many sheets the whole graph is drawn; beyond, by selection. */
+const FULL_GRAPH_MAX = 300;
+/** Sheets fetched around a selection on a large graph. */
+const SUBGRAPH_LIMIT = 250;
+
 export default function GraphView() {
   const navigate = useNavigate();
   const canvasRef = useRef<GraphCanvasHandle>(null);
@@ -257,8 +263,12 @@ export default function GraphView() {
 
   // Filters
   const [search, setSearch] = useState("");
-  const [nodeType, setNodeType] = useState("Tous les types");
-  const [relType, setRelType] = useState("Tous les liens");
+  // Several types at once; none selected = all (the small-graph case).
+  const [nodeTypes, setNodeTypes] = useState<string[]>([]);
+  const [relTypes, setRelTypes] = useState<string[]>([]);
+  // Sheets in the store: past FULL_GRAPH_MAX the graph is shown by
+  // selection only, never whole (performance of the page and of the eye).
+  const [total, setTotal] = useState<number | null>(null);
   const [depth, setDepth] = useState(3);
   const [showLabels, setShowLabels] = useState(true);
   const [clusterView, setClusterView] = useState(false);
@@ -276,6 +286,8 @@ export default function GraphView() {
 
   // State
   const [busy, setBusy] = useState(false);
+  // Only the latest request may land (fast type changes).
+  const seq = useRef(0);
   const [error, setError] = useState<string | null>(null);
 
   // ---------- Data loading ----------
@@ -286,17 +298,27 @@ export default function GraphView() {
   // Once: later reloads (interval, depth) keep what the user selected since.
   const focused = useRef(false);
 
+  const large = total !== null && total > FULL_GRAPH_MAX;
+  // A large graph loads only around a selection: types, a search or a sheet.
+  const canLoad = !large || nodeTypes.length > 0 || search.trim() !== "" || focusId !== null;
+
   const loadSubgraph = async (d = depth) => {
+    const mine = ++seq.current;
+    if (!canLoad) {
+      setSubgraph(null);
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
       const res = await getSubgraph({
         seed_query: search.trim() || undefined,
         seed_concept_ids: focusId !== null && !search.trim() ? [focusId] : undefined,
-        seed_concept_types: nodeType !== "Tous les types" ? [nodeType] : [],
+        seed_concept_types: nodeTypes,
         expansion_depth: d,
-        limit: 250,
+        limit: large ? SUBGRAPH_LIMIT : FULL_GRAPH_MAX,
       });
+      if (mine !== seq.current) return;
       setSubgraph(res.subgraph);
       if (focusId !== null && !focused.current && res.subgraph.concepts.some((c) => c.id === focusId)) {
         focused.current = true;
@@ -306,9 +328,9 @@ export default function GraphView() {
         window.setTimeout(() => canvasRef.current?.focusNode(String(focusId)), 0);
       }
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : String(e));
+      if (mine === seq.current) setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusy(false);
+      if (mine === seq.current) setBusy(false);
     }
   };
 
@@ -317,17 +339,23 @@ export default function GraphView() {
     getStatsHistory().then(setHistory).catch(() => undefined);
     getQueries().then((q) => setQueries(q.queries)).catch(() => undefined);
     getFiles().then((f) => setFiles(f.files)).catch(() => undefined);
+    // The size decides how the graph loads: whole, or by selection.
+    getStats()
+      .then((s) => setTotal(s.concepts))
+      .catch(() => setTotal(0));
+  }, []);
+
+  // Load once the size is known, and again when the depth or the selected
+  // types change. A small graph also refreshes every 30 s; a large one only
+  // on demand (Actualiser), so the page never reloads 250 sheets by itself.
+  useEffect(() => {
+    if (total === null) return;
     loadSubgraph(depth);
+    if (large) return;
     const t = window.setInterval(() => loadSubgraph(depth), 30_000);
     return () => window.clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Refetch when depth changes (debounced via slider release would be nicer; effect is fine)
-  useEffect(() => {
-    loadSubgraph(depth);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [depth]);
+  }, [total, depth, nodeTypes]);
 
   // ---------- Derived ----------
 
@@ -356,28 +384,28 @@ export default function GraphView() {
     if (!subgraph) return null;
     const q = search.trim().toLowerCase();
     const keepConcept = (c: Concept): boolean => {
-      if (nodeType !== "Tous les types" && c.concept_type !== nodeType) return false;
+      if (nodeTypes.length > 0 && !nodeTypes.includes(c.concept_type)) return false;
       if (q && !c.name.toLowerCase().includes(q) && !c.concept_type.toLowerCase().includes(q)) return false;
       return true;
     };
     const concepts = subgraph.concepts.filter(keepConcept);
     const keepIds = new Set(concepts.map((c) => c.id));
     const relations: Relation[] = subgraph.relations.filter((r) => {
-      if (relType !== "Tous les liens" && r.relation_type !== relType) return false;
+      if (relTypes.length > 0 && !relTypes.includes(r.relation_type)) return false;
       return keepIds.has(r.source) && keepIds.has(r.target);
     });
     return { concepts, relations };
-  }, [subgraph, search, nodeType, relType]);
+  }, [subgraph, search, nodeTypes, relTypes]);
 
   // Active filters count for KPI
   const activeFiltersCount = useMemo(() => {
     let n = 0;
     if (search.trim()) n++;
-    if (nodeType !== "Tous les types") n++;
-    if (relType !== "Tous les liens") n++;
+    if (nodeTypes.length > 0) n++;
+    if (relTypes.length > 0) n++;
     if (depth !== 3) n++;
     return n;
-  }, [search, nodeType, relType, depth]);
+  }, [search, nodeTypes, relTypes, depth]);
 
   // KPI values
   const nodesCount = filteredSubgraph?.concepts.length ?? 0;
@@ -470,7 +498,7 @@ export default function GraphView() {
 
   const onExpandNeighbors = async () => {
     if (!selectedConcept) return;
-    setNodeType(selectedConcept.concept_type);
+    setNodeTypes([selectedConcept.concept_type]);
     setDepth(Math.min(5, depth + 1));
   };
 
@@ -548,24 +576,60 @@ export default function GraphView() {
           <div className="gv-filter-group">
             <div className="files-search">
               <span className="files-search-icon">{Icon.search}</span>
-              <input placeholder="Rechercher une fiche…" value={search} onChange={(e) => setSearch(e.target.value)} />
+              <input
+                placeholder={large ? "Rechercher une fiche… (Entrée)" : "Rechercher une fiche…"}
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                onKeyDown={(e) => {
+                  // On a large graph the search is what seeds the load.
+                  if (e.key === "Enter") void loadSubgraph();
+                }}
+              />
             </div>
           </div>
 
           <div className="gv-filter-group">
-            <label className="gv-filter-label">Type de fiche</label>
-            <select value={nodeType} onChange={(e) => setNodeType(e.target.value)}>
-              <option>Tous les types</option>
+            <label className="gv-filter-label" htmlFor="gv-node-types">
+              Types de fiche{" "}
+              <span className="muted">
+                ({nodeTypes.length === 0 ? "tous" : `${nodeTypes.length} choisi(s)`}
+                {large ? ", au moins un sur un grand graphe" : ""} ; Ctrl+clic pour plusieurs)
+              </span>
+            </label>
+            <select
+              id="gv-node-types"
+              multiple
+              size={Math.min(6, Math.max(2, conceptTypes.length))}
+              value={nodeTypes}
+              onChange={(e) => setNodeTypes(Array.from(e.target.selectedOptions, (o) => o.value))}
+            >
               {conceptTypes.map((t) => <option key={t}>{t}</option>)}
             </select>
+            {nodeTypes.length > 0 && (
+              <button className="btn-ghost" type="button" onClick={() => setNodeTypes([])}>
+                {large ? "Vider la sélection" : "Tous les types"}
+              </button>
+            )}
           </div>
 
           <div className="gv-filter-group">
-            <label className="gv-filter-label">Type de lien</label>
-            <select value={relType} onChange={(e) => setRelType(e.target.value)}>
-              <option>Tous les liens</option>
+            <label className="gv-filter-label" htmlFor="gv-rel-types">
+              Types de lien <span className="muted">({relTypes.length === 0 ? "tous" : `${relTypes.length} choisi(s)`})</span>
+            </label>
+            <select
+              id="gv-rel-types"
+              multiple
+              size={Math.min(6, Math.max(2, relationTypes.length))}
+              value={relTypes}
+              onChange={(e) => setRelTypes(Array.from(e.target.selectedOptions, (o) => o.value))}
+            >
               {relationTypes.map((t) => <option key={t}>{t}</option>)}
             </select>
+            {relTypes.length > 0 && (
+              <button className="btn-ghost" type="button" onClick={() => setRelTypes([])}>
+                Tous les liens
+              </button>
+            )}
           </div>
 
           <div className="gv-filter-group">
@@ -636,6 +700,19 @@ export default function GraphView() {
           }
         >
           <div id="gv-canvas-wrap" className="gv-canvas">
+            {large && !canLoad && (
+              <div className="empty" data-testid="select-first">
+                {total!.toLocaleString("fr-CH")} fiches : trop pour tout afficher d'un coup. Choisissez un ou
+                plusieurs types de fiche à gauche, ou cherchez une fiche ; le graphe montre alors jusqu'à{" "}
+                {SUBGRAPH_LIMIT} fiches autour de la sélection.
+              </div>
+            )}
+            {total === 0 && subgraph && subgraph.concepts.length === 0 && conceptTypes.length > 0 && !search.trim() && (
+              <div className="empty" data-testid="model-only">
+                Le modèle est en place ({conceptTypes.length} type(s) de fiche) mais il n'y a pas encore de fiche à
+                afficher : le graphe se remplit avec vos fichiers.
+              </div>
+            )}
             <GraphCanvas
               ref={canvasRef}
               subgraph={filteredSubgraph}

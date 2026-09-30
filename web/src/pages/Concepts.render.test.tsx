@@ -288,8 +288,13 @@ describe("Concepts page — library list", () => {
 
   it("shows the empty state, the details placeholder and disables select-all when nothing matches", async () => {
     db = [];
-    renderPage(<Concepts />);
+    const { user } = renderPage(<Concepts />);
+    // No filter: the model is in place, the sheets are what is missing.
+    expect(await screen.findByText(/Aucune fiche pour l'instant\. Le modèle est en place \(\d+ type\(s\) de fiche/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Déposer des fichiers" })).toHaveAttribute("href", "/files");
+    await user.type(screen.getByPlaceholderText(/Rechercher/), "zzz");
     expect(await screen.findByText("Aucune fiche ne correspond aux filtres actuels.")).toBeInTheDocument();
+    await user.clear(screen.getByPlaceholderText(/Rechercher/));
     expect(screen.getByText("Sélectionnez une fiche dans la bibliothèque.")).toBeInTheDocument();
     expect(screen.getByText("Fiches 0–0 sur 0")).toBeInTheDocument();
     expect(screen.getByRole("checkbox", { name: "Sélectionner toutes les fiches de cette page" })).toBeDisabled();

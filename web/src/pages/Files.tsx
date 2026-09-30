@@ -129,6 +129,8 @@ export default function Files() {
   const [kind] = useState<string>("jsonl");
   const [autoKind] = useState<boolean>(true);
   const [conceptType, setConceptType] = useState<string>("");
+  /** A CSV/Excel dropped without a sheet type: asked for, then imported. */
+  const [pending, setPending] = useState<File | null>(null);
   const [busy, setBusy] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
@@ -159,12 +161,23 @@ export default function Files() {
   // A document (text, Word, PDF) is read by the assistant first: it
   // proposes the sheets and links it found, to check before they are added
   // (ROADMAP §3.9 lot B, point 4). Structured files load directly.
-  const onUpload = async (file: File) => {
+  const onUpload = async (file: File, chosenType?: string) => {
     const ext = (file.name.split(".").pop() ?? "").toLowerCase();
     if (autoKind && REVIEWED_EXTS.has(ext)) {
       nav("/ingest", { state: { file } });
       return;
     }
+    const ct = (chosenType ?? conceptType).trim();
+    {
+      const k = autoKind ? (KIND_BY_EXT[ext] ?? kind) : kind;
+      if (["csv", "xlsx", "text"].includes(k) && !ct) {
+        // Ask, right here, instead of refusing.
+        setPending(file);
+        setError(null);
+        return;
+      }
+    }
+    setPending(null);
     setBusy(true);
     setError(null);
     setInfo(null);
@@ -174,13 +187,10 @@ export default function Files() {
       const ext = (file.name.split(".").pop() ?? "").toLowerCase();
       const effectiveKind = autoKind ? (KIND_BY_EXT[ext] ?? kind) : kind;
       const needsCt = ["csv", "xlsx", "text"].includes(effectiveKind);
-      if (needsCt && !conceptType.trim()) {
-        throw new Error(`Le format « ${effectiveKind} » demande un type de fiche.`);
-      }
       setRecentUploads((u) => u.map((r) => r.id === tmpId ? { ...r, progress: 70 } : r));
       const res = await upload(file, {
         kind: effectiveKind,
-        conceptType: needsCt ? conceptType : undefined,
+        conceptType: needsCt ? ct : undefined,
       });
       setInfo(`${res.ingested.concepts} fiches et ${res.ingested.relations} liens importés depuis ${file.name}.`);
       setRecentUploads((u) => u.map((r): UploadRow => r.id === tmpId ? { ...r, progress: 100, status: "done" } : r));
@@ -399,7 +409,36 @@ export default function Files() {
             </div>
           }
         >
-          {(kind === "csv" || kind === "xlsx" || kind === "text") && (
+          {pending && (
+            <form
+              className="ct-row"
+              aria-label="Type de fiche du fichier déposé"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (conceptType.trim()) {
+                  void onUpload(pending, conceptType);
+                  setConceptType(""); // the next drop is asked again
+                }
+              }}
+            >
+              <label className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+                Chaque ligne de « {pending.name} » devient une fiche : de quel type ?
+              </label>
+              <div className="onboarding-actions">
+                {conceptTypeOptions.length > 0 ? (
+                  <select aria-label="Type de fiche" value={conceptType} onChange={(e) => setConceptType(e.target.value)} style={{ maxWidth: 260 }}>
+                    <option value="">— choisir —</option>
+                    {conceptTypeOptions.map((t) => <option key={t}>{t}</option>)}
+                  </select>
+                ) : (
+                  <input aria-label="Type de fiche" value={conceptType} onChange={(e) => setConceptType(e.target.value)} placeholder="p. ex. Contrat" style={{ maxWidth: 260 }} />
+                )}
+                <button className="btn-primary" type="submit" disabled={!conceptType.trim() || busy}>Importer</button>
+                <button className="btn-outline" type="button" onClick={() => setPending(null)}>Annuler</button>
+              </div>
+            </form>
+          )}
+          {!pending && (kind === "csv" || kind === "xlsx" || kind === "text") && (
             <div className="ct-row">
               <label className="muted" style={{ fontSize: 12, marginBottom: 4 }}>Type de fiche pour les dépôts CSV/XLSX/texte</label>
               {conceptTypeOptions.length > 0 ? (

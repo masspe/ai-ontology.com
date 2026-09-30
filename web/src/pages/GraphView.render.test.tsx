@@ -21,6 +21,7 @@ vi.mock("../api", async () => {
   return {
     ...actual,
     getSubgraph: vi.fn(),
+    getStats: vi.fn(),
     getOntology: vi.fn(),
     getStatsHistory: vi.fn(),
     getQueries: vi.fn(),
@@ -70,6 +71,7 @@ vi.mock("../components/GraphCanvas", () => {
 import * as api from "../api";
 
 const mocked = api as unknown as {
+  getStats: ReturnType<typeof vi.fn>;
   getSubgraph: ReturnType<typeof vi.fn>;
   getOntology: ReturnType<typeof vi.fn>;
   getStatsHistory: ReturnType<typeof vi.fn>;
@@ -172,6 +174,7 @@ beforeEach(() => {
   handle.zoomOut.mockReset();
   handle.focusNode.mockReset();
   mocked.getSubgraph.mockResolvedValue({ subgraph });
+  mocked.getStats.mockResolvedValue({ concepts: 4, relations: 3 });
   mocked.getOntology.mockResolvedValue(ontology);
   mocked.getStatsHistory.mockResolvedValue(history);
   mocked.getQueries.mockResolvedValue({ queries });
@@ -186,7 +189,7 @@ describe("GraphView page", () => {
       seed_query: undefined,
       seed_concept_types: [],
       expansion_depth: 3,
-      limit: 250,
+      limit: 300,
     });
     expect(kpiValue("Fiches")).toBe("4");
     expect(kpiValue("Liens")).toBe("3");
@@ -244,23 +247,29 @@ describe("GraphView page", () => {
 
   it("filters by node type and relation type", async () => {
     const { user } = await mount();
-    const [nodeSelect, relSelect] = screen.getAllByRole("combobox");
+    const nodeSelect = screen.getByRole("listbox", { name: /Types de fiche/ });
+    const relSelect = screen.getByRole("listbox", { name: /Types de lien/ });
     await user.selectOptions(nodeSelect, "Person");
     expect(canvasNodes()).toBe("Alice,Bob");
     expect(canvasRels()).toBe("knows");
     expect(kpiValue("Filtres actifs")).toBe("1");
-    await user.selectOptions(nodeSelect, "Tous les types");
+    // Several types at once.
+    await user.selectOptions(nodeSelect, "City");
+    expect(canvasNodes()).toBe("Alice,Geneva,Bob");
+    await user.click(screen.getByRole("button", { name: "Tous les types" }));
     await user.selectOptions(relSelect, "basedIn");
     expect(canvasNodes()).toBe("Alice,ACME,Geneva,Bob");
     expect(canvasRels()).toBe("basedIn");
     expect(kpiValue("Filtres actifs")).toBe("1");
-    // The node type is sent as a seed type on refresh.
+    await user.click(screen.getByRole("button", { name: "Tous les liens" }));
+    expect(kpiValue("Filtres actifs")).toBe("0");
+    // The node types are sent as seed types on refresh.
     await user.selectOptions(nodeSelect, "Company");
     await user.click(screen.getByRole("button", { name: "Actualiser" }));
     await waitFor(() =>
       expect(mocked.getSubgraph).toHaveBeenLastCalledWith(expect.objectContaining({ seed_concept_types: ["Company"] })),
     );
-    expect(kpiValue("Filtres actifs")).toBe("2");
+    expect(kpiValue("Filtres actifs")).toBe("1");
   });
 
   it("refetches with the new depth when the slider moves", async () => {
@@ -403,7 +412,7 @@ describe("GraphView page", () => {
     const { user } = await mount();
     await user.click(screen.getByRole("button", { name: "node 3" }));
     expect(screen.getByRole("link", { name: "Ouvrir la fiche" })).toHaveAttribute("href", "/concepts/3");
-    await user.selectOptions(screen.getAllByRole("combobox")[0], "Person");
+    await user.selectOptions(screen.getByRole("listbox", { name: /Types de fiche/ }), "Person");
     expect(screen.queryByRole("link", { name: "Ouvrir la fiche" })).toBeNull();
     expect(screen.getByText(/Cliquez sur une fiche du graphe/)).toBeInTheDocument();
   });
@@ -416,7 +425,7 @@ describe("GraphView page", () => {
     // Expand: restrict to the node's type and go one level deeper.
     await user.click(screen.getByRole("button", { name: /Étendre le voisinage/ }));
     expect(screen.getByText("4 niveaux")).toBeInTheDocument();
-    expect(screen.getAllByRole("combobox")[0]).toHaveValue("Person");
+    expect(screen.getByRole("listbox", { name: /Types de fiche/ })).toHaveValue(["Person"]);
     await waitFor(() =>
       expect(mocked.getSubgraph).toHaveBeenLastCalledWith(expect.objectContaining({ expansion_depth: 4, seed_concept_types: ["Person"] })),
     );
@@ -590,5 +599,45 @@ describe("GraphView — opened on a sheet", () => {
     expect(mocked.getSubgraph).toHaveBeenCalledWith(expect.objectContaining({ seed_concept_ids: [999] }));
     expect(handle.focusNode).not.toHaveBeenCalled();
     expect(screen.queryByRole("link", { name: "Ouvrir la fiche" })).toBeNull();
+  });
+});
+
+describe("GraphView — a model without sheets", () => {
+  it("says the model is in place and the graph waits for files", async () => {
+    mocked.getStats.mockResolvedValue({ concepts: 0, relations: 0 });
+    mocked.getSubgraph.mockResolvedValue({ subgraph: { concepts: [], relations: [] } });
+    renderPage(<GraphView />, { route: "/graph", extraRoutes: probeRoutes });
+    expect(await screen.findByTestId("model-only")).toHaveTextContent(/Le modèle est en place \(\d+ type\(s\) de fiche\)/);
+  });
+});
+
+describe("GraphView — a large graph loads by selection only", () => {
+  it("asks for types first, then fetches around them, and never polls by itself", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      mocked.getStats.mockResolvedValue({ concepts: 5000, relations: 9000 });
+      const { user } = renderPage(<GraphView />, { route: "/graph", extraRoutes: probeRoutes });
+      expect(await screen.findByTestId("select-first")).toHaveTextContent(/fiches : trop pour tout afficher/);
+      expect(screen.getByText(/au moins un sur un grand graphe/)).toBeInTheDocument();
+      await vi.advanceTimersByTimeAsync(31_000);
+      expect(mocked.getSubgraph).not.toHaveBeenCalled();
+      await user.selectOptions(screen.getByRole("listbox", { name: /Types de fiche/ }), "Person");
+      await waitFor(() =>
+        expect(mocked.getSubgraph).toHaveBeenLastCalledWith(expect.objectContaining({ seed_concept_types: ["Person"], limit: 250 })),
+      );
+      await waitFor(() => expect(canvasNodes()).toBe("Alice,Bob"));
+      const calls = mocked.getSubgraph.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(31_000);
+      expect(mocked.getSubgraph).toHaveBeenCalledTimes(calls);
+      await user.click(screen.getByRole("button", { name: "Vider la sélection" }));
+      expect(await screen.findByTestId("select-first")).toBeInTheDocument();
+      // A search seeds the load on Enter.
+      await user.type(screen.getByPlaceholderText(/Rechercher une fiche/), "acme{Enter}");
+      await waitFor(() =>
+        expect(mocked.getSubgraph).toHaveBeenLastCalledWith(expect.objectContaining({ seed_query: "acme", seed_concept_types: [] })),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

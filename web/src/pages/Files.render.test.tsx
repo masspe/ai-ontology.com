@@ -304,17 +304,29 @@ describe("Files page — upload", () => {
   it.each([
     ["data.csv", "csv"],
     ["sheet.xlsx", "xlsx"],
-  ])("refuses %s without a concept type", async (name, kind) => {
+  ])("asks the sheet type for %s, then imports with it", async (name, kind) => {
     const { user, container } = renderPage(<Files />);
     await loaded();
-    await user.upload(hiddenInput(container), makeFile(name, "x"));
-    expect(await screen.findByText(`Le format « ${kind} » demande un type de fiche.`)).toHaveClass("error-banner");
+    const file = makeFile(name, "x");
+    await user.upload(hiddenInput(container), file);
+    const form = await screen.findByRole("form", { name: "Type de fiche du fichier déposé" });
+    expect(form).toHaveTextContent(`Chaque ligne de « ${name} » devient une fiche : de quel type ?`);
     expect(mocked.upload).not.toHaveBeenCalled();
+    expect(screen.queryByText(/demande un type de fiche/)).toBeNull();
+    const go = within(form).getByRole("button", { name: "Importer" });
+    expect(go).toBeDisabled();
+    await user.selectOptions(within(form).getByRole("combobox", { name: "Type de fiche" }), "Contract");
+    await user.click(go);
+    await waitFor(() => expect(mocked.upload).toHaveBeenCalledWith(file, { kind, conceptType: "Contract" }));
+    expect(screen.queryByRole("form", { name: "Type de fiche du fichier déposé" })).toBeNull();
+    // The next drop is asked again: the type does not stick.
+    await user.upload(hiddenInput(container), makeFile(name, "y"));
+    expect(await screen.findByRole("form", { name: "Type de fiche du fichier déposé" })).toBeInTheDocument();
+    expect(mocked.upload).toHaveBeenCalledTimes(1);
     const recent = screen.getByText("Dépôts récents").closest("section")!;
     const row = within(recent).getAllByRole("listitem")[0];
     expect(row).toHaveTextContent(name);
-    expect(row).toHaveTextContent("Échec");
-    expect(within(row).getByText("Erreur")).toHaveClass("fail");
+    expect(row).toHaveTextContent("Traité");
   });
 
   it("shows the server's 422 and an unreachable API in the banner", async () => {
