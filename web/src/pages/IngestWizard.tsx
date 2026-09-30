@@ -17,7 +17,7 @@
 // `ingest.draft`.
 
 import { useEffect, useRef, useState } from "react";
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import Card from "../components/Card";
 // @ts-expect-error JSX module
 import { useToast } from "../components/Toast.jsx";
@@ -124,12 +124,20 @@ export default function IngestWizard() {
 
   // A document dropped on the Files page arrives here and is analysed at
   // once: the review is proposed, not requested.
+  const nav = useNavigate();
   const handed = (useLocation().state as { file?: File } | null)?.file;
+  const consumed = useRef(false);
   useEffect(() => {
-    if (handed && !loadDraft()) {
-      setFile(handed);
-      void onAnalyze(handed);
+    if (!handed || consumed.current) return;
+    consumed.current = true;
+    // Consumed: Back or a reload must not analyse it a second time.
+    nav(".", { replace: true, state: null });
+    if (loadDraft()) {
+      toast.info(`Relecture en cours : terminez-la ou annulez-la avant d'importer ${handed.name}`);
+      return;
     }
+    setFile(handed);
+    void onAnalyze(handed);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [handed]);
 

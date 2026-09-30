@@ -19,6 +19,7 @@ RUN npm ci
 COPY web/ ./
 # The finance example is bundled with the UI (web/src/lib/example.ts).
 COPY examples/finance/ /examples/finance/
+COPY examples/models/ /examples/models/
 # Same-origin: the UI calls the API and /auth on the host that served it.
 ENV VITE_API_BASE="" VITE_AUTH_API_BASE=""
 RUN npx vite build

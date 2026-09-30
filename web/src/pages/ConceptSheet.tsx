@@ -29,7 +29,8 @@ function text(v: unknown): string {
 }
 
 export default function ConceptSheet() {
-  const id = Number(useParams().id);
+  const raw = useParams().id ?? "";
+  const id = Number(raw);
   const [concept, setConcept] = useState<Concept | null>(null);
   const [neighbours, setNeighbours] = useState<Map<number, Concept>>(new Map());
   const [relations, setRelations] = useState<Relation[]>([]);
@@ -44,6 +45,11 @@ export default function ConceptSheet() {
     let cancelled = false;
     setConcept(null);
     setEditing(false);
+    setError(null);
+    if (!Number.isInteger(id) || id < 0) {
+      setError(`Fiche inconnue : ${raw}`);
+      return;
+    }
     (async () => {
       try {
         const [c, sg, r, a, f] = await Promise.all([
@@ -102,7 +108,7 @@ export default function ConceptSheet() {
   const sourceFile = text(concept.properties?.source_file);
   const origin = files.filter((f) => f.name === sourceFile || (f.kind === "text" && f.name === concept.name));
   const outgoing = relations.filter((r) => r.source === id);
-  const incoming = relations.filter((r) => r.target === id);
+  const incoming = relations.filter((r) => r.target === id && r.source !== id);
 
   const link = (other: number) => {
     const n = neighbours.get(other);

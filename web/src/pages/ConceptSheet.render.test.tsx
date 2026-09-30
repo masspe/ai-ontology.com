@@ -159,3 +159,21 @@ describe("ConceptSheet", () => {
     expect(screen.getByRole("link", { name: "Retour aux fiches" })).toHaveAttribute("href", "/concepts");
   });
 });
+
+describe("ConceptSheet — guards", () => {
+  it("refuses a route id that is not a number without calling the API", async () => {
+    mount("abc" as unknown as number);
+    expect(await screen.findByText("Fiche inconnue : abc")).toHaveClass("error-banner");
+    expect(mocked.getConcept).not.toHaveBeenCalled();
+  });
+
+  it("lists a self-loop once", async () => {
+    mocked.getSubgraph!.mockResolvedValue({
+      subgraph: { concepts: [acme], relations: [{ id: 20, relation_type: "boucle", source: 7, target: 7 }] },
+    });
+    mount();
+    await screen.findByRole("heading", { name: "Acme SA" });
+    expect(screen.getByText("Liens (1)")).toBeInTheDocument();
+    expect(screen.getAllByText("boucle")).toHaveLength(1);
+  });
+});

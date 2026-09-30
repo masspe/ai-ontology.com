@@ -400,4 +400,15 @@ describe("IngestWizard — handed a document by the Files page", () => {
     );
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+
+  it("does not analyse it twice, and says so when a review is already pending", async () => {
+    window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify({ proposal, decisions: {} }));
+    const fetchMock = routeFetch({ "/ingest/analyze": () => json(proposal) });
+    const { rerender } = renderPage(<IngestWizard />, { route: "/ingest", state: { file: makeFile("contrat.pdf", "x") } });
+    expect(await screen.findByText(/Relecture en cours : terminez-la/)).toBeInTheDocument();
+    rerender(<IngestWizard />);
+    await flushPromises();
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(mockedPrepare).not.toHaveBeenCalled();
+  });
 });
