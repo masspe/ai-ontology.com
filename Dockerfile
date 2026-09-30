@@ -47,9 +47,9 @@ COPY --from=builder /workspace/target/release/ontology /usr/local/bin/ontology
 COPY --from=web /web/dist /srv/web
 USER nonroot
 WORKDIR /data
-VOLUME ["/data"]
+VOLUME ["/data", "/backups"]
 EXPOSE 5000
 ENTRYPOINT ["/usr/local/bin/ontology", "--data", "/data"]
 # --memory-mode strict: a store that does not fit the container's budget
 # refuses to start with both figures instead of being killed later (R17).
-CMD ["--memory-mode", "strict", "serve", "--bind", "0.0.0.0:5000", "--web", "/srv/web", "--login"]
+CMD ["--memory-mode", "strict", "serve", "--bind", "0.0.0.0:5000", "--web", "/srv/web", "--login", "--backup-dir", "/backups"]

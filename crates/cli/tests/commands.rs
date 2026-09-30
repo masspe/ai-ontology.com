@@ -358,12 +358,20 @@ fn free_port() -> u16 {
 
 /// One HTTP/1.1 GET over a raw socket: `(status, body)`.
 fn http_get(port: u16, path: &str) -> Option<(u16, String)> {
+    http(port, "GET", path)
+}
+
+fn http_post(port: u16, path: &str) -> Option<(u16, String)> {
+    http(port, "POST", path)
+}
+
+fn http(port: u16, method: &str, path: &str) -> Option<(u16, String)> {
     let addr = format!("127.0.0.1:{port}").parse().unwrap();
     let mut s = TcpStream::connect_timeout(&addr, Duration::from_millis(500)).ok()?;
     s.set_read_timeout(Some(Duration::from_secs(10))).ok()?;
     write!(
         s,
-        "GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
     )
     .ok()?;
     let mut raw = String::new();
@@ -725,4 +733,51 @@ fn healthcheck_probes_the_running_server_without_touching_the_store() {
     let err = fail(None, &["healthcheck", "https://x"]);
     assert!(err.contains("http://"), "{err}");
     let _ = std::fs::remove_dir_all(&data);
+}
+
+/// `backup` copies the store, `restore` rebuilds it elsewhere and the
+/// graph is the same; `restore` refuses an existing store and a directory
+/// that is not a backup; `backup` needs the store (a running server holds
+/// it) but the server offers `POST /backup` into `--backup-dir`.
+#[test]
+fn backup_and_restore_round_trip_and_refusals() {
+    let data = tempdir("backup");
+    seeded(&data);
+    let dest = data.join("copy");
+    let out = ok(Some(&data), &["backup", &p(&dest)]);
+    assert!(out.starts_with("backup: "), "{out}");
+    assert!(out.contains("copied") && out.contains("records"), "{out}");
+    assert!(dest.join("MANIFEST.json").is_file());
+
+    let err = fail(Some(&data), &["restore", &p(&dest)]);
+    assert!(err.contains("already exists"), "{err}");
+    let other = tempdir("restored");
+    let err = fail(Some(&other), &["restore", &p(&data)]);
+    assert!(err.contains("not a backup"), "{err}");
+    let out = ok(Some(&other), &["restore", &p(&dest)]);
+    assert!(out.starts_with("restored: "), "{out}");
+    assert!(out.contains("6 concepts, 3 relations"), "{out}");
+    assert_eq!(
+        ok(Some(&other), &["stats"]),
+        ok(Some(&data), &["stats"]),
+        "restored store answers like the original"
+    );
+    let err = fail(None, &["restore", &p(&dest)]);
+    assert!(err.contains("--data"), "{err}");
+
+    // While a server holds the store, the CLI backup is refused and the
+    // server's route does the copy into its configured directory.
+    let backups = data.join("backups");
+    let mut cmd = ontology(Some(&data));
+    cmd.env("RUST_LOG", "info");
+    let srv = Server::start(&mut cmd, &["--backup-dir", &p(&backups)]);
+    let err = fail(Some(&data), &["backup", &p(&data.join("copy2"))]);
+    assert!(err.contains("locked"), "{err}");
+    let (code, body) = http_post(srv.port, "/backup").expect("server answers");
+    assert_eq!(code, 200, "{body}");
+    assert!(body.contains("\"records\""), "{body}");
+    assert!(backups.join("MANIFEST.json").is_file());
+    srv.stop();
+    let _ = std::fs::remove_dir_all(&data);
+    let _ = std::fs::remove_dir_all(&other);
 }

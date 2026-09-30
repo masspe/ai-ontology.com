@@ -50,6 +50,7 @@ Options utiles du binaire (dans `command:`) :
 | `--jwt-secret-env NOM` | prendre le secret des jetons dans la variable d'environnement `NOM` plutôt que dans `/data/jwt.secret` |
 | `--seed /chemin` | charger un exemple (schéma + JSONL) dans un store vide, une seule fois |
 | `--web /srv/web` | dossier de l'interface construite (celui de l'image) |
+| `--backup-dir /backups` | dossier où `POST /backup` copie le store (défaut de l'image ; §5) |
 
 ## 3. Premier compte et comptes suivants
 
@@ -89,12 +90,65 @@ mesurés (§7.8) : 2×10⁶ concepts et 10⁷ relations tiennent sur 16 Go en P1
 
 ## 5. Sauvegarde et restauration
 
-Décision du 2026-09-29 : copie des fichiers vers un stockage externe. Les
-segments scellés sont immuables, une copie quotidienne n'emporte que les
-nouveaux segments et le MANIFEST. La commande `ontology backup` et la
-restauration exercée en CI sont l'étape 3.8.4 ; en attendant, une copie du
-volume `/data` conteneur arrêté est une sauvegarde valide et complète
-(store, `users.json`, `jwt.secret`).
+Décision du 2026-09-29, livrée le 2026-09-30 (ROADMAP §3.8.4) : la
+sauvegarde est une **copie des fichiers du store** (le `MANIFEST.json` et les
+segments `.data` / `.idx`, dans la disposition du store), prise sous le
+verrou d'écriture, donc cohérente. Les segments scellés sont immuables :
+une sauvegarde répétée au même endroit ne recopie que le MANIFEST, les
+segments actifs et ce qui a été scellé depuis, et retire les segments
+qu'une compaction a remplacés. Le MANIFEST est retiré au début et réécrit
+en dernier : une sauvegarde interrompue n'est pas restaurable (« not a
+backup ») et se relance simplement ; elle n'est jamais restaurée
+tronquée. Un dossier de sauvegarde sert un seul store (identité dans le
+MANIFEST) : un second client, ou une copie restaurée, y est refusé.
+
+**Sauvegarder un conteneur qui tourne** : `POST /backup` (appel
+authentifié) copie le store dans le dossier fixé au démarrage par
+`--backup-dir` (l'image le fixe à `/backups`, `compose.yaml` y monte un
+volume par client). La destination n'est jamais choisie par l'appelant. La
+réponse dit ce qui a été copié :
+
+```sh
+curl -X POST -H "authorization: Bearer $TOKEN" http://localhost:5001/backup
+# {"files":13,"copied":3,"bytes":41290,"records":1284}
+```
+
+Une tâche planifiée (cron du serveur hôte) qui appelle cette route puis
+synchronise le volume `backups` vers le stockage externe (partage monté,
+`rclone` vers un stockage objet compatible S3, second serveur) fait une
+sauvegarde quotidienne incrémentale. Rétention : garder les copies
+externes 30 jours ; le volume `backups` lui-même ne contient que la
+dernière.
+
+**Sauvegarder un store à l'arrêt** : `ontology --data /data backup
+/backups` fait la même copie depuis la ligne de commande (refusée tant
+qu'un serveur tient le store).
+
+**Restaurer** : `ontology --data <dossier> restore <sauvegarde>` reconstruit
+`<dossier>/store` : copie dans un dossier de travail, ouverture, relecture
+complète (une sauvegarde qui ne se relit pas est rejetée avant de toucher
+à quoi que ce soit), puis mise en place. La commande refuse d'écraser un
+store existant : déplacez-le d'abord. La relecture complète charge le
+graphe en mémoire : la lancer dans un conteneur à part, pas à côté du
+serveur qui tourne sous sa limite mémoire. Pour un client :
+
+```sh
+docker stop acme
+docker run --rm -v acme-data:/data -v acme-backups:/backups --entrypoint sh ontology:local \
+  -c 'mv /data/store /data/store.old && /usr/local/bin/ontology --data /data restore /backups'
+docker start acme
+```
+
+Le store restauré a sa propre identité : sa prochaine sauvegarde va dans
+un dossier vide (ou dans `/backups` vidé), jamais par-dessus la sauvegarde
+d'origine.
+Les petits fichiers à côté du store (`users.json`, `jwt.secret`,
+`settings.json`) ne font pas partie de la sauvegarde : copiez-les avec le
+volume, ou fournissez le secret par `--jwt-secret-env`. La CI exécute
+sauvegarde par l'API, restauration par la commande et comparaison du graphe
+à chaque changement (`scripts/e2e_image.sh`), et les tests du store
+vérifient l'aller-retour, l'incrémental et les refus
+(`crates/storage/tests/backup.rs`).
 
 ## 6. Vérification de bout en bout
 
@@ -103,7 +157,8 @@ volume `/data` conteneur arrêté est une sauvegarde valide et complète
 l'exemple finance, création de l'administrateur, connexion, lecture du
 graphe par l'API et de l'interface sur le même port, écriture, arrêt propre
 (`docker stop`), redémarrage sur le même volume, données et compte
-retrouvés, sonde de santé depuis l'intérieur du conteneur. Le même script
+retrouvés, sonde de santé depuis l'intérieur du conteneur, sauvegarde par
+l'API et restauration par la commande. Le même script
 se lance à la main contre n'importe quelle image :
 
 ```sh

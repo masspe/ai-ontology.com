@@ -586,6 +586,28 @@ CI runs against every build: seed, sign-up, login, API and UI on one port,
 `docker stop`, restart with data and account intact. Installation guide in
 French: [docs/DEPLOIEMENT.md](docs/DEPLOIEMENT.md).
 
+## Backup and restore
+
+A backup is a copy of the store's files (`MANIFEST.json` and the `.data` /
+`.idx` of every partition) taken under the writer lock. Sealed partitions
+are immutable, so a repeated backup to the same directory copies only the
+manifest, the active partitions and what was sealed since, and removes the
+partitions a compaction replaced; the manifest is written last and
+atomically. Three entry points share the same code:
+
+- `POST /backup` on a running server copies the store to the directory
+  given by `serve --backup-dir` (the image uses `/backups`); the caller
+  never names the destination. The JSON report says what was copied.
+- `ontology --data <dir> backup <dest>` does the same from the command line
+  on a store no server holds.
+- `ontology --data <dir> restore <backup>` rebuilds `<dir>/store` in a
+  staging directory, replays it in full, then moves it into place; it
+  refuses to overwrite an existing store. The restored store gets its own
+  identity: a backup directory serves one store only.
+
+`users.json`, `jwt.secret` and `settings.json` are not part of a backup.
+Details in French: [docs/DEPLOIEMENT.md §5](docs/DEPLOIEMENT.md).
+
 ## Memory budget (`--memory-mode`)
 
 The graph lives in memory (P0). Before loading anything the binary estimates

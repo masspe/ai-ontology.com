@@ -122,6 +122,22 @@ pub struct Manifest {
     /// old ones. `open` finishes the swap if the process died in between.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compaction: Option<CompactionMarker>,
+    /// Identity of this store's history, so a backup directory serves one
+    /// store only: partition ids are per store, and a restored copy or a
+    /// second tenant would silently mix its segments in. Empty in stores
+    /// written before it existed; filled at the next open.
+    #[serde(default)]
+    pub store_id: String,
+}
+
+/// A fresh store identity: time and process, enough to tell two stores
+/// apart (no randomness dependency needed).
+pub fn new_store_id() -> String {
+    let t = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("{t:x}-{:x}", std::process::id())
 }
 
 /// Commit record of a compaction (see `SegmentStore::compact_all`).
@@ -156,6 +172,7 @@ impl Manifest {
             ],
             relation_types: Vec::new(),
             compaction: None,
+            store_id: new_store_id(),
             streams: vec![
                 StreamEntry {
                     ns_id: META_NS_ID,

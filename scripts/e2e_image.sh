@@ -28,7 +28,8 @@ start() {
   docker run -d --name "$NAME" -p "${PORT}:5000" \
     -v "$VOL:/data" -v "$HERE/examples/finance:/seed:ro" \
     --memory=2g -e RUST_LOG=info "$IMAGE" \
-    --memory-mode strict serve --bind 0.0.0.0:5000 --web /srv/web --login --seed /seed >/dev/null
+    --memory-mode strict serve --bind 0.0.0.0:5000 --web /srv/web --login --seed /seed \
+    --backup-dir /data/backups >/dev/null
   for _ in $(seq 1 60); do
     if curl -fsS "$BASE/healthz" >/dev/null 2>&1; then return 0; fi
     sleep 1
@@ -82,5 +83,11 @@ docker logs "$NAME" 2>&1 | grep -q "generated a new JWT secret" && { echo "secre
 
 echo "== healthcheck subcommand inside the container"
 docker exec "$NAME" /usr/local/bin/ontology --data /data healthcheck http://127.0.0.1:5000/healthz
+
+echo "== backup through the API, restore with the CLI, same graph"
+report=$(curl -fsS -X POST -H "authorization: Bearer $TOKEN" "$BASE/backup")
+echo "$report" | json "d['records']" | grep -qE '^[1-9][0-9]*$' || { echo "bad backup report: $report"; exit 1; }
+docker exec "$NAME" /usr/local/bin/ontology --data /data/restored restore /data/backups | grep -q "23 concepts, 38 relations"
+docker exec "$NAME" /usr/local/bin/ontology --data /data/restored stats | grep -qx "concepts: 23"
 
 echo "e2e: ok"
