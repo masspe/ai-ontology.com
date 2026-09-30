@@ -6,6 +6,7 @@ import { useNavigate, Link, useSearchParams } from "react-router-dom";
 import Card from "../components/Card";
 import Sparkline from "../components/Sparkline";
 import GraphCanvas, { type GraphCanvasHandle, type LayoutDir } from "../components/GraphCanvas";
+import MultiSelect, { type MultiSelectOption } from "../components/MultiSelect";
 import {
   getFiles,
   getOntology,
@@ -360,7 +361,31 @@ export default function GraphView() {
   // ---------- Derived ----------
 
   const conceptTypes = useMemo(() => (ontology ? Object.keys(ontology.concept_types) : []), [ontology]);
-  const relationTypes = useMemo(() => (ontology ? Object.keys(ontology.relation_types) : []), [ontology]);
+  const nodeOptions = useMemo<MultiSelectOption[]>(() => conceptTypes.map((t) => ({ value: t, label: t })), [conceptTypes]);
+  // Cross-filter, as in Power BI: with sheet types chosen, only the link
+  // types whose both ends are among them; none such = all, with a note.
+  const relCross = useMemo(() => {
+    const all = ontology ? Object.values(ontology.relation_types) : [];
+    const within = nodeTypes.length > 0 ? all.filter((r) => nodeTypes.includes(r.domain) && nodeTypes.includes(r.range)) : all;
+    const shown = within.length > 0 ? within : all;
+    return {
+      options: shown.map((r) => ({ value: r.name, label: r.name, hint: `${r.domain} → ${r.range}` })),
+      note: within.length === 0 && all.length > 0 ? "Aucun type de lien entre les types de fiche choisis : tous sont listés." : undefined,
+    };
+  }, [ontology, nodeTypes]);
+  // Types linked to two different chosen types: the missing middle of a path.
+  const intermediates = useMemo<string[]>(() => {
+    if (!ontology || nodeTypes.length < 2) return [];
+    const touchedBy = new Map<string, Set<string>>(); // other end -> chosen types it links to
+    for (const r of Object.values(ontology.relation_types)) {
+      for (const [a, b] of [[r.domain, r.range], [r.range, r.domain]] as const) {
+        if (!nodeTypes.includes(a) || nodeTypes.includes(b)) continue;
+        if (!touchedBy.has(b)) touchedBy.set(b, new Set());
+        touchedBy.get(b)!.add(a);
+      }
+    }
+    return conceptTypes.filter((t) => (touchedBy.get(t)?.size ?? 0) >= 2).slice(0, 3);
+  }, [ontology, nodeTypes, conceptTypes]);
   const rules: RuleTypeDef[] = useMemo(
     () => (ontology?.rule_types ? Object.values(ontology.rule_types) : []),
     [ontology]
@@ -496,9 +521,18 @@ export default function GraphView() {
     if (selectedId) canvasRef.current?.focusNode(selectedId);
   };
 
+  // Choosing sheet types drops the chosen link types the cross-filter no
+  // longer offers (they would silently hide every link).
+  const chooseNodeTypes = (next: string[]) => {
+    setNodeTypes(next);
+    const rels = ontology ? Object.values(ontology.relation_types) : [];
+    const offered = rels.filter((r) => next.includes(r.domain) && next.includes(r.range)).map((r) => r.name);
+    if (next.length > 0 && offered.length > 0) setRelTypes((prev) => prev.filter((t) => offered.includes(t)));
+  };
+
   const onExpandNeighbors = async () => {
     if (!selectedConcept) return;
-    setNodeTypes([selectedConcept.concept_type]);
+    chooseNodeTypes([selectedConcept.concept_type]);
     setDepth(Math.min(5, depth + 1));
   };
 
@@ -569,98 +603,11 @@ export default function GraphView() {
         />
       </div>
 
-      {/* Row 2 — Filters / Graph / Inspector */}
-      <div className={`dash-row gv-row-main${collapseInspector ? " inspector-collapsed" : ""}`}>
-        {/* Filters & Controls */}
-        <Card title="Filtres et réglages">
-          <div className="gv-filter-group">
-            <div className="files-search">
-              <span className="files-search-icon">{Icon.search}</span>
-              <input
-                placeholder={large ? "Rechercher une fiche… (Entrée)" : "Rechercher une fiche…"}
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                onKeyDown={(e) => {
-                  // On a large graph the search is what seeds the load.
-                  if (e.key === "Enter") void loadSubgraph();
-                }}
-              />
-            </div>
-          </div>
-
-          <div className="gv-filter-group">
-            <label className="gv-filter-label" htmlFor="gv-node-types">
-              Types de fiche{" "}
-              <span className="muted">
-                ({nodeTypes.length === 0 ? "tous" : `${nodeTypes.length} choisi(s)`}
-                {large ? ", au moins un sur un grand graphe" : ""} ; Ctrl+clic pour plusieurs)
-              </span>
-            </label>
-            <select
-              id="gv-node-types"
-              multiple
-              size={Math.min(6, Math.max(2, conceptTypes.length))}
-              value={nodeTypes}
-              onChange={(e) => setNodeTypes(Array.from(e.target.selectedOptions, (o) => o.value))}
-            >
-              {conceptTypes.map((t) => <option key={t}>{t}</option>)}
-            </select>
-            {nodeTypes.length > 0 && (
-              <button className="btn-ghost" type="button" onClick={() => setNodeTypes([])}>
-                {large ? "Vider la sélection" : "Tous les types"}
-              </button>
-            )}
-          </div>
-
-          <div className="gv-filter-group">
-            <label className="gv-filter-label" htmlFor="gv-rel-types">
-              Types de lien <span className="muted">({relTypes.length === 0 ? "tous" : `${relTypes.length} choisi(s)`})</span>
-            </label>
-            <select
-              id="gv-rel-types"
-              multiple
-              size={Math.min(6, Math.max(2, relationTypes.length))}
-              value={relTypes}
-              onChange={(e) => setRelTypes(Array.from(e.target.selectedOptions, (o) => o.value))}
-            >
-              {relationTypes.map((t) => <option key={t}>{t}</option>)}
-            </select>
-            {relTypes.length > 0 && (
-              <button className="btn-ghost" type="button" onClick={() => setRelTypes([])}>
-                Tous les liens
-              </button>
-            )}
-          </div>
-
-          <div className="gv-filter-group">
-            <div className="gv-slider-head">
-              <label className="gv-filter-label">Profondeur</label>
-              <span className="muted gv-depth-value">{depth} niveau{depth > 1 ? "x" : ""}</span>
-            </div>
-            <input
-              type="range"
-              min={1}
-              max={5}
-              step={1}
-              value={depth}
-              onChange={(e) => setDepth(Number(e.target.value))}
-              className="gv-slider"
-            />
-            <div className="gv-slider-ticks">
-              {[1, 2, 3, 4, 5].map((n) => <span key={n}>{n}</span>)}
-            </div>
-          </div>
-
-          <div className="gv-toggles">
-            <Toggle checked={showLabels} onChange={setShowLabels} label="Afficher les libellés" icon={Icon.funnel} />
-            <Toggle checked={clusterView} onChange={setClusterView} label="Vue groupée" icon={Icon.layers} />
-            <Toggle checked={highlightPaths} onChange={setHighlightPaths} label="Surligner les chemins" icon={Icon.share} />
-            <Toggle checked={showConstraints} onChange={setShowConstraints} label="Afficher les contraintes" icon={Icon.shield} />
-          </div>
-        </Card>
-
-        {/* Ontology Graph canvas */}
+      {/* Row 2 — the graph full width, its filters as a bar above it, the
+          inspector below it. */}
+      <div className={`gv-row-main${collapseInspector ? " inspector-collapsed" : ""}`}>
         <Card
+          className="gv-canvas-card"
           title={
             <span className="gv-canvas-title">
               <span>Graphe de l'ontologie</span>
@@ -699,11 +646,60 @@ export default function GraphView() {
             </div>
           }
         >
+          <div className="gv-filterbar" role="group" aria-label="Filtres et réglages">
+            <div className="files-search gv-fb-search">
+              <span className="files-search-icon">{Icon.search}</span>
+              <input
+                placeholder={large ? "Rechercher une fiche… (Entrée)" : "Rechercher une fiche…"}
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                onKeyDown={(e) => {
+                  // On a large graph the search is what seeds the load.
+                  if (e.key === "Enter") void loadSubgraph();
+                }}
+              />
+            </div>
+            <MultiSelect
+              label="Types de fiche"
+              options={nodeOptions}
+              selected={nodeTypes}
+              onChange={chooseNodeTypes}
+              allLabel={large ? "au moins un sur un grand graphe" : "Tous les types"}
+            />
+            <MultiSelect
+              label="Types de lien"
+              options={relCross.options}
+              selected={relTypes}
+              onChange={setRelTypes}
+              allLabel="Tous les liens"
+              note={relCross.note}
+            />
+            <label className="gv-fb-depth">
+              <span className="gv-filter-label">Profondeur</span>
+              <input
+                type="range"
+                min={1}
+                max={5}
+                step={1}
+                value={depth}
+                onChange={(e) => setDepth(Number(e.target.value))}
+                className="gv-slider"
+              />
+              <span className="muted gv-depth-value">{depth} niveau{depth > 1 ? "x" : ""}</span>
+            </label>
+            <div className="gv-toggles">
+              <Toggle checked={showLabels} onChange={setShowLabels} label="Afficher les libellés" icon={Icon.funnel} />
+              <Toggle checked={clusterView} onChange={setClusterView} label="Vue groupée" icon={Icon.layers} />
+              <Toggle checked={highlightPaths} onChange={setHighlightPaths} label="Surligner les chemins" icon={Icon.share} />
+              <Toggle checked={showConstraints} onChange={setShowConstraints} label="Afficher les contraintes" icon={Icon.shield} />
+            </div>
+          </div>
+
           <div id="gv-canvas-wrap" className="gv-canvas">
             {large && !canLoad && (
               <div className="empty" data-testid="select-first">
                 {total!.toLocaleString("fr-CH")} fiches : trop pour tout afficher d'un coup. Choisissez un ou
-                plusieurs types de fiche à gauche, ou cherchez une fiche ; le graphe montre alors jusqu'à{" "}
+                plusieurs types de fiche ci-dessus, ou cherchez une fiche ; le graphe montre alors jusqu'à{" "}
                 {SUBGRAPH_LIMIT} fiches autour de la sélection.
               </div>
             )}
@@ -711,6 +707,15 @@ export default function GraphView() {
               <div className="empty" data-testid="model-only">
                 Le modèle est en place ({conceptTypes.length} type(s) de fiche) mais il n'y a pas encore de fiche à
                 afficher : le graphe se remplit avec vos fichiers.
+              </div>
+            )}
+            {/* Only direct links between the chosen types are drawn: say so
+                when that leaves none, and name the types in the middle. */}
+            {nodeTypes.length > 0 && relTypes.length === 0 && !search.trim() && filteredSubgraph && filteredSubgraph.concepts.length >= 2 && filteredSubgraph.relations.length === 0 && (
+              <div className="gv-canvas-note" data-testid="no-direct-link" role="status">
+                Aucun lien direct entre les types choisis. Ajoutez un type intermédiaire
+                {intermediates.length > 0 ? ` (par exemple : ${intermediates.join(", ")})` : ""} pour voir les liens
+                qui les relient.
               </div>
             )}
             <GraphCanvas

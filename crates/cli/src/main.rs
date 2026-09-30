@@ -1196,7 +1196,9 @@ async fn seed_from_dir(
             subdirs.push(p);
             continue;
         }
-        if !ft.is_file() {
+        // `~$name.xlsx`: the lock file Office keeps while the file is open
+        // (locked, unreadable); `.name`: hidden files. Neither is data.
+        if !ft.is_file() || file_name.starts_with("~$") || file_name.starts_with('.') {
             continue;
         }
         match ext.as_str() {
