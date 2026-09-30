@@ -336,9 +336,24 @@ Ce que chaque étape applique du plan de stockage (vérifié le 2026-09-24) :
    store produit par la version précédente de `main` (artefact conservé)
    avec la version courante : migration de format et hydratation vertes.
    Critère : job `upgrade` dans `ci.yml`.
-6. **Clés d'API par client et journal d'audit** des écritures (qui, quoi,
-   quand, sur quel record), en dernier : nécessaires à la facturation et
-   au support, pas au premier déploiement.
+6. **Clés d'API par client et journal d'audit** — **livré 2026-09-30** :
+   clés nommées (`POST /auth/keys` par un administrateur, secret `ok_…`
+   montré une fois, haché SHA-256 dans `users.json`, `GET` liste, `DELETE`
+   révoque sur-le-champ ; une clé est un appelant machine : elle ouvre
+   l'API, pas `/auth/me` ni la gestion des comptes) ; journal d'audit
+   (`<data>/audit.jsonl`, une ligne JSON par écriture réussie — POST, PUT,
+   PATCH, DELETE — avec l'heure, l'appelant (courriel, nom de clé ou
+   jeton de service), la méthode, le chemin, le statut et l'identifiant
+   de requête ; `GET /audit?limit=` le relit, administrateurs seulement
+   avec la connexion intégrée ; `serve --audit-log`, `--no-audit`).
+   Non couvert : l'identifiant de la fiche créée par un `POST` (le chemin
+   ne le porte pas ; l'identifiant de requête permet de le retrouver dans
+   le journal du serveur) ; rotation du fichier ; un écran Réglages pour
+   les clés et le journal (API seulement pour l'instant, `curl` ou
+   `/docs`). Texte d'origine : clés
+   d'API par client et journal d'audit des écritures (qui, quoi, quand,
+   sur quel record), en dernier : nécessaires à la facturation et au
+   support, pas au premier déploiement.
 
 Deux décisions reviennent au propriétaire avant l'étape 3 : l'hébergeur
 cible (Infomaniak Public Cloud par cohérence avec le fournisseur LLM, ou

@@ -310,6 +310,13 @@ enum Cmd {
         /// route answers 400.
         #[arg(long)]
         backup_dir: Option<PathBuf>,
+        /// Audit log of the writes (one JSON line per successful write with
+        /// its caller, read by `GET /audit`). Defaults to `<data>/audit.jsonl`
+        /// when `--data` is given; `--no-audit` turns it off.
+        #[arg(long)]
+        audit_log: Option<PathBuf>,
+        #[arg(long)]
+        no_audit: bool,
     },
 }
 
@@ -749,6 +756,8 @@ async fn main() -> Result<()> {
             users_file,
             allow_signup,
             backup_dir,
+            audit_log,
+            no_audit,
         } => {
             // Resolve a seed directory: explicit --seed wins, otherwise look
             // for ONTOLOGY_SEED_DIR, then <data>/seed, then ./seed. Seeding
@@ -810,6 +819,16 @@ async fn main() -> Result<()> {
                 tracing::info!(dir = %dir.display(), "POST /backup enabled");
             }
             state.backup_dir = backup_dir;
+            let audit_path = audit_log.or_else(|| cli.data.as_ref().map(|d| d.join("audit.jsonl")));
+            let audit = match (no_audit, audit_path) {
+                (false, Some(path)) => {
+                    let log = ontology_server::audit::AuditLog::open(&path)
+                        .with_context(|| format!("opening the audit log {}", path.display()))?;
+                    tracing::info!(path = %path.display(), "audit log enabled");
+                    Some(Arc::new(log))
+                }
+                _ => None,
+            };
             let bearer = match auth_env {
                 Some(env_name) => Some(
                     std::env::var(&env_name)
@@ -885,6 +904,7 @@ async fn main() -> Result<()> {
                     rate_limit: None,
                     users,
                     web_dir: web,
+                    audit,
                 },
             );
             let listener = tokio::net::TcpListener::bind(&bind).await?;

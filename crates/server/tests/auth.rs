@@ -69,6 +69,7 @@ fn app_with(
                 allow_signup,
             }),
             web_dir,
+            audit: None,
         },
     )
 }
@@ -595,5 +596,340 @@ async fn without_a_web_dir_unknown_paths_are_refused_by_the_auth_layer() {
     let dir = tempdir("noweb");
     let app = app(dir.join("users.json"), false, None);
     let (st, _) = text(&app, "/anything").await;
+    assert_eq!(st, StatusCode::UNAUTHORIZED);
+}
+
+/// A router with the built-in login and an audit log at `audit`.
+fn app_audited(users_file: PathBuf, audit: PathBuf) -> Router {
+    let graph = OntologyGraph::with_arc(Ontology::new());
+    let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
+    build_router_with_config(
+        state_with(store, graph),
+        RouterConfig {
+            bearer_token: None,
+            jwt: Some(JwtAuth::from_secret(SECRET.to_vec())),
+            rate_limit: None,
+            users: Some(UserAuth {
+                store: Arc::new(UserStore::open(users_file).expect("users file")),
+                allow_signup: false,
+            }),
+            web_dir: None,
+            audit: Some(Arc::new(
+                ontology_server::audit::AuditLog::open(audit).expect("audit log"),
+            )),
+        },
+    )
+}
+
+async fn admin_token(app: &Router) -> String {
+    let (st, v, _) = call(
+        app,
+        "POST",
+        "/auth/signup",
+        None,
+        Some(creds("admin@example.com", "Passw0rd!", "Admin")),
+    )
+    .await;
+    assert_eq!(st, StatusCode::CREATED, "{v}");
+    v["token"].as_str().unwrap().to_string()
+}
+
+/// Named API keys (ROADMAP §3.8.6): minted by an administrator, shown
+/// once, stored hashed, usable as a bearer for the API but nobody for
+/// `/auth/me`, revoked at once.
+#[tokio::test]
+async fn api_keys_are_minted_once_stored_hashed_and_revoked_at_once() {
+    let dir = tempdir("keys");
+    let users = dir.join("users.json");
+    let app = app(users.clone(), false, None);
+    let admin = admin_token(&app).await;
+
+    // Validation, then a key.
+    let (st, v, _) = call(
+        &app,
+        "POST",
+        "/auth/keys",
+        Some(&admin),
+        Some(json!({ "name": "  " })),
+    )
+    .await;
+    assert_eq!(st, StatusCode::BAD_REQUEST, "{v}");
+    let (st, v, _) = call(
+        &app,
+        "POST",
+        "/auth/keys",
+        Some(&admin),
+        Some(json!({ "name": "ERP integration" })),
+    )
+    .await;
+    assert_eq!(st, StatusCode::CREATED, "{v}");
+    let secret = v["key"].as_str().unwrap().to_string();
+    assert!(
+        secret.starts_with("ok_") && secret.len() == 3 + 64,
+        "{secret}"
+    );
+    assert_eq!(v["name"], "ERP integration");
+    assert_eq!(v["prefix"], &secret[..11]);
+    assert_eq!(v["createdBy"], "admin@example.com");
+    let id = v["id"].as_str().unwrap().to_string();
+
+    // Listed without the secret; the file holds a hash, never the secret.
+    let (st, v, _) = call(&app, "GET", "/auth/keys", Some(&admin), None).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(v["keys"].as_array().unwrap().len(), 1);
+    assert!(
+        v["keys"][0].get("key").is_none() && v["keys"][0].get("hash").is_none(),
+        "{v}"
+    );
+    let file = std::fs::read_to_string(&users).unwrap();
+    assert!(
+        !file.contains(&secret) && file.contains("\"hash\""),
+        "{file}"
+    );
+
+    // The key opens the API, is a service caller for /auth/me, cannot
+    // manage keys or users.
+    let (st, v, _) = call(&app, "GET", "/stats", Some(&secret), None).await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    let (st, _, _) = call(&app, "GET", "/auth/me", Some(&secret), None).await;
+    assert_eq!(st, StatusCode::UNAUTHORIZED);
+    let (st, _, _) = call(&app, "GET", "/auth/keys", Some(&secret), None).await;
+    assert_eq!(st, StatusCode::UNAUTHORIZED);
+    // A key writes data but never wipes the tenant nor runs its backup.
+    let (st, v, _) = call(&app, "POST", "/reset", Some(&secret), None).await;
+    assert_eq!(st, StatusCode::FORBIDDEN, "{v}");
+    let (st, v, _) = call(&app, "POST", "/backup", Some(&secret), None).await;
+    assert_eq!(st, StatusCode::FORBIDDEN, "{v}");
+    let (st, v, _) = call(&app, "POST", "/backup", Some(&admin), None).await;
+    assert_eq!(st, StatusCode::BAD_REQUEST, "{v}"); // not configured, but allowed
+                                                    // An unknown key, or a key-shaped garbage, is refused.
+    let (st, _, _) = call(&app, "GET", "/stats", Some("ok_nope"), None).await;
+    assert_eq!(st, StatusCode::UNAUTHORIZED);
+
+    // A plain user cannot mint keys.
+    let (st, v, _) = call(
+        &app,
+        "POST",
+        "/auth/users",
+        Some(&admin),
+        Some(creds("u@example.com", "Passw0rd!", "U")),
+    )
+    .await;
+    assert_eq!(st, StatusCode::CREATED, "{v}");
+    let (st, v, _) = call(
+        &app,
+        "POST",
+        "/auth/login",
+        None,
+        Some(creds("u@example.com", "Passw0rd!", "")),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    let user = v["token"].as_str().unwrap().to_string();
+    let (st, _, _) = call(
+        &app,
+        "POST",
+        "/auth/keys",
+        Some(&user),
+        Some(json!({ "name": "x" })),
+    )
+    .await;
+    assert_eq!(st, StatusCode::FORBIDDEN);
+
+    // Revoked: gone at once, twice is not found.
+    let (st, _, _) = call(
+        &app,
+        "DELETE",
+        &format!("/auth/keys/{id}"),
+        Some(&admin),
+        None,
+    )
+    .await;
+    assert_eq!(st, StatusCode::NO_CONTENT);
+    let (st, _, _) = call(&app, "GET", "/stats", Some(&secret), None).await;
+    assert_eq!(st, StatusCode::UNAUTHORIZED);
+    let (st, _, _) = call(
+        &app,
+        "DELETE",
+        &format!("/auth/keys/{id}"),
+        Some(&admin),
+        None,
+    )
+    .await;
+    assert_eq!(st, StatusCode::NOT_FOUND);
+
+    // The keys survive a reopen of the file.
+    let (st, v, _) = call(
+        &app,
+        "POST",
+        "/auth/keys",
+        Some(&admin),
+        Some(json!({ "name": "again" })),
+    )
+    .await;
+    assert_eq!(st, StatusCode::CREATED, "{v}");
+    let secret2 = v["key"].as_str().unwrap().to_string();
+    let reopened = self::app(users.clone(), false, None);
+    let (st, _, _) = call(&reopened, "GET", "/stats", Some(&secret2), None).await;
+    assert_eq!(st, StatusCode::OK);
+}
+
+/// The audit log (ROADMAP §3.8.6): every successful write with its caller
+/// (a user's email, a key's name), nothing for reads or refused writes,
+/// read back by administrators only.
+#[tokio::test]
+async fn writes_are_audited_with_their_caller_and_read_by_administrators() {
+    let dir = tempdir("audit");
+    let audit = dir.join("logs").join("audit.jsonl");
+    let app = app_audited(dir.join("users.json"), audit.clone());
+    let admin = admin_token(&app).await;
+
+    // A write by the administrator, a read, a refused write, a write by a key.
+    let onto = json!({ "concept_types": { "Topic": { "name": "Topic" } }, "relation_types": {} });
+    let (st, v, _) = call(&app, "PUT", "/ontology", Some(&admin), Some(onto)).await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    let (st, _, _) = call(&app, "GET", "/stats", Some(&admin), None).await;
+    assert_eq!(st, StatusCode::OK);
+    // A POST that reads (a retrieval) is not a write.
+    let (st, _, _) = call(
+        &app,
+        "POST",
+        "/retrieve",
+        Some(&admin),
+        Some(json!({ "query": "x" })),
+    )
+    .await;
+    assert!(st.is_success(), "{st}");
+    let (st, _, _) = call(
+        &app,
+        "POST",
+        "/concepts",
+        Some(&admin),
+        Some(json!({ "id": 0, "concept_type": "Nope", "name": "x" })),
+    )
+    .await;
+    assert!(st.is_client_error(), "{st}");
+    let (_, v, _) = call(
+        &app,
+        "POST",
+        "/auth/keys",
+        Some(&admin),
+        Some(json!({ "name": "ERP" })),
+    )
+    .await;
+    let key = v["key"].as_str().unwrap().to_string();
+    let (st, v, headers) = call(
+        &app,
+        "POST",
+        "/concepts",
+        Some(&key),
+        Some(json!({ "id": 0, "concept_type": "Topic", "name": "A" })),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    let rid = headers
+        .get("x-request-id")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+
+    let (st, v, _) = call(&app, "GET", "/audit", Some(&admin), None).await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    let entries = v["entries"].as_array().unwrap();
+    let rows: Vec<(String, String, String, u64)> = entries
+        .iter()
+        .map(|e| {
+            (
+                e["who"].as_str().unwrap().to_string(),
+                e["method"].as_str().unwrap().to_string(),
+                e["path"].as_str().unwrap().to_string(),
+                e["status"].as_u64().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            (
+                "admin@example.com".to_string(),
+                "PUT".to_string(),
+                "/ontology".to_string(),
+                200
+            ),
+            (
+                "admin@example.com".to_string(),
+                "POST".to_string(),
+                "/auth/keys".to_string(),
+                201
+            ),
+            (
+                "ERP".to_string(),
+                "POST".to_string(),
+                "/concepts".to_string(),
+                200
+            ),
+        ],
+        "{v}"
+    );
+    assert_eq!(entries[2]["request_id"], rid);
+    assert!(entries[0]["ts"].as_str().unwrap().ends_with('Z'));
+    // The file is what the API reads.
+    assert_eq!(std::fs::read_to_string(&audit).unwrap().lines().count(), 3);
+
+    // `limit` keeps the last ones; a plain user and a key are refused.
+    let (_, v, _) = call(&app, "GET", "/audit?limit=1", Some(&admin), None).await;
+    assert_eq!(v["entries"].as_array().unwrap().len(), 1);
+    assert_eq!(v["entries"][0]["path"], "/concepts");
+    let (st, _, _) = call(&app, "GET", "/audit", Some(&key), None).await;
+    assert_eq!(st, StatusCode::FORBIDDEN);
+    let (_, _, _) = call(
+        &app,
+        "POST",
+        "/auth/users",
+        Some(&admin),
+        Some(creds("u@example.com", "Passw0rd!", "U")),
+    )
+    .await;
+    let (_, v, _) = call(
+        &app,
+        "POST",
+        "/auth/login",
+        None,
+        Some(creds("u@example.com", "Passw0rd!", "")),
+    )
+    .await;
+    let user = v["token"].as_str().unwrap().to_string();
+    let (st, _, _) = call(&app, "GET", "/audit", Some(&user), None).await;
+    assert_eq!(st, StatusCode::FORBIDDEN);
+}
+
+/// Without the built-in login (a service token only), the audit log names
+/// the service and anyone with the token may read it.
+#[tokio::test]
+async fn without_the_login_the_audit_names_the_service_token() {
+    let dir = tempdir("audit-service");
+    let graph = OntologyGraph::with_arc(Ontology::new());
+    let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
+    let app = build_router_with_config(
+        state_with(store, graph),
+        RouterConfig {
+            bearer_token: Some("svc".into()),
+            jwt: None,
+            rate_limit: None,
+            users: None,
+            web_dir: None,
+            audit: Some(Arc::new(
+                ontology_server::audit::AuditLog::open(dir.join("audit.jsonl")).unwrap(),
+            )),
+        },
+    );
+    let onto = json!({ "concept_types": { "Topic": { "name": "Topic" } }, "relation_types": {} });
+    let (st, _, _) = call(&app, "PUT", "/ontology", Some("svc"), Some(onto)).await;
+    assert_eq!(st, StatusCode::OK);
+    let (st, v, _) = call(&app, "GET", "/audit", Some("svc"), None).await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert_eq!(v["entries"][0]["who"], "service");
+    let (st, _, _) = call(&app, "GET", "/audit", None, None).await;
     assert_eq!(st, StatusCode::UNAUTHORIZED);
 }
