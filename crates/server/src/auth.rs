@@ -112,10 +112,57 @@ pub struct PublicUser {
     pub role: String,
 }
 
+/// A named API key of the tenant (ROADMAP §3.8.6) for machine callers:
+/// the secret (`ok_` + 64 hex) is shown once at creation and kept hashed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ApiKey {
+    id: String,
+    name: String,
+    /// SHA-256 of the secret, hex.
+    hash: String,
+    /// The first characters of the secret, to tell keys apart.
+    prefix: String,
+    created_at: String,
+    created_by: String,
+}
+
+impl ApiKey {
+    fn public(&self) -> PublicApiKey {
+        PublicApiKey {
+            id: self.id.clone(),
+            name: self.name.clone(),
+            prefix: self.prefix.clone(),
+            created_at: self.created_at.clone(),
+            created_by: self.created_by.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PublicApiKey {
+    pub id: String,
+    pub name: String,
+    pub prefix: String,
+    pub created_at: String,
+    pub created_by: String,
+}
+
+pub const API_KEY_PREFIX: &str = "ok_";
+
+fn sha256_hex(s: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let d = Sha256::digest(s.as_bytes());
+    d.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 struct Db {
     #[serde(default)]
     users: Vec<User>,
+    #[serde(default)]
+    keys: Vec<ApiKey>,
 }
 
 /// The users file, loaded once, written whole on every change (a few
@@ -271,6 +318,66 @@ impl UserStore {
     fn list(&self) -> Vec<PublicUser> {
         self.db.lock().users.iter().map(User::public).collect()
     }
+
+    /// `true` when `id` names an administrator.
+    pub fn is_admin(&self, id: &str) -> bool {
+        self.find_by_id(id).map(|u| u.is_admin()).unwrap_or(false)
+    }
+
+    /// The key a bearer secret names, if any: what `require_auth` asks.
+    pub fn key_by_secret(&self, secret: &str) -> Option<PublicApiKey> {
+        if !secret.starts_with(API_KEY_PREFIX) {
+            return None;
+        }
+        let h = sha256_hex(secret);
+        self.db
+            .lock()
+            .keys
+            .iter()
+            .find(|k| k.hash == h)
+            .map(ApiKey::public)
+    }
+
+    /// Mint a key: the secret is returned once, only its hash is kept.
+    fn create_key(&self, name: &str, by: &str) -> Result<(PublicApiKey, String), UserStoreError> {
+        use rand::RngCore;
+        let mut raw = [0u8; 32];
+        rand::rng().fill_bytes(&mut raw);
+        let secret = format!(
+            "{API_KEY_PREFIX}{}",
+            raw.iter().map(|b| format!("{b:02x}")).collect::<String>()
+        );
+        let key = ApiKey {
+            id: new_id(),
+            name: name.trim().to_string(),
+            hash: sha256_hex(&secret),
+            prefix: secret[..API_KEY_PREFIX.len() + 8].to_string(),
+            created_at: now_rfc3339(),
+            created_by: by.to_string(),
+        };
+        let mut db = self.db.lock();
+        let mut next = db.clone();
+        next.keys.push(key.clone());
+        self.persist(&next)?;
+        *db = next;
+        Ok((key.public(), secret))
+    }
+
+    fn delete_key(&self, id: &str) -> Result<bool, UserStoreError> {
+        let mut db = self.db.lock();
+        let mut next = db.clone();
+        next.keys.retain(|k| k.id != id);
+        if next.keys.len() == db.keys.len() {
+            return Ok(false);
+        }
+        self.persist(&next)?;
+        *db = next;
+        Ok(true)
+    }
+
+    fn list_keys(&self) -> Vec<PublicApiKey> {
+        self.db.lock().keys.iter().map(ApiKey::public).collect()
+    }
 }
 
 /// Unique id: the time in nanoseconds and a hashed counter, hex. Not a
@@ -293,7 +400,7 @@ fn new_id() -> String {
     )
 }
 
-fn now_rfc3339() -> String {
+pub(crate) fn now_rfc3339() -> String {
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -453,7 +560,62 @@ pub fn protected_routes(state: AuthState) -> Router {
         .route("/auth/me", get(me))
         .route("/auth/users", get(list_users).post(create_user))
         .route("/auth/users/:id", axum::routing::delete(delete_user))
+        .route("/auth/keys", get(list_keys).post(create_key))
+        .route("/auth/keys/:id", axum::routing::delete(delete_key))
         .with_state(state)
+}
+
+#[derive(Deserialize)]
+struct KeyRequest {
+    #[serde(default)]
+    name: String,
+}
+
+async fn list_keys(State(s): State<AuthState>, Extension(ctx): Extension<AuthContext>) -> Response {
+    match admin(&s, &ctx) {
+        Ok(_) => Json(serde_json::json!({ "keys": s.store.list_keys() })).into_response(),
+        Err((st, m)) => error(st, m),
+    }
+}
+
+async fn create_key(
+    State(s): State<AuthState>,
+    Extension(ctx): Extension<AuthContext>,
+    Json(r): Json<KeyRequest>,
+) -> Response {
+    let me = match admin(&s, &ctx) {
+        Ok(u) => u,
+        Err((st, m)) => return error(st, m),
+    };
+    if r.name.trim().is_empty() || r.name.len() > 80 {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "Key name required (80 characters at most)",
+        );
+    }
+    match s.store.create_key(&r.name, &me.email) {
+        Ok((key, secret)) => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({ "key": secret, "id": key.id, "name": key.name, "prefix": key.prefix, "createdAt": key.created_at, "createdBy": key.created_by })),
+        )
+            .into_response(),
+        Err(e) => store_error(e),
+    }
+}
+
+async fn delete_key(
+    State(s): State<AuthState>,
+    Extension(ctx): Extension<AuthContext>,
+    Path(id): Path<String>,
+) -> Response {
+    if let Err((st, m)) = admin(&s, &ctx) {
+        return error(st, m);
+    }
+    match s.store.delete_key(&id) {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => error(StatusCode::NOT_FOUND, "Key not found"),
+        Err(e) => store_error(e),
+    }
 }
 
 #[derive(Deserialize)]

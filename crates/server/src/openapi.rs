@@ -545,6 +545,14 @@ const SPEC_JSON: &str = r##"{
                     "responses": { "204": { "description": "Compacted" } }
                 }
             },
+            "/audit": {
+                "get": {
+                    "summary": "The last audit entries (who wrote what, when): successful POST/PUT/PATCH/DELETE with their caller; administrators only with the built-in login",
+                    "tags": ["admin"],
+                    "parameters": [{ "name": "limit", "in": "query", "schema": { "type": "integer", "default": 100, "maximum": 1000 } }],
+                    "responses": { "200": { "description": "{ entries: [{ ts, who, method, path, status, request_id }] }" }, "403": { "description": "Not an administrator" } }
+                }
+            },
             "/backup": {
                 "post": {
                     "summary": "Copy the store to the backup directory configured at start (serve --backup-dir); sealed partitions already there are skipped",

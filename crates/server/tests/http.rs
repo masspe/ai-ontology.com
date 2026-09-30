@@ -292,6 +292,7 @@ async fn rate_limiter_rejects_after_burst() {
             }),
             users: None,
             web_dir: None,
+            audit: None,
         },
     );
 
@@ -461,6 +462,7 @@ async fn jwt_and_static_token_coexist() {
             rate_limit: None,
             users: None,
             web_dir: None,
+            audit: None,
         },
     );
 
