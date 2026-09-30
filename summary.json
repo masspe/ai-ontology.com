@@ -1,0 +1,50 @@
+{
+  "date": "2026-09-30",
+  "crates": {
+    "cli": {
+      "covered": 1734,
+      "total": 1822,
+      "pct": 95.2
+    },
+    "graph": {
+      "covered": 3446,
+      "total": 3554,
+      "pct": 97.0
+    },
+    "index": {
+      "covered": 580,
+      "total": 582,
+      "pct": 99.7
+    },
+    "io": {
+      "covered": 1937,
+      "total": 2073,
+      "pct": 93.4
+    },
+    "rag": {
+      "covered": 3219,
+      "total": 3326,
+      "pct": 96.8
+    },
+    "server": {
+      "covered": 4271,
+      "total": 4430,
+      "pct": 96.4
+    },
+    "storage": {
+      "covered": 4267,
+      "total": 4649,
+      "pct": 91.8
+    }
+  },
+  "rust": {
+    "covered": 19454,
+    "total": 20436,
+    "pct": 95.2
+  },
+  "web": {
+    "covered": 3665,
+    "total": 3689,
+    "pct": 99.3
+  }
+}
