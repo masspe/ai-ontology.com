@@ -33,8 +33,8 @@ const mocked = {
   deleteFile: api.deleteFile as unknown as Mock,
 };
 
-// Fixed clock (2024-03-09T12:00:00Z): the relative ages ("just now",
-// "5m ago", …) must not depend on how long the worker took to get here.
+// Fixed clock (2024-03-09T12:00:00Z): the relative ages ("à l'instant",
+// "il y a 5 min", …) must not depend on how long the worker took to get here.
 const NOW = 1_710_000_000;
 const DAY = 86_400;
 
@@ -96,7 +96,7 @@ function rowNames(): string[] {
 }
 
 function dropzone(): HTMLElement {
-  return screen.getByText(/Drag & drop files here/).closest(".dz") as HTMLElement;
+  return screen.getByText(/Glissez-déposez vos fichiers ici/).closest(".dz") as HTMLElement;
 }
 
 beforeEach(() => {
@@ -120,29 +120,29 @@ describe("Files page — library", () => {
 
     // Default sort: last updated, newest first; page size 6.
     expect(rowNames()).toEqual(["report.pdf", "data.csv", "sheet.xlsx", "notes.docx", "graph.json", "rows.jsonl"]);
-    expect(screen.getByText("Showing 1 to 6 of 10 files")).toBeInTheDocument();
+    expect(screen.getByText("Fichiers 1 à 6 sur 10")).toBeInTheDocument();
 
     const row = libraryRow;
     expect(within(row("report.pdf")).getByText("PDF", { selector: "td" })).toBeInTheDocument();
     expect(within(row("report.pdf")).getByText("Contract", { selector: "td" })).toBeInTheDocument();
-    expect(within(row("report.pdf")).getByText("as Contract")).toBeInTheDocument();
-    expect(within(row("report.pdf")).getByText("Analyzed")).toHaveClass("info");
-    expect(within(row("report.pdf")).getByText("2.5 MB")).toBeInTheDocument();
+    expect(within(row("report.pdf")).getByText("en Contract")).toBeInTheDocument();
+    expect(within(row("report.pdf")).getByText("Analysé")).toHaveClass("info");
+    expect(within(row("report.pdf")).getByText("2.5 Mo")).toBeInTheDocument();
 
     expect(within(row("data.csv")).getByText("CSV", { selector: "td" })).toBeInTheDocument();
-    expect(within(row("data.csv")).getByText("General")).toBeInTheDocument();
-    expect(within(row("data.csv")).getByText("Processed")).toHaveClass("ok");
-    expect(within(row("data.csv")).getByText("512 B")).toBeInTheDocument();
+    expect(within(row("data.csv")).getByText("Général")).toBeInTheDocument();
+    expect(within(row("data.csv")).getByText("Traité")).toHaveClass("ok");
+    expect(within(row("data.csv")).getByText("512 o")).toBeInTheDocument();
 
     expect(within(row("sheet.xlsx")).getByText("XLS")).toBeInTheDocument();
-    expect(within(row("sheet.xlsx")).getByText("Pending")).toHaveClass("warn");
-    expect(within(row("sheet.xlsx")).getByText("2 KB")).toBeInTheDocument();
+    expect(within(row("sheet.xlsx")).getByText("En attente")).toHaveClass("warn");
+    expect(within(row("sheet.xlsx")).getByText("2 Ko")).toBeInTheDocument();
 
     expect(within(row("notes.docx")).getByText("DOC")).toBeInTheDocument();
-    expect(within(row("notes.docx")).getByText("Failed")).toHaveClass("fail");
-    expect(within(row("graph.json")).getByText("Analyzing")).toHaveClass("info");
+    expect(within(row("notes.docx")).getByText("Échec")).toHaveClass("fail");
+    expect(within(row("graph.json")).getByText("Analyse en cours")).toHaveClass("info");
     expect(within(row("rows.jsonl")).getByText("JSONL", { selector: "td" })).toBeInTheDocument();
-    expect(within(row("rows.jsonl")).getByText("Pending")).toBeInTheDocument();
+    expect(within(row("rows.jsonl")).getByText("En attente")).toBeInTheDocument();
 
     const expectedDate = new Date((NOW - 30) * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
     expect(within(row("report.pdf")).getByText(expectedDate)).toBeInTheDocument();
@@ -156,47 +156,47 @@ describe("Files page — library", () => {
     expect(prev).toBeDisabled();
     await user.click(next);
     expect(rowNames()).toEqual(["facts.triples", "readme.md", "old.txt", "blob.bin"]);
-    expect(screen.getByText("Showing 7 to 10 of 10 files")).toBeInTheDocument();
+    expect(screen.getByText("Fichiers 7 à 10 sur 10")).toBeInTheDocument();
     expect(next).toBeDisabled();
     expect(screen.getByRole("button", { name: "2" })).toHaveClass("active");
 
     const row = libraryRow;
     expect(within(row("facts.triples")).getByText("TRIPLES")).toBeInTheDocument();
-    expect(within(row("facts.triples")).getByText("Failed")).toBeInTheDocument();
+    expect(within(row("facts.triples")).getByText("Échec")).toBeInTheDocument();
     expect(within(row("readme.md")).getByText("TEXT")).toBeInTheDocument();
-    expect(within(row("readme.md")).getByText("Pending")).toBeInTheDocument();
+    expect(within(row("readme.md")).getByText("En attente")).toBeInTheDocument();
     expect(within(row("blob.bin")).getByText("BINARY")).toBeInTheDocument();
-    expect(within(row("blob.bin")).getByText("2.0 GB")).toBeInTheDocument();
+    expect(within(row("blob.bin")).getByText("2.0 Go")).toBeInTheDocument();
     expect(within(row("blob.bin")).getByText("—")).toBeInTheDocument();
-    expect(within(row("old.txt")).getByText("Processed")).toBeInTheDocument();
+    expect(within(row("old.txt")).getByText("Traité")).toBeInTheDocument();
 
     await user.click(prev);
-    expect(screen.getByText("Showing 1 to 6 of 10 files")).toBeInTheDocument();
+    expect(screen.getByText("Fichiers 1 à 6 sur 10")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "2" }));
-    expect(screen.getByText("Showing 7 to 10 of 10 files")).toBeInTheDocument();
+    expect(screen.getByText("Fichiers 7 à 10 sur 10")).toBeInTheDocument();
   });
 
   it("filters by search, type and status, sorts, and resets the page", async () => {
     const { user } = renderPage(<Files />);
     await loaded();
     await user.click(screen.getByRole("button", { name: "›" }));
-    expect(screen.getByText("Showing 7 to 10 of 10 files")).toBeInTheDocument();
+    expect(screen.getByText("Fichiers 7 à 10 sur 10")).toBeInTheDocument();
 
-    await user.type(screen.getByPlaceholderText("Search files…"), "CSV");
+    await user.type(screen.getByPlaceholderText("Rechercher un fichier…"), "CSV");
     expect(rowNames()).toEqual(["data.csv"]);
-    expect(screen.getByText("Showing 1 to 1 of 1 files")).toBeInTheDocument();
-    await user.clear(screen.getByPlaceholderText("Search files…"));
+    expect(screen.getByText("Fichiers 1 à 1 sur 1")).toBeInTheDocument();
+    await user.clear(screen.getByPlaceholderText("Rechercher un fichier…"));
 
     const selects = screen.getAllByRole("combobox");
     const [typeSelect, statusSelect, sortSelect] = selects;
     expect(within(typeSelect).getAllByRole("option").map((o) => o.textContent)).toEqual([
-      "All Types", "BINARY", "CSV", "DOCX", "JSON", "JSONL", "PDF", "TEXT", "TRIPLES", "XLSX",
+      "Tous les types", "BINARY", "CSV", "DOCX", "JSON", "JSONL", "PDF", "TEXT", "TRIPLES", "XLSX",
     ]);
     await user.selectOptions(typeSelect, "PDF");
     expect(rowNames()).toEqual(["report.pdf"]);
     await user.selectOptions(typeSelect, "");
 
-    await user.selectOptions(statusSelect, "failed");
+    await user.selectOptions(statusSelect, "échec");
     expect(rowNames()).toEqual(["notes.docx", "facts.triples"]);
     await user.selectOptions(statusSelect, "");
 
@@ -210,20 +210,20 @@ describe("Files page — library", () => {
     await user.selectOptions(sortSelect, "updated");
     expect(rowNames()[0]).toBe("report.pdf");
 
-    await user.type(screen.getByPlaceholderText("Search files…"), "nothing-here");
+    await user.type(screen.getByPlaceholderText("Rechercher un fichier…"), "nothing-here");
     expect(screen.getByText(/Aucun fichier ne correspond/)).toBeInTheDocument();
-    expect(screen.queryByText(/Showing/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Fichiers \d+ à/)).not.toBeInTheDocument();
   });
 
   it("derives stats, storage, folders and activity from the records", async () => {
     renderPage(<Files />);
     await loaded();
     const stat = (label: string) => screen.getByText(label, { selector: ".ts-label" }).nextElementSibling!;
-    expect(stat("Total Files")).toHaveTextContent("10");
+    expect(stat("Fichiers au total")).toHaveTextContent("10");
     // Only data.csv and old.txt count as processed.
-    expect(stat("Processed")).toHaveTextContent("2");
-    expect(stat("Pending Review")).toHaveTextContent("8");
-    expect(stat("Storage Used")).toHaveTextContent("2.0 GB");
+    expect(stat("Traités")).toHaveTextContent("2");
+    expect(stat("En attente")).toHaveTextContent("8");
+    expect(stat("Espace utilisé")).toHaveTextContent("2.0 Go");
 
     // Storage donut: top six types by bytes, BINARY first.
     const legend = screen.getByText("Total").closest(".storage")!.querySelector(".legend")!;
@@ -233,30 +233,30 @@ describe("Files page — library", () => {
     expect(legend.querySelectorAll(".pct")[0]).toHaveTextContent("99.");
 
     // Folders: grouped by source.
-    const folders = screen.getByText("Folders / Collections").closest("section")!;
-    expect(within(folders).getByText("General").nextElementSibling).toHaveTextContent("9 files");
-    expect(within(folders).getByText("Contract").nextElementSibling).toHaveTextContent("1 file");
+    const folders = screen.getByText("Dossiers / collections").closest("section")!;
+    expect(within(folders).getByText("Général").nextElementSibling).toHaveTextContent("9 fichiers");
+    expect(within(folders).getByText("Contract").nextElementSibling).toHaveTextContent("1 fichier");
 
     // Activity: five newest, with verb and relative age.
-    const activity = screen.getByText("Recent Activity").closest("section")!;
+    const activity = screen.getByText("Activité récente").closest("section")!;
     const items = within(activity).getAllByRole("listitem");
     expect(items).toHaveLength(5);
-    expect(items[0]).toHaveTextContent("report.pdf is being analyzed");
-    expect(items[0]).toHaveTextContent("just now");
-    expect(items[1]).toHaveTextContent("data.csv processed");
-    expect(items[1]).toHaveTextContent("5m ago");
-    expect(items[2]).toHaveTextContent("sheet.xlsx is pending");
-    expect(items[2]).toHaveTextContent("2h ago");
-    expect(items[3]).toHaveTextContent("notes.docx failed to process");
-    expect(items[3]).toHaveTextContent("3d ago");
+    expect(items[0]).toHaveTextContent("report.pdf est en cours d'analyse");
+    expect(items[0]).toHaveTextContent("à l'instant");
+    expect(items[1]).toHaveTextContent("data.csv a été traité");
+    expect(items[1]).toHaveTextContent("il y a 5 min");
+    expect(items[2]).toHaveTextContent("sheet.xlsx est en attente");
+    expect(items[2]).toHaveTextContent("il y a 2 h");
+    expect(items[3]).toHaveTextContent("notes.docx n'a pas pu être traité");
+    expect(items[3]).toHaveTextContent("il y a 3 j");
 
     // Recent uploads fall back to the first three records: analyzing → bar, others → check.
-    const recent = screen.getByText("Recent Uploads").closest("section")!;
+    const recent = screen.getByText("Dépôts récents").closest("section")!;
     const rows = within(recent).getAllByRole("listitem");
     expect(rows).toHaveLength(3);
     expect(rows[0]).toHaveTextContent("report.pdf");
     expect(rows[0]).toHaveTextContent("100%");
-    expect(rows[1]).toHaveTextContent("Processed");
+    expect(rows[1]).toHaveTextContent("Traité");
     expect(within(rows[1]).getByText("✓")).toBeInTheDocument();
   });
 
@@ -264,10 +264,10 @@ describe("Files page — library", () => {
     mocked.getFiles.mockResolvedValue({ files: [] });
     renderPage(<Files />);
     expect(await screen.findByText(/Aucun fichier ne correspond/)).toBeInTheDocument();
-    expect(screen.getByText("No uploads yet.")).toBeInTheDocument();
-    expect(screen.getByText("No activity yet.")).toBeInTheDocument();
-    expect(screen.getByText("No data")).toBeInTheDocument();
-    expect(screen.getByText("Total Files").nextElementSibling).toHaveTextContent("0");
+    expect(screen.getByText("Aucun dépôt pour l'instant.")).toBeInTheDocument();
+    expect(screen.getByText("Aucune activité pour l'instant.")).toBeInTheDocument();
+    expect(screen.getByText("Aucune donnée")).toBeInTheDocument();
+    expect(screen.getByText("Fichiers au total").nextElementSibling).toHaveTextContent("0");
   });
 
   it("surfaces a loading failure in the banner", async () => {
@@ -289,14 +289,14 @@ describe("Files page — upload", () => {
     await loaded();
     const file = makeFile("rows.jsonl", '{"a":1}\n', "application/x-ndjson");
     await user.upload(hiddenInput(container), file);
-    expect(await screen.findByText("Ingested 3 concepts, 2 relations from rows.jsonl.")).toHaveClass("success-banner");
+    expect(await screen.findByText("3 fiches et 2 liens importés depuis rows.jsonl.")).toHaveClass("success-banner");
     expect(mocked.upload).toHaveBeenCalledWith(file, { kind: "jsonl", conceptType: undefined });
     await waitFor(() => expect(mocked.getFiles).toHaveBeenCalledTimes(2));
 
-    const recent = screen.getByText("Recent Uploads").closest("section")!;
+    const recent = screen.getByText("Dépôts récents").closest("section")!;
     const row = within(recent).getAllByRole("listitem")[0];
     expect(row).toHaveTextContent("rows.jsonl");
-    expect(row).toHaveTextContent("Processed");
+    expect(row).toHaveTextContent("Traité");
     expect(within(row).getByText("✓")).toBeInTheDocument();
     expect(hiddenInput(container).value).toBe("");
   });
@@ -308,13 +308,13 @@ describe("Files page — upload", () => {
     const { user, container } = renderPage(<Files />);
     await loaded();
     await user.upload(hiddenInput(container), makeFile(name, "x"));
-    expect(await screen.findByText(`Kind "${kind}" requires a concept type.`)).toHaveClass("error-banner");
+    expect(await screen.findByText(`Le format « ${kind} » demande un type de fiche.`)).toHaveClass("error-banner");
     expect(mocked.upload).not.toHaveBeenCalled();
-    const recent = screen.getByText("Recent Uploads").closest("section")!;
+    const recent = screen.getByText("Dépôts récents").closest("section")!;
     const row = within(recent).getAllByRole("listitem")[0];
     expect(row).toHaveTextContent(name);
-    expect(row).toHaveTextContent("Failed");
-    expect(within(row).getByText("Error")).toHaveClass("fail");
+    expect(row).toHaveTextContent("Échec");
+    expect(within(row).getByText("Erreur")).toHaveClass("fail");
   });
 
   it("shows the server's 422 and an unreachable API in the banner", async () => {
@@ -347,15 +347,15 @@ describe("Files page — upload", () => {
     fireEvent.drop(dz, { dataTransfer: { files: [makeFile("first.jsonl", "{}")] } });
     expect(dz).not.toHaveClass("active");
     expect(await screen.findByText("70%")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Upload Files" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Déposer des fichiers" })).toBeDisabled();
 
     fireEvent.drop(dz, { dataTransfer: { files: [makeFile("second.jsonl", "{}")] } });
     fireEvent.drop(dz, { dataTransfer: { files: [] } });
     expect(mocked.upload).toHaveBeenCalledTimes(1);
 
     finish(uploaded);
-    expect(await screen.findByText(/Ingested 3 concepts/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Upload Files" })).toBeEnabled();
+    expect(await screen.findByText(/3 fiches et 2 liens importés/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Déposer des fichiers" })).toBeEnabled();
     expect(mocked.upload).toHaveBeenCalledTimes(1);
   });
 });
@@ -365,12 +365,12 @@ describe("Files page — delete and actions", () => {
     const { user } = renderPage(<Files />);
     await loaded();
     await user.click(screen.getAllByRole("button", { name: "Actions" })[0]);
-    expect(screen.getByRole("dialog")).toHaveTextContent("Remove file record");
-    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.getByRole("dialog")).toHaveTextContent("Retirer le fichier de la liste");
+    await user.click(screen.getByRole("button", { name: "Annuler" }));
     expect(mocked.deleteFile).not.toHaveBeenCalled();
 
     await user.click(screen.getAllByRole("button", { name: "Actions" })[1]);
-    await user.click(screen.getByRole("button", { name: "Remove" }));
+    await user.click(screen.getByRole("button", { name: "Retirer" }));
     await waitFor(() => expect(mocked.deleteFile).toHaveBeenCalledWith(2));
     expect(mocked.getFiles).toHaveBeenCalledTimes(2);
   });
@@ -380,7 +380,7 @@ describe("Files page — delete and actions", () => {
     const { user } = renderPage(<Files />);
     await loaded();
     await user.click(screen.getAllByRole("button", { name: "Actions" })[0]);
-    await user.click(screen.getByRole("button", { name: "Remove" }));
+    await user.click(screen.getByRole("button", { name: "Retirer" }));
     expect(await screen.findByText("cannot delete")).toBeInTheDocument();
   });
 
@@ -388,25 +388,25 @@ describe("Files page — delete and actions", () => {
     const { user } = renderPage(<Files />);
     await loaded();
     const click = vi.spyOn(HTMLInputElement.prototype, "click");
-    await user.click(screen.getByRole("button", { name: "Upload Files" }));
-    await user.click(screen.getByRole("button", { name: "Browse Files" }));
-    await user.click(screen.getByText(/Drag & drop files here/));
-    await user.click(screen.getByText("New Folder"));
-    await user.click(screen.getByText("Create Folder"));
-    await user.click(screen.getByText("Add new files to your library"));
+    await user.click(screen.getByRole("button", { name: "Déposer des fichiers" }));
+    await user.click(screen.getByRole("button", { name: "Parcourir" }));
+    await user.click(screen.getByText(/Glissez-déposez vos fichiers ici/));
+    await user.click(screen.getByText("Nouveau dossier"));
+    await user.click(screen.getByText("Créer un dossier"));
+    await user.click(screen.getByText("Ajouter des fichiers à votre bibliothèque"));
     // The dropzone's Browse button stops propagation: one click each.
     expect(click).toHaveBeenCalledTimes(6);
   });
 
-  it("reloads on 'Reprocess Failed', keeps 'View All' on the page and links the export", async () => {
+  it("reloads on 'Relancer les échecs', keeps 'Tout voir' on the page and links the export", async () => {
     const { user } = renderPage(<Files />);
     await loaded();
-    await user.click(screen.getByText("Reprocess Failed"));
+    await user.click(screen.getByText("Relancer les échecs"));
     await waitFor(() => expect(mocked.getFiles).toHaveBeenCalledTimes(2));
-    for (const link of screen.getAllByRole("link", { name: "View All" })) {
+    for (const link of screen.getAllByRole("link", { name: "Tout voir" })) {
       await user.click(link);
     }
-    expect(screen.getByRole("link", { name: /Export Metadata/ })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: /Exporter les métadonnées/ })).toHaveAttribute(
       "href",
       expect.stringContaining("/export?format=jsonl"),
     );

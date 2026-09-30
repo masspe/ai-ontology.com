@@ -53,10 +53,10 @@ describe("ConfirmProvider", () => {
     mount();
     expect(screen.queryByRole("dialog")).toBeInTheDocument();
     expect(dialog()).toHaveAttribute("aria-modal", "true");
-    expect(screen.getByRole("heading", { name: "Confirm" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Confirmer" })).toBeInTheDocument();
     expect(screen.getByText("Are you sure?")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
-    const ok = screen.getByRole("button", { name: "Confirm" });
+    expect(screen.getByRole("button", { name: "Annuler" })).toBeInTheDocument();
+    const ok = screen.getByRole("button", { name: "Confirmer" });
     expect(ok).toHaveFocus();
     expect(ok.style.background).toBe("");
     expect(result()).toHaveTextContent("pending");
@@ -72,14 +72,14 @@ describe("ConfirmProvider", () => {
 
   it("resolves true on the confirm button and closes", async () => {
     mount();
-    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirmer" }));
     await waitFor(() => expect(result()).toHaveTextContent("true"));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   it("resolves false on the cancel button", async () => {
     mount();
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Annuler" }));
     await waitFor(() => expect(result()).toHaveTextContent("false"));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
@@ -102,7 +102,7 @@ describe("ConfirmProvider", () => {
 
   it("detaches the key listener once closed", async () => {
     mount();
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    fireEvent.click(screen.getByRole("button", { name: "Annuler" }));
     await waitFor(() => expect(result()).toHaveTextContent("false"));
     // A late Enter has no dialog to settle: nothing changes and nothing throws.
     fireEvent.keyDown(window, { key: "Enter" });

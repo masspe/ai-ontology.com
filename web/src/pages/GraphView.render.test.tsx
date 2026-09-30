@@ -188,11 +188,11 @@ describe("GraphView page", () => {
       expansion_depth: 3,
       limit: 250,
     });
-    expect(kpiValue("Nodes")).toBe("4");
-    expect(kpiValue("Relations")).toBe("3");
-    expect(kpiValue("Active Filters")).toBe("0");
+    expect(kpiValue("Fiches")).toBe("4");
+    expect(kpiValue("Liens")).toBe("3");
+    expect(kpiValue("Filtres actifs")).toBe("0");
     // 3 relations / 4 nodes * 50 = 37.5 → 38%
-    expect(kpiValue("Graph Health")).toBe("38%");
+    expect(kpiValue("Santé du graphe")).toBe("38%");
     // The canvas gets a colour per concept type, in ontology order.
     expect(JSON.parse(screen.getByTestId("canvas-colors").textContent!)).toEqual({
       Person: "#2563eb",
@@ -212,12 +212,12 @@ describe("GraphView page", () => {
     mocked.getFiles.mockRejectedValue("nope");
     renderPage(<GraphView />);
     expect(await screen.findByText("graph exploded")).toBeInTheDocument();
-    expect(kpiValue("Nodes")).toBe("0");
-    expect(kpiValue("Graph Health")).toBe("0%");
-    expect(screen.getByText("No saved views yet.")).toBeInTheDocument();
-    expect(screen.getByText("No recent activity.")).toBeInTheDocument();
-    expect(screen.getByText("No suggestions available.")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /^Rules/ }).querySelector(".gv-tab-count")).toHaveTextContent("0");
+    expect(kpiValue("Fiches")).toBe("0");
+    expect(kpiValue("Santé du graphe")).toBe("0%");
+    expect(screen.getByText("Aucune vue enregistrée pour l'instant.")).toBeInTheDocument();
+    expect(screen.getByText("Aucune activité récente.")).toBeInTheDocument();
+    expect(screen.getByText("Aucune suggestion disponible.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Règles/ }).querySelector(".gv-tab-count")).toHaveTextContent("0");
     // A non-Error rejection is stringified.
     mocked.getSubgraph.mockRejectedValue("plain failure");
     renderPage(<GraphView />);
@@ -226,17 +226,17 @@ describe("GraphView page", () => {
 
   it("filters nodes client-side by search text (name or type) and counts the filter", async () => {
     const { user } = await mount();
-    const input = screen.getByPlaceholderText("Search nodes…");
+    const input = screen.getByPlaceholderText("Rechercher une fiche…");
     await user.type(input, "ali");
     expect(canvasNodes()).toBe("Alice");
     expect(canvasRels()).toBe("");
-    expect(kpiValue("Active Filters")).toBe("1");
+    expect(kpiValue("Filtres actifs")).toBe("1");
     await user.clear(input);
     await user.type(input, "person");
     expect(canvasNodes()).toBe("Alice,Bob");
     expect(canvasRels()).toBe("knows");
     // Refresh sends the search text as the seed query.
-    await user.click(screen.getByRole("button", { name: "Refresh" }));
+    await user.click(screen.getByRole("button", { name: "Actualiser" }));
     await waitFor(() =>
       expect(mocked.getSubgraph).toHaveBeenLastCalledWith(expect.objectContaining({ seed_query: "person", expansion_depth: 3 })),
     );
@@ -248,29 +248,29 @@ describe("GraphView page", () => {
     await user.selectOptions(nodeSelect, "Person");
     expect(canvasNodes()).toBe("Alice,Bob");
     expect(canvasRels()).toBe("knows");
-    expect(kpiValue("Active Filters")).toBe("1");
-    await user.selectOptions(nodeSelect, "All Types");
+    expect(kpiValue("Filtres actifs")).toBe("1");
+    await user.selectOptions(nodeSelect, "Tous les types");
     await user.selectOptions(relSelect, "basedIn");
     expect(canvasNodes()).toBe("Alice,ACME,Geneva,Bob");
     expect(canvasRels()).toBe("basedIn");
-    expect(kpiValue("Active Filters")).toBe("1");
+    expect(kpiValue("Filtres actifs")).toBe("1");
     // The node type is sent as a seed type on refresh.
     await user.selectOptions(nodeSelect, "Company");
-    await user.click(screen.getByRole("button", { name: "Refresh" }));
+    await user.click(screen.getByRole("button", { name: "Actualiser" }));
     await waitFor(() =>
       expect(mocked.getSubgraph).toHaveBeenLastCalledWith(expect.objectContaining({ seed_concept_types: ["Company"] })),
     );
-    expect(kpiValue("Active Filters")).toBe("2");
+    expect(kpiValue("Filtres actifs")).toBe("2");
   });
 
   it("refetches with the new depth when the slider moves", async () => {
     await mount();
     const calls = mocked.getSubgraph.mock.calls.length;
     fireEvent.change(screen.getByRole("slider"), { target: { value: "5" } });
-    expect(screen.getByText("5 levels")).toBeInTheDocument();
+    expect(screen.getByText("5 niveaux")).toBeInTheDocument();
     await waitFor(() => expect(mocked.getSubgraph).toHaveBeenCalledTimes(calls + 1));
     expect(mocked.getSubgraph).toHaveBeenLastCalledWith(expect.objectContaining({ expansion_depth: 5 }));
-    expect(kpiValue("Active Filters")).toBe("1");
+    expect(kpiValue("Filtres actifs")).toBe("1");
   });
 
   it("wires the toggles to the canvas", async () => {
@@ -278,39 +278,39 @@ describe("GraphView page", () => {
     const sw = (label: string) => screen.getByText(label).closest("label")!.querySelector("[role=switch]")!;
     expect(screen.getByTestId("canvas-labels")).toHaveTextContent("true");
     expect(screen.getByTestId("canvas-highlight")).toHaveTextContent("true");
-    await user.click(sw("Show labels"));
+    await user.click(sw("Afficher les libellés"));
     expect(screen.getByTestId("canvas-labels")).toHaveTextContent("false");
-    expect(sw("Show labels")).toHaveAttribute("aria-checked", "false");
-    await user.click(sw("Highlight paths"));
+    expect(sw("Afficher les libellés")).toHaveAttribute("aria-checked", "false");
+    await user.click(sw("Surligner les chemins"));
     expect(screen.getByTestId("canvas-highlight")).toHaveTextContent("false");
     // The funnel toolbar button toggles the same flag.
-    await user.click(screen.getByRole("button", { name: "Toggle filters" }));
+    await user.click(screen.getByRole("button", { name: "Basculer le surlignage des chemins" }));
     expect(screen.getByTestId("canvas-highlight")).toHaveTextContent("true");
     // The two decorative toggles flip their own state.
-    await user.click(sw("Cluster view"));
-    expect(sw("Cluster view")).toHaveAttribute("aria-checked", "true");
-    await user.click(sw("Show constraints"));
-    expect(sw("Show constraints")).toHaveAttribute("aria-checked", "true");
+    await user.click(sw("Vue groupée"));
+    expect(sw("Vue groupée")).toHaveAttribute("aria-checked", "true");
+    await user.click(sw("Afficher les contraintes"));
+    expect(sw("Afficher les contraintes")).toHaveAttribute("aria-checked", "true");
   });
 
   it("drives the canvas from the toolbar: layout menu, zoom, fit, fullscreen", async () => {
     const { user } = await mount();
     expect(screen.getByTestId("canvas-layout")).toHaveTextContent("LR");
-    await user.click(screen.getByRole("button", { name: /Layout/ }));
+    await user.click(screen.getByRole("button", { name: /Disposition/ }));
     const menu = document.querySelector(".gv-layout-menu") as HTMLElement;
-    expect(within(menu).getByRole("button", { name: "Left → Right" })).toHaveClass("active");
-    await user.click(within(menu).getByRole("button", { name: "Top → Bottom" }));
+    expect(within(menu).getByRole("button", { name: "Gauche → Droite" })).toHaveClass("active");
+    await user.click(within(menu).getByRole("button", { name: "Haut → Bas" }));
     expect(screen.getByTestId("canvas-layout")).toHaveTextContent("TB");
-    expect(screen.queryByRole("button", { name: "Top → Bottom" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Haut → Bas" })).toBeNull();
     // Reopen and leave with the mouse: the menu closes without a change.
-    await user.click(screen.getByRole("button", { name: /Layout/ }));
-    fireEvent.mouseLeave(screen.getByRole("button", { name: "Right → Left" }).closest("ul")!);
-    expect(screen.queryByRole("button", { name: "Right → Left" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: /Disposition/ }));
+    fireEvent.mouseLeave(screen.getByRole("button", { name: "Droite → Gauche" }).closest("ul")!);
+    expect(screen.queryByRole("button", { name: "Droite → Gauche" })).toBeNull();
     expect(screen.getByTestId("canvas-layout")).toHaveTextContent("TB");
 
-    await user.click(screen.getByRole("button", { name: "Zoom in" }));
-    await user.click(screen.getByRole("button", { name: "Zoom out" }));
-    await user.click(screen.getByRole("button", { name: "Fit view" }));
+    await user.click(screen.getByRole("button", { name: "Zoom avant" }));
+    await user.click(screen.getByRole("button", { name: "Zoom arrière" }));
+    await user.click(screen.getByRole("button", { name: "Ajuster la vue" }));
     expect(handle.zoomIn).toHaveBeenCalledTimes(1);
     expect(handle.zoomOut).toHaveBeenCalledTimes(1);
     expect(handle.fit).toHaveBeenCalledTimes(1);
@@ -321,24 +321,24 @@ describe("GraphView page", () => {
     (wrap as unknown as { requestFullscreen: () => void }).requestFullscreen = request;
     const exit = vi.fn();
     document.exitFullscreen = exit;
-    await user.click(screen.getByRole("button", { name: "Fullscreen" }));
+    await user.click(screen.getByRole("button", { name: "Plein écran" }));
     expect(request).toHaveBeenCalledTimes(1);
     expect(exit).not.toHaveBeenCalled();
     Object.defineProperty(document, "fullscreenElement", { configurable: true, get: () => wrap });
-    await user.click(screen.getByRole("button", { name: "Fullscreen" }));
+    await user.click(screen.getByRole("button", { name: "Plein écran" }));
     expect(exit).toHaveBeenCalledTimes(1);
     Object.defineProperty(document, "fullscreenElement", { configurable: true, get: () => null });
   });
 
   it("selects a node on click, toggles it off on a second click, clears on pane click", async () => {
     const { user } = await mount();
-    expect(screen.getByText(/Click a node in the graph/)).toBeInTheDocument();
+    expect(screen.getByText(/Cliquez sur une fiche du graphe/)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "node 1" }));
     expect(screen.getByTestId("canvas-selected")).toHaveTextContent("1");
     expect(screen.getByText("Alice", { selector: ".gv-inspector-name" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "node 1" }));
     expect(screen.getByTestId("canvas-selected")).toHaveTextContent("none");
-    expect(screen.getByText(/Click a node in the graph/)).toBeInTheDocument();
+    expect(screen.getByText(/Cliquez sur une fiche du graphe/)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "node 2" }));
     expect(screen.getByTestId("canvas-selected")).toHaveTextContent("2");
     await user.click(screen.getByRole("button", { name: "pane" }));
@@ -357,12 +357,12 @@ describe("GraphView page", () => {
     expect(screen.getByRole("link", { name: "Ouvrir la fiche" })).toHaveAttribute("href", "/concepts/1");
     expect(screen.getByText("A person")).toBeInTheDocument();
     const overview = document.querySelector(".gv-overview")!;
-    expect(overview).toHaveTextContent("Node TypePerson");
+    expect(overview).toHaveTextContent("Type de fichePerson");
     // Alice: outgoing worksAt, incoming knows.
-    expect(overview).toHaveTextContent("Total Connections2");
-    expect(overview).toHaveTextContent("Incoming Relations1");
-    expect(overview).toHaveTextContent("Outgoing Relations1");
-    expect(screen.getByText("Properties (7)")).toBeInTheDocument();
+    expect(overview).toHaveTextContent("Liens au total2");
+    expect(overview).toHaveTextContent("Liens entrants1");
+    expect(overview).toHaveTextContent("Liens sortants1");
+    expect(screen.getByText("Propriétés (7)")).toBeInTheDocument();
     const props = Object.fromEntries(
       Array.from(document.querySelectorAll(".gv-props li")).map((li) => [
         li.querySelector(".gv-prop-name")!.textContent,
@@ -384,13 +384,13 @@ describe("GraphView page", () => {
     const { user } = await mount();
     await user.click(screen.getByRole("button", { name: "node 2" }));
     expect(screen.getByText("A legal entity")).toBeInTheDocument();
-    expect(screen.getByText("Properties (2)")).toBeInTheDocument();
+    expect(screen.getByText("Propriétés (2)")).toBeInTheDocument();
     expect(screen.getByText("vat").nextElementSibling).toHaveTextContent("xsd:string");
     expect(screen.getByText("founded").nextElementSibling).toHaveTextContent("xsd:any");
     // Geneva: no properties anywhere, no description.
     await user.click(screen.getByRole("button", { name: "node 3" }));
-    expect(screen.getByText("Properties (0)")).toBeInTheDocument();
-    expect(screen.getByText("No declared properties.")).toBeInTheDocument();
+    expect(screen.getByText("Propriétés (0)")).toBeInTheDocument();
+    expect(screen.getByText("Aucune propriété déclarée.")).toBeInTheDocument();
     expect(document.querySelector(".gv-inspector-desc")).toBeNull();
     // Bob: empty own properties → schema of Person (string + non-string values).
     await user.click(screen.getByRole("button", { name: "node 4" }));
@@ -405,62 +405,62 @@ describe("GraphView page", () => {
     expect(screen.getByRole("link", { name: "Ouvrir la fiche" })).toHaveAttribute("href", "/concepts/3");
     await user.selectOptions(screen.getAllByRole("combobox")[0], "Person");
     expect(screen.queryByRole("link", { name: "Ouvrir la fiche" })).toBeNull();
-    expect(screen.getByText(/Click a node in the graph/)).toBeInTheDocument();
+    expect(screen.getByText(/Cliquez sur une fiche du graphe/)).toBeInTheDocument();
   });
 
   it("focuses, expands and queries the selected node", async () => {
     const { user } = await mount();
     await user.click(screen.getByRole("button", { name: "node 1" }));
-    await user.click(screen.getByRole("button", { name: /Focus Node/ }));
+    await user.click(screen.getByRole("button", { name: /Centrer la fiche/ }));
     expect(handle.focusNode).toHaveBeenCalledWith("1");
     // Expand: restrict to the node's type and go one level deeper.
-    await user.click(screen.getByRole("button", { name: /Expand Neighbors/ }));
-    expect(screen.getByText("4 levels")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Étendre le voisinage/ }));
+    expect(screen.getByText("4 niveaux")).toBeInTheDocument();
     expect(screen.getAllByRole("combobox")[0]).toHaveValue("Person");
     await waitFor(() =>
       expect(mocked.getSubgraph).toHaveBeenLastCalledWith(expect.objectContaining({ expansion_depth: 4, seed_concept_types: ["Person"] })),
     );
     // Depth is capped at 5.
     fireEvent.change(screen.getByRole("slider"), { target: { value: "5" } });
-    await user.click(screen.getByRole("button", { name: /Expand Neighbors/ }));
-    expect(screen.getByText("5 levels")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Étendre le voisinage/ }));
+    expect(screen.getByText("5 niveaux")).toBeInTheDocument();
     // Run Query navigates with the concept name.
-    await user.click(screen.getByRole("button", { name: /Run Query/ }));
+    await user.click(screen.getByRole("button", { name: /Lancer la requête/ }));
     expect(screen.getByTestId("location")).toHaveTextContent("/queries?q=Alice");
   });
 
   it("collapses and reopens the inspector; a node click reopens it too", async () => {
     const { user } = await mount();
     const row = document.querySelector(".gv-row-main")!;
-    await user.click(screen.getByRole("button", { name: "Previous" }));
+    await user.click(screen.getByRole("button", { name: "Précédent" }));
     expect(row).toHaveClass("inspector-collapsed");
-    await user.click(screen.getByRole("button", { name: "Next" }));
+    await user.click(screen.getByRole("button", { name: "Suivant" }));
     expect(row).not.toHaveClass("inspector-collapsed");
-    await user.click(screen.getByRole("button", { name: "Previous" }));
+    await user.click(screen.getByRole("button", { name: "Précédent" }));
     await user.click(screen.getByRole("button", { name: "node 1" }));
     expect(row).not.toHaveClass("inspector-collapsed");
   });
 
   it("lists rules and actions in their tabs, and comes back to the inspector on a node click", async () => {
     const { user } = await mount();
-    await user.click(screen.getByRole("button", { name: /^Rules/ }));
+    await user.click(screen.getByRole("button", { name: /^Règles/ }));
     expect(screen.getByText("R1")).toBeInTheDocument();
-    expect(screen.getByText("strict")).toBeInTheDocument();
+    expect(screen.getByText("stricte")).toBeInTheDocument();
     expect(screen.getByText("Strict one")).toBeInTheDocument();
-    expect(screen.getByText("WHEN").nextElementSibling).toHaveTextContent("x");
-    expect(screen.getByText("THEN").nextElementSibling).toHaveTextContent("y");
+    expect(screen.getByText("SI").nextElementSibling).toHaveTextContent("x");
+    expect(screen.getByText("ALORS").nextElementSibling).toHaveTextContent("y");
     expect(screen.getByText("R1").closest("li")!.querySelectorAll(".gv-rule-tags .badge")).toHaveLength(2);
     // R2 has none of the optional fields and is advisory.
-    expect(screen.getByText("advisory")).toBeInTheDocument();
+    expect(screen.getByText("indicative")).toBeInTheDocument();
     expect(screen.getByText("R2").closest("li")!.querySelector(".gv-rule-row")).toBeNull();
 
     await user.click(screen.getByRole("button", { name: /^Actions/ }));
     expect(screen.queryByText("R1")).toBeNull();
     const a1 = within(screen.getByText("A1").closest("li") as HTMLElement);
     expect(a1.getByText("Hire")).toBeInTheDocument();
-    expect(a1.getByText("SUBJECT").nextElementSibling).toHaveTextContent("Person → Company");
-    expect(a1.getByText("PARAMS").nextElementSibling!.querySelectorAll(".badge")).toHaveLength(2);
-    expect(a1.getByText("EFFECT").nextElementSibling).toHaveTextContent("hired");
+    expect(a1.getByText("SUJET").nextElementSibling).toHaveTextContent("Person → Company");
+    expect(a1.getByText("PARAMÈTRES").nextElementSibling!.querySelectorAll(".badge")).toHaveLength(2);
+    expect(a1.getByText("EFFET").nextElementSibling).toHaveTextContent("hired");
     // A2: subject only.
     const a2 = screen.getByText("A2").closest("li")!;
     expect(a2.querySelectorAll(".gv-rule-row")).toHaveLength(1);
@@ -470,22 +470,22 @@ describe("GraphView page", () => {
     expect(screen.getByRole("link", { name: "Ouvrir la fiche" })).toHaveAttribute("href", "/concepts/2");
     expect(screen.queryByText("A1")).toBeNull();
     // The Inspector tab itself can be chosen explicitly.
-    await user.click(screen.getByRole("button", { name: /^Rules/ }));
+    await user.click(screen.getByRole("button", { name: /^Règles/ }));
     expect(screen.queryByRole("link", { name: "Ouvrir la fiche" })).toBeNull();
-    await user.click(screen.getByRole("button", { name: "Inspector" }));
+    await user.click(screen.getByRole("button", { name: "Inspecteur" }));
     expect(screen.getByRole("link", { name: "Ouvrir la fiche" })).toHaveAttribute("href", "/concepts/2");
   });
 
   it("shows the empty rules / actions states when the ontology declares none", async () => {
     mocked.getOntology.mockResolvedValue({ concept_types: {}, relation_types: {} });
     const { user } = await mount();
-    await user.click(screen.getByRole("button", { name: /^Rules/ }));
-    expect(screen.getByText("No rules declared in this ontology.")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /^Règles/ }));
+    expect(screen.getByText("Aucune règle déclarée dans cette ontologie.")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: /^Actions/ }));
-    expect(screen.getByText("No actions declared in this ontology.")).toBeInTheDocument();
+    expect(screen.getByText("Aucune action déclarée dans cette ontologie.")).toBeInTheDocument();
     // Without types, the canvas colour map is empty and no suggestion is built.
     expect(screen.getByTestId("canvas-colors")).toHaveTextContent("{}");
-    expect(screen.getByText("No suggestions available.")).toBeInTheDocument();
+    expect(screen.getByText("Aucune suggestion disponible.")).toBeInTheDocument();
   });
 
   it("lists the four most recent saved views with relative times", async () => {
@@ -493,10 +493,10 @@ describe("GraphView page", () => {
     const list = screen.getByText("Just now").closest("ul")!;
     const rows = Array.from(list.querySelectorAll("li")).map((li) => li.textContent);
     expect(rows).toHaveLength(4);
-    expect(rows[0]).toMatch(/Just now[0-9]+s ago/);
-    expect(rows[1]).toMatch(/Minutes2m ago/);
-    expect(rows[2]).toMatch(/Hours2h ago/);
-    expect(rows[3]).toMatch(/Days2d ago/);
+    expect(rows[0]).toMatch(/Just nowil y a [0-9]+ s/);
+    expect(rows[1]).toMatch(/Minutesil y a 2 min/);
+    expect(rows[2]).toMatch(/Hoursil y a 2 h/);
+    expect(rows[3]).toMatch(/Daysil y a 2 j/);
     expect(screen.queryByText("Never (hidden)")).toBeNull();
   });
 
@@ -504,13 +504,13 @@ describe("GraphView page", () => {
     await mount();
     const items = Array.from(document.querySelectorAll(".gv-activity-item"));
     expect(items).toHaveLength(4);
-    expect(items[0]).toHaveTextContent("Bulk import completed for done.pdf");
+    expect(items[0]).toHaveTextContent("Import terminé pour done.pdf");
     expect(items[0].querySelector(".gv-act-ok")).not.toBeNull();
-    expect(items[1]).toHaveTextContent("Validation failed on bad.csv");
+    expect(items[1]).toHaveTextContent("Validation échouée sur bad.csv");
     expect(items[1].querySelector(".gv-act-err")).not.toBeNull();
-    expect(items[2]).toHaveTextContent("Node updated from seen.json");
+    expect(items[2]).toHaveTextContent("Fiche mise à jour depuis seen.json");
     expect(items[2].querySelector(".gv-act-info")).not.toBeNull();
-    expect(items[3]).toHaveTextContent("New ingestion in progress for wip.docx");
+    expect(items[3]).toHaveTextContent("Ingestion en cours pour wip.docx");
     expect(items[3].querySelector(".gv-act-warn")).not.toBeNull();
     expect(screen.queryByText("old.txt")).toBeNull();
   });
@@ -519,29 +519,29 @@ describe("GraphView page", () => {
     const { user } = await mount();
     const suggestions = Array.from(document.querySelectorAll(".gv-sug-text")).map((b) => b.textContent);
     expect(suggestions).toEqual([
-      "Find all Person works at a specific Company",
-      "Find all Person knows a specific Person",
-      "Find all Company based in a specific City",
-      "Show all Person created by an Company",
-      "List all Person related to Company",
+      "Trouver tous les Person qui works at un Company donné",
+      "Trouver tous les Person qui knows un Person donné",
+      "Trouver tous les Company qui based in un City donné",
+      "Afficher tous les Person créés par un Company",
+      "Lister tous les Person liés à Company",
     ]);
-    await user.click(screen.getByRole("button", { name: "List all Person related to Company" }));
-    expect(screen.getByTestId("location")).toHaveTextContent("/queries?q=List%20all%20Person%20related%20to%20Company");
+    await user.click(screen.getByRole("button", { name: "Lister tous les Person liés à Company" }));
+    expect(screen.getByTestId("location")).toHaveTextContent("/queries?q=" + encodeURIComponent("Lister tous les Person liés à Company"));
   });
 
-  it("'View All' on the saved views goes to the queries page", async () => {
+  it("'Tout voir' on the saved views goes to the queries page", async () => {
     const { user } = await mount();
-    await user.click(screen.getAllByRole("button", { name: "View All" })[0]);
+    await user.click(screen.getAllByRole("button", { name: "Tout voir" })[0]);
     expect(screen.getByTestId("location")).toHaveTextContent("/queries");
   });
 
-  it("'View All' on the suggestions goes to the queries page", async () => {
+  it("'Tout voir' on the suggestions goes to the queries page", async () => {
     const { user } = await mount();
-    await user.click(screen.getAllByRole("button", { name: "View All" })[2]);
+    await user.click(screen.getAllByRole("button", { name: "Tout voir" })[2]);
     expect(screen.getByTestId("location")).toHaveTextContent("/queries");
   });
 
-  it("navigates to the plain queries page from Run Query without a selection", async () => {
+  it("navigates to the files page from the activity 'Tout voir'", async () => {
     // Run Query only exists with a selection in the inspector, but the
     // activity 'View All' goes to /files: cover the second navigate target.
     const { user } = renderPage(<GraphView />, {
@@ -549,7 +549,7 @@ describe("GraphView page", () => {
       extraRoutes: <Route path="/files" element={<LocationProbe />} />,
     });
     await waitFor(() => expect(canvasNodes()).toBe("Alice,ACME,Geneva,Bob"));
-    await user.click(screen.getAllByRole("button", { name: "View All" })[1]);
+    await user.click(screen.getAllByRole("button", { name: "Tout voir" })[1]);
     expect(screen.getByTestId("location")).toHaveTextContent("/files");
   });
 

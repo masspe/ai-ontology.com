@@ -48,14 +48,14 @@ export function ConflictBadge({ conflict }: { conflict?: ConflictInfo | null }) 
           color: "#15803d",
         }}
       >
-        new
+        nouveau
       </span>
     );
   }
   const palette: Record<ConflictInfo["kind"]["kind"], { bg: string; fg: string; label: string }> = {
-    exists: { bg: "#fef3c7", fg: "#a16207", label: "exists" },
-    type_mismatch: { bg: "#fee2e2", fg: "#b91c1c", label: "type mismatch" },
-    dangling_ref: { bg: "#fee2e2", fg: "#b91c1c", label: "dangling ref" },
+    exists: { bg: "#fef3c7", fg: "#a16207", label: "existe déjà" },
+    type_mismatch: { bg: "#fee2e2", fg: "#b91c1c", label: "type différent" },
+    dangling_ref: { bg: "#fee2e2", fg: "#b91c1c", label: "référence manquante" },
   };
   const p = palette[conflict.kind.kind];
   return (
@@ -89,9 +89,9 @@ export function DecisionPicker({
       onChange={(e) => onChange(e.target.value as DecisionAction)}
       style={{ fontSize: 12, padding: "2px 4px" }}
     >
-      <option value="create_new">Create new</option>
-      {allowMerge && <option value="merge">Merge with existing</option>}
-      <option value="skip">Skip</option>
+      <option value="create_new">Créer</option>
+      {allowMerge && <option value="merge">Fusionner avec l'existant</option>}
+      <option value="skip">Ignorer</option>
     </select>
   );
 }
@@ -100,7 +100,7 @@ export function ConfidenceBar({ value }: { value?: number }) {
   const pct = Math.round(Math.max(0, Math.min(1, value ?? 0)) * 100);
   const color = pct >= 70 ? "#16a34a" : pct >= 40 ? "#eab308" : "#dc2626";
   return (
-    <div title={`confidence ${pct}%`} style={{ width: 40, height: 4, background: "#e5e7eb", borderRadius: 2 }}>
+    <div title={`confiance ${pct}%`} style={{ width: 40, height: 4, background: "#e5e7eb", borderRadius: 2 }}>
       <div style={{ width: `${pct}%`, height: "100%", background: color, borderRadius: 2 }} />
     </div>
   );
@@ -145,9 +145,9 @@ export interface ReviewPanelProps {
   onBulkDecision: (a: DecisionAction) => void;
   onApply: () => void;
   onCancel: () => void;
-  /** Label of the primary apply button (default `"Apply to graph"`). */
+  /** Label of the primary apply button (default `"Ajouter aux données"`). */
   applyLabel?: string;
-  /** Label of the secondary button (default `"Cancel"`). */
+  /** Label of the secondary button (default `"Annuler"`). */
   cancelLabel?: string;
   /** Disable the apply button (e.g. while a previous apply is in flight). */
   applyDisabled?: boolean;
@@ -176,32 +176,32 @@ export function ReviewPanel(props: ReviewPanelProps) {
             <strong>{proposal.source?.name ?? "Document"}</strong>
             {proposal.source?.encoding && (
               <span style={{ fontSize: 12, color: "#475569" }}>
-                encoding: <code>{proposal.source.encoding}</code>
+                encodage : <code>{proposal.source.encoding}</code>
                 {proposal.source?.had_bom ? " (BOM)" : ""}
               </span>
             )}
             {proposal.language && (
               <span style={{ fontSize: 12, color: "#475569" }}>
-                language: <code>{proposal.language.code}</code>{" "}
+                langue : <code>{proposal.language.code}</code>{" "}
                 ({Math.round(proposal.language.confidence * 100)}%)
               </span>
             )}
           </div>
           <div style={{ display: "flex", gap: 6 }}>
-            <button onClick={() => props.onBulkDecision("create_new")}>Accept all</button>
-            <button onClick={() => props.onBulkDecision("skip")}>Skip all</button>
+            <button onClick={() => props.onBulkDecision("create_new")}>Tout accepter</button>
+            <button onClick={() => props.onBulkDecision("skip")}>Tout ignorer</button>
           </div>
         </div>
         <div style={{ marginTop: 8, fontSize: 13, color: "#0f172a" }}>
-          <span style={{ marginRight: 12 }}>Create: <strong>{counters.create}</strong></span>
-          <span style={{ marginRight: 12 }}>Merge: <strong>{counters.merge}</strong></span>
-          <span>Skip: <strong>{counters.skip}</strong></span>
+          <span style={{ marginRight: 12 }}>Créer : <strong>{counters.create}</strong></span>
+          <span style={{ marginRight: 12 }}>Fusionner : <strong>{counters.merge}</strong></span>
+          <span>Ignorer : <strong>{counters.skip}</strong></span>
         </div>
       </Card>
 
       {proposal.concept_types.length > 0 && (
-        <Section title={`New concept types (${proposal.concept_types.length})`}>
-          <Table headers={["Name", "Parent", "Conflict", "Confidence", "Decision"]}>
+        <Section title={`Nouveaux types de fiche (${proposal.concept_types.length})`}>
+          <Table headers={["Nom", "Parent", "Conflit", "Confiance", "Décision"]}>
             {proposal.concept_types.map((ct) => (
               <tr key={ct.client_ref}>
                 <td>{ct.name}</td>
@@ -222,8 +222,8 @@ export function ReviewPanel(props: ReviewPanelProps) {
       )}
 
       {proposal.relation_types.length > 0 && (
-        <Section title={`New relation types (${proposal.relation_types.length})`}>
-          <Table headers={["Name", "Domain → Range", "Conflict", "Confidence", "Decision"]}>
+        <Section title={`Nouveaux types de lien (${proposal.relation_types.length})`}>
+          <Table headers={["Nom", "Domaine → Portée", "Conflit", "Confiance", "Décision"]}>
             {proposal.relation_types.map((rt) => (
               <tr key={rt.client_ref}>
                 <td>{rt.name}</td>
@@ -244,8 +244,8 @@ export function ReviewPanel(props: ReviewPanelProps) {
       )}
 
       {proposal.concepts.length > 0 && (
-        <Section title={`Concepts (${proposal.concepts.length})`}>
-          <Table headers={["Type", "Name", "Description", "Properties", "Conflict", "Confidence", "Decision"]}>
+        <Section title={`Fiches (${proposal.concepts.length})`}>
+          <Table headers={["Type", "Nom", "Description", "Propriétés", "Conflit", "Confiance", "Décision"]}>
             {proposal.concepts.map((c) => (
               <tr key={c.client_ref}>
                 <td style={{ color: "#475569" }}>{c.concept_type}</td>
@@ -295,8 +295,8 @@ export function ReviewPanel(props: ReviewPanelProps) {
       )}
 
       {proposal.relations.length > 0 && (
-        <Section title={`Relations (${proposal.relations.length})`}>
-          <Table headers={["Type", "Source", "Target", "Conflict", "Confidence", "Decision"]}>
+        <Section title={`Liens (${proposal.relations.length})`}>
+          <Table headers={["Type", "Source", "Cible", "Conflit", "Confiance", "Décision"]}>
             {proposal.relations.map((r) => (
               <tr key={r.client_ref}>
                 <td style={{ color: "#475569" }}>{r.relation_type}</td>
@@ -318,14 +318,14 @@ export function ReviewPanel(props: ReviewPanelProps) {
       )}
 
       {proposal.rules.length > 0 && (
-        <Section title={`Rules (${proposal.rules.length})`}>
-          <Table headers={["Type", "Name", "When → Then", "Conflict", "Decision"]}>
+        <Section title={`Règles (${proposal.rules.length})`}>
+          <Table headers={["Type", "Nom", "Si → Alors", "Conflit", "Décision"]}>
             {proposal.rules.map((r) => (
               <tr key={r.client_ref}>
                 <td style={{ color: "#475569" }}>{r.rule_type}</td>
                 <td>{r.name}</td>
                 <td style={{ color: "#475569", fontSize: 12 }}>
-                  <em>when</em> {r.when || "—"} <em>then</em> {r.then || "—"}
+                  <em>si</em> {r.when || "—"} <em>alors</em> {r.then || "—"}
                 </td>
                 <td><ConflictBadge conflict={r.conflict} /></td>
                 <td>
@@ -343,7 +343,7 @@ export function ReviewPanel(props: ReviewPanelProps) {
 
       {proposal.actions.length > 0 && (
         <Section title={`Actions (${proposal.actions.length})`}>
-          <Table headers={["Type", "Name", "Subject", "Object", "Conflict", "Decision"]}>
+          <Table headers={["Type", "Nom", "Sujet", "Objet", "Conflit", "Décision"]}>
             {proposal.actions.map((a) => (
               <tr key={a.client_ref}>
                 <td style={{ color: "#475569" }}>{a.action_type}</td>
@@ -365,7 +365,7 @@ export function ReviewPanel(props: ReviewPanelProps) {
       )}
 
       <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8 }}>
-        <button onClick={props.onCancel}>{props.cancelLabel ?? "Cancel"}</button>
+        <button onClick={props.onCancel}>{props.cancelLabel ?? "Annuler"}</button>
         <button
           onClick={props.onApply}
           disabled={props.applyDisabled}
@@ -378,7 +378,7 @@ export function ReviewPanel(props: ReviewPanelProps) {
             cursor: props.applyDisabled ? "not-allowed" : "pointer",
           }}
         >
-          {props.applyLabel ?? "Apply to graph"}
+          {props.applyLabel ?? "Ajouter aux données"}
         </button>
       </div>
     </div>
@@ -394,23 +394,23 @@ export function ApplyReportView({ report, onReset, resetLabel }: {
 }) {
   return (
     <Card>
-      <h2 style={{ marginTop: 0 }}>Apply complete</h2>
+      <h2 style={{ marginTop: 0 }}>Ajout terminé</h2>
       <div style={{ display: "flex", gap: 24, marginBottom: 16 }}>
-        <Stat label="Created" value={report.created} color="#16a34a" />
-        <Stat label="Merged" value={report.merged} color="#2563eb" />
-        <Stat label="Skipped" value={report.skipped} color="#94a3b8" />
-        <Stat label="Failed" value={report.failed} color="#dc2626" />
+        <Stat label="Créés" value={report.created} color="#16a34a" />
+        <Stat label="Fusionnés" value={report.merged} color="#2563eb" />
+        <Stat label="Ignorés" value={report.skipped} color="#94a3b8" />
+        <Stat label="Échoués" value={report.failed} color="#dc2626" />
       </div>
 
-      <OutcomeList title="Concept types" rows={report.concept_types} />
-      <OutcomeList title="Relation types" rows={report.relation_types} />
-      <OutcomeList title="Concepts" rows={report.concepts} />
-      <OutcomeList title="Relations" rows={report.relations} />
-      <OutcomeList title="Rules" rows={report.rules} />
+      <OutcomeList title="Types de fiche" rows={report.concept_types} />
+      <OutcomeList title="Types de lien" rows={report.relation_types} />
+      <OutcomeList title="Fiches" rows={report.concepts} />
+      <OutcomeList title="Liens" rows={report.relations} />
+      <OutcomeList title="Règles" rows={report.rules} />
       <OutcomeList title="Actions" rows={report.actions} />
 
       <button onClick={onReset} style={{ marginTop: 12 }}>
-        {resetLabel ?? "Ingest another document"}
+        {resetLabel ?? "Importer un autre document"}
       </button>
     </Card>
   );
@@ -441,10 +441,10 @@ function OutcomeList({ title, rows }: { title: string; rows: [string, ApplyOutco
                 {outcome.status === "failed" ? (
                   <span style={{ color: "#dc2626" }}>{outcome.error}</span>
                 ) : outcome.status === "skipped" ? (
-                  <span style={{ color: "#94a3b8" }}>skipped</span>
+                  <span style={{ color: "#94a3b8" }}>ignoré</span>
                 ) : (
                   <span style={{ color: outcome.status === "merged" ? "#2563eb" : "#16a34a" }}>
-                    {outcome.status} #{outcome.id}
+                    {outcome.status === "merged" ? "fusionné" : "créé"} #{outcome.id}
                   </span>
                 )}
               </td>

@@ -59,7 +59,7 @@ export default function Settings() {
     try {
       const next = await patchSettings(patch);
       setS(next);
-      setInfo("Settings saved.");
+      setInfo("Réglages enregistrés.");
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -80,21 +80,21 @@ export default function Settings() {
     setTestResult(null);
     try {
       const base = cfg.ontologyApiUrl.trim().replace(/\/$/, "");
-      if (!base) throw new Error("Ontology API base URL is empty");
+      if (!base) throw new Error("L'URL de base de l'API ontologie est vide");
       const headers: Record<string, string> = {};
       if (cfg.ontologyBearerToken.trim()) {
         headers["authorization"] = `Bearer ${cfg.ontologyBearerToken.trim()}`;
       }
       const res = await fetch(`${base}/healthz`, { headers });
       if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
-      let version = "unknown";
+      let version = "inconnue";
       try {
         const data = await res.json();
         if (data && typeof data.version === "string") version = data.version;
       } catch {
         /* /healthz may return text — ignore */
       }
-      setTestResult({ ok: true, message: `✅ Server reachable — version ${version}` });
+      setTestResult({ ok: true, message: `✅ Serveur joignable — version ${version}` });
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       setTestResult({ ok: false, message: `❌ ${msg}` });
@@ -186,15 +186,15 @@ function GeneralSettings({
       <LegacyKeysBanner apply={apply} />
 
       <div className="grid grid-2" style={{ alignItems: "start", marginBottom: 16 }}>
-        <Card title="Retrieval defaults">
+        <Card title="Réglages de recherche">
           {!s ? (
-            <div className="empty">Loading…</div>
+            <div className="empty">Chargement…</div>
           ) : (
             <>
               <div className="setting-row">
                 <div className="meta">
                   <strong>Top-K</strong>
-                  Number of seed concepts retrieved per query.
+                  Nombre de concepts de départ récupérés par requête.
                 </div>
                 <input
                   type="number"
@@ -206,8 +206,8 @@ function GeneralSettings({
               </div>
               <div className="setting-row">
                 <div className="meta">
-                  <strong>Lexical weight</strong>
-                  0 = vector-only, 1 = BM25-only.
+                  <strong>Poids lexical</strong>
+                  0 = vectoriel seul, 1 = BM25 seul.
                 </div>
                 <input
                   type="number"
@@ -220,8 +220,8 @@ function GeneralSettings({
               </div>
               <div className="setting-row">
                 <div className="meta">
-                  <strong>Expansion depth</strong>
-                  Hops added to each seed when traversing.
+                  <strong>Profondeur d'expansion</strong>
+                  Sauts ajoutés à chaque concept de départ lors du parcours.
                 </div>
                 <input
                   type="number"
@@ -235,35 +235,35 @@ function GeneralSettings({
           )}
         </Card>
 
-        <Card title="UI preferences">
+        <Card title="Préférences d'affichage">
           {!s ? (
-            <div className="empty">Loading…</div>
+            <div className="empty">Chargement…</div>
           ) : (
             <>
               <div className="setting-row">
                 <div className="meta">
-                  <strong>Theme</strong>
-                  Color scheme (light only at the moment).
+                  <strong>Thème</strong>
+                  Jeu de couleurs (clair uniquement pour le moment).
                 </div>
                 <select
                   value={s.ui.theme}
                   onChange={(e) => apply({ ui: { theme: e.target.value } })}
                 >
-                  <option value="light">Light</option>
-                  <option value="dark">Dark</option>
+                  <option value="light">Clair</option>
+                  <option value="dark">Sombre</option>
                 </select>
               </div>
               <div className="setting-row">
                 <div className="meta">
-                  <strong>Graph layout</strong>
-                  Layout engine for Graph View.
+                  <strong>Disposition du graphe</strong>
+                  Moteur de disposition de la vue graphe.
                 </div>
                 <select
                   value={s.ui.graph_layout}
                   onChange={(e) => apply({ ui: { graph_layout: e.target.value } })}
                 >
-                  <option value="dagre">Dagre (hierarchical)</option>
-                  <option value="force">Force-directed</option>
+                  <option value="dagre">Dagre (hiérarchique)</option>
+                  <option value="force">Dirigé par forces</option>
                 </select>
               </div>
             </>
@@ -292,7 +292,7 @@ function GeneralSettings({
         {/* Server URLs (always visible) */}
         <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 12 }}>
           <label className="field">
-            <span>Ontology API base URL</span>
+            <span>URL de base de l'API ontologie</span>
             <input
               type="text"
               value={cfg.ontologyApiUrl}
@@ -301,18 +301,18 @@ function GeneralSettings({
             />
           </label>
           <div className="field">
-            <label>Bearer token (optional)</label>
+            <label>Jeton Bearer (optionnel)</label>
             <KeyField
               label=""
               value={cfg.ontologyBearerToken}
               onChange={(v) => updateCfg("ontologyBearerToken", v)}
               show={showBearer}
               onToggle={() => setShowBearer((v) => !v)}
-              placeholder="(leave blank if server is open)"
+              placeholder="(laisser vide si le serveur est ouvert)"
             />
           </div>
           <label className="field">
-            <span>Auth server URL</span>
+            <span>URL du serveur d'authentification</span>
             <input
               type="text"
               value={cfg.authApiUrl}
@@ -323,9 +323,9 @@ function GeneralSettings({
         </div>
 
         <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
-          <button className="btn btn-primary" onClick={handleSave}>💾 Save all</button>
+          <button className="btn btn-primary" onClick={handleSave}>💾 Tout enregistrer</button>
           <button className="btn btn-outline" onClick={handleTest} disabled={testing}>
-            {testing ? "Testing…" : "🔌 Test connection"}
+            {testing ? "Test…" : "🔌 Tester la connexion"}
           </button>
         </div>
         {testResult && (
@@ -335,7 +335,7 @@ function GeneralSettings({
         )}
 
         <p className="field-hint" style={{ marginTop: 12 }}>
-          Currently resolving API base to <code>{apiBase() || "(same-origin)"}</code>.
+          Base d'API actuellement résolue : <code>{apiBase() || "(same-origin)"}</code>.
         </p>
       </Card>
 
@@ -521,7 +521,7 @@ function DiagnosticsPanel() {
     results.push({
       name: "Paramètres serveur",
       status: settingsRes.err ? "error" : "ok",
-      summary: settingsRes.err ? "Échec du chargement" : "Settings chargés",
+      summary: settingsRes.err ? "Échec du chargement" : "Réglages chargés",
       latencyMs: settingsRes.ms,
       details: settingsRes.err ? errMsg(settingsRes.err) : `provider actif: ${settingsRes.value?.llm.active_provider ?? "—"}`,
     });
@@ -544,7 +544,7 @@ function DiagnosticsPanel() {
         status: empty ? "warn" : "ok",
         summary: `${s.concepts} concepts, ${s.relations} relations, ${s.rules} règles, ${s.actions} actions`,
         latencyMs: statsRes.ms,
-        details: `Types — concepts:${s.concept_types}, relations:${s.relation_types}, rules:${s.rule_types}, actions:${s.action_types}`,
+        details: `Types — concepts:${s.concept_types}, relations:${s.relation_types}, règles:${s.rule_types}, actions:${s.action_types}`,
       });
     }
 
@@ -1249,7 +1249,7 @@ function LlmServerSection({ settings, onPatch }: LlmServerSectionProps) {
           />
         </label>
         <label className="field">
-          <span>Max tokens</span>
+          <span>Tokens max</span>
           <input
             type="number"
             min={1}
@@ -1379,7 +1379,7 @@ function OcrSection({ settings, onPatch }: OcrSectionProps) {
           value={ocr.provider}
           onChange={(e) => onPatch({ provider: e.target.value })}
         >
-          <option value="tesseract">Tesseract (Local — gratuit)</option>
+          <option value="tesseract">Tesseract (local — gratuit)</option>
           <option value="google_vision">Google Cloud Vision</option>
         </select>
       </label>
@@ -1394,7 +1394,7 @@ function OcrSection({ settings, onPatch }: OcrSectionProps) {
           }}
         >
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <strong>Tesseract (Local)</strong>
+            <strong>Tesseract (local)</strong>
             <span className={tessAvail ? "badge badge-success" : "badge badge-warn"}>
               {tessAvail ? "⊘ Disponible" : "⚠ Indisponible"}
             </span>
@@ -1421,7 +1421,7 @@ function OcrSection({ settings, onPatch }: OcrSectionProps) {
             </span>
           </div>
           <div style={{ marginTop: 8, fontSize: 13, color: "var(--muted)" }}>
-            Auth: Clé API {ocr.google_api_key_hint && (<code style={{ marginLeft: 6 }}>{ocr.google_api_key_hint}</code>)}
+            Auth : clé d'API {ocr.google_api_key_hint && (<code style={{ marginLeft: 6 }}>{ocr.google_api_key_hint}</code>)}
           </div>
         </div>
       </div>
@@ -1440,7 +1440,7 @@ function OcrSection({ settings, onPatch }: OcrSectionProps) {
         }}
       >
         <div>
-          <div style={{ fontWeight: 600 }}>Fallback automatique</div>
+          <div style={{ fontWeight: 600 }}>Bascule automatique</div>
           <div style={{ fontSize: 13, color: "var(--muted)" }}>
             Si le moteur principal échoue ou produit un résultat insuffisant, basculer automatiquement sur l'autre moteur.
           </div>
@@ -1489,7 +1489,7 @@ function OcrSection({ settings, onPatch }: OcrSectionProps) {
           onChange={(e) => onPatch({ min_text_threshold: Number(e.target.value) })}
         />
         <p className="field-hint">
-          Si l'OCR retourne moins de {ocr.min_text_threshold} caractères, le fallback est déclenché.
+          Si l'OCR retourne moins de {ocr.min_text_threshold} caractères, la bascule est déclenchée.
         </p>
       </label>
 
@@ -1565,8 +1565,8 @@ function KeyField({ label, value, onChange, show, onToggle, placeholder }: KeyFi
           type="button"
           className="key-toggle-btn"
           onClick={onToggle}
-          aria-label={show ? "Hide key" : "Show key"}
-          title={show ? "Hide" : "Show"}
+          aria-label={show ? "Masquer la clé" : "Afficher la clé"}
+          title={show ? "Masquer" : "Afficher"}
         >
           👁
         </button>
@@ -1691,7 +1691,7 @@ function FeedbackListPanel() {
                   <div style={{ fontWeight: 600, marginBottom: 4 }}>Capture d'écran</div>
                   <img
                     src={selected.screenshot}
-                    alt="screenshot"
+                    alt="capture d'écran"
                     style={{ maxWidth: "100%", border: "1px solid var(--border)", borderRadius: 6 }}
                   />
                 </div>
