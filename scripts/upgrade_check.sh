@@ -19,6 +19,7 @@ F="$HERE/examples/finance"
 D=$(mktemp -d)
 trap 'rm -rf "$D"' EXIT
 export RUST_LOG=${RUST_LOG:-warn}
+"$OLD" backup --help >/dev/null 2>&1 || { echo "the previous version predates \`backup\` (2026-09-30): rebase on main"; exit 1; }
 
 echo "== previous version writes two stores (finance example, generated 20k)"
 "$OLD" --data "$D/data" ingest --ontology "$F/ontology.json" "$F/seed.jsonl"
@@ -37,13 +38,15 @@ diff "$D/old.stats" "$D/new.stats"
 "$NEW" --data "$D/data" export "$D/new.jsonl" >/dev/null
 # Property maps have no fixed order: compare canonical JSON, line-sorted.
 canon() { python3 -c 'import json,sys; [print(x) for x in sorted(json.dumps(json.loads(l), sort_keys=True) for l in sys.stdin if l.strip())]' < "$1"; }
-diff <(canon "$D/old.jsonl") <(canon "$D/new.jsonl") >/dev/null || { echo "export differs after upgrade"; exit 1; }
+canon "$D/old.jsonl" > "$D/old.canon"
+canon "$D/new.jsonl" > "$D/new.canon"
+diff "$D/old.canon" "$D/new.canon" >/dev/null || { echo "export differs after upgrade"; exit 1; }
 "$NEW" --data "$D/big" stats > "$D/new-big.stats"
 diff "$D/old-big.stats" "$D/new-big.stats"
 
 echo "== current version writes, compacts, reopens"
 printf '{"kind":"concept","id":0,"concept_type":"Company","name":"Upgrade Corp","description":"added by the current version"}\n' > "$D/add.jsonl"
-"$NEW" --data "$D/data" ingest "$D/add.jsonl" | grep -q "1 concepts"
+"$NEW" --data "$D/data" ingest "$D/add.jsonl" | grep -q "ingested: 1 concepts,"
 "$NEW" --data "$D/data" compact >/dev/null
 "$NEW" --data "$D/data" stats | grep -qx "concepts: $(( $(sed -n 's/^concepts: //p' "$D/old.stats") + 1 ))"
 
