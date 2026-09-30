@@ -466,9 +466,12 @@ export const listConcepts = (params: {
   offset?: number;
   /** `next_cursor` of the previous page: the page starts strictly after it. */
   cursor?: string;
+  /** `type` alone, without its subtypes (the server includes them by default). */
+  include_subtypes?: boolean;
 } = {}) => {
   const qs = new URLSearchParams();
   if (params.type) qs.set("type", params.type);
+  if (params.include_subtypes === false) qs.set("include_subtypes", "false");
   if (params.q) qs.set("q", params.q);
   if (params.limit != null) qs.set("limit", String(params.limit));
   if (params.offset != null) qs.set("offset", String(params.offset));

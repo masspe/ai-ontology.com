@@ -213,20 +213,16 @@ export default function OntologyBuilder() {
     setBusy("save");
     setError(null);
     try {
-      // What the change touches, said before the server refuses it (lot B.7).
-      const impact = await modelImpact(ontology, proposed);
-      if (impact.total > 0) {
-        const go = await confirm({
-          title: "Fiches concernées",
-          message: wordImpact(impact),
-          confirmLabel: "Enregistrer quand même",
-          danger: true,
-        });
-        if (!go) return;
+      // What the change touches, said before the server refuses it (lot
+      // B.7). Unknown (request failed): the server still decides.
+      const impact = await modelImpact(ontology, proposed).catch(() => null);
+      if (impact && impact.total > 0) {
+        setError(wordImpact(impact));
+        return;
       }
       await replaceOntology(proposed);
       setProposed(null);
-      setInfo(`Modèle enregistré. ${wordImpact(impact)}`);
+      setInfo(`Modèle enregistré. ${impact ? wordImpact(impact) : ""}`.trim());
       await refresh();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));

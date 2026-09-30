@@ -630,7 +630,7 @@ describe("OntologyBuilder — ingest preview", () => {
 });
 
 describe("OntologyBuilder — what a model change touches", () => {
-  it("counts the sheets whose type the new model drops, asks before saving, and says it afterwards", async () => {
+  it("counts the sheets whose type the new model drops and refuses to save with what to do", async () => {
     listConcepts.mockImplementation(async (params) => ({
       total: params?.type === "Person" ? 12 : 0,
       concepts: [],
@@ -641,19 +641,24 @@ describe("OntologyBuilder — what a model change touches", () => {
     await user.click(screen.getByRole("button", { name: /Generate Ontology/ }));
     await screen.findByText(/Proposed schema/);
     await user.click(screen.getByRole("button", { name: /Save Ontology/ }));
-    const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText("Fiches concernées")).toBeInTheDocument();
-    expect(within(dialog).getByText(/12 fiche\(s\) concernée\(s\) : Person \(12\)\./)).toBeInTheDocument();
-    expect(listConcepts).toHaveBeenCalledWith({ type: "Person", limit: 1 });
-    expect(listConcepts).toHaveBeenCalledWith({ type: "Org", limit: 1 });
-    // Cancel: nothing saved, the draft stays.
-    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(await errorBanner()).toHaveTextContent(
+      "12 fiche(s) concernée(s) : Person (12). Un type encore utilisé ne peut pas être retiré : réaffectez ou supprimez ces fiches d'abord.",
+    );
+    expect(listConcepts).toHaveBeenCalledWith({ type: "Person", limit: 1, include_subtypes: false });
+    expect(listConcepts).toHaveBeenCalledWith({ type: "Org", limit: 1, include_subtypes: false });
     expect(replaceOntology).not.toHaveBeenCalled();
     expect(screen.getByText(/Proposed schema/)).toBeInTheDocument();
-    // Accept: saved, and the figure repeated in the banner.
+    expect(screen.getByRole("button", { name: /Save Ontology/ })).toBeEnabled();
+  });
+
+  it("lets the server decide when the count cannot be made", async () => {
+    listConcepts.mockRejectedValue(new Error("HTTP 429"));
+    const { user } = await renderLoaded();
+    await user.type(screen.getByPlaceholderText(/Describe the ontology structure/), "x");
+    await user.click(screen.getByRole("button", { name: /Generate Ontology/ }));
+    await screen.findByText(/Proposed schema/);
     await user.click(screen.getByRole("button", { name: /Save Ontology/ }));
-    await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Enregistrer quand même" }));
     await waitFor(() => expect(replaceOntology).toHaveBeenCalledWith(draft));
-    expect(await screen.findByText(/Modèle enregistré\. 12 fiche\(s\) concernée\(s\)/)).toBeInTheDocument();
+    expect(await screen.findByText("Modèle enregistré.")).toBeInTheDocument();
   });
 });
