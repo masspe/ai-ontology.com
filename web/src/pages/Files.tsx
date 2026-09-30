@@ -317,8 +317,8 @@ export default function Files() {
     <>
       <div className="page-header">
         <div>
-          <h1 className="page-title">Files</h1>
-          <p className="page-subtitle">Manage uploaded sources, ingestion status, and file organization.</p>
+          <h1 className="page-title">Fichiers</h1>
+          <p className="page-subtitle">Vos sources déposées, l'état de leur import, et de quoi en déposer d'autres.</p>
         </div>
       </div>
 

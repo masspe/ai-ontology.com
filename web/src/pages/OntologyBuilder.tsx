@@ -8,6 +8,7 @@ import Dropzone from "../components/Dropzone";
 import OntologyGraph from "../components/OntologyGraph";
 // @ts-expect-error JSX module
 import { useConfirm } from "../components/ConfirmDialog.jsx";
+import { modelImpact, wordImpact } from "../lib/impact";
 import {
   ApplyReportView,
   ReviewPanel,
@@ -212,9 +213,20 @@ export default function OntologyBuilder() {
     setBusy("save");
     setError(null);
     try {
+      // What the change touches, said before the server refuses it (lot B.7).
+      const impact = await modelImpact(ontology, proposed);
+      if (impact.total > 0) {
+        const go = await confirm({
+          title: "Fiches concernées",
+          message: wordImpact(impact),
+          confirmLabel: "Enregistrer quand même",
+          danger: true,
+        });
+        if (!go) return;
+      }
       await replaceOntology(proposed);
       setProposed(null);
-      setInfo("Ontology saved.");
+      setInfo(`Modèle enregistré. ${wordImpact(impact)}`);
       await refresh();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
@@ -426,8 +438,8 @@ export default function OntologyBuilder() {
     <>
       <div className="page-header">
         <div>
-          <h1 className="page-title">Ontology Creation</h1>
-          <p className="page-subtitle">Create an ontology from natural language instructions or from your files.</p>
+          <h1 className="page-title">Modèle de données</h1>
+          <p className="page-subtitle">Les types de fiches et les liens permis, décrits en langage courant ou déduits de vos fichiers.</p>
         </div>
       </div>
 

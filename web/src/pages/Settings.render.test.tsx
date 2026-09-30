@@ -114,7 +114,7 @@ beforeEach(() => {
 describe("Settings page — shell and tabs", () => {
   it("shows the header, loads the server settings and fills the retrieval rows", async () => {
     renderPage(<Settings />);
-    expect(screen.getByRole("heading", { name: "Settings" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Réglages" })).toBeInTheDocument();
     // Both cards show a loading placeholder until `getSettings` resolves.
     expect(screen.getAllByText("Loading…")).toHaveLength(2);
     expect(await screen.findByDisplayValue("8")).toBeInTheDocument();
