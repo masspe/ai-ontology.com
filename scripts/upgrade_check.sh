@@ -48,7 +48,7 @@ echo "== current version writes, compacts, reopens"
 printf '{"kind":"concept","id":0,"concept_type":"Company","name":"Upgrade Corp","description":"added by the current version"}\n' > "$D/add.jsonl"
 "$NEW" --data "$D/data" ingest "$D/add.jsonl" | grep "ingested: 1 concepts," >/dev/null
 "$NEW" --data "$D/data" compact >/dev/null
-"$NEW" --data "$D/data" stats | grep -x "concepts: $(( $(sed -n 's/^concepts: //p' " >/dev/null$D/old.stats") + 1 ))"
+"$NEW" --data "$D/data" stats | grep -x "concepts: $(( $(sed -n 's/^concepts: //p' "$D/old.stats") + 1 ))" >/dev/null
 
 echo "== current version backs up and restores the upgraded store"
 "$NEW" --data "$D/data" backup "$D/bak" >/dev/null
