@@ -169,10 +169,15 @@ jobs:
         run: cargo build --locked --bin ontology
       - name: build the previous version
         run: |
-          if [ "$GITHUB_REF" = refs/heads/main ]; then prev=$(git rev-parse HEAD~1); else prev=$(git merge-base HEAD origin/main); fi
+          # On main: the tip before this push (HEAD~1 if the event has none); elsewhere the merge base.
+          before="${{ github.event.before }}"
+          if [ "$GITHUB_REF" = refs/heads/main ]; then
+            if [ -n "$before" ] && ! echo "$before" | grep -qx "0*" && git cat-file -e "$before" 2>/dev/null; then prev=$before; else prev=$(git rev-parse HEAD~1); fi
+          else prev=$(git merge-base HEAD origin/main); fi
           echo "previous: $(git log --oneline -1 "$prev")"
           git worktree add --detach ../previous "$prev"
-          (cd ../previous && CARGO_TARGET_DIR="$PWD/target" cargo build --locked --bin ontology)
+          # Built as it was green under its own CI: no -D warnings from a newer stable.
+          (cd ../previous && RUSTFLAGS= CARGO_TARGET_DIR="$PWD/target" cargo build --locked --bin ontology)
           cp ../previous/target/debug/ontology /tmp/ontology-previous
       - run: bash scripts/upgrade_check.sh /tmp/ontology-previous target/debug/ontology
 
