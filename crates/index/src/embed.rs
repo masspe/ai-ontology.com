@@ -5,9 +5,6 @@
 // Dual-licensed: AGPL-3.0-or-later OR a commercial license
 // from Mediasoft & Cie S.A. See LICENSE and LICENSE-COMMERCIAL.md.
 
-use ahash::AHasher;
-use std::hash::{Hash, Hasher};
-
 /// Pluggable embedding backend. Implementors should produce vectors of a
 /// fixed dimension; `dim()` is read once at index construction time.
 pub trait Embedder: Send + Sync + 'static {
@@ -18,6 +15,11 @@ pub trait Embedder: Send + Sync + 'static {
 /// Deterministic, dependency-free embedder: hashed bag-of-words with L2
 /// normalization. Not as good as a real model — but fast, reproducible,
 /// and good enough to demonstrate the retrieval plumbing in tests.
+///
+/// Reproducible across processes: the hashers are built from fixed seeds
+/// (`AHasher::default()` is keyed at random per process, which made the
+/// vector scores, and so the ranking of close candidates, differ from one
+/// run to the next).
 #[derive(Debug, Clone)]
 pub struct HashEmbedder {
     dim: usize,
@@ -43,14 +45,16 @@ impl Embedder for HashEmbedder {
 
     fn embed(&self, text: &str) -> Vec<f32> {
         let mut v = vec![0f32; self.dim];
+        let keyed =
+            ahash::RandomState::with_seeds(0x5eed_0001, 0x5eed_0002, 0x5eed_0003, 0x5eed_0004);
         for tok in tokens(text) {
-            let mut h = AHasher::default();
-            tok.hash(&mut h);
-            let idx = (h.finish() as usize) % self.dim;
-            // Sign hashing, second hasher.
-            let mut h2 = AHasher::default();
-            (tok, 0xC0FFEEu64).hash(&mut h2);
-            let sign = if h2.finish() & 1 == 0 { 1.0 } else { -1.0 };
+            let idx = (keyed.hash_one(&tok) as usize) % self.dim;
+            // Sign hashing, second key.
+            let sign = if keyed.hash_one((&tok, 0xC0FFEEu64)) & 1 == 0 {
+                1.0
+            } else {
+                -1.0
+            };
             v[idx] += sign;
         }
         l2_normalize(&mut v);
