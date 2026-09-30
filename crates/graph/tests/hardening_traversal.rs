@@ -212,6 +212,40 @@ fn expand_terminates_on_cycles_and_honours_max_nodes() {
     }
 }
 
+/// Seeds that already fill `max_nodes` (the graph page seeding with a full
+/// page of one type) still come back with the links between them: the cap
+/// stops adding nodes, never collecting edges among the kept ones.
+#[test]
+fn expand_keeps_the_links_between_seeds_that_fill_the_cap() {
+    let g = graph();
+    let ring: Vec<ConceptId> = (0..5)
+        .map(|i| concept(&g, "Paper", &format!("S{i}")))
+        .collect();
+    for i in 0..5 {
+        relation(&g, "cites", ring[i], ring[(i + 1) % 5]);
+    }
+    let outside = concept(&g, "Paper", "outside");
+    relation(&g, "cites", ring[0], outside);
+    let sg = g.expand(
+        &ring,
+        &TraversalSpec {
+            max_depth: 3,
+            max_nodes: 5,
+            ..Default::default()
+        },
+    );
+    assert_eq!(sg.concepts.len(), 5, "no node beyond the cap");
+    assert_eq!(
+        sg.relations.len(),
+        5,
+        "every link of the ring, none to the outside"
+    );
+    assert!(sg
+        .relations
+        .iter()
+        .all(|r| r.target != outside && r.source != outside));
+}
+
 /// Direction and relation-type filters restrict what `expand` follows;
 /// concept-type filters restrict what it emits, with subsumption on by
 /// default.

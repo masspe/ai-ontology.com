@@ -31,6 +31,8 @@ vi.mock("../api", async () => {
 
 // The canvas handle methods, recorded so the toolbar can be asserted on.
 const handle = { fit: vi.fn(), zoomIn: vi.fn(), zoomOut: vi.fn(), focusNode: vi.fn() };
+// Renders of the canvas stub: a filter panel opening must not re-render it.
+const canvasRenders = { n: 0 };
 
 vi.mock("../components/GraphCanvas", () => {
   interface StubProps {
@@ -46,6 +48,7 @@ vi.mock("../components/GraphCanvas", () => {
   }
   const Stub = forwardRef<GraphCanvasHandle, StubProps>(function Stub(props, ref) {
     useImperativeHandle(ref, () => handle, []);
+    canvasRenders.n++;
     return (
       <div data-testid="canvas">
         <div data-testid="canvas-nodes">{(props.subgraph?.concepts ?? []).map((c) => c.name).join(",")}</div>
@@ -135,13 +138,15 @@ const history: StatsHistory = {
   ],
 };
 
-const queries: SavedQuery[] = [
-  { id: 1, name: "Just now", query: "q1", last_run_at: NOW - 5 },
-  { id: 2, name: "Minutes", query: "q2", last_run_at: NOW - 120 },
-  { id: 3, name: "Hours", query: "q3", last_run_at: NOW - 7200 },
-  { id: 4, name: "Days", query: "q4", last_run_at: NOW - 200_000 },
-  { id: 5, name: "Never (hidden)", query: "q5", last_run_at: null },
-] as unknown as SavedQuery[];
+// Built per test from the current time: a long run must not age "Just now".
+const makeQueries = (now = Math.floor(Date.now() / 1000)): SavedQuery[] =>
+  [
+    { id: 1, name: "Just now", query: "q1", last_run_at: now - 5 },
+    { id: 2, name: "Minutes", query: "q2", last_run_at: now - 120 },
+    { id: 3, name: "Hours", query: "q3", last_run_at: now - 7200 },
+    { id: 4, name: "Days", query: "q4", last_run_at: now - 200_000 },
+    { id: 5, name: "Never (hidden)", query: "q5", last_run_at: null },
+  ] as unknown as SavedQuery[];
 
 const files: FileRecord[] = [
   { id: 1, name: "done.pdf", status: "processed", uploaded_at: NOW - 10 },
@@ -162,6 +167,34 @@ const canvasRels = () => screen.getByTestId("canvas-rels").textContent;
 const kpiValue = (label: string) =>
   screen.getByText(label, { selector: ".stat-label" }).parentElement!.querySelector(".stat-value")!.textContent;
 
+type User = ReturnType<typeof renderPage>["user"];
+type Filter = "Types de fiche" | "Types de lien";
+const filterButton = (label: Filter) => screen.getByRole("button", { name: new RegExp(`^${label}`) });
+
+/** The filter's panel, opened if needed. */
+async function openFilter(user: User, label: Filter) {
+  if (filterButton(label).getAttribute("aria-expanded") !== "true") await user.click(filterButton(label));
+  return screen.getByRole("dialog", { name: label });
+}
+
+/** Tick (or untick) options in a MultiSelect filter. */
+async function pick(user: User, label: Filter, ...names: string[]) {
+  const panel = await openFilter(user, label);
+  for (const n of names) await user.click(within(panel).getByRole("checkbox", { name: new RegExp(`^${n}`) }));
+}
+
+/** "Effacer" in a MultiSelect filter: back to all. */
+async function clearFilter(user: User, label: Filter) {
+  const panel = await openFilter(user, label);
+  await user.click(within(panel).getByRole("button", { name: "Effacer" }));
+}
+
+/** The link types the link filter offers, in order. */
+async function linkOptions(user: User) {
+  const panel = await openFilter(user, "Types de lien");
+  return Array.from(panel.querySelectorAll(".ms-options .ms-option > span:first-of-type"), (e) => e.textContent);
+}
+
 async function mount(route = "/graph") {
   const page = renderPage(<GraphView />, { route, extraRoutes: probeRoutes });
   await waitFor(() => expect(canvasNodes()).toBe("Alice,ACME,Geneva,Bob"));
@@ -177,13 +210,13 @@ beforeEach(() => {
   mocked.getStats.mockResolvedValue({ concepts: 4, relations: 3 });
   mocked.getOntology.mockResolvedValue(ontology);
   mocked.getStatsHistory.mockResolvedValue(history);
-  mocked.getQueries.mockResolvedValue({ queries });
+  mocked.getQueries.mockResolvedValue({ queries: makeQueries() });
   mocked.getFiles.mockResolvedValue({ files });
 });
 
 describe("GraphView page", () => {
   it("loads the subgraph with the default request and fills the KPI tiles", async () => {
-    await mount();
+    const page = await mount();
     // The mount effect and the depth effect both fetch on the first render.
     expect(mocked.getSubgraph).toHaveBeenCalledWith({
       seed_query: undefined,
@@ -202,9 +235,16 @@ describe("GraphView page", () => {
       Company: "#7c3aed",
       City: "#16a34a",
     });
-    // Ontology types populate the two selects.
-    expect(screen.getByRole("option", { name: "Company" })).toBeInTheDocument();
-    expect(screen.getByRole("option", { name: "owns" })).toBeInTheDocument();
+    // Ontology types populate the two filters; nothing chosen reads as all.
+    expect(filterButton("Types de fiche")).toHaveTextContent("Tous les types");
+    expect(filterButton("Types de lien")).toHaveTextContent("Tous les liens");
+    const { user } = page;
+    expect(within(await openFilter(user, "Types de fiche")).getByRole("checkbox", { name: "Company" })).not.toBeChecked();
+    expect(within(await openFilter(user, "Types de lien")).getByRole("checkbox", { name: /^owns/ })).toHaveAccessibleName(
+      /^owns\s*Person → Company$/,
+    );
+    // Opening one filter closed the other.
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
   });
 
   it("shows the error banner when the subgraph request fails, and survives the side requests failing", async () => {
@@ -247,29 +287,95 @@ describe("GraphView page", () => {
 
   it("filters by node type and relation type", async () => {
     const { user } = await mount();
-    const nodeSelect = screen.getByRole("listbox", { name: /Types de fiche/ });
-    const relSelect = screen.getByRole("listbox", { name: /Types de lien/ });
-    await user.selectOptions(nodeSelect, "Person");
+    await pick(user, "Types de fiche", "Person");
     expect(canvasNodes()).toBe("Alice,Bob");
     expect(canvasRels()).toBe("knows");
     expect(kpiValue("Filtres actifs")).toBe("1");
+    expect(filterButton("Types de fiche")).toHaveTextContent("Person");
     // Several types at once.
-    await user.selectOptions(nodeSelect, "City");
+    await pick(user, "Types de fiche", "City");
     expect(canvasNodes()).toBe("Alice,Geneva,Bob");
-    await user.click(screen.getByRole("button", { name: "Tous les types" }));
-    await user.selectOptions(relSelect, "basedIn");
+    expect(filterButton("Types de fiche")).toHaveTextContent("2 sur 3");
+    await clearFilter(user, "Types de fiche");
+    expect(filterButton("Types de fiche")).toHaveTextContent("Tous les types");
+    await pick(user, "Types de lien", "basedIn");
     expect(canvasNodes()).toBe("Alice,ACME,Geneva,Bob");
     expect(canvasRels()).toBe("basedIn");
     expect(kpiValue("Filtres actifs")).toBe("1");
-    await user.click(screen.getByRole("button", { name: "Tous les liens" }));
+    await clearFilter(user, "Types de lien");
     expect(kpiValue("Filtres actifs")).toBe("0");
     // The node types are sent as seed types on refresh.
-    await user.selectOptions(nodeSelect, "Company");
+    await pick(user, "Types de fiche", "Company");
     await user.click(screen.getByRole("button", { name: "Actualiser" }));
     await waitFor(() =>
       expect(mocked.getSubgraph).toHaveBeenLastCalledWith(expect.objectContaining({ seed_concept_types: ["Company"] })),
     );
     expect(kpiValue("Filtres actifs")).toBe("1");
+  });
+
+  it("cross-filters the link types by the chosen sheet types, as in Power BI", async () => {
+    const { user } = await mount();
+    expect(await linkOptions(user)).toEqual(["worksAt", "knows", "basedIn", "owns"]);
+    // Only the link types with both ends among the chosen types.
+    await pick(user, "Types de fiche", "Person");
+    expect(await linkOptions(user)).toEqual(["knows"]);
+    await pick(user, "Types de fiche", "Company");
+    expect(await linkOptions(user)).toEqual(["worksAt", "knows", "owns"]);
+    expect(screen.queryByText(/Aucun type de lien entre/)).toBeNull();
+    // None between the chosen types: all are listed, and the panel says why.
+    await clearFilter(user, "Types de fiche");
+    await pick(user, "Types de fiche", "City");
+    expect(await linkOptions(user)).toEqual(["worksAt", "knows", "basedIn", "owns"]);
+    expect(screen.getByText(/Aucun type de lien entre les types de fiche choisis/)).toBeInTheDocument();
+    // A chosen link type the new sheet types no longer offer is dropped.
+    await clearFilter(user, "Types de fiche");
+    await pick(user, "Types de lien", "basedIn");
+    expect(canvasRels()).toBe("basedIn");
+    await pick(user, "Types de fiche", "Person");
+    expect(filterButton("Types de lien")).toHaveTextContent("Tous les liens");
+    expect(canvasRels()).toBe("knows");
+  });
+
+  it("says when the chosen types have no direct link, and names the type in the middle", async () => {
+    mocked.getSubgraph.mockResolvedValue({
+      subgraph: { concepts: subgraph.concepts, relations: subgraph.relations.filter((r) => r.relation_type !== "knows") },
+    });
+    const { user } = await mount();
+    expect(screen.queryByTestId("no-direct-link")).toBeNull();
+    // Person and City only meet through Company.
+    await pick(user, "Types de fiche", "Person", "City");
+    expect(canvasNodes()).toBe("Alice,Geneva,Bob");
+    expect(canvasRels()).toBe("");
+    expect(screen.getByTestId("no-direct-link")).toHaveTextContent(
+      "Aucun lien direct entre les types choisis. Ajoutez un type intermédiaire (par exemple : Company) pour voir les liens qui les relient.",
+    );
+    // With the middle type, the links are drawn and the message goes.
+    await pick(user, "Types de fiche", "Company");
+    expect(canvasRels()).toBe("worksAt,basedIn");
+    expect(screen.queryByTestId("no-direct-link")).toBeNull();
+    // One type alone, two sheets, no link: the message, without an example.
+    await clearFilter(user, "Types de fiche");
+    await pick(user, "Types de fiche", "Person");
+    expect(canvasNodes()).toBe("Alice,Bob");
+    expect(screen.getByTestId("no-direct-link")).toHaveTextContent(/Ajoutez un type intermédiaire pour voir/);
+    // A single sheet is not a missing link.
+    await clearFilter(user, "Types de fiche");
+    await pick(user, "Types de fiche", "City");
+    expect(screen.queryByTestId("no-direct-link")).toBeNull();
+  });
+
+  it("opens a filter and searches in it without re-rendering the canvas", async () => {
+    const { user } = await mount();
+    const before = canvasRenders.n;
+    const panel = await openFilter(user, "Types de fiche");
+    await user.type(within(panel).getByRole("searchbox"), "cômp");
+    expect(within(panel).getAllByRole("checkbox").map((c) => c.parentElement!.textContent)).toEqual([
+      "Tout sélectionner",
+      "Company",
+    ]);
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(canvasRenders.n).toBe(before);
   });
 
   it("refetches with the new depth when the slider moves", async () => {
@@ -412,7 +518,7 @@ describe("GraphView page", () => {
     const { user } = await mount();
     await user.click(screen.getByRole("button", { name: "node 3" }));
     expect(screen.getByRole("link", { name: "Ouvrir la fiche" })).toHaveAttribute("href", "/concepts/3");
-    await user.selectOptions(screen.getByRole("listbox", { name: /Types de fiche/ }), "Person");
+    await pick(user, "Types de fiche", "Person");
     expect(screen.queryByRole("link", { name: "Ouvrir la fiche" })).toBeNull();
     expect(screen.getByText(/Cliquez sur une fiche du graphe/)).toBeInTheDocument();
   });
@@ -425,7 +531,7 @@ describe("GraphView page", () => {
     // Expand: restrict to the node's type and go one level deeper.
     await user.click(screen.getByRole("button", { name: /Étendre le voisinage/ }));
     expect(screen.getByText("4 niveaux")).toBeInTheDocument();
-    expect(screen.getByRole("listbox", { name: /Types de fiche/ })).toHaveValue(["Person"]);
+    expect(filterButton("Types de fiche").querySelector(".ms-value")).toHaveTextContent(/^Person$/);
     await waitFor(() =>
       expect(mocked.getSubgraph).toHaveBeenLastCalledWith(expect.objectContaining({ expansion_depth: 4, seed_concept_types: ["Person"] })),
     );
@@ -621,7 +727,7 @@ describe("GraphView — a large graph loads by selection only", () => {
       expect(screen.getByText(/au moins un sur un grand graphe/)).toBeInTheDocument();
       await vi.advanceTimersByTimeAsync(31_000);
       expect(mocked.getSubgraph).not.toHaveBeenCalled();
-      await user.selectOptions(screen.getByRole("listbox", { name: /Types de fiche/ }), "Person");
+      await pick(user, "Types de fiche", "Person");
       await waitFor(() =>
         expect(mocked.getSubgraph).toHaveBeenLastCalledWith(expect.objectContaining({ seed_concept_types: ["Person"], limit: 250 })),
       );
@@ -629,7 +735,7 @@ describe("GraphView — a large graph loads by selection only", () => {
       const calls = mocked.getSubgraph.mock.calls.length;
       await vi.advanceTimersByTimeAsync(31_000);
       expect(mocked.getSubgraph).toHaveBeenCalledTimes(calls);
-      await user.click(screen.getByRole("button", { name: "Vider la sélection" }));
+      await clearFilter(user, "Types de fiche");
       expect(await screen.findByTestId("select-first")).toBeInTheDocument();
       // A search seeds the load on Enter.
       await user.type(screen.getByPlaceholderText(/Rechercher une fiche/), "acme{Enter}");

@@ -233,9 +233,10 @@ impl OntologyGraph {
             if depth >= spec.max_depth {
                 continue;
             }
-            if concepts.len() >= spec.max_nodes {
-                break;
-            }
+            // At the node cap the walk goes on over the nodes already kept,
+            // adding none, so the links *between* them are still collected
+            // (seeding with a full page of one type used to return nodes
+            // without a single edge). Bounded: the queue only drains.
 
             // When a relation_type whitelist is supplied, jump straight to
             // the typed adjacency buckets and skip cloning edges of types
@@ -270,6 +271,12 @@ impl OntologyGraph {
                 } else {
                     rel.source
                 };
+                let known = visited.contains(&neighbor);
+                // At the cap an unknown neighbour is never kept: skip it before
+                // reading (and cloning) it, so a hub costs its edge list only.
+                if !known && concepts.len() >= spec.max_nodes {
+                    continue;
+                }
                 let nc = match self.get_concept(neighbor) {
                     Ok(c) => c,
                     Err(_) => continue,
@@ -278,13 +285,11 @@ impl OntologyGraph {
                     continue;
                 }
 
-                if visited.insert(neighbor) {
+                if !known {
+                    visited.insert(neighbor);
                     depth_of.insert(neighbor, depth + 1);
                     concepts.push(nc);
                     queue.push_back((neighbor, depth + 1));
-                    if concepts.len() >= spec.max_nodes {
-                        break;
-                    }
                 }
                 if emitted_edges.insert(rel.id) {
                     relations.push(rel);
