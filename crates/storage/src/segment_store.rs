@@ -48,13 +48,14 @@ use ontology_graph::{Concept, ConceptId, GraphError, Loc, Ontology, OntologyGrap
 use parking_lot::{Mutex, RwLock};
 use tracing::{info, warn};
 
+use crate::backup::BackupReport;
 use crate::budget::{self, ActiveCounters, DomainEstimate, LoadPlan, MemoryBudget, MemoryMode};
 use crate::codec::{self, CODEC_JSON};
 use crate::log::{LogRecord, RecordKind, RouteHint};
-use crate::manifest::{CompactionMarker, META_NS};
+use crate::manifest::{new_store_id, CompactionMarker, META_NS};
 use crate::manifest::{Manifest, META_NS_ID};
 use crate::memory::apply;
-use crate::segment::active::{move_segment_files, remove_segment_files};
+use crate::segment::active::{data_path, idx_path, move_segment_files, remove_segment_files};
 use crate::segment::xref::{read_xref, XrefEntry};
 use crate::segment::{
     decode_record, unpack_endpoints, ActiveSegment, IndexFields, Kind, RecordMeta, RecordView,
@@ -454,6 +455,9 @@ impl SegmentStore {
         manifest.stream_mut(META_NS_ID).unwrap().sealed = meta.sealed_entries();
         for (ns_id, s) in graph.iter() {
             manifest.stream_mut(*ns_id).unwrap().sealed = s.sealed_entries();
+        }
+        if manifest.store_id.is_empty() {
+            manifest.store_id = new_store_id();
         }
         let manifest_rewritten = created || manifest != before;
         if manifest_rewritten {
@@ -1459,6 +1463,132 @@ impl SegmentStore {
         .await
         .map_err(|e| StoreError::Io(std::io::Error::other(e)))?
     }
+
+    /// Copy the store to `dest` under the writer lock (ROADMAP §3.8.4):
+    /// `MANIFEST.json` and every partition's `.data` and `.idx`, in the
+    /// store's own layout. A sealed partition is immutable (H11), so one
+    /// already at `dest` with the same size is skipped; the active
+    /// partition is always copied; `.xref`s are rebuilt at open. Files at
+    /// `dest` the store no longer has (removed by a compaction) are
+    /// deleted, since partition discovery is by directory. The manifest is
+    /// removed first and written back last, so an interrupted backup is
+    /// refused by `restore` (rerun the backup) rather than restored short.
+    /// `dest` must be outside the store and hold no other store's backup.
+    pub async fn backup(&self, dest: &Path) -> StoreResult<BackupReport> {
+        let inner = self.inner.clone();
+        let dest = dest.to_path_buf();
+        tokio::task::spawn_blocking(move || backup_locked(&inner.lock(), &dest))
+            .await
+            .map_err(|e| StoreError::Io(std::io::Error::other(e)))?
+    }
+}
+
+fn backup_locked(inner: &Inner, dest: &Path) -> StoreResult<BackupReport> {
+    if inner.poisoned {
+        return Err(StoreError::Poisoned(inner.root.display().to_string()));
+    }
+    // Canonical forms (a destination that does not exist yet is resolved
+    // through its nearest existing ancestor), so `./data/store` and
+    // `data/store` compare equal.
+    fn canon(p: &Path) -> PathBuf {
+        match std::fs::canonicalize(p) {
+            Ok(c) => c,
+            Err(_) => match (p.parent(), p.file_name()) {
+                (Some(parent), Some(name)) => canon(parent).join(name),
+                _ => p.to_path_buf(),
+            },
+        }
+    }
+    let (root_c, dest_c) = (canon(&inner.root), canon(dest));
+    if dest_c.starts_with(&root_c) || root_c.starts_with(&dest_c) {
+        return Err(StoreError::Format(format!(
+            "backup destination {} must be outside the store {}",
+            dest.display(),
+            inner.root.display()
+        )));
+    }
+    let manifest_at_dest = dest.join(crate::manifest::MANIFEST_FILE);
+    if let Some(other) = Manifest::load(dest)? {
+        if other.store_id != inner.manifest.store_id {
+            return Err(StoreError::Format(format!(
+                "{} holds the backup of another store (id {} vs {}); use an empty directory",
+                dest.display(),
+                other.store_id,
+                inner.manifest.store_id
+            )));
+        }
+    }
+    std::fs::create_dir_all(dest)?;
+    // No manifest while the copy is under way: a backup interrupted here
+    // is "not a backup" to `restore`, never a silently shorter one.
+    match std::fs::remove_file(&manifest_at_dest) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e.into()),
+    }
+    let mut report = BackupReport {
+        records: inner.total_records(),
+        ..Default::default()
+    };
+    let started = std::time::Instant::now();
+    for stream in std::iter::once(&inner.meta).chain(inner.graph.values()) {
+        let rel = stream.dir().strip_prefix(&inner.root).map_err(|_| {
+            StoreError::Format(format!(
+                "stream {} is outside the store",
+                stream.dir().display()
+            ))
+        })?;
+        let out = dest.join(rel);
+        std::fs::create_dir_all(&out)?;
+        let mut keep: HashSet<std::ffi::OsString> = HashSet::new();
+        let mut files: Vec<(PathBuf, bool)> = Vec::new();
+        for seg in stream.sealed() {
+            files.push((data_path(stream.dir(), seg.partition_id()), true));
+            files.push((idx_path(stream.dir(), seg.partition_id()), true));
+        }
+        let active = stream.active().partition_id();
+        files.push((data_path(stream.dir(), active), false));
+        files.push((idx_path(stream.dir(), active), false));
+        for (src, immutable) in files {
+            let Ok(meta) = std::fs::metadata(&src) else {
+                continue; // an active `.idx` not written yet
+            };
+            let name = src.file_name().expect("segment file name").to_os_string();
+            let dst = out.join(&name);
+            keep.insert(name);
+            report.files += 1;
+            let same = immutable
+                && std::fs::metadata(&dst)
+                    .map(|d| d.len() == meta.len())
+                    .unwrap_or(false);
+            if same {
+                continue;
+            }
+            report.bytes += std::fs::copy(&src, &dst)?;
+            report.copied += 1;
+        }
+        for e in std::fs::read_dir(&out)? {
+            let e = e?;
+            if e.file_type()?.is_file() && !keep.contains(&e.file_name()) {
+                std::fs::remove_file(e.path())?;
+            }
+        }
+    }
+    let tmp = dest.join(format!("{}.tmp", crate::manifest::MANIFEST_FILE));
+    report.bytes += std::fs::copy(inner.root.join(crate::manifest::MANIFEST_FILE), &tmp)?;
+    std::fs::rename(&tmp, &manifest_at_dest)?;
+    report.files += 1;
+    report.copied += 1;
+    info!(
+        dest = %dest.display(),
+        files = report.files,
+        copied = report.copied,
+        bytes = report.bytes,
+        records = report.records,
+        elapsed_ms = started.elapsed().as_millis() as u64,
+        "store backed up"
+    );
+    Ok(report)
 }
 
 /// Decode the next record of a cursor with its location, mapping format
@@ -1596,6 +1726,10 @@ fn finish_compaction(root: &Path, manifest: &mut Manifest) -> StoreResult<()> {
 impl Store for SegmentStore {
     async fn append(&self, record: &LogRecord) -> StoreResult<()> {
         self.append_batch(std::slice::from_ref(record)).await
+    }
+
+    async fn backup(&self, dest: &Path) -> StoreResult<BackupReport> {
+        SegmentStore::backup(self, dest).await
     }
 
     async fn append_batch(&self, records: &[LogRecord]) -> StoreResult<()> {

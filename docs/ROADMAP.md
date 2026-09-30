@@ -218,8 +218,12 @@ les instantanés disque restent un complément optionnel de l'hébergeur.
 Ordre d'exécution retenu : passe 1 = 3.8.1 + 3.8.2 (image, compose, web
 servie par le binaire, test de bout en bout) — **livrée 2026-09-29**
 (`276d22e`) ; passe 2 = lot A de l'interface (§3.9) — **livrée
-2026-09-29** ; puis 3.8.3b OAuth en Rust et retrait d'`auth-server/`,
-3.8.4 sauvegarde, lot B, 3.8.5, 3.8.6.
+2026-09-29** ; puis, **ordre révisé le 2026-09-30 avec le propriétaire** :
+3.8.4 sauvegarde, lot B (première tranche), 3.8.5 mise à jour, lot B
+(seconde tranche), 3.8.6 clés d'API et audit, et **3.8.3b OAuth reporté**
+(avec le retrait d'`auth-server/` et la dette web) jusqu'à la demande d'un
+client : le login intégré couvre le besoin, OAuth n'apporte que la
+connexion par compte Google ou Microsoft.
 
 État à la fin du 2026-09-28 : tous les reliquats du plan sont livrés (T1,
 T2, T3, mesure §3.7, R tranche 2a) ; `main` = 44a47fd, CI verte, incident
@@ -292,11 +296,32 @@ Ce que chaque étape applique du plan de stockage (vérifié le 2026-09-24) :
    (`auth-server`) embarqué dans l'image, ou réécrit comme module Rust du
    serveur (un seul processus, une seule surface). Recommandation : Rust.
    Critère : inscription, connexion, JWT et OAuth couverts à ≥ 90 %.
-4. **Sauvegarde et restauration.** `ontology backup <dest>` (copie des
+4. **Sauvegarde et restauration** — **livré 2026-09-30** : `POST /backup`
+   vers le dossier fixé par `serve --backup-dir` (image : `/backups`, un
+   volume par client dans `compose.yaml`), `ontology backup <dest>` hors
+   serveur, `ontology restore <src>` (copie en zone de travail, relecture
+   complète, mise en place, jamais par-dessus un store existant). Copie
+   sous le verrou d'écriture du MANIFEST et des segments `.data`/`.idx` ;
+   incrémentale par immuabilité des segments scellés (fichier de même
+   taille déjà présent = ignoré, partitions retirées par une compaction
+   supprimées à destination) ; MANIFEST retiré au début et réécrit en
+   dernier (une sauvegarde interrompue est refusée, jamais restaurée
+   courte) ; identité du store dans le MANIFEST (un dossier de sauvegarde
+   par store, une copie restaurée en reçoit une nouvelle).
+   Vérifié par `compare_graphs` (`crates/storage/tests/backup.rs`), par
+   l'API et la commande (`crates/server/tests/hardening_meta.rs`,
+   `crates/cli/tests/commands.rs`) et de bout en bout dans l'image
+   (`scripts/e2e_image.sh` : sauvegarde par l'API, restauration dans le
+   conteneur, même graphe). Texte d'origine : `ontology backup <dest>` (copie des
    segments scellés et du MANIFEST après compaction, actif inclus sous
    verrou) et `restore`, testés par un aller-retour vérifié par
    `compare_graphs`. Critère : restauration d'un store 5×10⁵ identique au
-   fingerprint.
+   fingerprint — exercé à la main le 2026-09-30 sur le poste de
+   développement (Windows, SSD) : store `bench gen` de 5×10⁵ concepts et
+   10⁶ relations (819 Mo, 45 fichiers) ; première sauvegarde 30 s (dont
+   l'ouverture du store), seconde sauvegarde sans changement 15 fichiers
+   et 45 Mo copiés (les actifs et le MANIFEST), restauration 21 s avec
+   relecture complète, mêmes comptes (500 000 / 1 000 000).
 5. **Mise à jour.** La CI ouvre un store produit par la version précédente
    de `main` (artefact conservé) avec la version courante : migration de
    format et hydratation vertes. Critère : job `upgrade` dans `ci.yml`.

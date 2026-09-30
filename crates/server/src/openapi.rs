@@ -545,6 +545,16 @@ const SPEC_JSON: &str = r##"{
                     "responses": { "204": { "description": "Compacted" } }
                 }
             },
+            "/backup": {
+                "post": {
+                    "summary": "Copy the store to the backup directory configured at start (serve --backup-dir); sealed partitions already there are skipped",
+                    "tags": ["admin"],
+                    "responses": {
+                        "200": { "description": "Report: files, copied, bytes, records" },
+                        "400": { "description": "No backup directory configured" }
+                    }
+                }
+            },
             "/reset": {
                 "post": {
                     "summary": "Start over: empty the store, the graph, the schema and the index. Irreversible.",

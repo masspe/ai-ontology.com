@@ -17,6 +17,7 @@
 //! The on-disk format is a sequence of length-prefixed [`LogRecord`]s,
 //! decoupled from the in-memory graph types so the schema can evolve.
 
+pub mod backup;
 pub mod budget;
 pub mod codec;
 pub mod file;
@@ -32,6 +33,7 @@ pub mod store;
 pub mod stream;
 pub mod testing;
 
+pub use backup::{restore, BackupReport, RestoreReport};
 pub use budget::{
     plan_load, ActiveCounters, BudgetError, BudgetSource, DomainEstimate, LoadPlan, MemoryBudget,
     MemoryMode, SkippedDomain,
