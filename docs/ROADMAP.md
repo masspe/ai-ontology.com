@@ -453,6 +453,21 @@ quatre entrées (Accueil, Importer, Explorer, Réglages) proposée par le
 propriétaire le 2026-09-30 à la place du menu latéral, à faire une fois la
 fiche et l'accueil validés à l'usage ; traduction des pages restantes.
 
+**Livraison du lot B, tranche 2a (2026-09-30, branche `feat/ui-lot-b2a`)** :
+navigation à **quatre entrées** en haut de page à la place du menu latéral
+(`layout/TopNav.tsx`, `layout/nav.tsx`) — Accueil et Réglages ouvrent une
+page, Importer (Fichiers, Relire un document, Modèle de données) et
+Explorer (Fiches, Graphe, Questions, Règles, Actions) ouvrent un menu
+natif (`<details>`), l'entrée de la section courante est marquée ; le
+guide interactif suit (une étape par page, le projecteur sur le menu qui
+la contient). Point 6 (début) — le graphe s'ouvre sur une fiche :
+`/graph?focus=<id>` amorce le voisinage sur cette fiche, la sélectionne et
+la cadre ; la fiche y renvoie. Point 5 — questions épinglables à l'accueil
+depuis la page Questions (★, mémorisé dans le navigateur), rejouées en un
+clic depuis l'accueil (`/queries?run=<id>`). Couverture web 99,4 %.
+**Reste (tranche 2b)** : point 7 (impact d'une évolution du modèle),
+traduction des pages restantes.
+
 **Dette technique** (avec 3.8.3, inchangé) : migration `react-router` 7
 (deux vulnérabilités npm modérées) ; modules d'authentification `.jsx` en
 TypeScript (testés à 97–100 %, conversion mécanique).

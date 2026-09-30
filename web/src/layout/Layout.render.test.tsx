@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Mediasoft-Commercial
 // Copyright (C) 2026 Mediasoft & Cie S.A.
 //
-// Rendering tests of the app shell: the menu by flow (groups, active
-// link, collapse toggle), the top bar (global search → /queries?q=, the
-// guide button, the account menu with logout, the feedback modal) and the
-// outlet that hosts the page.
+// Rendering tests of the app shell: the four top entries (a page each for
+// Accueil and Réglages, a menu for Importer and Explorer, the active one
+// marked), the top bar (global search → /queries?q=, the guide button, the
+// account menu with logout, the feedback modal) and the outlet that hosts
+// the page.
 
 import { describe, expect, it, vi } from "vitest";
 import { render, screen, within } from "@testing-library/react";
@@ -42,73 +43,55 @@ function mount(route = "/") {
 }
 
 const SEARCH = "Rechercher une fiche, poser une question…";
+const summary = (title: string) => screen.getByText(title, { selector: "summary" });
 
 describe("Layout shell", () => {
-  it("renders the brand, every nav entry in its group, the top bar and the routed page", () => {
+  it("renders the four entries, every page in its menu, the top bar and the routed page", () => {
     mount("/rules");
-    expect(screen.getByText("AI Ontology Studio")).toBeInTheDocument();
-    for (const group of NAV_GROUPS) {
-      const nav = screen.getByRole("navigation", { name: group.title });
+    expect(screen.getByRole("link", { name: "AI Ontology Studio" })).toHaveAttribute("href", "/");
+    expect(NAV_GROUPS.map((g) => g.title)).toEqual(["Accueil", "Importer", "Explorer", "Réglages"]);
+    expect(screen.getByRole("link", { name: "Accueil" })).toHaveAttribute("href", "/");
+    expect(screen.getByRole("link", { name: "Réglages" })).toHaveAttribute("href", "/settings");
+    for (const group of NAV_GROUPS.filter((g) => g.items.length > 1)) {
+      const menu = screen.getByRole("menu", { name: group.title });
       for (const item of group.items) {
-        expect(within(nav).getByRole("link", { name: item.label })).toHaveAttribute("href", item.to);
+        expect(within(menu).getByRole("menuitem", { name: item.label })).toHaveAttribute("href", item.to);
       }
     }
-    expect(NAV_ITEMS.map((i) => i.label)).toEqual([
-      "Tableau de bord",
-      "Modèle de données",
-      "Fichiers",
-      "Importer des documents",
-      "Graphe",
-      "Fiches",
-      "Questions",
-      "Règles",
-      "Actions",
-      "Paramètres",
-    ]);
+    expect(NAV_ITEMS).toHaveLength(10);
     expect(screen.getByPlaceholderText(SEARCH)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Guide" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Compte" })).toHaveTextContent("U");
-    expect(screen.queryByTitle("Notifications")).not.toBeInTheDocument();
+    expect(document.querySelector("aside.sidebar")).toBeNull();
     expect(document.querySelector("main.content")).toHaveTextContent("Rules page");
   });
 
-  it("marks only the current section active; the dashboard is an exact match", () => {
+  it("marks the entry of the current section: the menu that holds the page, or the page itself", () => {
     mount("/rules");
-    expect(screen.getByRole("link", { name: "Règles" })).toHaveClass("active");
-    expect(screen.getByRole("link", { name: "Tableau de bord" })).not.toHaveClass("active");
-    expect(screen.getByRole("link", { name: "Questions" })).not.toHaveClass("active");
+    expect(summary("Explorer")).toHaveClass("active");
+    expect(summary("Importer")).not.toHaveClass("active");
+    expect(screen.getByRole("menuitem", { name: "Règles" })).toHaveClass("active");
+    expect(screen.getByRole("menuitem", { name: "Questions" })).not.toHaveClass("active");
+    expect(screen.getByRole("link", { name: "Accueil" })).not.toHaveClass("active");
   });
 
-  it("activates the dashboard on the index route only", () => {
+  it("activates Accueil on the index route only", () => {
     mount("/");
-    expect(screen.getByRole("link", { name: "Tableau de bord" })).toHaveClass("active");
-    expect(screen.getByRole("link", { name: "Règles" })).not.toHaveClass("active");
+    expect(screen.getByRole("link", { name: "Accueil" })).toHaveClass("active");
+    expect(summary("Explorer")).not.toHaveClass("active");
     expect(document.querySelector("main.content")).toHaveTextContent("Dashboard page");
   });
 
-  it("navigates through the sidebar links", async () => {
+  it("opens a menu, navigates through it and closes it", async () => {
     const { user } = mount("/");
-    await user.click(screen.getByRole("link", { name: "Règles" }));
+    const details = summary("Explorer").closest("details")!;
+    expect(details).not.toHaveAttribute("open");
+    await user.click(summary("Explorer"));
+    expect(details).toHaveAttribute("open");
+    await user.click(screen.getByRole("menuitem", { name: "Règles" }));
     expect(document.querySelector("main.content")).toHaveTextContent("Rules page");
-    expect(screen.getByRole("link", { name: "Règles" })).toHaveClass("active");
-  });
-
-  it("collapses and expands the sidebar, exposing labels as tooltips when collapsed", async () => {
-    const { user } = mount("/");
-    const shell = document.querySelector(".app-shell")!;
-    const aside = document.querySelector("aside.sidebar")!;
-    expect(shell).not.toHaveClass("collapsed");
-    expect(screen.getByRole("link", { name: "Règles" })).not.toHaveAttribute("title");
-
-    await user.click(screen.getByRole("button", { name: "Réduire le menu" }));
-    expect(shell).toHaveClass("collapsed");
-    expect(aside).toHaveClass("collapsed");
-    expect(screen.queryByText("Réduire")).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Règles" })).toHaveAttribute("title", "Règles");
-
-    await user.click(screen.getByRole("button", { name: "Déployer le menu" }));
-    expect(shell).not.toHaveClass("collapsed");
-    expect(screen.getByText("Réduire")).toBeInTheDocument();
+    expect(details).not.toHaveAttribute("open");
+    expect(summary("Explorer")).toHaveClass("active");
   });
 });
 
@@ -117,7 +100,7 @@ describe("TopBar", () => {
     const { user } = mount("/rules");
     await user.type(screen.getByPlaceholderText(SEARCH), "late invoices & fees{Enter}");
     expect(screen.getByTestId("location")).toHaveTextContent("/queries?q=late%20invoices%20%26%20fees");
-    expect(screen.getByRole("link", { name: "Questions" })).toHaveClass("active");
+    expect(screen.getByRole("menuitem", { name: "Questions" })).toHaveClass("active");
   });
 
   it("ignores a blank search", async () => {
@@ -142,13 +125,14 @@ describe("TopBar", () => {
     const { user } = mount("/rules");
     const account = screen.getByRole("button", { name: "Compte" });
     expect(account).toHaveTextContent("AL");
-    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(screen.queryByRole("menu", { name: "" })).not.toBeInTheDocument();
     await user.click(account);
-    expect(screen.getByRole("menu")).toHaveTextContent("Ada Lovelace");
-    expect(screen.getByRole("menu")).toHaveTextContent("ada@example.com");
+    const menu = account.parentElement!.querySelector(".account-menu") as HTMLElement;
+    expect(menu).toHaveTextContent("Ada Lovelace");
+    expect(menu).toHaveTextContent("ada@example.com");
     // Escape closes, a second click reopens.
     await user.keyboard("{Escape}");
-    expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+    expect(account.parentElement!.querySelector(".account-menu")).toBeNull();
     await user.click(account);
     await user.click(screen.getByRole("menuitem", { name: "Se déconnecter" }));
     expect(await screen.findByTestId("location")).toHaveTextContent("/login");
