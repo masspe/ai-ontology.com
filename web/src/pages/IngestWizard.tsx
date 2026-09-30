@@ -221,8 +221,10 @@ export default function IngestWizard() {
     <div style={{ display: "grid", gap: 16, maxWidth: 1100 }}>
       <h1 style={{ margin: 0 }}>Importer un document</h1>
       <p style={{ color: "#475569", margin: 0 }}>
-        Le document est lu par le modèle de langage configuré, qui propose des fiches, des liens et des règles.
-        Vous vérifiez chaque proposition avant qu'elle n'entre dans vos données.
+        Un document en texte libre (PDF, Word, texte) n'a pas de colonnes : le modèle de langage configuré le lit et
+        propose des fiches, des liens et des règles, que vous vérifiez avant qu'ils n'entrent dans vos données. Vous
+        n'avez pas à choisir ce chemin : un document déposé dans Fichiers arrive ici de lui-même ; un fichier structuré
+        (Excel, CSV, JSONL) se charge directement, chaque ligne devenant une fiche.
       </p>
 
       {step === "upload" && (

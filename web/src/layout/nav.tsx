@@ -76,7 +76,7 @@ export const NAV_GROUPS: NavGroup[] = [
       },
       {
         to: "/ingest",
-        label: "Relire un document",
+        label: "Relecture d'un document",
         icon: NavIcon.upload,
         tour: "importer",
         guide: "Un modèle de langage lit un document et propose des fiches et des liens. Vous relisez, corrigez, puis ajoutez ce qui entre dans vos données.",
