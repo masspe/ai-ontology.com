@@ -320,7 +320,7 @@ export default function OntologyBuilder() {
     setApplyReport(null);
     const tail = failures.length ? ` · ${failures.length} en échec` : "";
     setInfo(
-      `${sourceLabel} : ${merged.concepts.length} fiche(s) et ${merged.relations.length} lien(s) proposés à partir de ${parts.length}/${files.length} fichier(s)${tail}. Vérifiez ci-dessous, puis cliquez sur Appliquer.`,
+      `${sourceLabel} : ${merged.concepts.length} fiche(s) et ${merged.relations.length} lien(s) proposés à partir de ${parts.length}/${files.length} fichier(s)${tail}. Vérifiez ci-dessous, puis cliquez sur Ajouter aux données.`,
     );
     if (failures.length) setError(failures.slice(0, 3).join(" | "));
   };
@@ -500,7 +500,7 @@ export default function OntologyBuilder() {
             onApply={applyIngestProposal}
             onCancel={cancelIngestProposal}
             applyDisabled={applyBusy}
-            applyLabel={applyBusy ? "Application…" : "Appliquer au graphe"}
+            applyLabel={applyBusy ? "Application…" : "Ajouter aux données"}
             cancelLabel="Abandonner"
           />
         </Card>

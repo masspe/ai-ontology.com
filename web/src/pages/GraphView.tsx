@@ -201,7 +201,7 @@ function Kpi({ label, value, deltaPct, deltaLabel, icon, tone, spark, sparkColor
         <div className="stat-value">{value}</div>
         {deltaPct != null && (
           <div className={`stat-delta ${cls}`}>
-            <span>{arrow} {Math.abs(deltaPct).toFixed(0)}%</span>
+            <span>{arrow} {Math.abs(deltaPct).toFixed(0)} %</span>
             <span className="muted">{deltaLabel ?? "vs le mois dernier"}</span>
           </div>
         )}

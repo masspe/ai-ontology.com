@@ -14,7 +14,7 @@ export function ConfirmProvider({ children }) {
       setState({
         opts: {
           title: opts?.title ?? "Confirmer",
-          message: opts?.message ?? "Are you sure?",
+          message: opts?.message ?? "Êtes-vous sûr ?",
           confirmLabel: opts?.confirmLabel ?? "Confirmer",
           cancelLabel: opts?.cancelLabel ?? "Annuler",
           danger: opts?.danger ?? false,

@@ -370,7 +370,7 @@ export default function Files() {
                 {allTypes.map((t) => <option key={t} value={t}>{t}</option>)}
               </select>
               <select className="lib-select" value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)}>
-                <option value="">Tous les états</option>
+                <option value="">Tous les statuts</option>
                 <option value="traité">Traité</option>
                 <option value="analyse en cours">Analyse en cours</option>
                 <option value="analysé">Analysé</option>
@@ -423,7 +423,7 @@ export default function Files() {
                   <th>Type</th>
                   <th>Source</th>
                   <th>Dernière mise à jour <span aria-hidden style={{ opacity: 0.5 }}>↓</span></th>
-                  <th>État</th>
+                  <th>Statut</th>
                   <th>Taille</th>
                   <th className="actions">Actions</th>
                 </tr>
@@ -439,7 +439,7 @@ export default function Files() {
                           <span className="file-icon" style={{ background: ic.bg, color: ic.fg }}>{ic.label}</span>
                           <div>
                             <div className="file-name">{f.name}</div>
-                            {f.concept_type && <div className="muted" style={{ fontSize: 11 }}>en {f.concept_type}</div>}
+                            {f.concept_type && <div className="muted" style={{ fontSize: 11 }}>type : {f.concept_type}</div>}
                           </div>
                         </div>
                       </td>

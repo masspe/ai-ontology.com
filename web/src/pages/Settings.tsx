@@ -194,7 +194,7 @@ function GeneralSettings({
               <div className="setting-row">
                 <div className="meta">
                   <strong>Top-K</strong>
-                  Nombre de concepts de départ récupérés par requête.
+                  Nombre de fiches de départ récupérés par requête.
                 </div>
                 <input
                   type="number"
@@ -301,7 +301,7 @@ function GeneralSettings({
             />
           </label>
           <div className="field">
-            <label>Jeton Bearer (optionnel)</label>
+            <label>Jeton Bearer (facultatif)</label>
             <KeyField
               label=""
               value={cfg.ontologyBearerToken}

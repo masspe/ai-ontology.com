@@ -162,7 +162,7 @@ describe("Rules page", () => {
     const table = libraryTable();
     // Status derived from properties.status, else strict → Active / Draft.
     expect(within(table).getByText("Active")).toHaveClass("badge-success");
-    expect(within(table).getByText("Revue")).toHaveClass("badge-accent");
+    expect(within(table).getByText("Vérifiée")).toHaveClass("badge-accent");
     expect(within(table).getByText("Brouillon")).toHaveClass("badge-warn");
     expect(within(table).getByText("Désactivée")).toHaveClass("badge-danger");
     // Scope = applies_to count or dash; description falls back to `when`.
@@ -224,7 +224,7 @@ describe("Rules page", () => {
     expect(within(details).getByText("Fiche #10")).toBeInTheDocument();
     expect(within(details).getByText("Fiche #11")).toBeInTheDocument();
     const code = details.querySelector(".rd-code") as HTMLElement;
-    expect(code).toHaveTextContent("QUAND contract.owner is null");
+    expect(code).toHaveTextContent("SI contract.owner is null");
     expect(code).toHaveTextContent("ALORS flag(contract)");
     // Rule Categories legend: one entry per type with its share.
     const legend = details.querySelector(".rd-cat-legend") as HTMLElement;
@@ -252,7 +252,7 @@ describe("Rules page", () => {
     expect(within(details).getByText("Oui")).toBeInTheDocument();
     // No applies_to, no when/then, no description.
     expect(within(details).getAllByText("—").length).toBeGreaterThanOrEqual(2);
-    expect(details.querySelector(".rd-code")).toHaveTextContent("QUAND (aucune condition)");
+    expect(details.querySelector(".rd-code")).toHaveTextContent("SI (aucune condition)");
     expect(details.querySelector(".rd-code")).toHaveTextContent("ALORS (aucune action)");
     expect(within(libraryTable()).getByText("Archive stale drafts").closest("tr")).toHaveClass("is-selected");
   });
@@ -347,7 +347,7 @@ describe("Rules page", () => {
     await user.selectOptions(typeSelect, "Inference");
     await user.type(within(form).getByLabelText("Nom"), "  New rule  ");
     await user.type(within(form).getByLabelText("Description"), "desc");
-    await user.type(within(form).getByLabelText("Quand"), "a");
+    await user.type(within(form).getByLabelText("Si"), "a");
     await user.type(within(form).getByLabelText("Alors"), "b");
     const applies = within(form).getByLabelText(/S'applique à/) as HTMLSelectElement;
     expect(within(applies).getAllByRole("option").map((o) => o.textContent)).toEqual([
@@ -428,7 +428,7 @@ describe("Rules page", () => {
     expect(typeSelect.value).toBe("Validation");
     expect(within(form).getByText("Le type ne peut pas être modifié.")).toBeInTheDocument();
     expect(within(form).getByLabelText("Nom")).toHaveValue("Contract needs owner");
-    expect(within(form).getByLabelText("Quand")).toHaveValue("contract.owner is null");
+    expect(within(form).getByLabelText("Si")).toHaveValue("contract.owner is null");
     expect(within(form).getByRole("checkbox")).toBeChecked();
     const applies = within(form).getByLabelText(/S'applique à/) as HTMLSelectElement;
     expect(Array.from(applies.selectedOptions).map((o) => o.value)).toEqual(["10", "11"]);
@@ -487,7 +487,7 @@ describe("Rules page", () => {
     expect(generate).toBeDisabled();
 
     await user.type(within(form).getByPlaceholderText("Décrivez la règle à créer…"), "  flag orphans ");
-    expect(within(form).getByText("Remplit Nom, Quand, Alors, Description, Stricte.")).toBeInTheDocument();
+    expect(within(form).getByText("Remplit Nom, Si, Alors, Description, Stricte.")).toBeInTheDocument();
     expect(generate).toBeEnabled();
 
     await user.click(generate);
@@ -497,7 +497,7 @@ describe("Rules page", () => {
     resolveGen({ name: "Generated rule", when: "gen.when", then: "gen.then", description: "gen description", strict: true });
     expect(await within(form).findByRole("button", { name: "Générer" })).toBeEnabled();
     expect(within(form).getByLabelText("Nom")).toHaveValue("Generated rule");
-    expect(within(form).getByLabelText("Quand")).toHaveValue("gen.when");
+    expect(within(form).getByLabelText("Si")).toHaveValue("gen.when");
     expect(within(form).getByLabelText("Alors")).toHaveValue("gen.then");
     expect(within(form).getByLabelText("Description")).toHaveValue("gen description");
     expect(within(form).getByRole("checkbox")).toBeChecked();

@@ -58,7 +58,7 @@ export default function StreamingAnswer({ defaultQuery = "" }: Props) {
       </div>
       <div className="row" style={{ marginBottom: 12 }}>
         <button className="btn-primary" onClick={run} disabled={streaming || !query.trim()}>
-          {streaming ? "Réponse en cours…" : "Demander"}
+          {streaming ? "Réponse en cours…" : "Poser la question"}
         </button>
         <span className="muted" style={{ fontSize: 12 }}>
           {retrieved ? `Réponse fondée sur ${plural(retrieved.concepts.length, "fiche")} et ${plural(retrieved.relations.length, "lien")}` : ""}
