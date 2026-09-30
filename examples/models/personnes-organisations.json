@@ -1,0 +1,58 @@
+{
+  "concept_types": {
+    "Personne": {
+      "name": "Personne",
+      "ns": "tiers",
+      "description": "une personne physique"
+    },
+    "Organisation": {
+      "name": "Organisation",
+      "ns": "tiers",
+      "description": "une société, une association, un service"
+    },
+    "Document": {
+      "name": "Document",
+      "ns": "documents",
+      "description": "un document : contrat, courrier, procès-verbal"
+    }
+  },
+  "relation_types": {
+    "membre_de": {
+      "name": "membre_de",
+      "domain": "Personne",
+      "range": "Organisation",
+      "cardinality": "ManyToMany",
+      "description": "la personne appartient à l'organisation"
+    },
+    "connait": {
+      "name": "connait",
+      "domain": "Personne",
+      "range": "Personne",
+      "cardinality": "ManyToMany",
+      "description": "les deux personnes sont en relation"
+    },
+    "partenaire_de": {
+      "name": "partenaire_de",
+      "domain": "Organisation",
+      "range": "Organisation",
+      "cardinality": "ManyToMany",
+      "description": "les organisations travaillent ensemble"
+    },
+    "mentionne": {
+      "name": "mentionne",
+      "domain": "Document",
+      "range": "Personne",
+      "cardinality": "ManyToMany",
+      "description": "le document cite la personne"
+    },
+    "emis_par": {
+      "name": "emis_par",
+      "domain": "Document",
+      "range": "Organisation",
+      "cardinality": "ManyToOne",
+      "description": "l'organisation a produit le document"
+    }
+  },
+  "rule_types": {},
+  "action_types": {}
+}

@@ -411,6 +411,13 @@ pub(crate) async fn apply(
                     let mut concept =
                         Concept::new(ConceptId(0), c.concept_type.clone(), c.name.clone())
                             .with_description(c.description.clone());
+                    // The document it came from: the sheet shows it (lot B.2).
+                    if let Some(src) = proposal.source.as_ref() {
+                        concept.properties.insert(
+                            "source_file".into(),
+                            ontology_graph::PropertyValue::Text(src.name.clone()),
+                        );
+                    }
                     // Stamp the detected language onto the concept so search
                     // and downstream filters can disambiguate by locale.
                     if let Some(lang) = proposal.language.as_ref() {

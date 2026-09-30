@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Mediasoft-Commercial
 // Copyright (C) 2026 Mediasoft & Cie S.A.
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { Link } from "react-router-dom";
+import { useEffect, useState, type ReactNode } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import Card from "../components/Card";
 import Onboarding from "../components/Onboarding";
 import Sparkline from "../components/Sparkline";
@@ -12,8 +12,8 @@ import {
   getQueries,
   getStats,
   getStatsHistory,
-  listConcepts,
-  type Concept,
+  listRules,
+  type Rule,
   type FileRecord,
   type Ontology,
   type SavedQuery,
@@ -178,84 +178,34 @@ function RichStat({ label, value, deltaPct, icon, tone, spark, sparkColor }: Ric
 // Larger line chart for "Ontology Growth"
 // ---------------------------------------------------------------------------
 
-interface ChartProps {
-  samples: { ts: number; value: number }[];
-}
-
-function GrowthChart({ samples }: ChartProps) {
-  if (samples.length === 0) {
-    return <div className="empty">No samples yet. The dashboard auto-refreshes every 15s.</div>;
+/** The draft of a review left in the ingest assistant (same key as the assistant). */
+function pendingReview(): { concepts: number; relations: number; name: string } | null {
+  try {
+    const raw = window.sessionStorage.getItem("ingest.draft.v1");
+    if (!raw) return null;
+    const d = JSON.parse(raw) as { proposal?: { concepts?: unknown[]; relations?: unknown[]; source?: { name?: string } } };
+    if (!d.proposal) return null;
+    return {
+      concepts: d.proposal.concepts?.length ?? 0,
+      relations: d.proposal.relations?.length ?? 0,
+      name: d.proposal.source?.name ?? "document",
+    };
+  } catch {
+    return null;
   }
-  const W = 600;
-  const H = 220;
-  const padL = 44;
-  const padR = 12;
-  const padT = 12;
-  const padB = 28;
-  const innerW = W - padL - padR;
-  const innerH = H - padT - padB;
-  const xs = samples.map((s) => s.ts);
-  const ys = samples.map((s) => s.value);
-  const xMin = Math.min(...xs);
-  const xMax = Math.max(...xs);
-  const yMin = 0;
-  const yMax = Math.max(1, Math.max(...ys));
-  const sx = (t: number) => padL + ((t - xMin) / Math.max(1, xMax - xMin)) * innerW;
-  const sy = (v: number) => padT + innerH - ((v - yMin) / (yMax - yMin)) * innerH;
-  const pts = samples.map((s) => `${sx(s.ts).toFixed(1)},${sy(s.value).toFixed(1)}`).join(" ");
-  const areaPts = `${padL},${padT + innerH} ${pts} ${padL + innerW},${padT + innerH}`;
-  const ticks = [0, 0.25, 0.5, 0.75, 1].map((p) => {
-    const v = yMin + (yMax - yMin) * (1 - p);
-    return { y: padT + innerH * p, v };
-  });
-  const xLabelIdx = samples.length <= 7
-    ? samples.map((_, i) => i)
-    : [0, Math.floor(samples.length / 4), Math.floor(samples.length / 2), Math.floor((3 * samples.length) / 4), samples.length - 1];
-  return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="growth-chart" preserveAspectRatio="none">
-      {ticks.map((t, i) => (
-        <g key={i}>
-          <line x1={padL} x2={padL + innerW} y1={t.y} y2={t.y} stroke="var(--border)" strokeDasharray="3 3" />
-          <text x={padL - 8} y={t.y + 4} fontSize="10" fill="var(--muted)" textAnchor="end">
-            {t.v >= 1000 ? `${(t.v / 1000).toFixed(1)}k` : Math.round(t.v)}
-          </text>
-        </g>
-      ))}
-      <polygon points={areaPts} fill="var(--accent-soft)" opacity={0.55} />
-      <polyline points={pts} fill="none" stroke="var(--accent)" strokeWidth={2} />
-      {samples.map((s, i) => (
-        <circle key={i} cx={sx(s.ts)} cy={sy(s.value)} r={2} fill="var(--accent)" />
-      ))}
-      {xLabelIdx.map((i) => {
-        const s = samples[i]!;
-        const d = new Date(s.ts * 1000);
-        const label = d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-        return (
-          <text key={i} x={sx(s.ts)} y={H - 8} fontSize="10" fill="var(--muted)" textAnchor="middle">
-            {label}
-          </text>
-        );
-      })}
-    </svg>
-  );
 }
 
-// ---------------------------------------------------------------------------
-// Decorative mini network preview
-// ---------------------------------------------------------------------------
-
-
-// ---------------------------------------------------------------------------
-// Dashboard page
-// ---------------------------------------------------------------------------
+const WEEK = 7 * 86_400;
 
 export default function Dashboard() {
+  const nav = useNavigate();
+  const [q, setQ] = useState("");
   const [stats, setStats] = useState<Stats | null>(null);
   const [history, setHistory] = useState<StatsHistory | null>(null);
   const [files, setFiles] = useState<FileRecord[]>([]);
   const [queries, setQueries] = useState<SavedQuery[]>([]);
   const [ontology, setOntology] = useState<Ontology | null>(null);
-  const [concepts, setConcepts] = useState<Concept[]>([]);
+  const [rules, setRules] = useState<Rule[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [refresh, setRefresh] = useState(0);
 
@@ -263,21 +213,21 @@ export default function Dashboard() {
     let cancelled = false;
     const tick = async () => {
       try {
-        const [s, h, f, q, o, c] = await Promise.all([
+        const [s, h, f, qs, o, r] = await Promise.all([
           getStats(),
           getStatsHistory(),
           getFiles(),
           getQueries().catch(() => ({ queries: [] as SavedQuery[] })),
           getOntology().catch(() => null),
-          listConcepts({ limit: 500 }).catch(() => ({ total: 0, concepts: [] as Concept[] })),
+          listRules().catch(() => [] as Rule[]),
         ]);
         if (cancelled) return;
         setStats(s);
         setHistory(h);
         setFiles(f.files);
-        setQueries(q.queries);
+        setQueries(qs.queries);
         setOntology(o);
-        setConcepts(c.concepts);
+        setRules(r);
         setError(null);
       } catch (e: unknown) {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e));
@@ -292,21 +242,6 @@ export default function Dashboard() {
   }, [refresh]);
 
   const samples = history?.samples ?? [];
-  const sparkConcepts = samples.map((s) => s.concepts);
-  const sparkRelations = samples.map((s) => s.relations);
-  const sparkConceptTypes = samples.map((s) => s.concept_types);
-  const sparkRelationTypes = samples.map((s) => s.relation_types);
-
-  const topTypes = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const c of concepts) counts.set(c.concept_type, (counts.get(c.concept_type) ?? 0) + 1);
-    return Array.from(counts.entries())
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 5);
-  }, [concepts]);
-  const topMax = topTypes.length > 0 ? topTypes[0]![1] : 1;
-
-  const conceptTypes = ontology ? Object.entries(ontology.concept_types).slice(0, 5) : [];
 
   // The first day (ROADMAP §3.9 lot A): an empty graph shows the three
   // steps instead of empty tiles; the dashboard returns with the data.
@@ -321,248 +256,138 @@ export default function Dashboard() {
     );
   }
 
+  const now = Date.now() / 1000;
+  const thisWeek = files.filter((f) => now - f.uploaded_at < WEEK);
+  const weekConcepts = thisWeek.reduce((n, f) => n + f.concepts, 0);
+  const weekRelations = thisWeek.reduce((n, f) => n + f.relations, 0);
+  const failed = files.filter((f) => f.status === "error" || f.status === "failed");
+  const review = pendingReview();
+  const strict = rules.filter((r) => r.strict);
+  const recentQueries = [...queries]
+    .sort((a, b) => (b.last_run_at ?? b.created_at) - (a.last_run_at ?? a.created_at))
+    .slice(0, 5);
+  const recentFiles = [...files].sort((a, b) => b.uploaded_at - a.uploaded_at).slice(0, 5);
+  const todo = (review ? 1 : 0) + failed.length;
+
   return (
     <>
       <div className="page-header">
         <div>
-          <h1 className="page-title">Dashboard</h1>
-          <p className="page-subtitle">Monitor your ontology projects, files, and graph activity.</p>
+          <h1 className="page-title">Accueil</h1>
+          <p className="page-subtitle">
+            {stats
+              ? `${fmtNum(stats.concepts)} fiches et ${fmtNum(stats.relations)} liens, ${fmtNum(stats.concept_types)} types de fiches.`
+              : "En attente du serveur."}
+          </p>
         </div>
       </div>
 
       {error && <div className="error-banner">{error}</div>}
 
-      {/* Row 1 — stat tiles */}
+      <form
+        className="home-search"
+        data-tour="home-search"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (q.trim()) nav(`/queries?q=${encodeURIComponent(q.trim())}`);
+        }}
+      >
+        <input
+          aria-label="Question"
+          placeholder="Posez une question à vos données : « Quels contrats arrivent à échéance ce mois-ci ? »"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+        />
+        <button className="btn-primary" type="submit" disabled={!q.trim()}>
+          Demander
+        </button>
+      </form>
+
       <div className="dash-row dash-row-stats">
-        <RichStat
-          label="Concept Types"
-          value={stats?.concept_types ?? 0}
-          deltaPct={stats?.deltas.concept_types_pct}
-          icon={Icon.layers}
-          tone="blue"
-          spark={sparkConceptTypes}
-          sparkColor="#2563eb"
-        />
-        <RichStat
-          label="Entities"
-          value={stats?.concepts ?? 0}
-          deltaPct={stats?.deltas.concepts_pct}
-          icon={Icon.users}
-          tone="violet"
-          spark={sparkConcepts}
-          sparkColor="#7c3aed"
-        />
-        <RichStat
-          label="Relations"
-          value={stats?.relations ?? 0}
-          deltaPct={stats?.deltas.relations_pct}
-          icon={Icon.share}
-          tone="amber"
-          spark={sparkRelations}
-          sparkColor="#d97706"
-        />
-        <RichStat
-          label="Relation Types"
-          value={stats?.relation_types ?? 0}
-          deltaPct={stats?.deltas.relation_types_pct}
-          icon={Icon.shield}
-          tone="green"
-          spark={sparkRelationTypes}
-          sparkColor="#16a34a"
-        />
+        <RichStat label="Fiches" value={stats?.concepts ?? 0} deltaPct={stats?.deltas.concepts_pct} icon={Icon.users} tone="violet" spark={samples.map((s) => s.concepts)} sparkColor="#7c3aed" />
+        <RichStat label="Liens" value={stats?.relations ?? 0} deltaPct={stats?.deltas.relations_pct} icon={Icon.share} tone="amber" spark={samples.map((s) => s.relations)} sparkColor="#d97706" />
+        <RichStat label="Types de fiches" value={stats?.concept_types ?? 0} deltaPct={stats?.deltas.concept_types_pct} icon={Icon.layers} tone="blue" spark={samples.map((s) => s.concept_types)} sparkColor="#2563eb" />
+        <RichStat label="Règles" value={stats?.rules ?? 0} icon={Icon.shield} tone="green" spark={[]} sparkColor="#16a34a" />
       </div>
 
-      {/* Row 2 — growth chart + network preview */}
-      <div className="dash-row dash-row-chart">
-        <Card title="Ontology Growth (Entities)">
-          <GrowthChart samples={samples.map((s) => ({ ts: s.ts, value: s.concepts }))} />
-          <div className="chart-legend">
-            <span><i style={{ background: "var(--accent)" }} /> Entities Added</span>
-            <span><i style={{ background: "#94a3b8" }} /> Trend</span>
-          </div>
-        </Card>
-        <Card
-          title="Recent Concept Types"
-          actions={<Link to="/builder" className="btn-ghost-link">View All</Link>}
-        >
-          {conceptTypes.length === 0 ? (
-            <div className="empty">
-              No ontology defined yet. <Link to="/builder">Define the model</Link>
-            </div>
+      <div className="dash-row home-row">
+        <Card title={`À faire (${todo})`} className="home-todo">
+          {todo === 0 ? (
+            <p className="muted">Rien en attente. Déposez un document ou posez une question.</p>
           ) : (
-            <table className="table compact-table">
-              <thead>
-                <tr>
-                  <th>Name</th>
-                  <th>Parent</th>
-                  <th>Properties</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                {conceptTypes.map(([name, def]) => (
-                  <tr key={name}>
-                    <td><strong>{name}</strong></td>
-                    <td className="muted">{def.parent ?? "—"}</td>
-                    <td className="muted">{def.properties ? Object.keys(def.properties).length : 0}</td>
-                    <td><span className="badge badge-success">Active</span></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </Card>
-      </div>
-
-      {/* Row 3 — ingestion + quick actions */}
-      <div className="dash-row dash-row-three">
-        <Card
-          title="Files / Ingestion Status"
-          actions={<Link to="/files" className="btn-ghost-link">View All</Link>}
-        >
-          {files.length === 0 ? (
-            <div className="empty">No files uploaded yet.</div>
-          ) : (
-            <ul className="file-list">
-              {files.slice(0, 5).map((f) => {
-                const st = ingestStatus(f);
-                return (
-                  <li key={f.id} className="file-row">
-                    <div className={fileKindClass(f.kind)}>{f.kind.toUpperCase().slice(0, 4)}</div>
-                    <div className="file-meta">
-                      <div className="file-name">{f.name}</div>
-                      <div className="muted file-sub">{fmtBytes(f.size)} · {f.kind}</div>
-                    </div>
-                    <span className={`badge ${st.cls}`}>{st.label}</span>
-                    <span className="muted file-time">{fmtAgo(f.uploaded_at)}</span>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-          <Link to="/files" className="dropzone-mini">
-            <span className="muted">Drag &amp; drop files anywhere to upload</span>
-            <span className="upload-link">{Icon.upload} Upload Files</span>
-          </Link>
-        </Card>
-
-        <div className="dash-stack">
-          <Card title="Quick Actions">
-            <div className="quick-actions">
-              <Link to="/builder" className="quick-action qa-blue">
-                <div className="qa-icon">{Icon.plus}</div>
-                <div>
-                  <div className="qa-title">Create Ontology</div>
-                  <div className="qa-sub muted">Start a new ontology</div>
-                </div>
-              </Link>
-              <Link to="/files" className="quick-action qa-green">
-                <div className="qa-icon">{Icon.upload}</div>
-                <div>
-                  <div className="qa-title">Upload Files</div>
-                  <div className="qa-sub muted">Import and process data</div>
-                </div>
-              </Link>
-              <Link to="/queries" className="quick-action qa-violet">
-                <div className="qa-icon">{Icon.search}</div>
-                <div>
-                  <div className="qa-title">Run Query</div>
-                  <div className="qa-sub muted">Search your graph</div>
-                </div>
-              </Link>
-              <Link to="/graph" className="quick-action qa-amber">
-                <div className="qa-icon">{Icon.graph}</div>
-                <div>
-                  <div className="qa-title">Open Graph</div>
-                  <div className="qa-sub muted">Explore relationships</div>
-                </div>
-              </Link>
-            </div>
-          </Card>
-
-          <Card
-            title="Recent Queries"
-            actions={<Link to="/queries" className="btn-ghost-link">View All</Link>}
-          >
-            {queries.length === 0 ? (
-              <div className="empty">No saved queries yet.</div>
-            ) : (
-              <ul className="query-list">
-                {queries.slice(0, 5).map((q) => (
-                  <li key={q.id}>
-                    <span className="query-dot" />
-                    <span className="query-text" title={q.query}>{q.name}</span>
-                    <span className="muted query-time">
-                      {q.last_run_at ? fmtAgo(q.last_run_at) : "—"}
-                    </span>
-                    <span className="query-check">{Icon.check}</span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </Card>
-        </div>
-      </div>
-
-      {/* Row 4 — team activity + top entity types + insights */}
-      <div className="dash-row dash-row-three">
-        <Card title="Team Activity" actions={<Link to="/files" className="btn-ghost-link">View All</Link>}>
-          {files.length === 0 ? (
-            <div className="empty">No activity yet.</div>
-          ) : (
-            <ul className="activity-list">
-              {files.slice(0, 4).map((f) => (
-                <li key={f.id} className="activity-item">
-                  <div className="activity-avatar">{(f.name[0] ?? "?").toUpperCase()}</div>
-                  <div className="activity-body">
-                    <div className="activity-text">
-                      <strong>System</strong> ingested <em>{f.name}</em>
-                    </div>
-                    <div className="muted activity-time">{fmtAgo(f.uploaded_at)}</div>
-                  </div>
+            <ul className="sheet-list">
+              {review && (
+                <li>
+                  <Link to="/ingest">
+                    Relecture en cours : {review.name}
+                  </Link>{" "}
+                  <span className="muted">
+                    {review.concepts} fiche(s) et {review.relations} lien(s) proposés, à vérifier puis ajouter.
+                  </span>
+                </li>
+              )}
+              {failed.map((f) => (
+                <li key={f.id}>
+                  <Link to="/files">Import en échec : {f.name}</Link>
                 </li>
               ))}
             </ul>
           )}
         </Card>
 
-        <Card title="Top Entity Types" subtitle={`Across ${fmtNum(concepts.length)} entities`}>
-          {topTypes.length === 0 ? (
-            <div className="empty">No entities yet.</div>
+        <Card title="Cette semaine" actions={<Link to="/files" className="btn-ghost-link">Déposer des fichiers</Link>}>
+          {thisWeek.length === 0 ? (
+            <p className="muted">Aucun document importé ces 7 derniers jours.</p>
           ) : (
-            <ul className="bar-list">
-              {topTypes.map(([name, count]) => (
-                <li key={name} className="bar-row">
-                  <span className="bar-label">{name}</span>
-                  <div className="bar-track">
-                    <div
-                      className="bar-fill"
-                      style={{ width: `${Math.max(4, (count / topMax) * 100)}%` }}
-                    />
-                  </div>
-                  <span className="bar-value">{fmtNum(count)}</span>
+            <p>
+              <strong>{thisWeek.length}</strong> document(s) importé(s) : <strong>{fmtNum(weekConcepts)}</strong> fiche(s) et{" "}
+              <strong>{fmtNum(weekRelations)}</strong> lien(s) ajoutés.
+            </p>
+          )}
+          <ul className="sheet-list">
+            {recentFiles.map((f) => {
+              const st = ingestStatus(f);
+              return (
+                <li key={f.id}>
+                  <span className={`file-kind ${fileKindClass(f.kind)}`}>{f.kind}</span> {f.name}{" "}
+                  <span className="muted">
+                    {fmtBytes(f.size)}, {fmtAgo(f.uploaded_at)}
+                  </span>{" "}
+                  <span className={`badge ${st.cls}`}>{st.label}</span>
+                </li>
+              );
+            })}
+          </ul>
+        </Card>
+      </div>
+
+      <div className="dash-row home-row">
+        <Card title="Dernières questions" actions={<Link to="/queries" className="btn-ghost-link">Toutes</Link>}>
+          {recentQueries.length === 0 ? (
+            <p className="muted">Aucune question enregistrée. La première se pose ci-dessus.</p>
+          ) : (
+            <ul className="sheet-list">
+              {recentQueries.map((sq) => (
+                <li key={sq.id}>
+                  <Link to={`/queries?q=${encodeURIComponent(sq.query)}`}>{sq.name}</Link>{" "}
+                  <span className="muted">{fmtAgo(sq.last_run_at ?? sq.created_at)}</span>
                 </li>
               ))}
             </ul>
           )}
         </Card>
 
-        <Card title="Insights">
-          <div className="insights-card">
-            <div className="insights-icon">{Icon.spark}</div>
-            <div>
-              <div className="insights-title">
-                {stats && stats.deltas.concepts_pct > 0
-                  ? `Entity growth is up ${stats.deltas.concepts_pct.toFixed(0)}%`
-                  : "Graph activity overview"}
-              </div>
-              <div className="muted insights-body">
-                {stats
-                  ? `You have ${fmtNum(stats.concepts)} entities across ${fmtNum(stats.concept_types)} concept types and ${fmtNum(stats.relations)} relations.`
-                  : "Awaiting stats from the server."}
-              </div>
-            </div>
-          </div>
+        <Card title="Règles" actions={<Link to="/rules" className="btn-ghost-link">Gérer</Link>}>
+          {rules.length === 0 ? (
+            <p className="muted">
+              Aucune règle. Une règle dit ce qui doit être vrai (« toute facture est liée à un contrat ») et signale les exceptions.
+            </p>
+          ) : (
+            <p>
+              <strong>{rules.length}</strong> règle(s), dont <strong>{strict.length}</strong> stricte(s) ;{" "}
+              {rules.filter((r) => r.applies_to.length === 0).length} générale(s).
+            </p>
+          )}
         </Card>
       </div>
     </>

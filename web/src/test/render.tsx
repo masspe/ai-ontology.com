@@ -22,6 +22,8 @@ import { ConfirmProvider } from "../components/ConfirmDialog.jsx";
 export interface RenderPageOptions extends Omit<RenderOptions, "wrapper"> {
   /** Initial location, e.g. `"/queries?q=hello"`. Default `"/"`. */
   route?: string;
+  /** History state of the initial location (what `navigate(to, { state })` carries). */
+  state?: unknown;
   /** Route pattern the element is mounted on. Default `"*"` (matches any). */
   path?: string;
   /** Extra routes to register, e.g. a target for `navigate()` assertions. */
@@ -34,11 +36,11 @@ export interface RenderedPage extends RenderResult {
 
 /** Mount `ui` inside the providers and a memory router. */
 export function renderPage(ui: ReactElement, options: RenderPageOptions = {}): RenderedPage {
-  const { route = "/", path = "*", extraRoutes, ...rest } = options;
+  const { route = "/", path = "*", extraRoutes, state, ...rest } = options;
   const user = userEvent.setup();
   // A wrapper rather than an inline tree, so `rerender(ui)` keeps it.
   const wrapper = ({ children }: { children: ReactNode }) => (
-    <MemoryRouter initialEntries={[route]}>
+    <MemoryRouter initialEntries={[state === undefined ? route : { pathname: route.split("?")[0], search: route.includes("?") ? route.slice(route.indexOf("?")) : "", state }]}>
       <ToastProvider>
         <ConfirmProvider>
           <Routes>

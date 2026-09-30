@@ -219,7 +219,8 @@ Ordre d'exécution retenu : passe 1 = 3.8.1 + 3.8.2 (image, compose, web
 servie par le binaire, test de bout en bout) — **livrée 2026-09-29**
 (`276d22e`) ; passe 2 = lot A de l'interface (§3.9) — **livrée
 2026-09-29** ; puis, **ordre révisé le 2026-09-30 avec le propriétaire** :
-3.8.4 sauvegarde, lot B (première tranche), 3.8.5 mise à jour, lot B
+3.8.4 sauvegarde (**livrée 2026-09-30**), lot B (première tranche,
+**livrée 2026-09-30**), 3.8.5 mise à jour, lot B
 (seconde tranche), 3.8.6 clés d'API et audit, et **3.8.3b OAuth reporté**
 (avec le retrait d'`auth-server/` et la dette web) jusqu'à la demande d'un
 client : le login intégré couvre le besoin, OAuth n'apporte que la
@@ -415,6 +416,34 @@ par ce que les premiers utilisateurs font réellement) :
    voisinage à deux pas, filtre par type (le parcours existe côté serveur).
 7. Évolution du modèle sans peur : ajouter un type ou une relation dit ce
    que ça touche (« 3 400 fiches concernées, rien à migrer »).
+
+**Livraison du lot B, tranche 1 (2026-09-30, branche `feat/ui-lot-b1`)** :
+point 4 — un document (texte, Word, PDF) déposé sur Fichiers part dans
+l'assistant d'import, qui l'analyse aussitôt et dit ce qu'il a trouvé
+(« 1 Contract, 1 Clause et 1 lien(s) trouvés dans contrat.pdf. Vérifiez,
+corrigez si besoin, puis ajoutez. ») ; les fichiers structurés (CSV, Excel,
+JSONL) se chargent toujours directement ; les fiches issues d'une relecture
+portent le document d'origine (`source_file`). Point 2 — la fiche
+(`/concepts/:id`, `pages/ConceptSheet.tsx`) : nom et description corrigés
+sur place, liens dans les deux sens avec renvoi vers chaque fiche voisine,
+informations structurées, documents d'origine, règles (générales ou
+ciblées) et actions qui la concernent ; ouverte depuis l'inspecteur du
+graphe. Point 3 — l'accueil (`pages/Dashboard.tsx`) : question en tête de
+page, tuiles, « À faire » (relecture en cours, imports en échec), « Cette
+semaine » (documents importés, fiches et liens ajoutés), dernières
+questions, règles ; les courbes et l'aperçu décoratif ont disparu. Reports
+du lot A — modèles prêts à l'emploi au premier jour (`examples/models` :
+chantiers et sous-traitants, contrats et factures, personnes et
+organisations) ; la traduction du contenu des pages reste partielle
+(accueil, fiche, assistant d'import et premiers pas en français ; Fichiers,
+Fiches, Règles, Actions, Graphe, Modèle de données et Paramètres encore en
+anglais). Couverture web 99,4 % lignes. **Reste pour la tranche 2** :
+points 5, 6 et 7 ; « exceptions signalées par les règles » sur l'accueil
+attend un moteur d'évaluation des règles côté serveur (aucun aujourd'hui :
+l'accueil compte les règles, il ne les évalue pas) ; navigation réduite à
+quatre entrées (Accueil, Importer, Explorer, Réglages) proposée par le
+propriétaire le 2026-09-30 à la place du menu latéral, à faire une fois la
+fiche et l'accueil validés à l'usage ; traduction des pages restantes.
 
 **Dette technique** (avec 3.8.3, inchangé) : migration `react-router` 7
 (deux vulnérabilités npm modérées) ; modules d'authentification `.jsx` en

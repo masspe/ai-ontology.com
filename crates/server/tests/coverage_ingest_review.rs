@@ -116,7 +116,10 @@ async fn analyze_form_fields_select_the_language_and_the_provider() {
     assert_eq!(report["created"], 1, "{report}");
     let id = graph.find_by_name("Topic", "Acme").unwrap();
     let c = graph.get_concept(id).unwrap();
-    assert_eq!(serde_json::to_value(&c.properties).unwrap()["lang"], "fr");
+    let props = serde_json::to_value(&c.properties).unwrap();
+    assert_eq!(props["lang"], "fr");
+    // The document it came from, for the sheet (lot B.2).
+    assert_eq!(props["source_file"], proposal["source"]["name"]);
 
     // A blank hint falls back to detection (short text: none).
     let (st, proposal) = analyze(&app, &[("language_hint", "  ")], ("n.txt", b"Acme.\n")).await;

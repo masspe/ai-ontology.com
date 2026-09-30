@@ -17,6 +17,7 @@
 // `ingest.draft`.
 
 import { useEffect, useRef, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import Card from "../components/Card";
 // @ts-expect-error JSX module
 import { useToast } from "../components/Toast.jsx";
@@ -121,6 +122,25 @@ export default function IngestWizard() {
     }
   }, []);
 
+  // A document dropped on the Files page arrives here and is analysed at
+  // once: the review is proposed, not requested.
+  const nav = useNavigate();
+  const handed = (useLocation().state as { file?: File } | null)?.file;
+  const consumed = useRef(false);
+  useEffect(() => {
+    if (!handed || consumed.current) return;
+    consumed.current = true;
+    // Consumed: Back or a reload must not analyse it a second time.
+    nav(".", { replace: true, state: null });
+    if (loadDraft()) {
+      toast.info(`Relecture en cours : terminez-la ou annulez-la avant d'importer ${handed.name}`);
+      return;
+    }
+    setFile(handed);
+    void onAnalyze(handed);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [handed]);
+
   // Release tesseract.js worker on unmount.
   useEffect(() => () => void terminateOcrWorker(), []);
 
@@ -131,15 +151,15 @@ export default function IngestWizard() {
     }
   }, [proposal, decisions, step]);
 
-  async function onAnalyze() {
-    if (!file) {
-      toast.info("Pick a document first");
+  async function onAnalyze(picked: File | null = file) {
+    if (!picked) {
+      toast.info("Choisissez d'abord un document");
       return;
     }
     setStep("analyzing");
     setError(null);
     try {
-      const prepared = await prepareForIngest(file, {
+      const prepared = await prepareForIngest(picked, {
         onProgress: (p) => {
           setError(null);
           toast.info(p.status);
@@ -199,10 +219,10 @@ export default function IngestWizard() {
 
   return (
     <div style={{ display: "grid", gap: 16, maxWidth: 1100 }}>
-      <h1 style={{ margin: 0 }}>LLM-assisted ingest</h1>
+      <h1 style={{ margin: 0 }}>Importer un document</h1>
       <p style={{ color: "#475569", margin: 0 }}>
-        Upload a document and let the configured LLM draft concepts, relations,
-        rules and actions. Review every suggestion before it touches the graph.
+        Le document est lu par le modèle de langage configuré, qui propose des fiches, des liens et des règles.
+        Vous vérifiez chaque proposition avant qu'elle n'entre dans vos données.
       </p>
 
       {step === "upload" && (
@@ -219,16 +239,21 @@ export default function IngestWizard() {
           onModel={setModelName}
           languageHint={languageHint}
           onLanguageHint={setLanguageHint}
-          onAnalyze={onAnalyze}
+          onAnalyze={() => void onAnalyze()}
         />
       )}
 
       {step === "analyzing" && (
         <Card>
-          <p>Calling the LLM and detecting language… this can take a few seconds.</p>
+          <p>Lecture du document{file ? ` ${file.name}` : ""}… quelques secondes.</p>
         </Card>
       )}
 
+      {step === "review" && proposal && (
+        <p className="ingest-summary" data-testid="ingest-summary">
+          {summary(proposal)} Vérifiez, corrigez si besoin, puis ajoutez.
+        </p>
+      )}
       {step === "review" && proposal && (
         <ReviewPanel
           proposal={proposal}
@@ -282,15 +307,25 @@ export default function IngestWizard() {
 
       {step === "error" && (
         <Card>
-          <h2 style={{ marginTop: 0, color: "#b91c1c" }}>Something went wrong</h2>
+          <h2 style={{ marginTop: 0, color: "#b91c1c" }}>Un problème est survenu</h2>
           <pre style={{ whiteSpace: "pre-wrap", color: "#475569" }}>{error}</pre>
           <button onClick={reset} style={{ marginTop: 8 }}>
-            Start over
+            Recommencer
           </button>
         </Card>
       )}
     </div>
   );
+}
+
+/** « 12 personnes, 4 organisations et 9 liens trouvés dans contrat.pdf. » */
+export function summary(p: OntologyProposal): string {
+  const byType = new Map<string, number>();
+  for (const c of p.concepts) byType.set(c.concept_type, (byType.get(c.concept_type) ?? 0) + 1);
+  const parts = [...byType.entries()].sort((a, b) => b[1] - a[1]).map(([t, n]) => `${n} ${t}`);
+  const found = parts.length === 0 ? "aucune fiche" : parts.join(", ");
+  const where = p.source?.name ? ` dans ${p.source.name}` : "";
+  return `${found} et ${p.relations.length} lien(s) trouvés${where}.`;
 }
 
 // ---------- Upload step ----------
@@ -371,7 +406,7 @@ function UploadStep(props: {
               cursor: props.file ? "pointer" : "not-allowed",
             }}
           >
-            Analyze document
+            Analyser le document
           </button>
         </div>
       </div>
