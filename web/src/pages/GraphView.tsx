@@ -711,7 +711,7 @@ export default function GraphView() {
             )}
             {/* Only direct links between the chosen types are drawn: say so
                 when that leaves none, and name the types in the middle. */}
-            {nodeTypes.length > 0 && filteredSubgraph && filteredSubgraph.concepts.length >= 2 && filteredSubgraph.relations.length === 0 && (
+            {nodeTypes.length > 0 && relTypes.length === 0 && !search.trim() && filteredSubgraph && filteredSubgraph.concepts.length >= 2 && filteredSubgraph.relations.length === 0 && (
               <div className="gv-canvas-note" data-testid="no-direct-link" role="status">
                 Aucun lien direct entre les types choisis. Ajoutez un type intermédiaire
                 {intermediates.length > 0 ? ` (par exemple : ${intermediates.join(", ")})` : ""} pour voir les liens

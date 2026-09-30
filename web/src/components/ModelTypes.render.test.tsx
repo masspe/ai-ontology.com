@@ -160,6 +160,25 @@ describe("ModelTypes", () => {
     expect(within(row("Fournisseur")).getByRole("button", { name: "Supprimer" })).toBeEnabled();
   });
 
+  it("blocks deleting a concept type that a rule type or an action type targets", async () => {
+    renderPage(
+      <ModelTypes
+        ontology={{
+          ...ontology,
+          rule_types: { controle: { name: "controle", applies_to: ["Note"] } },
+          action_types: { relancer: { name: "relancer", subject: "Fournisseur", object: null } },
+        }}
+        onChanged={onChanged}
+      />,
+    );
+    await waitFor(() => expect(screen.queryByText("…")).toBeNull());
+    const note = within(row("Note")).getByRole("button", { name: "Supprimer" });
+    expect(note).toBeDisabled();
+    expect(note.getAttribute("title")).toContain("visé par le(s) type(s) de règle : controle");
+    const fournisseur = within(row("Fournisseur")).getByRole("button", { name: "Supprimer" });
+    expect(fournisseur.getAttribute("title")).toContain("visé par le(s) type(s) d'action : relancer");
+  });
+
   it("deletes a concept type after confirmation, and not when cancelled", async () => {
     const { user } = await loaded();
     await user.click(within(row("Note")).getByRole("button", { name: "Supprimer" }));

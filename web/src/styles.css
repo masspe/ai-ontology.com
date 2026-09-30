@@ -969,10 +969,6 @@ label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px
 .gv-fb-depth .gv-filter-label { margin: 0; }
 .gv-fb-depth .gv-slider { width: 110px; }
 .gv-fb-depth .gv-depth-value { white-space: nowrap; }
-@media (max-width: 700px) {
-  .gv-filterbar > * { flex: 1 1 100%; max-width: none; }
-  .gv-canvas { height: 70vh; min-height: 380px; }
-}
 
 .gv-canvas-note {
   position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
@@ -2067,3 +2063,9 @@ label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px
 .sheet-edit { display: grid; gap: 8px; max-width: 640px; }
 .sheet-edit input, .sheet-edit textarea { font: inherit; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; }
 .ingest-summary { font-size: 16px; margin: 0; }
+
+/* After the base .gv-canvas rule, so a phone gets the shorter canvas. */
+@media (max-width: 700px) {
+  .gv-filterbar > * { flex: 1 1 100%; max-width: none; }
+  .gv-canvas { height: 70vh; min-height: 380px; }
+}
