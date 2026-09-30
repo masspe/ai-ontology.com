@@ -566,3 +566,29 @@ describe("GraphView page", () => {
     vi.useRealTimers();
   });
 });
+
+describe("GraphView — opened on a sheet", () => {
+  it("seeds the graph with ?focus, selects the node and focuses it", async () => {
+    const { user } = await mount("/graph?focus=2");
+    expect(mocked.getSubgraph).toHaveBeenCalledWith(expect.objectContaining({ seed_concept_ids: [2], seed_query: undefined }));
+    await waitFor(() => expect(handle.focusNode).toHaveBeenCalledWith("2"));
+    expect(screen.getByRole("link", { name: "Ouvrir la fiche" })).toHaveAttribute("href", "/concepts/2");
+    // A later reload (the depth slider) leaves the selection alone.
+    handle.focusNode.mockClear();
+    await user.click(screen.getByRole("button", { name: "node 1" }));
+    expect(screen.getByRole("link", { name: "Ouvrir la fiche" })).toHaveAttribute("href", "/concepts/1");
+  });
+
+  it("ignores a focus that is not an id or not in the subgraph", async () => {
+    await mount("/graph?focus=abc");
+    expect(mocked.getSubgraph).toHaveBeenCalledWith(expect.objectContaining({ seed_concept_ids: undefined }));
+    expect(handle.focusNode).not.toHaveBeenCalled();
+  });
+
+  it("ignores a focus that is not in the subgraph", async () => {
+    await mount("/graph?focus=999");
+    expect(mocked.getSubgraph).toHaveBeenCalledWith(expect.objectContaining({ seed_concept_ids: [999] }));
+    expect(handle.focusNode).not.toHaveBeenCalled();
+    expect(screen.queryByRole("link", { name: "Ouvrir la fiche" })).toBeNull();
+  });
+});

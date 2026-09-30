@@ -5,6 +5,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import Card from "../components/Card";
 import Onboarding from "../components/Onboarding";
+import { pinnedIds } from "../lib/pins";
 import Sparkline from "../components/Sparkline";
 import {
   getFiles,
@@ -263,9 +264,12 @@ export default function Dashboard() {
   const failed = files.filter((f) => f.status === "error" || f.status === "failed");
   const review = pendingReview();
   const strict = rules.filter((r) => r.strict);
-  const recentQueries = [...queries]
+  const pins = pinnedIds();
+  const pinnedQueries = queries.filter((sq) => pins.includes(sq.id));
+  const recentQueries = queries
+    .filter((sq) => !pins.includes(sq.id))
     .sort((a, b) => (b.last_run_at ?? b.created_at) - (a.last_run_at ?? a.created_at))
-    .slice(0, 5);
+    .slice(0, Math.max(0, 5 - pinnedQueries.length));
   const recentFiles = [...files].sort((a, b) => b.uploaded_at - a.uploaded_at).slice(0, 5);
   const todo = (review ? 1 : 0) + failed.length;
 
@@ -363,10 +367,17 @@ export default function Dashboard() {
 
       <div className="dash-row home-row">
         <Card title="Dernières questions" actions={<Link to="/queries" className="btn-ghost-link">Toutes</Link>}>
-          {recentQueries.length === 0 ? (
+          {pinnedQueries.length + recentQueries.length === 0 ? (
             <p className="muted">Aucune question enregistrée. La première se pose ci-dessus.</p>
           ) : (
             <ul className="sheet-list">
+              {pinnedQueries.map((sq) => (
+                <li key={`p${sq.id}`}>
+                  <span aria-label="Épinglée" title="Épinglée">★</span>{" "}
+                  <Link to={`/queries?run=${sq.id}`}>{sq.name}</Link>{" "}
+                  <span className="muted">rejouer</span>
+                </li>
+              ))}
               {recentQueries.map((sq) => (
                 <li key={sq.id}>
                   <Link to={`/queries?q=${encodeURIComponent(sq.query)}`}>{sq.name}</Link>{" "}

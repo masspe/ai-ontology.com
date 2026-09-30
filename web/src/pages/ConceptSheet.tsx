@@ -169,7 +169,7 @@ export default function ConceptSheet() {
             <button className="btn-outline" onClick={() => setEditing(true)}>
               Corriger
             </button>
-            <Link className="btn-outline" to="/graph">
+            <Link className="btn-outline" to={`/graph?focus=${concept.id}`}>
               Voir dans le graphe
             </Link>
           </div>
