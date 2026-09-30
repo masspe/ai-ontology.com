@@ -354,7 +354,7 @@ describe("GraphView page", () => {
   it("inspects a concept: description, connection counts and its own typed properties", async () => {
     const { user } = await mount();
     await user.click(screen.getByRole("button", { name: "node 1" }));
-    expect(screen.getByText("ex:Alice")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Ouvrir la fiche" })).toHaveAttribute("href", "/concepts/1");
     expect(screen.getByText("A person")).toBeInTheDocument();
     const overview = document.querySelector(".gv-overview")!;
     expect(overview).toHaveTextContent("Node TypePerson");
@@ -402,9 +402,9 @@ describe("GraphView page", () => {
   it("hides the inspector content when the selection is filtered out", async () => {
     const { user } = await mount();
     await user.click(screen.getByRole("button", { name: "node 3" }));
-    expect(screen.getByText("ex:Geneva")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Ouvrir la fiche" })).toHaveAttribute("href", "/concepts/3");
     await user.selectOptions(screen.getAllByRole("combobox")[0], "Person");
-    expect(screen.queryByText("ex:Geneva")).toBeNull();
+    expect(screen.queryByRole("link", { name: "Ouvrir la fiche" })).toBeNull();
     expect(screen.getByText(/Click a node in the graph/)).toBeInTheDocument();
   });
 
@@ -467,13 +467,13 @@ describe("GraphView page", () => {
     expect(a2.querySelector("strong")).toBeNull();
 
     await user.click(screen.getByRole("button", { name: "node 2" }));
-    expect(screen.getByText("ex:ACME")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Ouvrir la fiche" })).toHaveAttribute("href", "/concepts/2");
     expect(screen.queryByText("A1")).toBeNull();
     // The Inspector tab itself can be chosen explicitly.
     await user.click(screen.getByRole("button", { name: /^Rules/ }));
-    expect(screen.queryByText("ex:ACME")).toBeNull();
+    expect(screen.queryByRole("link", { name: "Ouvrir la fiche" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "Inspector" }));
-    expect(screen.getByText("ex:ACME")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Ouvrir la fiche" })).toHaveAttribute("href", "/concepts/2");
   });
 
   it("shows the empty rules / actions states when the ontology declares none", async () => {

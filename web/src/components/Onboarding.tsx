@@ -10,6 +10,7 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { loadFinanceExample } from "../lib/example";
+import { MODELS, loadModel } from "../lib/models";
 
 interface Props {
   /** The schema has at least one concept type. */
@@ -23,6 +24,19 @@ interface Props {
 export default function Onboarding({ hasModel, hasData, onLoaded }: Props) {
   const [progress, setProgress] = useState<[number, number] | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const [model, setModel] = useState("");
+  const pickModel = async (key: string) => {
+    setModel(key);
+    if (!key) return;
+    setError(null);
+    try {
+      await loadModel(key);
+      onLoaded?.();
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
 
   const loadExample = async () => {
     setError(null);
@@ -43,9 +57,17 @@ export default function Onboarding({ hasModel, hasData, onLoaded }: Props) {
       done: hasModel,
       open: true,
       title: "Décrivez vos données",
-      text: "Quels types de fiches (Personne, Contrat, Équipement…) et quels liens entre elles ? Décrivez-les en une phrase, ou partez de l'exemple.",
+      text: "Quels types de fiches (Personne, Contrat, Équipement…) et quels liens entre elles ? Partez d'un modèle prêt à l'emploi, décrivez le vôtre, ou essayez l'exemple.",
       action: (
         <>
+          <select aria-label="Modèle prêt à l'emploi" value={model} onChange={(e) => void pickModel(e.target.value)}>
+            <option value="">Modèle prêt à l'emploi…</option>
+            {MODELS.map((m) => (
+              <option key={m.key} value={m.key}>
+                {m.label}
+              </option>
+            ))}
+          </select>
           <Link className="btn-primary" to="/builder">
             Définir le modèle
           </Link>

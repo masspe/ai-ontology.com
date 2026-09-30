@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Mediasoft & Cie S.A.
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import Card from "../components/Card";
 import Sparkline from "../components/Sparkline";
 // @ts-expect-error JSX module
@@ -15,6 +16,9 @@ import {
   type FileRecord,
   type Ontology,
 } from "../api";
+
+/** Extensions handed to the review assistant instead of a direct load. */
+const REVIEWED_EXTS = new Set(["txt", "md", "pdf", "docx"]);
 
 const KIND_BY_EXT: Record<string, string> = {
   json: "ontology",
@@ -118,6 +122,7 @@ const PAGE_SIZE = 6;
 
 
 export default function Files() {
+  const nav = useNavigate();
   const confirm = useConfirm();
   const [files, setFiles] = useState<FileRecord[]>([]);
   const [ontology, setOntology] = useState<Ontology | null>(null);
@@ -151,7 +156,15 @@ export default function Files() {
     refresh();
   }, []);
 
+  // A document (text, Word, PDF) is read by the assistant first: it
+  // proposes the sheets and links it found, to check before they are added
+  // (ROADMAP §3.9 lot B, point 4). Structured files load directly.
   const onUpload = async (file: File) => {
+    const ext = (file.name.split(".").pop() ?? "").toLowerCase();
+    if (autoKind && REVIEWED_EXTS.has(ext)) {
+      nav("/ingest", { state: { file } });
+      return;
+    }
     setBusy(true);
     setError(null);
     setInfo(null);

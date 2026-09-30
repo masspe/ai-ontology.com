@@ -1983,3 +1983,14 @@ label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px
 .onboarding-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .onboarding-actions a, .onboarding-actions button { text-decoration: none; }
 .empty-action { margin-top: 8px; }
+
+/* Home (lot B.3) and concept sheet (lot B.2) */
+.home-search { display: flex; gap: 8px; margin: 4px 0 16px; }
+.home-search input { flex: 1; font-size: 16px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
+.home-row, .sheet-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+@media (max-width: 900px) { .home-row, .sheet-row { grid-template-columns: 1fr; } }
+.sheet-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.sheet-list li { line-height: 1.5; }
+.sheet-edit { display: grid; gap: 8px; max-width: 640px; }
+.sheet-edit input, .sheet-edit textarea { font: inherit; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; }
+.ingest-summary { font-size: 16px; margin: 0; }

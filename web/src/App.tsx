@@ -9,6 +9,7 @@ import Files from "./pages/Files";
 import IngestWizard from "./pages/IngestWizard";
 import GraphView from "./pages/GraphView";
 import Concepts from "./pages/Concepts";
+import ConceptSheet from "./pages/ConceptSheet";
 import Rules from "./pages/Rules";
 import Queries from "./pages/Queries";
 import Actions from "./pages/Actions";
@@ -42,6 +43,7 @@ export default function App() {
             <Route path="ingest" element={<IngestWizard />} />
             <Route path="graph" element={<GraphView />} />
             <Route path="concepts" element={<Concepts />} />
+            <Route path="concepts/:id" element={<ConceptSheet />} />
             <Route path="rules" element={<Rules />} />
             <Route path="queries" element={<Queries />} />
             <Route path="actions" element={<Actions />} />

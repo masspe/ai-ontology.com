@@ -1,0 +1,101 @@
+{
+  "concept_types": {
+    "Chantier": {
+      "name": "Chantier",
+      "ns": "chantiers",
+      "description": "un projet de construction, à une adresse, avec un maître d'ouvrage"
+    },
+    "Entreprise": {
+      "name": "Entreprise",
+      "ns": "tiers",
+      "description": "une société : maître d'ouvrage, sous-traitant, fournisseur"
+    },
+    "Personne": {
+      "name": "Personne",
+      "ns": "tiers",
+      "description": "une personne : chef de chantier, contact, signataire"
+    },
+    "Contrat": {
+      "name": "Contrat",
+      "ns": "contrats",
+      "description": "un contrat de sous-traitance ou de fourniture lié à un chantier"
+    },
+    "Facture": {
+      "name": "Facture",
+      "ns": "facturation",
+      "description": "une facture émise ou reçue pour un chantier"
+    },
+    "Equipement": {
+      "name": "Equipement",
+      "ns": "materiel",
+      "description": "une machine ou un engin affecté à un chantier"
+    }
+  },
+  "relation_types": {
+    "maitre_d_ouvrage": {
+      "name": "maitre_d_ouvrage",
+      "domain": "Chantier",
+      "range": "Entreprise",
+      "cardinality": "ManyToOne",
+      "description": "le chantier est commandé par cette entreprise"
+    },
+    "sous_traitant": {
+      "name": "sous_traitant",
+      "domain": "Chantier",
+      "range": "Entreprise",
+      "cardinality": "ManyToMany",
+      "description": "cette entreprise intervient sur le chantier"
+    },
+    "chef_de_chantier": {
+      "name": "chef_de_chantier",
+      "domain": "Chantier",
+      "range": "Personne",
+      "cardinality": "ManyToOne",
+      "description": "la personne qui conduit le chantier"
+    },
+    "travaille_pour": {
+      "name": "travaille_pour",
+      "domain": "Personne",
+      "range": "Entreprise",
+      "cardinality": "ManyToOne",
+      "description": "la personne est employée par l'entreprise"
+    },
+    "concerne": {
+      "name": "concerne",
+      "domain": "Contrat",
+      "range": "Chantier",
+      "cardinality": "ManyToOne",
+      "description": "le contrat porte sur ce chantier"
+    },
+    "signe_par": {
+      "name": "signe_par",
+      "domain": "Contrat",
+      "range": "Personne",
+      "cardinality": "ManyToMany",
+      "description": "la personne a signé le contrat"
+    },
+    "facture_pour": {
+      "name": "facture_pour",
+      "domain": "Facture",
+      "range": "Chantier",
+      "cardinality": "ManyToOne",
+      "description": "la facture se rapporte à ce chantier"
+    },
+    "emise_par": {
+      "name": "emise_par",
+      "domain": "Facture",
+      "range": "Entreprise",
+      "cardinality": "ManyToOne",
+      "description": "l'entreprise qui a émis la facture"
+    },
+    "affecte_a": {
+      "name": "affecte_a",
+      "domain": "Equipement",
+      "range": "Chantier",
+      "cardinality": "ManyToMany",
+      "description": "l'équipement est sur ce chantier"
+    }
+  },
+  "rule_types": {},
+  "action_types": {}
+}

@@ -12,12 +12,12 @@ import { renderPage } from "../test/render";
 
 vi.mock("../api", async () => {
   const actual = await vi.importActual<typeof import("../api")>("../api");
-  return { ...actual, upload: vi.fn() };
+  return { ...actual, upload: vi.fn(), replaceOntology: vi.fn() };
 });
 
 import * as api from "../api";
 
-const mocked = api as unknown as { upload: ReturnType<typeof vi.fn> };
+const mocked = api as unknown as { upload: ReturnType<typeof vi.fn>; replaceOntology: ReturnType<typeof vi.fn> };
 
 beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn(async () => ({ blob: async () => new Blob(["x"]) })));
@@ -63,5 +63,31 @@ describe("Onboarding", () => {
     await user.click(screen.getByRole("button", { name: /Essayer avec l'exemple finance/ }));
     expect(await screen.findByText("API unreachable")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Essayer avec l'exemple finance/ })).toBeEnabled();
+  });
+});
+
+describe("Onboarding — ready-made models", () => {
+  it("installs the chosen model's schema and tells the page to refresh", async () => {
+    mocked.replaceOntology.mockResolvedValue(undefined);
+    const onLoaded = vi.fn();
+    const { user } = renderPage(<Onboarding hasModel={false} hasData={false} onLoaded={onLoaded} />);
+    const select = screen.getByRole("combobox", { name: "Modèle prêt à l'emploi" });
+    expect(select).toHaveDisplayValue("Modèle prêt à l'emploi…");
+    await user.selectOptions(select, "chantiers");
+    await waitFor(() => expect(onLoaded).toHaveBeenCalledTimes(1));
+    const schema = mocked.replaceOntology.mock.calls[0]![0];
+    expect(Object.keys(schema.concept_types)).toContain("Chantier");
+    expect(schema.relation_types.sous_traitant.domain).toBe("Chantier");
+    // The finance model is the example's own schema.
+    await user.selectOptions(select, "finance");
+    await waitFor(() => expect(mocked.replaceOntology).toHaveBeenCalledTimes(2));
+    expect(Object.keys(mocked.replaceOntology.mock.calls[1]![0].concept_types)).toContain("Invoice");
+  });
+
+  it("shows the API error when the model cannot be installed", async () => {
+    mocked.replaceOntology.mockRejectedValue(new Error("schema refused"));
+    const { user } = renderPage(<Onboarding hasModel={false} hasData={false} />);
+    await user.selectOptions(screen.getByRole("combobox", { name: "Modèle prêt à l'emploi" }), "personnes");
+    expect(await screen.findByText("schema refused")).toBeInTheDocument();
   });
 });
