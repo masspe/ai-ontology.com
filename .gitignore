@@ -21,3 +21,6 @@ web/dist/
 web/coverage/
 badges/
 lcov.info
+# Office lock files (a spreadsheet open in Excel)
+~$*
+**/~$*

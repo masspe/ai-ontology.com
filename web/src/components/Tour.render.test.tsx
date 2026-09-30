@@ -74,7 +74,7 @@ describe("Tour", () => {
     expect(screen.getByRole("heading", { name: "Fichiers" })).toBeInTheDocument();
     await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("/files"));
     await user.keyboard("{ArrowRight}");
-    expect(screen.getByRole("heading", { name: "Relire un document" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Relecture d'un document" })).toBeInTheDocument();
     await user.keyboard("{ArrowLeft}");
     expect(screen.getByRole("heading", { name: "Fichiers" })).toBeInTheDocument();
 
