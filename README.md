@@ -782,6 +782,14 @@ git config user.signingkey ~/.ssh/id_ed25519.pub   # also added on GitHub as a *
 git config commit.gpgsign true
 ```
 
+## Upgrading
+
+The store format is versioned and migrated on open. `scripts/upgrade_check.sh
+<previous binary> <current binary>` writes two stores with the previous
+version and makes the current one open, extend, compact, back up and restore
+them; the CI job `upgrade` runs it with the binary of the previous `main`
+against every change.
+
 ## Testing
 
 ```bash

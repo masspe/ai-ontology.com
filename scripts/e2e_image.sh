@@ -44,8 +44,8 @@ docker volume create "$VOL" >/dev/null
 start
 
 echo "== the UI is served on the same port"
-curl -fsS "$BASE/" | grep -q "<div id=\"root\"" || { echo "no UI at /"; exit 1; }
-curl -fsS "$BASE/concepts/edit/1" | grep -q "<div id=\"root\"" || { echo "client-side route not served"; exit 1; }
+curl -fsS "$BASE/" | grep "<div id=\"root\"" >/dev/null || { echo "no UI at /"; exit 1; }
+curl -fsS "$BASE/concepts/edit/1" | grep "<div id=\"root\"" >/dev/null || { echo "client-side route not served"; exit 1; }
 
 echo "== the API needs a login"
 code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/stats")
@@ -54,7 +54,7 @@ code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/stats")
 echo "== first account = administrator"
 resp=$(curl -fsS -X POST "$BASE/auth/signup" -H 'content-type: application/json' \
   -d '{"email":"admin@example.com","password":"Passw0rd!","name":"Admin"}')
-echo "$resp" | json "d['user']['role']" | grep -qx admin
+echo "$resp" | json "d['user']['role']" | grep -x admin >/dev/null
 TOKEN=$(echo "$resp" | json "d['token']")
 code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/auth/signup" -H 'content-type: application/json' \
   -d '{"email":"other@example.com","password":"Passw0rd!","name":"Other"}')
@@ -62,32 +62,32 @@ code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/auth/signup" -H 'co
 
 echo "== the seeded graph is there"
 stats=$(curl -fsS -H "authorization: Bearer $TOKEN" "$BASE/stats")
-echo "$stats" | json "d['concepts']" | grep -qx 22
-echo "$stats" | json "d['relations']" | grep -qx 38
-echo "$stats" | json "d['memory']['budget_source']" | grep -qx cgroup-v2 || { echo "budget not read from the cgroup: $stats"; exit 1; }
-curl -fsS -H "authorization: Bearer $TOKEN" "$BASE/metrics" | grep -q '^ontology_stream_records{ns="meta"}'
+echo "$stats" | json "d['concepts']" | grep -x 22 >/dev/null
+echo "$stats" | json "d['relations']" | grep -x 38 >/dev/null
+echo "$stats" | json "d['memory']['budget_source']" | grep -x cgroup-v2 >/dev/null || { echo "budget not read from the cgroup: $stats"; exit 1; }
+curl -fsS -H "authorization: Bearer $TOKEN" "$BASE/metrics" | grep '^ontology_stream_records{ns="meta"}' >/dev/null
 
 echo "== a write survives a restart"
 curl -fsS -X POST -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' \
   "$BASE/concepts" -d '{"id":0,"concept_type":"Company","name":"E2E Corp","description":"created by the e2e","properties":{}}' >/dev/null
 docker stop -t 30 "$NAME" >/dev/null
-docker logs "$NAME" 2>&1 | grep -q "server stopped" || { echo "no clean stop in the log"; docker logs "$NAME"; exit 1; }
+docker logs "$NAME" 2>&1 | grep "server stopped" >/dev/null || { echo "no clean stop in the log"; docker logs "$NAME"; exit 1; }
 docker rm "$NAME" >/dev/null
 start
 resp=$(curl -fsS -X POST "$BASE/auth/login" -H 'content-type: application/json' \
   -d '{"email":"admin@example.com","password":"Passw0rd!"}')
 TOKEN=$(echo "$resp" | json "d['token']")
 stats=$(curl -fsS -H "authorization: Bearer $TOKEN" "$BASE/stats")
-echo "$stats" | json "d['concepts']" | grep -qx 23
-docker logs "$NAME" 2>&1 | grep -q "generated a new JWT secret" && { echo "secret regenerated on restart"; exit 1; }
+echo "$stats" | json "d['concepts']" | grep -x 23 >/dev/null
+docker logs "$NAME" 2>&1 | grep "generated a new JWT secret" >/dev/null && { echo "secret regenerated on restart"; exit 1; }
 
 echo "== healthcheck subcommand inside the container"
 docker exec "$NAME" /usr/local/bin/ontology --data /data healthcheck http://127.0.0.1:5000/healthz
 
 echo "== backup through the API, restore with the CLI, same graph"
 report=$(curl -fsS -X POST -H "authorization: Bearer $TOKEN" "$BASE/backup")
-echo "$report" | json "d['records']" | grep -qE '^[1-9][0-9]*$' || { echo "bad backup report: $report"; exit 1; }
-docker exec "$NAME" /usr/local/bin/ontology --data /data/restored restore /data/backups | grep -q "23 concepts, 38 relations"
-docker exec "$NAME" /usr/local/bin/ontology --data /data/restored stats | grep -qx "concepts: 23"
+echo "$report" | json "d['records']" | grep -E '^[1-9][0-9]*$' >/dev/null || { echo "bad backup report: $report"; exit 1; }
+docker exec "$NAME" /usr/local/bin/ontology --data /data/restored restore /data/backups | grep "23 concepts, 38 relations" >/dev/null
+docker exec "$NAME" /usr/local/bin/ontology --data /data/restored stats | grep -x "concepts: 23" >/dev/null
 
 echo "e2e: ok"
