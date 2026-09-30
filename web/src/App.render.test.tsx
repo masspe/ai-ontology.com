@@ -73,8 +73,8 @@ describe("App routes", () => {
 
   it("marks the menu and the entry of the current section", () => {
     visit("/rules");
-    expect(screen.getByRole("menuitem", { name: "Règles" })).toHaveClass("active");
-    expect(screen.getByText("Explorer", { selector: "summary" })).toHaveClass("active");
+    expect(screen.getByRole("link", { name: "Règles" })).toHaveClass("active");
+    expect(screen.getByText("Explorer", { selector: "summary .topnav-label" }).closest("summary")).toHaveClass("active");
     expect(screen.getByRole("link", { name: "Accueil" })).not.toHaveClass("active");
   });
 

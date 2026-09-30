@@ -43,7 +43,7 @@ function mount(route = "/") {
 }
 
 const SEARCH = "Rechercher une fiche, poser une question…";
-const summary = (title: string) => screen.getByText(title, { selector: "summary" });
+const summary = (title: string) => screen.getByText(title, { selector: "summary .topnav-label" }).closest("summary") as HTMLElement;
 
 describe("Layout shell", () => {
   it("renders the four entries, every page in its menu, the top bar and the routed page", () => {
@@ -53,9 +53,9 @@ describe("Layout shell", () => {
     expect(screen.getByRole("link", { name: "Accueil" })).toHaveAttribute("href", "/");
     expect(screen.getByRole("link", { name: "Réglages" })).toHaveAttribute("href", "/settings");
     for (const group of NAV_GROUPS.filter((g) => g.items.length > 1)) {
-      const menu = screen.getByRole("menu", { name: group.title });
+      const menu = screen.getByLabelText(group.title);
       for (const item of group.items) {
-        expect(within(menu).getByRole("menuitem", { name: item.label })).toHaveAttribute("href", item.to);
+        expect(within(menu).getByRole("link", { name: item.label })).toHaveAttribute("href", item.to);
       }
     }
     expect(NAV_ITEMS).toHaveLength(10);
@@ -70,8 +70,8 @@ describe("Layout shell", () => {
     mount("/rules");
     expect(summary("Explorer")).toHaveClass("active");
     expect(summary("Importer")).not.toHaveClass("active");
-    expect(screen.getByRole("menuitem", { name: "Règles" })).toHaveClass("active");
-    expect(screen.getByRole("menuitem", { name: "Questions" })).not.toHaveClass("active");
+    expect(screen.getByRole("link", { name: "Règles" })).toHaveClass("active");
+    expect(screen.getByRole("link", { name: "Questions" })).not.toHaveClass("active");
     expect(screen.getByRole("link", { name: "Accueil" })).not.toHaveClass("active");
   });
 
@@ -88,10 +88,20 @@ describe("Layout shell", () => {
     expect(details).not.toHaveAttribute("open");
     await user.click(summary("Explorer"));
     expect(details).toHaveAttribute("open");
-    await user.click(screen.getByRole("menuitem", { name: "Règles" }));
+    await user.click(screen.getByRole("link", { name: "Règles" }));
     expect(document.querySelector("main.content")).toHaveTextContent("Rules page");
     expect(details).not.toHaveAttribute("open");
     expect(summary("Explorer")).toHaveClass("active");
+    // Escape closes an open menu; so does the focus leaving it.
+    await user.click(summary("Explorer"));
+    expect(details).toHaveAttribute("open");
+    await user.keyboard("{Escape}");
+    expect(details).not.toHaveAttribute("open");
+    await user.click(summary("Importer"));
+    const importer = summary("Importer").closest("details")!;
+    expect(importer).toHaveAttribute("open");
+    await user.click(screen.getByPlaceholderText(SEARCH));
+    expect(importer).not.toHaveAttribute("open");
   });
 });
 
@@ -100,7 +110,7 @@ describe("TopBar", () => {
     const { user } = mount("/rules");
     await user.type(screen.getByPlaceholderText(SEARCH), "late invoices & fees{Enter}");
     expect(screen.getByTestId("location")).toHaveTextContent("/queries?q=late%20invoices%20%26%20fees");
-    expect(screen.getByRole("menuitem", { name: "Questions" })).toHaveClass("active");
+    expect(screen.getByRole("link", { name: "Questions" })).toHaveClass("active");
   });
 
   it("ignores a blank search", async () => {
@@ -125,7 +135,6 @@ describe("TopBar", () => {
     const { user } = mount("/rules");
     const account = screen.getByRole("button", { name: "Compte" });
     expect(account).toHaveTextContent("AL");
-    expect(screen.queryByRole("menu", { name: "" })).not.toBeInTheDocument();
     await user.click(account);
     const menu = account.parentElement!.querySelector(".account-menu") as HTMLElement;
     expect(menu).toHaveTextContent("Ada Lovelace");
