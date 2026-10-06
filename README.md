@@ -4,6 +4,35 @@
 [![Rust line coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmasspe%2Fai-ontology.com%2Fcoverage-badges%2Frust.json)](#test-coverage)
 [![Web line coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmasspe%2Fai-ontology.com%2Fcoverage-badges%2Fweb.json)](#test-coverage)
 
+**Your business files → a typed knowledge graph → LLM answers you can trace.**
+Drop contracts, invoices, spreadsheets or plain text; the import proposes
+typed sheets and links that you review; then ask questions in plain
+language and get an answer that cites the sheets it came from — not a
+chatbot over PDFs, a graph the model is held to.
+
+![Demo: load the finance example, ask which invoices were issued to a company and under which contracts, explore the graph](docs/demo.gif)
+
+*Above: an empty base, the finance example loaded in one click, a question
+answered from the graph (invoices → contracts, citations below the answer),
+the graph filtered to companies / people / contracts, one contract selected
+with its links. Same walkthrough as a seekable video: [docs/demo.mp4](docs/demo.mp4).*
+
+## Try it in five minutes
+
+```bash
+docker compose up -d --build
+# open http://localhost:5001 — create the first account (it becomes the administrator),
+# then click "Essayer avec l'exemple finance" on the home page.
+```
+
+Without Docker, the three dev servers in one command: `cd web && npm install && npm run dev`
+(details in [Running the full stack locally](#running-the-full-stack-locally)).
+The example's files and the questions it answers are in
+[`examples/finance`](examples/finance/README.md); the CLI path is under
+[Quickstart](#quickstart).
+
+## Under the hood
+
 A Rust workspace implementing an ontology-structured graph database with a
 hybrid retrieval layer and a RAG pipeline that grounds language-model
 answers in retrieved subgraphs.
