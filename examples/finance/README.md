@@ -62,7 +62,7 @@ endpoints to exist):
    `has_line_item`). Loaded **last** so every endpoint exists.
 
 The **Stats** header at the top updates live so you can watch the
-graph grow (you should land at 25 concepts, 36 relations).
+graph grow (you should land at 22 concepts, 38 relations).
 
 ## Sample questions
 
