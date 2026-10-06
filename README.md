@@ -10,18 +10,19 @@ typed sheets and links that you review; then ask questions in plain
 language and get an answer that cites the sheets it came from — not a
 chatbot over PDFs, a graph the model is held to.
 
-<!-- ![Demo: load the finance example, ask which invoices were issued to a company and under which contracts, explore the graph](docs/demo.gif) -->
+https://github.com/user-attachments/assets/c3a237bc-b532-47c3-b48e-d834c7e500e9
 
 *Above: an empty base, the finance example loaded in one click, a question
 answered from the graph (invoices → contracts, citations below the answer),
 the graph filtered to companies / people / contracts, one contract selected
 with its links.*
 
+<details>
+<summary>Same walkthrough as a GIF (for viewers that do not play the video)</summary>
 
+![Demo: load the finance example, ask which invoices were issued to a company and under which contracts, explore the graph](docs/demo.gif)
 
-https://github.com/user-attachments/assets/c3a237bc-b532-47c3-b48e-d834c7e500e9
-
-
+</details>
 
 ## Try it in five minutes
 
