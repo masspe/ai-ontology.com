@@ -4,17 +4,49 @@
 [![Rust line coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmasspe%2Fai-ontology.com%2Fcoverage-badges%2Frust.json)](#test-coverage)
 [![Web line coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmasspe%2Fai-ontology.com%2Fcoverage-badges%2Fweb.json)](#test-coverage)
 
+**Your business files → a typed knowledge graph → LLM answers you can trace.**
+Drop contracts, invoices, spreadsheets or plain text; the import proposes
+typed sheets and links that you review; then ask questions in plain
+language and get an answer that cites the sheets it came from — not a
+chatbot over PDFs, a graph the model is held to.
+
+https://github.com/user-attachments/assets/c3a237bc-b532-47c3-b48e-d834c7e500e9
+
+*Above: an empty base, the finance example loaded in one click, a question
+answered from the graph (invoices → contracts, citations below the answer),
+the graph filtered to companies / people / contracts, one contract selected
+with its links.*
+
+<details>
+<summary>Same walkthrough as a GIF (for viewers that do not play the video)</summary>
+
+![Demo: load the finance example, ask which invoices were issued to a company and under which contracts, explore the graph](docs/demo.gif)
+
+</details>
+
+## Try it in five minutes
+
+```bash
+docker compose up -d --build
+# open http://localhost:5001 — create the first account (it becomes the administrator),
+# then click "Essayer avec l'exemple finance" on the home page.
+```
+
+Without Docker, the three dev servers in one command: `cd web && npm install && npm run dev`
+(details in [Running the full stack locally](#running-the-full-stack-locally)).
+The example's files and the questions it answers are in
+[`examples/finance`](examples/finance/README.md); the CLI path is under
+[Quickstart](#quickstart).
+
+## Under the hood
+
 A Rust workspace implementing an ontology-structured graph database with a
 hybrid retrieval layer and a RAG pipeline that grounds language-model
 answers in retrieved subgraphs.
 
-**Where the project stands and what comes next:** [docs/ROADMAP.md](docs/ROADMAP.md)
-(state, dated decisions, next steps with acceptance criteria, working process).
-
 The coverage badges are **live**: after every push to `main` the CI measures
 line coverage of the whole Rust suite and of the web UI and publishes the
-figures (see [Test coverage](#test-coverage)). Green is ≥ 80 %, bright green
-≥ 90 %, red < 30 %. The bar is **90 % minimum**, enforced on the web suite
+figures (see [Test coverage](#test-coverage)). The bar is **90 % minimum**, enforced on the web suite
 by `vitest.config.ts` thresholds.
 
 ## Crates
@@ -766,10 +798,7 @@ and no secret is involved. The figures on Windows differ by a few tenths
 Linux one.
 
 ## Security
-
-After the supply-chain injection of 2026-09-24 (write-up in
-[docs/INCIDENT-2026-09-25.md](docs/INCIDENT-2026-09-25.md)), the repository
-enforces the measures listed in [SECURITY.md](SECURITY.md). In short:
+The repository enforces the measures listed in [SECURITY.md](SECURITY.md). In short:
 
 - `scripts/repo_guard.py` is the first CI job and every other job waits for
   it: fake binaries, VS Code `folderOpen` tasks, tracked `.vscode/` files,
