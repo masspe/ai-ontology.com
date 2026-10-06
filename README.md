@@ -10,12 +10,18 @@ typed sheets and links that you review; then ask questions in plain
 language and get an answer that cites the sheets it came from — not a
 chatbot over PDFs, a graph the model is held to.
 
-![Demo: load the finance example, ask which invoices were issued to a company and under which contracts, explore the graph](docs/demo.gif)
+<!-- ![Demo: load the finance example, ask which invoices were issued to a company and under which contracts, explore the graph](docs/demo.gif) -->
 
 *Above: an empty base, the finance example loaded in one click, a question
 answered from the graph (invoices → contracts, citations below the answer),
 the graph filtered to companies / people / contracts, one contract selected
-with its links. Same walkthrough as a seekable video: [docs/demo.mp4](docs/demo.mp4).*
+with its links.*
+
+
+
+https://github.com/user-attachments/assets/c3a237bc-b532-47c3-b48e-d834c7e500e9
+
+
 
 ## Try it in five minutes
 
@@ -37,13 +43,9 @@ A Rust workspace implementing an ontology-structured graph database with a
 hybrid retrieval layer and a RAG pipeline that grounds language-model
 answers in retrieved subgraphs.
 
-**Where the project stands and what comes next:** [docs/ROADMAP.md](docs/ROADMAP.md)
-(state, dated decisions, next steps with acceptance criteria, working process).
-
 The coverage badges are **live**: after every push to `main` the CI measures
 line coverage of the whole Rust suite and of the web UI and publishes the
-figures (see [Test coverage](#test-coverage)). Green is ≥ 80 %, bright green
-≥ 90 %, red < 30 %. The bar is **90 % minimum**, enforced on the web suite
+figures (see [Test coverage](#test-coverage)). The bar is **90 % minimum**, enforced on the web suite
 by `vitest.config.ts` thresholds.
 
 ## Crates
@@ -795,10 +797,7 @@ and no secret is involved. The figures on Windows differ by a few tenths
 Linux one.
 
 ## Security
-
-After the supply-chain injection of 2026-09-24 (write-up in
-[docs/INCIDENT-2026-09-25.md](docs/INCIDENT-2026-09-25.md)), the repository
-enforces the measures listed in [SECURITY.md](SECURITY.md). In short:
+The repository enforces the measures listed in [SECURITY.md](SECURITY.md). In short:
 
 - `scripts/repo_guard.py` is the first CI job and every other job waits for
   it: fake binaries, VS Code `folderOpen` tasks, tracked `.vscode/` files,
