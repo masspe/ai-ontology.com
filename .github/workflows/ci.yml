@@ -18,9 +18,9 @@ env:
 
 jobs:
   guard:
-    # Refuses the file shapes of the 2026-09-24 injection (fake fonts,
-    # VS Code folderOpen tasks, obfuscated sources, npm hooks); see
-    # scripts/repo_guard.py and docs/INCIDENT-2026-09-25.md.
+    # Refuses file shapes that hide executable code in a repository (fake
+    # fonts, VS Code folderOpen tasks, obfuscated sources, npm lifecycle
+    # hooks); see scripts/repo_guard.py.
     name: repo guard
     runs-on: ubuntu-latest
     steps:
@@ -111,8 +111,8 @@ jobs:
         working-directory: auth-server
 
   auth-server:
-    # The Node auth server (the file the 2026-09-24 injection targeted) has
-    # its own tests; they run after the guard, never before.
+    # The Node auth server has its own tests;
+    # they run after the guard, never before.
     name: auth-server (node --test)
     needs: guard
     runs-on: ubuntu-latest
@@ -130,7 +130,7 @@ jobs:
       - run: npm test
 
   image:
-    # The deliverable (ROADMAP §3.8.1): build the container image, then run
+    # The deliverable: build the container image, then run
     # scripts/e2e_image.sh against it — seed, sign-up, login, API and UI on
     # one port, clean stop, restart with the data and the account intact.
     name: image (build, e2e)
@@ -150,8 +150,8 @@ jobs:
       - run: bash scripts/e2e_image.sh ontology:e2e
 
   upgrade:
-    # ROADMAP §3.8.5: a store written by the previous `main` must open with
-    # the commit under test — same graph, writable, compactable, restorable
+    # A store written by the previous `main` must open with the
+    # commit under test — same graph, writable, compactable, restorable
     # (scripts/upgrade_check.sh). The previous version is built from its
     # own checkout; on main it is the parent commit, elsewhere the merge
     # base with origin/main.

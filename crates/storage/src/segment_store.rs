@@ -34,7 +34,7 @@
 //! dependency order, into fresh partitions, verifies the result by replay,
 //! then swaps. Per-domain compaction is not offered: with seq-ordered
 //! replay, rewriting one domain would put its records after the rules and
-//! cross-domain relations that depend on them (STORAGE-PLAN.md §5.6).
+//! cross-domain relations that depend on them.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{File, OpenOptions};
@@ -180,7 +180,7 @@ pub struct CompactionReport {
     pub partitions_removed: usize,
 }
 
-/// The last compaction since the store was opened (T3, `/metrics`).
+/// The last compaction since the store was opened (`/metrics`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct LastCompaction {
     pub duration_secs: f64,
@@ -189,7 +189,7 @@ pub struct LastCompaction {
     pub report: CompactionReport,
 }
 
-/// One stream (domain) as an operator watches it (STORAGE-PLAN.md §8 T3).
+/// One stream (domain) as an operator watches it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StreamStats {
     /// Domain name; `meta` for the schema stream.
@@ -232,9 +232,9 @@ struct Inner {
     poisoned: bool,
     /// P1 domains by `ns_id`; absent = P0 (`set_tiers`).
     tiers: HashMap<u16, Tier>,
-    /// Syncs issued per stream since open (T3).
+    /// Syncs issued per stream since open.
     syncs_by_ns: HashMap<u16, u64>,
-    /// The last compaction since open (T3).
+    /// The last compaction since open.
     last_compaction: Option<LastCompaction>,
     /// Sealed segments of the graph streams, shared with the reader (R12).
     sealed_index: Arc<SealedIndex>,
@@ -571,7 +571,7 @@ impl SegmentStore {
         .map_err(|e| StoreError::Io(std::io::Error::other(e)))?
     }
 
-    /// `compact_all`, timed, remembered for `/metrics` (T3).
+    /// `compact_all`, timed, remembered for `/metrics`.
     fn compact_timed(
         g: &mut Inner,
         graph: &Arc<OntologyGraph>,
@@ -591,10 +591,9 @@ impl SegmentStore {
         Ok(report)
     }
 
-    /// Per-stream and store-wide figures for `/metrics` (STORAGE-PLAN.md
-    /// §8 T3): segments, bytes, records, last seq and syncs per domain, the
-    /// domain's tier, and the last compaction since open. Takes the store
-    /// lock: call it off the async runtime (a compaction holds that lock).
+    /// Per-stream and store-wide figures for `/metrics`: segments, bytes, records, last seq and
+    /// syncs per domain, the domain's tier, and the last compaction since open.
+    /// Takes the store lock: call it off the async runtime (a compaction holds that lock).
     pub fn stats(&self) -> StoreStats {
         let g = self.inner.lock();
         let mut streams = Vec::with_capacity(g.graph.len() + 1);
@@ -693,7 +692,7 @@ impl SegmentStore {
         }))
     }
 
-    /// Decide what this process will load (`STORAGE-PLAN.md` §7.1): the
+    /// Decide what this process will load (`STORAGE.md` §8.1): the
     /// estimate against the budget, in `mode`, honouring an explicit `--ns`
     /// list. Remembered for `last_plan`. Strict mode refuses with both
     /// figures when the store does not fit (R17).
@@ -1464,7 +1463,7 @@ impl SegmentStore {
         .map_err(|e| StoreError::Io(std::io::Error::other(e)))?
     }
 
-    /// Copy the store to `dest` under the writer lock (ROADMAP §3.8.4):
+    /// Copy the store to `dest` under the writer lock:
     /// `MANIFEST.json` and every partition's `.data` and `.idx`, in the
     /// store's own layout. A sealed partition is immutable (H11), so one
     /// already at `dest` with the same size is skipped; the active

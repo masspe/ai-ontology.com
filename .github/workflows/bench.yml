@@ -1,9 +1,8 @@
 name: bench
 
-# Manual storage benchmark (STORAGE-PLAN.md §8 T2, ROADMAP.md §3.7 bis): a
-# synthetic store of the requested size is generated on the runner, then
-# hydrated in P0 and in P1 and queried, with `ontology bench` exactly as on
-# a developer machine. The JSON results are published as an artifact and
+# Manual storage benchmark: a synthetic store of the requested size is
+# generated on the runner, then hydrated in P0 and in P1 and queried, with
+# `ontology bench` exactly as on a developer machine. The JSON results are published as an artifact and
 # summarised in the job summary, so the capacity figures of STORAGE.md §7.8
 # / §8.1 are reproducible on a 16 GB runner instead of a laptop.
 #

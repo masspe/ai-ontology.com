@@ -5,7 +5,7 @@
 // Dual-licensed: AGPL-3.0-or-later OR a commercial license
 // from Mediasoft & Cie S.A. See LICENSE and LICENSE-COMMERCIAL.md.
 
-//! `ontology bench …` — the measurements of `STORAGE-PLAN.md` phase 4.
+//! `ontology bench …` — the measurements of `STORAGE.md` §7.7-7.8.
 //!
 //! Everything here goes through the public APIs a server uses (`SegmentStore`,
 //! `OntologyGraph`), so the numbers describe the real read and write paths:

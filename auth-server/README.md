@@ -1,5 +1,7 @@
 # auth-server — Login / Signup / OAuth (Google + Microsoft)
 
+> **This server is optional.** The `ontology` binary serves sign-up, login, sessions, accounts and API keys itself (`serve --login`). This Node server is only needed for Google / Microsoft OAuth sign-in, which the binary does not provide yet; it will be removed once it does.
+
 Express auth backend for the AI-Ontology web app. Issues JWTs consumed by the
 SPA via the centralized `msBE.auth` client.
 

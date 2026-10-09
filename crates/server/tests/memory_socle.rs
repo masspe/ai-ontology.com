@@ -195,7 +195,7 @@ async fn a_soft_budget_exceeded_is_reported_as_over_budget_not_partial() {
     );
 }
 
-/// T3: a store without streams (`MemoryStore`) exposes no per-stream gauge.
+/// A store without streams (`MemoryStore`) exposes no per-stream gauge.
 #[tokio::test]
 async fn a_store_without_streams_has_no_stream_gauges() {
     let app = build_router(state());

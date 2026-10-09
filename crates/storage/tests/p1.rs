@@ -5,7 +5,7 @@
 // Dual-licensed: AGPL-3.0-or-later OR a commercial license
 // from Mediasoft & Cie S.A. See LICENSE and LICENSE-COMMERCIAL.md.
 
-//! P1, storage side (`STORAGE.md` §6.2, §8.2; `STORAGE-PLAN.md` §7.2):
+//! P1, storage side (`STORAGE.md` §6.2, §8.2):
 //! concept locations, the lock-free sealed reader, seal notifications and
 //! relocation by compaction. The graph side is stubbed on this branch, so
 //! eviction itself is asserted end to end (graph + store).

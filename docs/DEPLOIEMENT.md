@@ -1,7 +1,6 @@
 # Déploiement — une image, un conteneur par client
 
-Ce document est la page d'installation du produit (ROADMAP.md §3.8.1 à
-3.8.3, décisions du 2026-09-29 : authentification dans le binaire, serveur
+Ce document est la page d'installation du produit (décisions du 2026-09-29 : authentification dans le binaire, serveur
 à nous, sauvegarde par copie des fichiers). Il suppose Docker sur un
 serveur Linux que vous administrez.
 
@@ -74,7 +73,7 @@ valable tel quel. Un tel fichier n'a pas d'administrateur et l'inscription y
 est fermée : pour en désigner un, arrêtez le conteneur, ajoutez
 `"role": "admin"` sur un compte du fichier, redémarrez. Supprimer un compte
 révoque ses jetons immédiatement. L'écran de création de comptes dans Paramètres arrive
-avec le lot A de l'interface (ROADMAP §3.9).
+avec le lot A de l'interface.
 
 Google et Microsoft (OAuth) ne sont pas encore servis par le binaire : les
 boutons renvoient vers la page de connexion avec `error=…_not_configured`.
@@ -109,7 +108,7 @@ mesurés (§7.8) : 2×10⁶ concepts et 10⁷ relations tiennent sur 16 Go en P1
 
 ## 5. Sauvegarde et restauration
 
-Décision du 2026-09-29, livrée le 2026-09-30 (ROADMAP §3.8.4) : la
+Décision du 2026-09-29, livrée le 2026-09-30 : la
 sauvegarde est une **copie des fichiers du store** (le `MANIFEST.json` et les
 segments `.data` / `.idx`, dans la disposition du store), prise sous le
 verrou d'écriture, donc cohérente. Les segments scellés sont immuables :

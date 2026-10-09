@@ -5,9 +5,8 @@
 // Dual-licensed: AGPL-3.0-or-later OR a commercial license
 // from Mediasoft & Cie S.A. See LICENSE and LICENSE-COMMERCIAL.md.
 
-//! Durability and crash-recovery contract of `FileStore` (STORAGE-PLAN.md
-//! phase 1): one `fdatasync` per batch, consecutive sequence numbers, and a
-//! torn tail — at *any* byte offset — that is discarded on load while
+//! Durability and crash-recovery contract of `FileStore`: one `fdatasync` per batch, consecutive sequence
+//! numbers, and a torn tail — at *any* byte offset — that is discarded on load while
 //! anything earlier in the file is preserved byte for byte.
 
 use ontology_graph::{Concept, ConceptType, Ontology, OntologyGraph};

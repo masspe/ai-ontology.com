@@ -17,7 +17,7 @@ use crate::embed::{cosine, top_k, Embedder};
 ///
 /// One `Vec<f32>` of `n × dim` instead of a `Vec` per row: the scan reads
 /// memory sequentially, and the layout is the one a memory-mapped file
-/// would have (STORAGE-PLAN.md §8 R, tranche 2b). The scan is split across
+/// would have. The scan is split across
 /// the available cores with scoped threads — no dependency, no pool — so a
 /// query costs O(N · dim / cores).
 pub struct VectorIndex {
@@ -27,7 +27,7 @@ pub struct VectorIndex {
 
 /// Dense rows for the scan, plus the position of each id so an insert or a
 /// removal is O(1): the linear `find` this replaced made `reindex_all`
-/// O(N²) — seven minutes at 500 000 concepts (STORAGE-PLAN.md §8 R).
+/// O(N²) — seven minutes at 500 000 concepts.
 #[derive(Default)]
 struct Rows {
     dim: usize,
@@ -143,7 +143,7 @@ impl VectorIndex {
     // ponytail: at 10⁷ concepts a query reads ~10 GB of rows and is bound by
     // memory bandwidth (unmeasured, hundreds of ms); each query also spawns
     // up to `cores` threads, so concurrent queries oversubscribe the CPU. An
-    // ANN index (STORAGE-PLAN.md §8 R, tranche 2b) is the upgrade when the
+    // ANN index is the upgrade when the
     // measured p95 (STORAGE.md §7.8) leaves the interactive budget.
     pub fn search(&self, query: &str, limit: usize) -> Vec<(ConceptId, f32)> {
         let q = self.embedder.embed(query);

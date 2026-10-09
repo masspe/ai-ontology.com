@@ -5,7 +5,7 @@
 // Dual-licensed: AGPL-3.0-or-later OR a commercial license
 // from Mediasoft & Cie S.A. See LICENSE and LICENSE-COMMERCIAL.md.
 
-//! Backup and restore of a [`SegmentStore`] (ROADMAP §3.8.4).
+//! Backup and restore of a [`SegmentStore`].
 //!
 //! A backup is a copy of the store's files taken under the writer lock:
 //! `MANIFEST.json` and every partition's `.data` and `.idx`. Sealed

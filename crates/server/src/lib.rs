@@ -874,7 +874,7 @@ pub struct RouterConfig {
     pub jwt: Option<JwtAuth>,
     /// Per-IP request limit. `None` disables rate limiting.
     pub rate_limit: Option<RateLimit>,
-    /// Audit log of the writes (ROADMAP §3.8.6): every successful
+    /// Audit log of the writes: every successful
     /// mutating request with its caller; read back by `GET /audit`.
     pub audit: Option<StdArc<audit::AuditLog>>,
     /// Built-in `/auth/*` (users file, sign-up policy); needs `jwt` to sign
@@ -993,7 +993,7 @@ pub fn build_router_with_jwt(state: AppState, jwt: JwtAuth) -> Router {
 }
 
 /// Full-featured constructor. Adds (in this order, outer-to-inner):
-/// 1. request-id injection (always on),
+/// 1. request-id insertion (always on),
 /// 2. optional rate-limit by client IP,
 /// 3. optional bearer-token / JWT check.
 pub fn build_router_with_config(state: AppState, cfg: RouterConfig) -> Router {
@@ -1014,7 +1014,7 @@ fn build_router_inner(state: AppState, cfg: RouterConfig) -> Router {
         .route("/openapi.json", get(openapi::openapi_spec))
         .route("/docs", get(openapi::swagger_ui));
 
-    // Built-in auth (ROADMAP §3.8.3): the public half next to /healthz,
+    // Built-in auth: the public half next to /healthz,
     // behind its own rate limit (credential guessing), the private half
     // inside the protected router below.
     let auth_state = match (&users, &jwt) {
@@ -1149,7 +1149,7 @@ fn build_router_inner(state: AppState, cfg: RouterConfig) -> Router {
 
     let mut app = healthz_router.merge(protected);
 
-    // The web UI (ROADMAP §3.8.2): files under `web_dir`, and `index.html`
+    // The web UI: files under `web_dir`, and `index.html`
     // for any other path so the client-side router owns it. API routes are
     // matched first; six UI pages share a path with a GET API route
     // (`/concepts`, `/files`, …), so a browser *navigation* to one of them
@@ -1453,7 +1453,7 @@ async fn require_auth(
 ) -> Result<Response, StatusCode> {
     let provided = extract_bearer(&req).ok_or(StatusCode::UNAUTHORIZED)?;
 
-    // A named API key (ROADMAP §3.8.6): a machine caller of the tenant.
+    // A named API key: a machine caller of the tenant.
     if provided.starts_with(auth::API_KEY_PREFIX) && accounts.is_some() {
         if let Some(key) = accounts.as_ref().and_then(|s| s.key_by_secret(&provided)) {
             req.extensions_mut().insert(AuthContext {
@@ -1582,7 +1582,7 @@ fn lookup<T>(
     })
 }
 
-/// Copy the store to the configured backup directory (ROADMAP §3.8.4):
+/// Copy the store to the configured backup directory:
 /// sealed partitions already there are skipped, so a daily call costs
 /// what changed. No writer runs during the copy.
 /// A named API key is an integration, not an operator: it may write the
@@ -1792,7 +1792,7 @@ async fn metrics(State(s): State<AppState>) -> ([(String, String); 1], String) {
     )
 }
 
-/// Per-stream gauges (STORAGE-PLAN.md §8 T3): one series per domain,
+/// Per-stream gauges: one series per domain,
 /// labelled `ns`, plus the store-wide sequence, sync count and last
 /// compaction. Absent on stores without streams.
 fn stream_metrics(st: &ontology_storage::StoreStats) -> String {
