@@ -2,11 +2,12 @@
 // Copyright (C) 2026 Mediasoft & Cie S.A.
 //
 // A dropdown multi-select in the Power BI manner: a button that shows the
-// state, a panel with a search, "Tout sélectionner" and one checkbox per
+// state, a panel with a search, t("Tout sélectionner") and one checkbox per
 // option. None selected means no filter (all). The open state and the search
 // live here, so opening or typing never re-renders the page around it.
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { t } from "../lib/i18n";
 
 export interface MultiSelectOption {
   value: string;
@@ -83,7 +84,7 @@ export default function MultiSelect({ label, options, selected, onChange, allLab
       ? allLabel
       : n === 1
         ? (options.find((o) => o.value === selected[0])?.label ?? selected[0])
-        : `${n} sur ${options.length}`;
+        : t("{n} sur {total}", { n, total: options.length });
 
   return (
     <div
@@ -119,8 +120,8 @@ export default function MultiSelect({ label, options, selected, onChange, allLab
           <input
             className="ms-search"
             type="search"
-            placeholder="Rechercher…"
-            aria-label={`Rechercher dans ${label}`}
+            placeholder={t("Rechercher…")}
+            aria-label={t("Rechercher dans {label}", { label })}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             autoFocus
@@ -134,10 +135,10 @@ export default function MultiSelect({ label, options, selected, onChange, allLab
               onChange={toggleVisible}
               disabled={visible.length === 0}
             />
-            <span>Tout sélectionner</span>
+            <span>{t("Tout sélectionner")}</span>
           </label>
           <div className="ms-options">
-            {visible.length === 0 && <div className="ms-empty muted">Aucun résultat.</div>}
+            {visible.length === 0 && <div className="ms-empty muted">{t("Aucun résultat.")}</div>}
             {visible.map((o) => (
               <label key={o.value} className="ms-option">
                 <input type="checkbox" checked={chosen.has(o.value)} onChange={() => toggle(o.value)} />
@@ -148,7 +149,7 @@ export default function MultiSelect({ label, options, selected, onChange, allLab
           </div>
           <div className="ms-foot">
             <button type="button" className="btn-ghost-link" onClick={() => onChange([])} disabled={n === 0}>
-              Effacer
+              {t("Effacer")}
             </button>
           </div>
         </div>

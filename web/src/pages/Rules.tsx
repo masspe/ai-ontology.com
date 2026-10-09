@@ -22,6 +22,7 @@ import {
   type Rule,
   type Stats,
 } from "../api";
+import { getLang, t } from "../lib/i18n";
 
 // ---------------------------------------------------------------------------
 // Rule row derived from the live API.
@@ -39,6 +40,20 @@ interface RuleRow {
   updated: string;
 }
 
+function fmtDate(d: Date): string {
+  return d.toLocaleDateString(getLang() === "fr" ? "fr-CH" : "en-GB", { year: "numeric", month: "short", day: "numeric" });
+}
+
+// The status words are filter keys (they stay French); this is what the user reads.
+function statusLabel(s: RuleStatus): string {
+  switch (s) {
+    case "Active": return t("Active");
+    case "Vérifiée": return t("Vérifiée");
+    case "Brouillon": return t("Brouillon");
+    case "Désactivée": return t("Désactivée");
+  }
+}
+
 function ruleStatus(r: Rule): RuleStatus {
   const raw = (r.properties?.status as string | undefined)?.toLowerCase();
   if (raw === "reviewed") return "Vérifiée";
@@ -50,11 +65,11 @@ function ruleStatus(r: Rule): RuleStatus {
 function ruleUpdatedAt(r: Rule): string {
   const v = r.properties?.updated_at ?? r.properties?.created_at;
   if (typeof v === "number") {
-    return new Date(v * 1000).toLocaleDateString("fr-CH", { year: "numeric", month: "short", day: "numeric" });
+    return fmtDate(new Date(v * 1000));
   }
   if (typeof v === "string") {
     const t = Date.parse(v);
-    if (!isNaN(t)) return new Date(t).toLocaleDateString("fr-CH", { year: "numeric", month: "short", day: "numeric" });
+    if (!isNaN(t)) return fmtDate(new Date(t));
   }
   return "—";
 }
@@ -64,7 +79,7 @@ function ruleToRow(r: Rule): RuleRow {
     id: r.id,
     name: r.name,
     type: r.rule_type,
-    scope: (r.applies_to?.length ? `${r.applies_to.length} fiche(s)` : "—"),
+    scope: (r.applies_to?.length ? t("{n} fiche(s)", { n: r.applies_to.length }) : "—"),
     description: r.description ?? r.when ?? "",
     status: ruleStatus(r),
     updated: ruleUpdatedAt(r),
@@ -382,7 +397,7 @@ export default function Rules() {
     // Group by first concept-id in `applies_to` (or "Unscoped").
     const counts = new Map<string, number>();
     for (const r of rules) {
-      const key = r.applies_to?.[0] != null ? `Fiche #${r.applies_to[0]}` : "Sans portée";
+      const key = r.applies_to?.[0] != null ? t("Fiche #{id}", { id: r.applies_to[0] }) : t("Sans portée");
       counts.set(key, (counts.get(key) ?? 0) + 1);
     }
     const total = rules.length || 1;
@@ -402,13 +417,13 @@ export default function Rules() {
   );
 
   async function onDelete(id: number) {
-    if (!(await confirm({ title: "Supprimer la règle", message: "Supprimer cette règle ?", confirmLabel: "Supprimer", cancelLabel: "Annuler", danger: true }))) return;
+    if (!(await confirm({ title: t("Supprimer la règle"), message: t("Supprimer cette règle ?"), confirmLabel: t("Supprimer"), cancelLabel: t("Annuler"), danger: true }))) return;
     try {
       await deleteRule(id);
       setRules((rs) => rs.filter((r) => r.id !== id));
-      toast.success("Règle supprimée.");
+      toast.success(t("Règle supprimée."));
     } catch (e) {
-      toast.error("Échec de la suppression : " + (e as Error).message);
+      toast.error(t("Échec de la suppression : {msg}", { msg: (e as Error).message }));
     }
   }
 
@@ -432,7 +447,7 @@ export default function Rules() {
       }
       setEditing(null);
     } catch (e) {
-      toast.error("Échec de l'enregistrement : " + (e as Error).message);
+      toast.error(t("Échec de l'enregistrement : {msg}", { msg: (e as Error).message }));
     }
   }
 
@@ -444,33 +459,33 @@ export default function Rules() {
     <>
       <div className="page-header">
         <div>
-          <h1 className="page-title">Règles</h1>
-          <p className="page-subtitle">Ce qui doit être vrai dans vos données, et les exceptions à signaler.</p>
+          <h1 className="page-title">{t("Règles")}</h1>
+          <p className="page-subtitle">{t("Ce qui doit être vrai dans vos données, et les exceptions à signaler.")}</p>
         </div>
       </div>
 
-      {error && <div className="banner banner-error">Échec du chargement des règles : {error}</div>}
+      {error && <div className="banner banner-error">{t("Échec du chargement des règles : {msg}", { msg: error })}</div>}
 
       {/* Stats */}
       <div className="dash-row dash-row-stats">
-        <RichStat label="Règles au total"      value={String(totalRules)}        icon={Icon.total}  tone="blue"   spark={[]} sparkColor="#2563eb" />
-        <RichStat label="Règles actives"       value={String(activeRules)}       icon={Icon.shield} tone="green"  spark={[]} sparkColor="#16a34a" />
-        <RichStat label="Types de règle"       value={String(totalRuleTypes)}    icon={Icon.check}  tone="violet" spark={[]} sparkColor="#7c3aed" />
-        <RichStat label="Fiches concernées"    value={String(rules.reduce((s, r) => s + (r.applies_to?.length ?? 0), 0))} icon={Icon.bolt}   tone="amber"  spark={[]} sparkColor="#d97706" />
+        <RichStat label={t("Règles au total")}      value={String(totalRules)}        icon={Icon.total}  tone="blue"   spark={[]} sparkColor="#2563eb" />
+        <RichStat label={t("Règles actives")}       value={String(activeRules)}       icon={Icon.shield} tone="green"  spark={[]} sparkColor="#16a34a" />
+        <RichStat label={t("Types de règle")}       value={String(totalRuleTypes)}    icon={Icon.check}  tone="violet" spark={[]} sparkColor="#7c3aed" />
+        <RichStat label={t("Fiches concernées")}    value={String(rules.reduce((s, r) => s + (r.applies_to?.length ?? 0), 0))} icon={Icon.bolt}   tone="amber"  spark={[]} sparkColor="#d97706" />
       </div>
 
       {/* Library + Details */}
       <div className="rules-row">
         <Card
           className="rule-library"
-          title="Bibliothèque de règles"
+          title={t("Bibliothèque de règles")}
           actions={
             <button
               className="btn-primary rule-create-btn"
               onClick={() => setEditing("new")}
             >
               <span className="qa-icon-inline">{Icon.plus}</span>
-              Créer une règle
+              {t("Créer une règle")}
             </button>
           }
         >
@@ -479,46 +494,46 @@ export default function Rules() {
               <span className="rule-search-icon" aria-hidden>{Icon.search}</span>
               <input
                 type="search"
-                placeholder="Rechercher une règle..."
+                placeholder={t("Rechercher une règle...")}
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
               />
             </div>
             <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} className="rule-select">
-              {typeOptions.map((t) => <option key={t}>{t}</option>)}
+              {typeOptions.map((o) => <option key={o} value={o}>{o === "Tous les types" ? t("Tous les types") : o}</option>)}
             </select>
             <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="rule-select">
-              <option>Tous les statuts</option>
-              <option>Active</option>
-              <option>Vérifiée</option>
-              <option>Brouillon</option>
-              <option>Désactivée</option>
+              <option value="Tous les statuts">{t("Tous les statuts")}</option>
+              <option value="Active">{t("Active")}</option>
+              <option value="Vérifiée">{t("Vérifiée")}</option>
+              <option value="Brouillon">{t("Brouillon")}</option>
+              <option value="Désactivée">{t("Désactivée")}</option>
             </select>
             <select value={sort} onChange={(e) => setSort(e.target.value)} className="rule-select">
-              <option>Tri : dernière mise à jour</option>
-              <option>Tri : nom</option>
-              <option>Tri : type</option>
+              <option value="Tri : dernière mise à jour">{t("Tri : dernière mise à jour")}</option>
+              <option value="Tri : nom">{t("Tri : nom")}</option>
+              <option value="Tri : type">{t("Tri : type")}</option>
             </select>
           </div>
 
           <table className="table rule-table">
             <thead>
               <tr>
-                <th>Nom</th>
-                <th>Type</th>
-                <th>Portée</th>
-                <th>Description</th>
-                <th>Statut</th>
-                <th>Dernière mise à jour</th>
-                <th>Actions</th>
+                <th>{t("Nom")}</th>
+                <th>{t("Type")}</th>
+                <th>{t("Portée")}</th>
+                <th>{t("Description")}</th>
+                <th>{t("Statut")}</th>
+                <th>{t("Dernière mise à jour")}</th>
+                <th>{t("Actions")}</th>
               </tr>
             </thead>
             <tbody>
               {loading && (
-                <tr><td colSpan={7} className="muted">Chargement des règles…</td></tr>
+                <tr><td colSpan={7} className="muted">{t("Chargement des règles…")}</td></tr>
               )}
               {!loading && filtered.length === 0 && (
-                <tr><td colSpan={7} className="muted">Aucune règle ne correspond aux filtres.</td></tr>
+                <tr><td colSpan={7} className="muted">{t("Aucune règle ne correspond aux filtres.")}</td></tr>
               )}
               {filtered.map((r) => {
                 const tb = typeBadge(r.type);
@@ -537,12 +552,12 @@ export default function Rules() {
                     <td className="muted">{r.type}</td>
                     <td className="muted">{r.scope}</td>
                     <td className="muted rule-desc">{r.description}</td>
-                    <td><span className={`badge ${statusBadge(r.status)}`}>{r.status}</span></td>
+                    <td><span className={`badge ${statusBadge(r.status)}`}>{statusLabel(r.status)}</span></td>
                     <td className="muted">{r.updated}</td>
                     <td>
                       <button
                         className="btn-ghost icon-btn"
-                        aria-label="Supprimer la règle"
+                        aria-label={t("Supprimer la règle")}
                         onClick={(e) => { e.stopPropagation(); onDelete(r.id); }}
                       >
                         {Icon.more}
@@ -555,13 +570,13 @@ export default function Rules() {
           </table>
 
           <div className="rule-pagination">
-            <span className="muted">{filtered.length} règle(s) affichée(s) sur {rows.length}</span>
+            <span className="muted">{t("{n} règle(s) affichée(s) sur {total}", { n: filtered.length, total: rows.length })}</span>
           </div>
         </Card>
 
         <Card
           className="rule-details"
-          title="Détails de la règle"
+          title={t("Détails de la règle")}
         >
           {selected && selectedRule ? (
             <>
@@ -583,28 +598,28 @@ export default function Rules() {
                 <dd className="rd-uri">
                   <span>rule:{selected.id}</span>
                 </dd>
-                <dt>📦 Type de règle</dt>
+                <dt>📦 {t("Type de règle")}</dt>
                 <dd><span className="tag-chip tag-core">{selected.type}</span></dd>
-                <dt>⚠ Stricte</dt>
-                <dd><span className="tag-chip tag-high">{selectedRule.strict ? "Oui" : "Non"}</span></dd>
-                <dt>🕓 Dernière mise à jour</dt>
+                <dt>⚠ {t("Stricte")}</dt>
+                <dd><span className="tag-chip tag-high">{selectedRule.strict ? t("Oui") : t("Non")}</span></dd>
+                <dt>🕓 {t("Dernière mise à jour")}</dt>
                 <dd>{selected.updated}</dd>
-                <dt>🔖 S'applique à</dt>
+                <dt>🔖 {t("S'applique à")}</dt>
                 <dd>
                   {selectedRule.applies_to?.length
                     ? selectedRule.applies_to.map((cid) => (
-                        <span key={cid} className="tag-chip">Fiche #{cid}</span>
+                        <span key={cid} className="tag-chip">{t("Fiche #{id}", { id: cid })}</span>
                       ))
                     : <span className="muted">—</span>}
                 </dd>
               </dl>
 
               <div className="rd-logic">
-                <div className="rd-logic-title">Logique de la règle</div>
+                <div className="rd-logic-title">{t("Logique de la règle")}</div>
                 <pre className="rd-code">
                   <code>
-                    <span className="ln">1</span><span className="kw">SI</span> {selectedRule.when || "(aucune condition)"}{"\n"}
-                    <span className="ln">2</span><span className="kw">ALORS</span> {selectedRule.then || "(aucune action)"}
+                    <span className="ln">1</span><span className="kw">{t("SI")}</span> {selectedRule.when || t("(aucune condition)")}{"\n"}
+                    <span className="ln">2</span><span className="kw">{t("ALORS")}</span> {selectedRule.then || t("(aucune action)")}
                   </code>
                 </pre>
               </div>
@@ -614,16 +629,16 @@ export default function Rules() {
                   className="btn-ghost"
                   onClick={() => selectedRule && setEditing(selectedRule)}
                 >
-                  <span className="qa-icon-inline">{Icon.edit}</span> Modifier la règle
+                  <span className="qa-icon-inline">{Icon.edit}</span> {t("Modifier la règle")}
                 </button>
                 <button className="btn-ghost" onClick={() => onDelete(selected.id)}>
-                  <span className="qa-icon-inline">{Icon.flask}</span> Supprimer
+                  <span className="qa-icon-inline">{Icon.flask}</span> {t("Supprimer")}
                 </button>
               </div>
 
               {categories.length > 0 && (
                 <div className="rd-categories">
-                  <div className="card-title"><span>Catégories de règles</span></div>
+                  <div className="card-title"><span>{t("Catégories de règles")}</span></div>
                   <div className="rd-cat-row">
                     <Donut data={categories} />
                     <ul className="rd-cat-legend">
@@ -641,29 +656,29 @@ export default function Rules() {
               )}
             </>
           ) : (
-            <p className="muted">{loading ? "Chargement…" : "Aucune règle sélectionnée."}</p>
+            <p className="muted">{loading ? t("Chargement…") : t("Aucune règle sélectionnée.")}</p>
           )}
         </Card>
       </div>
 
       {/* Bottom row */}
       <div className="rules-bottom">
-        <Card title="Activité récente">
+        <Card title={t("Activité récente")}>
           <ul className="rule-activity">
-            {rules.length === 0 && <li className="muted">Aucune activité pour l'instant.</li>}
+            {rules.length === 0 && <li className="muted">{t("Aucune activité pour l'instant.")}</li>}
             {rules.slice(0, 5).map((r) => (
               <li key={r.id}>
                 <span className="act-icon act-ok">{Icon.check}</span>
-                <span className="ra-text">Règle « {r.name} » présente</span>
+                <span className="ra-text">{t("Règle « {name} » présente", { name: r.name })}</span>
                 <span className="muted ra-time">{ruleUpdatedAt(r)}</span>
               </li>
             ))}
           </ul>
         </Card>
 
-        <Card title="Portées principales">
+        <Card title={t("Portées principales")}>
           <ul className="bar-list">
-            {domains.length === 0 && <li className="muted">Aucune portée.</li>}
+            {domains.length === 0 && <li className="muted">{t("Aucune portée.")}</li>}
             {domains.map((d) => (
               <li key={d.name} className="bar-row">
                 <span className="bar-label">{d.name}</span>
@@ -775,15 +790,15 @@ function RuleModal({ initial, ontology, concepts, onCancel, onSave }: RuleModalP
         onClick={(e) => e.stopPropagation()}
         onSubmit={submit}
       >
-        <h3 className="modal-title">{isEdit ? "Modifier la règle" : "Créer une règle"}</h3>
+        <h3 className="modal-title">{isEdit ? t("Modifier la règle") : t("Créer une règle")}</h3>
 
         <div className="modal-ai">
-          <div className="modal-ai-title">Générer avec l'IA</div>
+          <div className="modal-ai-title">{t("Générer avec l'IA")}</div>
           <textarea
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
             rows={2}
-            placeholder="Décrivez la règle à créer…"
+            placeholder={t("Décrivez la règle à créer…")}
           />
           <div className="modal-ai-row">
             <button
@@ -792,23 +807,23 @@ function RuleModal({ initial, ontology, concepts, onCancel, onSave }: RuleModalP
               onClick={onGenerate}
               disabled={!canGenerate}
             >
-              {generating ? "Génération…" : "Générer"}
+              {generating ? t("Génération…") : t("Générer")}
             </button>
             <small className="muted">
               {appliesTo.length === 0
-                ? "Sélectionnez au moins une fiche sous « S'applique à » avant de générer."
+                ? t("Sélectionnez au moins une fiche sous « S'applique à » avant de générer.")
                 : !ruleType
-                  ? "Choisissez d'abord un type de règle."
+                  ? t("Choisissez d'abord un type de règle.")
                   : !prompt.trim()
-                    ? "Décrivez la règle pour activer la génération."
-                    : "Remplit Nom, Si, Alors, Description, Stricte."}
+                    ? t("Décrivez la règle pour activer la génération.")
+                    : t("Remplit Nom, Si, Alors, Description, Stricte.")}
             </small>
           </div>
           {genError && <div className="modal-ai-error">{genError}</div>}
         </div>
 
         <label className="modal-field">
-          <span>Type de règle</span>
+          <span>{t("Type de règle")}</span>
           {ruleTypes.length > 0 ? (
             <select
               value={ruleType}
@@ -828,31 +843,31 @@ function RuleModal({ initial, ontology, concepts, onCancel, onSave }: RuleModalP
               required
             />
           )}
-          {isEdit && <small className="muted">Le type ne peut pas être modifié.</small>}
+          {isEdit && <small className="muted">{t("Le type ne peut pas être modifié.")}</small>}
         </label>
 
         <label className="modal-field">
-          <span>Nom</span>
+          <span>{t("Nom")}</span>
           <input value={name} onChange={(e) => setName(e.target.value)} required />
         </label>
 
         <label className="modal-field">
-          <span>Description</span>
+          <span>{t("Description")}</span>
           <input value={description} onChange={(e) => setDescription(e.target.value)} />
         </label>
 
         <label className="modal-field">
-          <span>Si</span>
+          <span>{t("Si")}</span>
           <textarea value={when} onChange={(e) => setWhen(e.target.value)} rows={2} />
         </label>
 
         <label className="modal-field">
-          <span>Alors</span>
+          <span>{t("Alors")}</span>
           <textarea value={then} onChange={(e) => setThen(e.target.value)} rows={2} />
         </label>
 
         <label className="modal-field">
-          <span>S'applique à (fiches) <span className="modal-req">*</span></span>
+          <span>{t("S'applique à (fiches)")} <span className="modal-req">*</span></span>
           <select
             multiple
             value={appliesTo.map(String)}
@@ -872,10 +887,10 @@ function RuleModal({ initial, ontology, concepts, onCancel, onSave }: RuleModalP
             ))}
           </select>
           <small className="muted">
-            Maintenez Ctrl/Cmd pour une sélection multiple. Au moins une fiche est requise.
+            {t("Maintenez Ctrl/Cmd pour une sélection multiple. Au moins une fiche est requise.")}
           </small>
           {showAppliesError && appliesTo.length === 0 && (
-            <small className="modal-field-error">Sélectionnez au moins une fiche.</small>
+            <small className="modal-field-error">{t("Sélectionnez au moins une fiche.")}</small>
           )}
         </label>
 
@@ -885,15 +900,15 @@ function RuleModal({ initial, ontology, concepts, onCancel, onSave }: RuleModalP
             checked={strict}
             onChange={(e) => setStrict(e.target.checked)}
           />
-          <span>Stricte (considérée comme active)</span>
+          <span>{t("Stricte (considérée comme active)")}</span>
         </label>
 
         <div className="modal-actions">
           <button type="button" className="btn-ghost" onClick={onCancel}>
-            Annuler
+            {t("Annuler")}
           </button>
           <button type="submit" className="btn-primary">
-            {isEdit ? "Enregistrer" : "Créer"}
+            {isEdit ? t("Enregistrer") : t("Créer")}
           </button>
         </div>
 

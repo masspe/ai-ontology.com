@@ -5,6 +5,7 @@
 // what it is, its links to other sheets, the documents it came from, the
 // rules and actions that concern it, and the corrections, made in place.
 
+import { t } from "../lib/i18n";
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import Card from "../components/Card";
@@ -47,7 +48,7 @@ export default function ConceptSheet() {
     setEditing(false);
     setError(null);
     if (!Number.isInteger(id) || id < 0) {
-      setError(`Fiche inconnue : ${raw}`);
+      setError(t("Fiche inconnue : {raw}", { raw }));
       return;
     }
     (async () => {
@@ -97,12 +98,12 @@ export default function ConceptSheet() {
       <>
         <div className="error-banner">{error}</div>
         <p>
-          <Link to="/concepts">Retour aux fiches</Link>
+          <Link to="/concepts">{t("Retour aux fiches")}</Link>
         </p>
       </>
     );
   }
-  if (!concept) return <p className="muted">Chargement…</p>;
+  if (!concept) return <p className="muted">{t("Chargement…")}</p>;
 
   const props = Object.entries(concept.properties ?? {}).filter(([k]) => k !== "source_file" && k !== "lang");
   const sourceFile = text(concept.properties?.source_file);
@@ -117,7 +118,7 @@ export default function ConceptSheet() {
         {n.name} <span className="muted">({n.concept_type})</span>
       </Link>
     ) : (
-      <Link to={`/concepts/${other}`}>fiche {other}</Link>
+      <Link to={`/concepts/${other}`}>{t("fiche {n}", { n: other })}</Link>
     );
   };
 
@@ -126,7 +127,7 @@ export default function ConceptSheet() {
       <div className="page-header">
         <div>
           <p className="muted" style={{ margin: 0 }}>
-            <Link to="/concepts">Fiches</Link> › {concept.concept_type}
+            <Link to="/concepts">{t("Fiches")}</Link> › {concept.concept_type}
           </p>
           {editing ? (
             <form
@@ -137,40 +138,40 @@ export default function ConceptSheet() {
               }}
             >
               <input
-                aria-label="Nom"
+                aria-label={t("Nom")}
                 value={draft.name}
                 onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))}
                 required
               />
               <textarea
-                aria-label="Description"
+                aria-label={t("Description")}
                 rows={3}
                 value={draft.description}
                 onChange={(e) => setDraft((d) => ({ ...d, description: e.target.value }))}
               />
               <div className="onboarding-actions">
                 <button className="btn-primary" type="submit">
-                  Enregistrer
+                  {t("Enregistrer")}
                 </button>
                 <button className="btn-outline" type="button" onClick={() => setEditing(false)}>
-                  Annuler
+                  {t("Annuler")}
                 </button>
               </div>
             </form>
           ) : (
             <>
               <h1 className="page-title">{concept.name}</h1>
-              <p className="page-subtitle">{concept.description || "Pas de description."}</p>
+              <p className="page-subtitle">{concept.description || t("Pas de description.")}</p>
             </>
           )}
         </div>
         {!editing && (
           <div className="onboarding-actions">
             <button className="btn-outline" onClick={() => setEditing(true)}>
-              Corriger
+              {t("Corriger")}
             </button>
             <Link className="btn-outline" to={`/graph?focus=${concept.id}`}>
-              Voir dans le graphe
+              {t("Voir dans le graphe")}
             </Link>
           </div>
         )}
@@ -178,11 +179,11 @@ export default function ConceptSheet() {
       {error && <div className="error-banner">{error}</div>}
 
       <div className="dash-row sheet-row">
-        <Card title={`Liens (${relations.length})`}>
+        <Card title={t("Liens ({n})", { n: relations.length })}>
           {relations.length === 0 ? (
             <p className="muted">
-              Aucun lien pour l'instant. Les liens viennent des documents importés ou du{" "}
-              <Link to="/graph">graphe</Link>.
+              {t("Aucun lien pour l'instant. Les liens viennent des documents importés ou du")}{" "}
+              <Link to="/graph">{t("graphe")}</Link>.
             </p>
           ) : (
             <ul className="sheet-list">
@@ -193,16 +194,16 @@ export default function ConceptSheet() {
               ))}
               {incoming.map((r) => (
                 <li key={r.id}>
-                  {link(r.source)} <span className="badge">{r.relation_type}</span> <span className="muted">→ cette fiche</span>
+                  {link(r.source)} <span className="badge">{r.relation_type}</span> <span className="muted">{t("→ cette fiche")}</span>
                 </li>
               ))}
             </ul>
           )}
         </Card>
 
-        <Card title={`Informations (${props.length})`}>
+        <Card title={t("Informations ({n})", { n: props.length })}>
           {props.length === 0 ? (
-            <p className="muted">Aucune information structurée.</p>
+            <p className="muted">{t("Aucune information structurée.")}</p>
           ) : (
             <table className="compact-table">
               <tbody>
@@ -219,12 +220,12 @@ export default function ConceptSheet() {
       </div>
 
       <div className="dash-row sheet-row">
-        <Card title="Documents d'origine">
+        <Card title={t("Documents d'origine")}>
           {origin.length === 0 ? (
             <p className="muted">
               {sourceFile
-                ? `Importée depuis ${sourceFile}.`
-                : "Origine inconnue : fiche créée à la main ou importée avant le suivi des documents."}
+                ? t("Importée depuis {file}.", { file: sourceFile })
+                : t("Origine inconnue : fiche créée à la main ou importée avant le suivi des documents.")}
             </p>
           ) : (
             <ul className="sheet-list">
@@ -232,7 +233,7 @@ export default function ConceptSheet() {
                 <li key={f.id}>
                   <Link to="/files">{f.name}</Link>{" "}
                   <span className="muted">
-                    {f.concepts} fiche(s), {f.relations} lien(s)
+                    {t("{n} fiche(s), {m} lien(s)", { n: f.concepts, m: f.relations })}
                   </span>
                 </li>
               ))}
@@ -240,23 +241,23 @@ export default function ConceptSheet() {
           )}
         </Card>
 
-        <Card title={`Règles et actions (${rules.length + actions.length})`}>
+        <Card title={t("Règles et actions ({n})", { n: rules.length + actions.length })}>
           {rules.length + actions.length === 0 ? (
             <p className="muted">
-              Aucune règle ni action ne concerne cette fiche. <Link to="/rules">Définir une règle</Link>
+              {t("Aucune règle ni action ne concerne cette fiche.")} <Link to="/rules">{t("Définir une règle")}</Link>
             </p>
           ) : (
             <ul className="sheet-list">
               {rules.map((r) => (
                 <li key={`r${r.id}`}>
-                  <span className="badge">{r.applies_to.length === 0 ? "règle générale" : "règle"}</span>{" "}
+                  <span className="badge">{r.applies_to.length === 0 ? t("règle générale") : t("règle")}</span>{" "}
                   <Link to="/rules">{r.name}</Link>
-                  {r.strict && <span className="badge badge-warning"> stricte</span>}
+                  {r.strict && <span className="badge badge-warning"> {t("stricte")}</span>}
                 </li>
               ))}
               {actions.map((a) => (
                 <li key={`a${a.id}`}>
-                  <span className="badge">action</span> <Link to="/actions">{a.name}</Link>
+                  <span className="badge">{t("action")}</span> <Link to="/actions">{a.name}</Link>
                 </li>
               ))}
             </ul>

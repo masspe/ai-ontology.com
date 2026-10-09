@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Mediasoft-Commercial
 // Copyright (C) 2026 Mediasoft & Cie S.A.
 
+import { locale, t } from "../lib/i18n";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import Card from "../components/Card";
 import Sparkline from "../components/Sparkline";
@@ -49,11 +50,11 @@ function actionStatus(a: ActionInstance): ActionStatus {
 function actionUpdatedAt(a: ActionInstance): string {
   const v = a.parameters?.updated_at ?? a.parameters?.created_at;
   if (typeof v === "number") {
-    return new Date(v * 1000).toLocaleDateString("fr-CH", { year: "numeric", month: "short", day: "numeric" });
+    return new Date(v * 1000).toLocaleDateString(locale(), { year: "numeric", month: "short", day: "numeric" });
   }
   if (typeof v === "string") {
     const t = Date.parse(v);
-    if (!isNaN(t)) return new Date(t).toLocaleDateString("fr-CH", { year: "numeric", month: "short", day: "numeric" });
+    if (!isNaN(t)) return new Date(t).toLocaleDateString(locale(), { year: "numeric", month: "short", day: "numeric" });
   }
   return "—";
 }
@@ -63,7 +64,7 @@ function actionToRow(a: ActionInstance): ActionRow {
     id: a.id,
     name: a.name,
     type: a.action_type,
-    trigger: (a.parameters?.trigger as string | undefined) ?? "Manuel",
+    trigger: (a.parameters?.trigger as string | undefined) ?? t("Manuel"),
     description: a.description ?? a.effect ?? "",
     status: actionStatus(a),
     lastRun: actionUpdatedAt(a),
@@ -204,9 +205,9 @@ function typeBadge(type: string): { cls: string; dot: string } {
   return known[type] ?? { cls: "action-type-automation", dot: typeColor(type) };
 }
 
-const STATUS_LABEL: Record<ActionStatus, string> = {
-  Active: "Active", Reviewed: "Vérifiée", Draft: "Brouillon", Paused: "En pause",
-};
+function statusLabels(): Record<ActionStatus, string> {
+  return { Active: t("Active"), Reviewed: t("Vérifiée"), Draft: t("Brouillon"), Paused: t("En pause") };
+}
 
 function statusBadge(s: ActionStatus): string {
   switch (s) {
@@ -306,9 +307,15 @@ export default function Actions() {
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [search, setSearch] = useState("");
-  const [typeFilter, setTypeFilter] = useState<string>("Tous les types");
-  const [statusFilter, setStatusFilter] = useState<string>("Tous les statuts");
-  const [sort, setSort] = useState<string>("Tri : dernière mise à jour");
+  // The sentinels are the translated labels themselves: the language does not change without a reload.
+  const ALL_TYPES = t("Tous les types");
+  const ALL_STATUSES = t("Tous les statuts");
+  const SORT_NAME = t("Tri : nom");
+  const SORT_TYPE = t("Tri : type");
+  const STATUS_LABEL = statusLabels();
+  const [typeFilter, setTypeFilter] = useState<string>(ALL_TYPES);
+  const [statusFilter, setStatusFilter] = useState<string>(ALL_STATUSES);
+  const [sort, setSort] = useState<string>(t("Tri : dernière mise à jour"));
   const [ontology, setOntology] = useState<Ontology | null>(null);
   const [allConcepts, setAllConcepts] = useState<Concept[]>([]);
   const [editing, setEditing] = useState<ActionInstance | "new" | null>(null);
@@ -355,21 +362,21 @@ export default function Actions() {
 
   const typeOptions = useMemo(() => {
     const set = new Set<string>(rows.map((r) => r.type));
-    return ["Tous les types", ...Array.from(set).sort()];
-  }, [rows]);
+    return [ALL_TYPES, ...Array.from(set).sort()];
+  }, [rows, ALL_TYPES]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     let out = rows.filter((a) => {
       if (q && !(a.name.toLowerCase().includes(q) || a.description.toLowerCase().includes(q))) return false;
-      if (typeFilter !== "Tous les types" && a.type !== typeFilter) return false;
-      if (statusFilter !== "Tous les statuts" && a.status !== statusFilter) return false;
+      if (typeFilter !== ALL_TYPES && a.type !== typeFilter) return false;
+      if (statusFilter !== ALL_STATUSES && a.status !== statusFilter) return false;
       return true;
     });
-    if (sort === "Tri : nom") out = [...out].sort((a, b) => a.name.localeCompare(b.name));
-    else if (sort === "Tri : type") out = [...out].sort((a, b) => a.type.localeCompare(b.type));
+    if (sort === SORT_NAME) out = [...out].sort((a, b) => a.name.localeCompare(b.name));
+    else if (sort === SORT_TYPE) out = [...out].sort((a, b) => a.type.localeCompare(b.type));
     return out;
-  }, [rows, search, typeFilter, statusFilter, sort]);
+  }, [rows, search, typeFilter, statusFilter, sort, ALL_TYPES, ALL_STATUSES, SORT_NAME, SORT_TYPE]);
 
   const selected = useMemo(
     () => rows.find((r) => r.id === selectedId) ?? rows[0] ?? null,
@@ -385,12 +392,13 @@ export default function Actions() {
     const counts: Record<ActionStatus, number> = {
       Active: 0, Reviewed: 0, Draft: 0, Paused: 0,
     };
+    const labels = statusLabels();
     for (const r of rows) counts[r.status] += 1;
     return [
-      { name: STATUS_LABEL.Active,   count: counts.Active,   color: "#2563eb" },
-      { name: STATUS_LABEL.Reviewed, count: counts.Reviewed, color: "#7c3aed" },
-      { name: STATUS_LABEL.Draft,    count: counts.Draft,    color: "#d97706" },
-      { name: STATUS_LABEL.Paused,   count: counts.Paused,   color: "#dc2626" },
+      { name: labels.Active,   count: counts.Active,   color: "#2563eb" },
+      { name: labels.Reviewed, count: counts.Reviewed, color: "#7c3aed" },
+      { name: labels.Draft,    count: counts.Draft,    color: "#d97706" },
+      { name: labels.Paused,   count: counts.Paused,   color: "#dc2626" },
     ].filter((d) => d.count > 0);
   }, [rows]);
 
@@ -406,13 +414,13 @@ export default function Actions() {
   }, [rows]);
 
   async function onDelete(id: number) {
-    if (!(await confirm({ title: "Supprimer l'action", message: "Supprimer cette action ?", confirmLabel: "Supprimer", cancelLabel: "Annuler", danger: true }))) return;
+    if (!(await confirm({ title: t("Supprimer l'action"), message: t("Supprimer cette action ?"), confirmLabel: t("Supprimer"), cancelLabel: t("Annuler"), danger: true }))) return;
     try {
       await deleteAction(id);
       setActions((rs) => rs.filter((r) => r.id !== id));
-      toast.success("Action supprimée.");
+      toast.success(t("Action supprimée."));
     } catch (e) {
-      toast.error("Échec de la suppression : " + (e as Error).message);
+      toast.error(t("Échec de la suppression : {msg}", { msg: (e as Error).message }));
     }
   }
 
@@ -438,7 +446,7 @@ export default function Actions() {
       }
       setEditing(null);
     } catch (e) {
-      toast.error("Échec de l'enregistrement : " + (e as Error).message);
+      toast.error(t("Échec de l'enregistrement : {msg}", { msg: (e as Error).message }));
     }
   }
 
@@ -450,33 +458,33 @@ export default function Actions() {
     <>
       <div className="page-header">
         <div>
-          <h1 className="page-title">Actions</h1>
-          <p className="page-subtitle">Les automatisations déclenchées par le contenu de vos données.</p>
+          <h1 className="page-title">{t("Actions")}</h1>
+          <p className="page-subtitle">{t("Les automatisations déclenchées par le contenu de vos données.")}</p>
         </div>
       </div>
 
-      {error && <div className="banner banner-error">Échec du chargement des actions : {error}</div>}
+      {error && <div className="banner banner-error">{t("Échec du chargement des actions : {error}", { error })}</div>}
 
       {/* Stats */}
       <div className="dash-row dash-row-stats">
-        <RichStat label="Total des actions"   value={String(totalActions)}              icon={Icon.bolt}        tone="blue"   spark={[]} sparkColor="#2563eb" />
-        <RichStat label="Automatisations actives" value={String(activeActions)}             icon={Icon.bot}         tone="green"  spark={[]} sparkColor="#16a34a" />
-        <RichStat label="Types d'action"    value={String(stats?.action_types ?? 0)}  icon={Icon.checkCircle} tone="violet" spark={[]} sparkColor="#7c3aed" />
-        <RichStat label="En pause / brouillon" value={String(rows.filter((r) => r.status === "Paused" || r.status === "Draft").length)} icon={Icon.alert} tone="red" spark={[]} sparkColor="#dc2626" />
+        <RichStat label={t("Total des actions")}   value={String(totalActions)}              icon={Icon.bolt}        tone="blue"   spark={[]} sparkColor="#2563eb" />
+        <RichStat label={t("Automatisations actives")} value={String(activeActions)}             icon={Icon.bot}         tone="green"  spark={[]} sparkColor="#16a34a" />
+        <RichStat label={t("Types d'action")}    value={String(stats?.action_types ?? 0)}  icon={Icon.checkCircle} tone="violet" spark={[]} sparkColor="#7c3aed" />
+        <RichStat label={t("En pause / brouillon")} value={String(rows.filter((r) => r.status === "Paused" || r.status === "Draft").length)} icon={Icon.alert} tone="red" spark={[]} sparkColor="#dc2626" />
       </div>
 
       {/* Library + Details */}
       <div className="rules-row">
         <Card
           className="rule-library"
-          title="Bibliothèque d'actions"
+          title={t("Bibliothèque d'actions")}
           actions={
             <button
               className="btn-primary rule-create-btn"
               onClick={() => setEditing("new")}
             >
               <span className="qa-icon-inline">{Icon.plus}</span>
-              Créer une action
+              {t("Créer une action")}
             </button>
           }
         >
@@ -485,40 +493,40 @@ export default function Actions() {
               <span className="rule-search-icon" aria-hidden>{Icon.search}</span>
               <input
                 type="search"
-                placeholder="Rechercher des actions..."
+                placeholder={t("Rechercher des actions...")}
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
               />
             </div>
             <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} className="rule-select">
-              {typeOptions.map((t) => <option key={t}>{t}</option>)}
+              {typeOptions.map((o) => <option key={o}>{o}</option>)}
             </select>
             <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="rule-select">
-              <option>Tous les statuts</option>
+              <option>{ALL_STATUSES}</option>
               {(Object.keys(STATUS_LABEL) as ActionStatus[]).map((s) => <option key={s} value={s}>{STATUS_LABEL[s]}</option>)}
             </select>
             <select value={sort} onChange={(e) => setSort(e.target.value)} className="rule-select">
-              <option>Tri : dernière mise à jour</option>
-              <option>Tri : nom</option>
-              <option>Tri : type</option>
+              <option>{t("Tri : dernière mise à jour")}</option>
+              <option>{SORT_NAME}</option>
+              <option>{SORT_TYPE}</option>
             </select>
           </div>
 
           <table className="table rule-table">
             <thead>
               <tr>
-                <th>Nom de l'action</th>
-                <th>Type</th>
-                <th>Déclencheur</th>
-                <th>Description</th>
-                <th>Statut</th>
-                <th>Dernière exécution</th>
-                <th>Actions</th>
+                <th>{t("Nom de l'action")}</th>
+                <th>{t("Type")}</th>
+                <th>{t("Déclencheur")}</th>
+                <th>{t("Description")}</th>
+                <th>{t("Statut")}</th>
+                <th>{t("Dernière exécution")}</th>
+                <th>{t("Actions")}</th>
               </tr>
             </thead>
             <tbody>
-              {loading && <tr><td colSpan={7} className="muted">Chargement des actions…</td></tr>}
-              {!loading && filtered.length === 0 && <tr><td colSpan={7} className="muted">Aucune action ne correspond aux filtres actuels.</td></tr>}
+              {loading && <tr><td colSpan={7} className="muted">{t("Chargement des actions…")}</td></tr>}
+              {!loading && filtered.length === 0 && <tr><td colSpan={7} className="muted">{t("Aucune action ne correspond aux filtres actuels.")}</td></tr>}
               {filtered.map((a) => {
                 const tb = typeBadge(a.type);
                 return (
@@ -541,7 +549,7 @@ export default function Actions() {
                     <td>
                       <button
                         className="btn-ghost icon-btn"
-                        aria-label="Supprimer l'action"
+                        aria-label={t("Supprimer l'action")}
                         onClick={(e) => { e.stopPropagation(); onDelete(a.id); }}
                       >
                         {Icon.trash}
@@ -554,13 +562,13 @@ export default function Actions() {
           </table>
 
           <div className="rule-pagination">
-            <span className="muted">Affichage de {filtered.length} sur {rows.length} actions</span>
+            <span className="muted">{t("Affichage de {n} sur {m} actions", { n: filtered.length, m: rows.length })}</span>
           </div>
         </Card>
 
         <Card
           className="rule-details"
-          title="Détails de l'action"
+          title={t("Détails de l'action")}
         >
           {selected && selectedAction ? (
             <>
@@ -577,25 +585,25 @@ export default function Actions() {
               </div>
 
               <dl className="rd-grid">
-                <dt>🔗 Identifiant</dt>
+                <dt>🔗 {t("Identifiant")}</dt>
                 <dd className="rd-uri"><span>action:{selected.id}</span></dd>
-                <dt>📦 Type d'action</dt>
+                <dt>📦 {t("Type d'action")}</dt>
                 <dd><span className="tag-chip tag-core">{selected.type}</span></dd>
-                <dt>⚡ Déclencheur</dt>
+                <dt>⚡ {t("Déclencheur")}</dt>
                 <dd><span className="tag-chip">{selected.trigger}</span></dd>
-                <dt>🎯 Sujet</dt>
-                <dd><span className="tag-chip">Fiche #{selectedAction.subject}</span></dd>
-                <dt>🎯 Objet</dt>
-                <dd>{selectedAction.object != null ? <span className="tag-chip">Fiche #{selectedAction.object}</span> : <span className="muted">—</span>}</dd>
-                <dt>🕓 Dernière mise à jour</dt>
+                <dt>🎯 {t("Sujet")}</dt>
+                <dd><span className="tag-chip">{t("Fiche #{n}", { n: selectedAction.subject })}</span></dd>
+                <dt>🎯 {t("Objet")}</dt>
+                <dd>{selectedAction.object != null ? <span className="tag-chip">{t("Fiche #{n}", { n: selectedAction.object })}</span> : <span className="muted">—</span>}</dd>
+                <dt>🕓 {t("Dernière mise à jour")}</dt>
                 <dd>{selected.lastRun}</dd>
               </dl>
 
               <div className="rd-logic">
-                <div className="rd-logic-title">Effet</div>
+                <div className="rd-logic-title">{t("Effet")}</div>
                 <pre className="rd-code">
                   <code>
-                    <span className="ln">1</span>{selectedAction.effect || "(aucun effet déclaré)"}
+                    <span className="ln">1</span>{selectedAction.effect || t("(aucun effet déclaré)")}
                   </code>
                 </pre>
               </div>
@@ -605,16 +613,16 @@ export default function Actions() {
                   className="btn-ghost"
                   onClick={() => selectedAction && setEditing(selectedAction)}
                 >
-                  <span className="qa-icon-inline">{Icon.edit}</span> Modifier l'action
+                  <span className="qa-icon-inline">{Icon.edit}</span> {t("Modifier l'action")}
                 </button>
                 <button className="btn-ghost" onClick={() => onDelete(selected.id)}>
-                  <span className="qa-icon-inline">{Icon.trash}</span> Supprimer
+                  <span className="qa-icon-inline">{Icon.trash}</span> {t("Supprimer")}
                 </button>
               </div>
 
               {runStatus.length > 0 && (
                 <div className="rd-categories">
-                  <div className="card-title"><span>Répartition par statut</span></div>
+                  <div className="card-title"><span>{t("Répartition par statut")}</span></div>
                   <div className="rd-cat-row">
                     <Donut data={runStatus} />
                     <ul className="rd-cat-legend">
@@ -632,29 +640,29 @@ export default function Actions() {
               )}
             </>
           ) : (
-            <p className="muted">{loading ? "Chargement…" : "Aucune action sélectionnée."}</p>
+            <p className="muted">{loading ? t("Chargement…") : t("Aucune action sélectionnée.")}</p>
           )}
         </Card>
       </div>
 
       {/* Bottom row */}
       <div className="actions-bottom">
-        <Card title="Activité récente des actions">
+        <Card title={t("Activité récente des actions")}>
           <ul className="rule-activity">
-            {actions.length === 0 && <li className="muted">Aucune activité pour l'instant.</li>}
+            {actions.length === 0 && <li className="muted">{t("Aucune activité pour l'instant.")}</li>}
             {actions.slice(0, 5).map((a) => (
               <li key={a.id}>
                 <span className="act-icon act-ok">{Icon.checkCircle}</span>
-                <span className="ra-text">Action « {a.name} » présente</span>
+                <span className="ra-text">{t("Action « {name} » présente", { name: a.name })}</span>
                 <span className="muted ra-time">{actionUpdatedAt(a)}</span>
               </li>
             ))}
           </ul>
         </Card>
 
-        <Card title="Principaux types d'action">
+        <Card title={t("Principaux types d'action")}>
           <ul className="bar-list">
-            {domains.length === 0 && <li className="muted">Aucun type.</li>}
+            {domains.length === 0 && <li className="muted">{t("Aucun type.")}</li>}
             {domains.map((d) => (
               <li key={d.name} className="bar-row">
                 <span className="bar-label">{d.name}</span>
@@ -734,10 +742,10 @@ function ActionModal({ initial, ontology, concepts, onCancel, onSave }: ActionMo
         onClick={(e) => e.stopPropagation()}
         onSubmit={submit}
       >
-        <h3 className="modal-title">{isEdit ? "Modifier l'action" : "Créer une action"}</h3>
+        <h3 className="modal-title">{isEdit ? t("Modifier l'action") : t("Créer une action")}</h3>
 
         <label className="modal-field">
-          <span>Type d'action</span>
+          <span>{t("Type d'action")}</span>
           {actionTypes.length > 0 ? (
             <select
               value={actionType}
@@ -745,8 +753,8 @@ function ActionModal({ initial, ontology, concepts, onCancel, onSave }: ActionMo
               disabled={isEdit}
               required
             >
-              {actionTypes.map((t) => (
-                <option key={t} value={t}>{t}</option>
+              {actionTypes.map((at) => (
+                <option key={at} value={at}>{at}</option>
               ))}
             </select>
           ) : (
@@ -757,22 +765,22 @@ function ActionModal({ initial, ontology, concepts, onCancel, onSave }: ActionMo
               required
             />
           )}
-          {isEdit && <small className="muted">Le type ne peut pas être modifié.</small>}
+          {isEdit && <small className="muted">{t("Le type ne peut pas être modifié.")}</small>}
         </label>
 
         <label className="modal-field">
-          <span>Nom</span>
+          <span>{t("Nom")}</span>
           <input value={name} onChange={(e) => setName(e.target.value)} required />
         </label>
 
         <label className="modal-field">
-          <span>Sujet (fiche)</span>
+          <span>{t("Sujet (fiche)")}</span>
           <select
             value={subject === "" ? "" : String(subject)}
             onChange={(e) => setSubject(e.target.value === "" ? "" : Number(e.target.value))}
             required
           >
-            <option value="" disabled>Choisissez une fiche sujet…</option>
+            <option value="" disabled>{t("Choisissez une fiche sujet…")}</option>
             {concepts.map((c) => (
               <option key={c.id} value={c.id}>
                 {c.concept_type}: {c.name}
@@ -782,12 +790,12 @@ function ActionModal({ initial, ontology, concepts, onCancel, onSave }: ActionMo
         </label>
 
         <label className="modal-field">
-          <span>Objet (fiche, facultatif)</span>
+          <span>{t("Objet (fiche, facultatif)")}</span>
           <select
             value={object === "" ? "" : String(object)}
             onChange={(e) => setObject(e.target.value === "" ? "" : Number(e.target.value))}
           >
-            <option value="">(aucun)</option>
+            <option value="">{t("(aucun)")}</option>
             {concepts.map((c) => (
               <option key={c.id} value={c.id}>
                 {c.concept_type}: {c.name}
@@ -797,21 +805,21 @@ function ActionModal({ initial, ontology, concepts, onCancel, onSave }: ActionMo
         </label>
 
         <label className="modal-field">
-          <span>Effet</span>
+          <span>{t("Effet")}</span>
           <textarea value={effect} onChange={(e) => setEffect(e.target.value)} rows={2} />
         </label>
 
         <label className="modal-field">
-          <span>Description</span>
+          <span>{t("Description")}</span>
           <input value={description} onChange={(e) => setDescription(e.target.value)} />
         </label>
 
         <div className="modal-actions">
           <button type="button" className="btn-ghost" onClick={onCancel}>
-            Annuler
+            {t("Annuler")}
           </button>
           <button type="submit" className="btn-primary">
-            {isEdit ? "Enregistrer" : "Créer"}
+            {isEdit ? t("Enregistrer") : t("Créer")}
           </button>
         </div>
 

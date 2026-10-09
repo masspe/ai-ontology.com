@@ -18,6 +18,7 @@ import ReactFlow, {
 import dagre from "dagre";
 import "reactflow/dist/style.css";
 import type { Subgraph } from "../api";
+import { t } from "../lib/i18n";
 
 export type LayoutDir = "LR" | "TB" | "RL" | "BT";
 
@@ -240,8 +241,8 @@ function CanvasInner({
   if (!subgraph || subgraph.concepts.length === 0) {
     return (
       <div className="empty">
-        Rien à afficher : le graphe est vide. <Link to="/files">Déposez des fichiers</Link> ou
-        <Link to="/builder"> définissez le modèle</Link> pour le remplir.
+        {t("Rien à afficher : le graphe est vide.")} <Link to="/files">{t("Déposez des fichiers")}</Link> {t("ou")}{" "}
+        <Link to="/builder">{t("définissez le modèle")}</Link> {t("pour le remplir.")}
       </div>
     );
   }

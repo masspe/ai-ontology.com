@@ -8,6 +8,7 @@
 import { useMemo } from "react";
 import type { Subgraph } from "../api";
 import type { OntologyProposal } from "../lib/proposalTypes";
+import { t } from "../lib/i18n";
 
 // --- palette ---------------------------------------------------------------
 const PALETTE: { fill: string; stroke: string; text: string }[] = [
@@ -243,7 +244,7 @@ export default function OntologyGraph({
   return (
     <div className={`og-wrap${className ? " " + className : ""}`} style={{ minHeight: height }}>
       {lay.nodes.length === 0 ? (
-        <div className="og-empty">Generate or upload sources to populate the ontology graph.</div>
+        <div className="og-empty">{t("Générez ou importez des sources pour remplir le graphe de l'ontologie.")}</div>
       ) : (
         <svg viewBox={`0 0 ${VBW} ${VBH}`} preserveAspectRatio="xMidYMid meet" className="og-svg">
           {/* edges */}

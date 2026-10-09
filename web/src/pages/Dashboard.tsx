@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Mediasoft-Commercial
 // Copyright (C) 2026 Mediasoft & Cie S.A.
 
+import { t } from "../lib/i18n";
 import { useEffect, useState, type ReactNode } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import Card from "../components/Card";
@@ -56,10 +57,10 @@ function fileKindClass(kind: string): string {
 
 function ingestStatus(f: FileRecord): { label: string; cls: string } {
   const s = (f.status || "").toLowerCase();
-  if (s === "processed" || s === "ingested" || s === "done") return { label: "Traité", cls: "badge-success" };
-  if (s === "pending" || s === "queued") return { label: "En attente", cls: "badge-warn" };
-  if (s === "failed" || s === "error") return { label: "Échec", cls: "badge-danger" };
-  if (s === "analyzed") return { label: "Analysé", cls: "badge-accent" };
+  if (s === "processed" || s === "ingested" || s === "done") return { label: t("Traité"), cls: "badge-success" };
+  if (s === "pending" || s === "queued") return { label: t("En attente"), cls: "badge-warn" };
+  if (s === "failed" || s === "error") return { label: t("Échec"), cls: "badge-danger" };
+  if (s === "analyzed") return { label: t("Analysé"), cls: "badge-accent" };
   return { label: f.status || "—", cls: "badge" };
 }
 
@@ -164,7 +165,7 @@ function RichStat({ label, value, deltaPct, icon, tone, spark, sparkColor }: Ric
         {deltaPct != null && (
           <div className={`stat-delta ${cls}`}>
             <span>{arrow} {Math.abs(deltaPct).toFixed(0)}%</span>
-            <span className="muted">vs last period</span>
+            <span className="muted">{t("vs période précédente")}</span>
           </div>
         )}
       </div>
@@ -277,11 +278,11 @@ export default function Dashboard() {
     <>
       <div className="page-header">
         <div>
-          <h1 className="page-title">Accueil</h1>
+          <h1 className="page-title">{t("Accueil")}</h1>
           <p className="page-subtitle">
             {stats
-              ? `${fmtNum(stats.concepts)} fiches et ${fmtNum(stats.relations)} liens, ${fmtNum(stats.concept_types)} types de fiches.`
-              : "En attente du serveur."}
+              ? t("{n} fiches et {m} liens, {k} types de fiches.", { n: fmtNum(stats.concepts), m: fmtNum(stats.relations), k: fmtNum(stats.concept_types) })
+              : t("En attente du serveur.")}
           </p>
         </div>
       </div>
@@ -297,55 +298,55 @@ export default function Dashboard() {
         }}
       >
         <input
-          aria-label="Question"
-          placeholder="Posez une question à vos données : « Quels contrats arrivent à échéance ce mois-ci ? »"
+          aria-label={t("Question")}
+          placeholder={t("Posez une question à vos données : « Quels contrats arrivent à échéance ce mois-ci ? »")}
           value={q}
           onChange={(e) => setQ(e.target.value)}
         />
         <button className="btn-primary" type="submit" disabled={!q.trim()}>
-          Demander
+          {t("Demander")}
         </button>
       </form>
 
       <div className="dash-row dash-row-stats">
-        <RichStat label="Fiches" value={stats?.concepts ?? 0} deltaPct={stats?.deltas.concepts_pct} icon={Icon.users} tone="violet" spark={samples.map((s) => s.concepts)} sparkColor="#7c3aed" />
-        <RichStat label="Liens" value={stats?.relations ?? 0} deltaPct={stats?.deltas.relations_pct} icon={Icon.share} tone="amber" spark={samples.map((s) => s.relations)} sparkColor="#d97706" />
-        <RichStat label="Types de fiches" value={stats?.concept_types ?? 0} deltaPct={stats?.deltas.concept_types_pct} icon={Icon.layers} tone="blue" spark={samples.map((s) => s.concept_types)} sparkColor="#2563eb" />
-        <RichStat label="Règles" value={stats?.rules ?? 0} icon={Icon.shield} tone="green" spark={[]} sparkColor="#16a34a" />
+        <RichStat label={t("Fiches")} value={stats?.concepts ?? 0} deltaPct={stats?.deltas.concepts_pct} icon={Icon.users} tone="violet" spark={samples.map((s) => s.concepts)} sparkColor="#7c3aed" />
+        <RichStat label={t("Liens")} value={stats?.relations ?? 0} deltaPct={stats?.deltas.relations_pct} icon={Icon.share} tone="amber" spark={samples.map((s) => s.relations)} sparkColor="#d97706" />
+        <RichStat label={t("Types de fiches")} value={stats?.concept_types ?? 0} deltaPct={stats?.deltas.concept_types_pct} icon={Icon.layers} tone="blue" spark={samples.map((s) => s.concept_types)} sparkColor="#2563eb" />
+        <RichStat label={t("Règles")} value={stats?.rules ?? 0} icon={Icon.shield} tone="green" spark={[]} sparkColor="#16a34a" />
       </div>
 
       <div className="dash-row home-row">
-        <Card title={`À faire (${todo})`} className="home-todo">
+        <Card title={t("À faire ({n})", { n: todo })} className="home-todo">
           {todo === 0 ? (
-            <p className="muted">Rien en attente. Déposez un document ou posez une question.</p>
+            <p className="muted">{t("Rien en attente. Déposez un document ou posez une question.")}</p>
           ) : (
             <ul className="sheet-list">
               {review && (
                 <li>
                   <Link to="/ingest">
-                    Relecture en cours : {review.name}
+                    {t("Relecture en cours : {name}", { name: review.name })}
                   </Link>{" "}
                   <span className="muted">
-                    {review.concepts} fiche(s) et {review.relations} lien(s) proposés, à vérifier puis ajouter.
+                    {t("{n} fiche(s) et {m} lien(s) proposés, à vérifier puis ajouter.", { n: review.concepts, m: review.relations })}
                   </span>
                 </li>
               )}
               {failed.map((f) => (
                 <li key={f.id}>
-                  <Link to="/files">Import en échec : {f.name}</Link>
+                  <Link to="/files">{t("Import en échec : {name}", { name: f.name })}</Link>
                 </li>
               ))}
             </ul>
           )}
         </Card>
 
-        <Card title="Cette semaine" actions={<Link to="/files" className="btn-ghost-link">Déposer des fichiers</Link>}>
+        <Card title={t("Cette semaine")} actions={<Link to="/files" className="btn-ghost-link">{t("Déposer des fichiers")}</Link>}>
           {thisWeek.length === 0 ? (
-            <p className="muted">Aucun document importé ces 7 derniers jours.</p>
+            <p className="muted">{t("Aucun document importé ces 7 derniers jours.")}</p>
           ) : (
             <p>
-              <strong>{thisWeek.length}</strong> document(s) importé(s) : <strong>{fmtNum(weekConcepts)}</strong> fiche(s) et{" "}
-              <strong>{fmtNum(weekRelations)}</strong> lien(s) ajoutés.
+              <strong>{thisWeek.length}</strong> {t("document(s) importé(s) :")} <strong>{fmtNum(weekConcepts)}</strong> {t("fiche(s) et")}{" "}
+              <strong>{fmtNum(weekRelations)}</strong> {t("lien(s) ajoutés.")}
             </p>
           )}
           <ul className="sheet-list">
@@ -366,16 +367,16 @@ export default function Dashboard() {
       </div>
 
       <div className="dash-row home-row">
-        <Card title="Dernières questions" actions={<Link to="/queries" className="btn-ghost-link">Toutes</Link>}>
+        <Card title={t("Dernières questions")} actions={<Link to="/queries" className="btn-ghost-link">{t("Toutes")}</Link>}>
           {pinnedQueries.length + recentQueries.length === 0 ? (
-            <p className="muted">Aucune question enregistrée. La première se pose ci-dessus.</p>
+            <p className="muted">{t("Aucune question enregistrée. La première se pose ci-dessus.")}</p>
           ) : (
             <ul className="sheet-list">
               {pinnedQueries.map((sq) => (
                 <li key={`p${sq.id}`}>
-                  <span aria-label="Épinglée" title="Épinglée">★</span>{" "}
+                  <span aria-label={t("Épinglée")} title={t("Épinglée")}>★</span>{" "}
                   <Link to={`/queries?run=${sq.id}`}>{sq.name}</Link>{" "}
-                  <span className="muted">rejouer</span>
+                  <span className="muted">{t("rejouer")}</span>
                 </li>
               ))}
               {recentQueries.map((sq) => (
@@ -388,15 +389,15 @@ export default function Dashboard() {
           )}
         </Card>
 
-        <Card title="Règles" actions={<Link to="/rules" className="btn-ghost-link">Gérer</Link>}>
+        <Card title={t("Règles")} actions={<Link to="/rules" className="btn-ghost-link">{t("Gérer")}</Link>}>
           {rules.length === 0 ? (
             <p className="muted">
-              Aucune règle. Une règle dit ce qui doit être vrai (« toute facture est liée à un contrat ») et signale les exceptions.
+              {t("Aucune règle. Une règle dit ce qui doit être vrai (« toute facture est liée à un contrat ») et signale les exceptions.")}
             </p>
           ) : (
             <p>
-              <strong>{rules.length}</strong> règle(s), dont <strong>{strict.length}</strong> stricte(s) ;{" "}
-              {rules.filter((r) => r.applies_to.length === 0).length} générale(s).
+              <strong>{rules.length}</strong> {t("règle(s), dont")} <strong>{strict.length}</strong> {t("stricte(s) ;")}{" "}
+              {rules.filter((r) => r.applies_to.length === 0).length} {t("générale(s).")}
             </p>
           )}
         </Card>

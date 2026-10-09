@@ -16,6 +16,7 @@
 // reviewing, every change is mirrored to `sessionStorage` under
 // `ingest.draft`.
 
+import { t } from "../lib/i18n";
 import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import Card from "../components/Card";
@@ -133,7 +134,7 @@ export default function IngestWizard() {
     // Consumed: Back or a reload must not analyse it a second time.
     nav(".", { replace: true, state: null });
     if (loadDraft()) {
-      toast.info(`Relecture en cours : terminez-la ou annulez-la avant d'importer ${handed.name}`);
+      toast.info(t("Relecture en cours : terminez-la ou annulez-la avant d'importer {name}", { name: handed.name }));
       return;
     }
     setFile(handed);
@@ -153,7 +154,7 @@ export default function IngestWizard() {
 
   async function onAnalyze(picked: File | null = file) {
     if (!picked) {
-      toast.info("Choisissez d'abord un document");
+      toast.info(t("Choisissez d'abord un document"));
       return;
     }
     setStep("analyzing");
@@ -219,12 +220,9 @@ export default function IngestWizard() {
 
   return (
     <div style={{ display: "grid", gap: 16, maxWidth: 1100 }}>
-      <h1 style={{ margin: 0 }}>Importer un document</h1>
+      <h1 style={{ margin: 0 }}>{t("Importer un document")}</h1>
       <p style={{ color: "#475569", margin: 0 }}>
-        Un document en texte libre (PDF, Word, texte) n'a pas de colonnes : le modèle de langage configuré le lit et
-        propose des fiches, des liens et des règles, que vous vérifiez avant qu'ils n'entrent dans vos données. Vous
-        n'avez pas à choisir ce chemin : un document déposé dans Fichiers arrive ici de lui-même ; un fichier structuré
-        (Excel, CSV, JSONL) se charge directement, chaque ligne devenant une fiche.
+        {t("Un document en texte libre (PDF, Word, texte) n'a pas de colonnes : le modèle de langage configuré le lit et propose des fiches, des liens et des règles, que vous vérifiez avant qu'ils n'entrent dans vos données. Vous n'avez pas à choisir ce chemin : un document déposé dans Fichiers arrive ici de lui-même ; un fichier structuré (Excel, CSV, JSONL) se charge directement, chaque ligne devenant une fiche.")}
       </p>
 
       {step === "upload" && (
@@ -247,13 +245,13 @@ export default function IngestWizard() {
 
       {step === "analyzing" && (
         <Card>
-          <p>Lecture du document{file ? ` ${file.name}` : ""}… quelques secondes.</p>
+          <p>{file ? t("Lecture du document {name}… quelques secondes.", { name: file.name }) : t("Lecture du document… quelques secondes.")}</p>
         </Card>
       )}
 
       {step === "review" && proposal && (
         <p className="ingest-summary" data-testid="ingest-summary">
-          {summary(proposal)} Vérifiez, corrigez si besoin, puis ajoutez.
+          {summary(proposal)} {t("Vérifiez, corrigez si besoin, puis ajoutez.")}
         </p>
       )}
       {step === "review" && proposal && (
@@ -299,7 +297,7 @@ export default function IngestWizard() {
 
       {step === "applying" && (
         <Card>
-          <p>Ajout des éléments acceptés à vos données…</p>
+          <p>{t("Ajout des éléments acceptés à vos données…")}</p>
         </Card>
       )}
 
@@ -309,10 +307,10 @@ export default function IngestWizard() {
 
       {step === "error" && (
         <Card>
-          <h2 style={{ marginTop: 0, color: "#b91c1c" }}>Un problème est survenu</h2>
+          <h2 style={{ marginTop: 0, color: "#b91c1c" }}>{t("Un problème est survenu")}</h2>
           <pre style={{ whiteSpace: "pre-wrap", color: "#475569" }}>{error}</pre>
           <button onClick={reset} style={{ marginTop: 8 }}>
-            Recommencer
+            {t("Recommencer")}
           </button>
         </Card>
       )}
@@ -324,10 +322,12 @@ export default function IngestWizard() {
 export function summary(p: OntologyProposal): string {
   const byType = new Map<string, number>();
   for (const c of p.concepts) byType.set(c.concept_type, (byType.get(c.concept_type) ?? 0) + 1);
-  const parts = [...byType.entries()].sort((a, b) => b[1] - a[1]).map(([t, n]) => `${n} ${t}`);
-  const found = parts.length === 0 ? "aucune fiche" : parts.join(", ");
-  const where = p.source?.name ? ` dans ${p.source.name}` : "";
-  return `${found} et ${p.relations.length} lien(s) trouvés${where}.`;
+  const parts = [...byType.entries()].sort((a, b) => b[1] - a[1]).map(([type, n]) => `${n} ${type}`);
+  const found = parts.length === 0 ? t("aucune fiche") : parts.join(", ");
+  const n = p.relations.length;
+  return p.source?.name
+    ? t("{found} et {n} lien(s) trouvés dans {name}.", { found, n, name: p.source.name })
+    : t("{found} et {n} lien(s) trouvés.", { found, n });
 }
 
 // ---------- Upload step ----------
@@ -348,7 +348,7 @@ function UploadStep(props: {
     <Card>
       <div style={{ display: "grid", gap: 12 }}>
         <label style={{ display: "grid", gap: 4 }}>
-          <span style={{ fontSize: 12, color: "#475569" }}>Document</span>
+          <span style={{ fontSize: 12, color: "#475569" }}>{t("Document")}</span>
           <input
             ref={props.fileInput}
             type="file"
@@ -359,7 +359,7 @@ function UploadStep(props: {
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
           <label style={{ display: "grid", gap: 4 }}>
-            <span style={{ fontSize: 12, color: "#475569" }}>Fournisseur d'IA</span>
+            <span style={{ fontSize: 12, color: "#475569" }}>{t("Fournisseur d'IA")}</span>
             <select
               value={props.provider}
               onChange={(e) =>
@@ -368,14 +368,14 @@ function UploadStep(props: {
                 )
               }
             >
-              <option value="default">Par défaut (configuré sur le serveur)</option>
+              <option value="default">{t("Par défaut (configuré sur le serveur)")}</option>
               <option value="openai">OpenAI</option>
               <option value="anthropic">Anthropic</option>
-              <option value="infomaniak">Infomaniak AI (cloud suisse)</option>
+              <option value="infomaniak">{t("Infomaniak AI (cloud suisse)")}</option>
             </select>
           </label>
           <label style={{ display: "grid", gap: 4 }}>
-            <span style={{ fontSize: 12, color: "#475569" }}>Modèle (facultatif)</span>
+            <span style={{ fontSize: 12, color: "#475569" }}>{t("Modèle (facultatif)")}</span>
             <input
               type="text"
               placeholder="gpt-4o-mini / claude-3-7-sonnet-latest"
@@ -384,10 +384,10 @@ function UploadStep(props: {
             />
           </label>
           <label style={{ display: "grid", gap: 4 }}>
-            <span style={{ fontSize: 12, color: "#475569" }}>Langue du document (ISO-639-1)</span>
+            <span style={{ fontSize: 12, color: "#475569" }}>{t("Langue du document (ISO-639-1)")}</span>
             <input
               type="text"
-              placeholder="fr, de, it, … (détection automatique si vide)"
+              placeholder={t("fr, de, it, … (détection automatique si vide)")}
               value={props.languageHint}
               onChange={(e) => props.onLanguageHint(e.target.value)}
               maxLength={5}
@@ -408,7 +408,7 @@ function UploadStep(props: {
               cursor: props.file ? "pointer" : "not-allowed",
             }}
           >
-            Analyser le document
+            {t("Analyser le document")}
           </button>
         </div>
       </div>

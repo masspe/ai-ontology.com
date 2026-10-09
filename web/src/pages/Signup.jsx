@@ -3,6 +3,7 @@ import { useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { msBE } from "../lib/msBE";
 import { useToast } from "../components/Toast.jsx";
+import { t } from "../lib/i18n";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -35,10 +36,10 @@ export default function Signup() {
 
   function validate() {
     const e = {};
-    if (!form.name.trim()) e.name = "Nom requis";
-    if (!EMAIL_RE.test(form.email)) e.email = "Email invalide";
-    if (scorePassword(form.password) < 3) e.password = "Mot de passe trop faible (8+ car., majuscule, chiffre)";
-    if (form.password !== form.confirm) e.confirm = "Les mots de passe ne correspondent pas";
+    if (!form.name.trim()) e.name = t("Nom requis");
+    if (!EMAIL_RE.test(form.email)) e.email = t("Email invalide");
+    if (scorePassword(form.password) < 3) e.password = t("Mot de passe trop faible (8+ car., majuscule, chiffre)");
+    if (form.password !== form.confirm) e.confirm = t("Les mots de passe ne correspondent pas");
     setErrors(e);
     return Object.keys(e).length === 0;
   }
@@ -53,10 +54,10 @@ export default function Signup() {
         password: form.password,
         name: form.name.trim(),
       });
-      toast.success("Compte créé");
+      toast.success(t("Compte créé"));
       nav(next, { replace: true });
     } catch (err) {
-      toast.error(err.message || "Échec de l'inscription");
+      toast.error(err.message || t("Échec de l'inscription"));
     } finally {
       setLoading(false);
     }
@@ -66,21 +67,21 @@ export default function Signup() {
   return (
     <div style={wrap}>
       <form onSubmit={onSubmit} style={card} noValidate>
-        <h1 style={{ marginTop: 0 }}>Créer un compte</h1>
+        <h1 style={{ marginTop: 0 }}>{t("Créer un compte")}</h1>
 
-        <label style={label}>Nom
+        <label style={label}>{t("Nom")}
           <input value={form.name} onChange={set("name")} autoComplete="name" style={input}
             aria-invalid={!!errors.name} />
           {errors.name && <span style={errStyle}>{errors.name}</span>}
         </label>
 
-        <label style={label}>Email
+        <label style={label}>{t("Email")}
           <input type="email" value={form.email} onChange={set("email")} autoComplete="email" style={input}
             aria-invalid={!!errors.email} />
           {errors.email && <span style={errStyle}>{errors.email}</span>}
         </label>
 
-        <label style={label}>Mot de passe
+        <label style={label}>{t("Mot de passe")}
           <input type="password" value={form.password} onChange={set("password")}
             autoComplete="new-password" style={input} aria-invalid={!!errors.password} />
           <div style={{ display: "flex", gap: 4, marginTop: 4 }}>
@@ -94,27 +95,27 @@ export default function Signup() {
           {errors.password && <span style={errStyle}>{errors.password}</span>}
         </label>
 
-        <label style={label}>Confirmer
+        <label style={label}>{t("Confirmer")}
           <input type="password" value={form.confirm} onChange={set("confirm")}
             autoComplete="new-password" style={input} aria-invalid={!!errors.confirm} />
           {errors.confirm && <span style={errStyle}>{errors.confirm}</span>}
         </label>
 
         <button type="submit" disabled={loading} style={primaryBtn}>
-          {loading ? "Création…" : "Créer mon compte"}
+          {loading ? t("Création…") : t("Créer mon compte")}
         </button>
 
-        <div style={divider}><span>ou</span></div>
+        <div style={divider}><span>{t("ou")}</span></div>
 
         <a href={msBE.auth.googleLoginUrl(next)} style={oauthBtn("#fff", "#111", "#ddd")}>
-          S'inscrire avec Google
+          {t("S'inscrire avec Google")}
         </a>
         <a href={msBE.auth.microsoftLoginUrl(next)} style={oauthBtn("#2f2f2f", "#fff", "#2f2f2f")}>
-          S'inscrire avec Microsoft
+          {t("S'inscrire avec Microsoft")}
         </a>
 
         <p style={{ marginTop: 16 }}>
-          Déjà inscrit ? <Link to={`/login?next=${encodeURIComponent(next)}`}>Se connecter</Link>
+          {t("Déjà inscrit ?")} <Link to={`/login?next=${encodeURIComponent(next)}`}>{t("Se connecter")}</Link>
         </p>
       </form>
     </div>

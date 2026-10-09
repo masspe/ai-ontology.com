@@ -9,6 +9,7 @@
 // refusal.
 
 import { listConcepts, type Ontology } from "../api";
+import { getLang, t } from "./i18n";
 
 export interface ModelImpact {
   removed: { type: string; count: number }[];
@@ -29,10 +30,11 @@ export async function modelImpact(current: Ontology | null, proposed: Ontology):
 
 /** « 3 412 fiches concernées : Contract (3 000), Invoice (412). » */
 export function wordImpact(impact: ModelImpact): string {
-  if (impact.total === 0) return "Rien à migrer : aucune fiche ne perd son type.";
+  const locale = getLang() === "fr" ? "fr-CH" : "en-GB";
+  if (impact.total === 0) return t("Rien à migrer : aucune fiche ne perd son type.");
   const parts = impact.removed
     .filter((r) => r.count > 0)
-    .map((r) => `${r.type} (${r.count.toLocaleString("fr-CH")})`)
+    .map((r) => `${r.type} (${r.count.toLocaleString(locale)})`)
     .join(", ");
-  return `${impact.total.toLocaleString("fr-CH")} fiche(s) concernée(s) : ${parts}. Un type encore utilisé ne peut pas être retiré : réaffectez ou supprimez ces fiches d'abord.`;
+  return t("{total} fiche(s) concernée(s) : {parts}. Un type encore utilisé ne peut pas être retiré : réaffectez ou supprimez ces fiches d'abord.", { total: impact.total.toLocaleString(locale), parts });
 }

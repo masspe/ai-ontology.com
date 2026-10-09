@@ -19,6 +19,7 @@
 // useful provenance.
 
 import JSZip from "jszip";
+import { t } from "./i18n";
 
 // ---------- format detection ----------
 
@@ -136,7 +137,7 @@ async function ocrBlob(
   onProgress?: ProgressFn,
   label?: string,
 ): Promise<string> {
-  onProgress?.({ status: `OCR ${label ?? ""}…`.trim() });
+  onProgress?.({ status: t("OCR {label}…", { label: label ?? "" }).trim() });
   const w = await getOcrWorker(langs);
   const res = await w.recognize(blob);
   return (res.data.text ?? "").trim();
@@ -186,7 +187,7 @@ async function extractDocx(
   langs: string,
   onProgress?: ProgressFn,
 ): Promise<string> {
-  onProgress?.({ status: `Parsing ${file.name}…` });
+  onProgress?.({ status: t("Analyse de {name}…", { name: file.name }) });
   const zip = await JSZip.loadAsync(await file.arrayBuffer());
   const docXml = await zip.file("word/document.xml")?.async("string");
   const body = docXml ? docxBodyText(docXml) : "";
@@ -201,7 +202,7 @@ async function extractDocx(
     const ext = extOf(entry.name);
     if (!IMAGE_EXTS.has(ext)) continue;
     onProgress?.({
-      status: `OCR ${file.name} · image ${i + 1}/${mediaEntries.length}`,
+      status: t("OCR {name} · image {i}/{n}", { name: file.name, i: i + 1, n: mediaEntries.length }),
       fraction: (i + 1) / Math.max(1, mediaEntries.length),
     });
     try {
@@ -233,7 +234,7 @@ async function extractPdf(
   onProgress?: ProgressFn,
 ): Promise<string> {
   const pdfjs = await loadPdfjs();
-  onProgress?.({ status: `Parsing ${file.name}…` });
+  onProgress?.({ status: t("Analyse de {name}…", { name: file.name }) });
   const buf = await file.arrayBuffer();
   // pdf.js 6 releases resources through the loading task (the document
   // proxy lost its `destroy`); the task API is the same in 5 and 6.
@@ -242,7 +243,7 @@ async function extractPdf(
   const pages: string[] = [];
   for (let pageNum = 1; pageNum <= doc.numPages; pageNum++) {
     onProgress?.({
-      status: `Reading ${file.name} · page ${pageNum}/${doc.numPages}`,
+      status: t("Lecture de {name} · page {page}/{n}", { name: file.name, page: pageNum, n: doc.numPages }),
       fraction: pageNum / doc.numPages,
     });
     const page = await doc.getPage(pageNum);
@@ -266,7 +267,7 @@ async function extractPdf(
         const ctx = canvas.getContext("2d");
         if (ctx) {
           onProgress?.({
-            status: `OCR ${file.name} · page ${pageNum}/${doc.numPages}`,
+            status: t("OCR {name} · page {page}/{n}", { name: file.name, page: pageNum, n: doc.numPages }),
             fraction: pageNum / doc.numPages,
           });
           await page.render({ canvasContext: ctx, viewport, canvas }).promise;

@@ -32,6 +32,7 @@ import {
   saveProviderConfig,
 } from "../lib/providerConfig";
 import type { LegacyProviderSecrets, ProviderConfig } from "../types/providerConfig";
+import { t } from "../lib/i18n";
 
 interface TestResult { ok: boolean; message: string; }
 
@@ -59,7 +60,7 @@ export default function Settings() {
     try {
       const next = await patchSettings(patch);
       setS(next);
-      setInfo("Réglages enregistrés.");
+      setInfo(t("Réglages enregistrés."));
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -71,7 +72,7 @@ export default function Settings() {
 
   const handleSave = () => {
     saveProviderConfig(cfg);
-    setInfo("Connexion serveur enregistrée. Rechargez les autres onglets pour la prendre en compte.");
+    setInfo(t("Connexion serveur enregistrée. Rechargez les autres onglets pour la prendre en compte."));
     setError(null);
   };
 
@@ -80,21 +81,21 @@ export default function Settings() {
     setTestResult(null);
     try {
       const base = cfg.ontologyApiUrl.trim().replace(/\/$/, "");
-      if (!base) throw new Error("L'URL de base de l'API ontologie est vide");
+      if (!base) throw new Error(t("L'URL de base de l'API ontologie est vide"));
       const headers: Record<string, string> = {};
       if (cfg.ontologyBearerToken.trim()) {
         headers["authorization"] = `Bearer ${cfg.ontologyBearerToken.trim()}`;
       }
       const res = await fetch(`${base}/healthz`, { headers });
       if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
-      let version = "inconnue";
+      let version = t("inconnue");
       try {
         const data = await res.json();
         if (data && typeof data.version === "string") version = data.version;
       } catch {
         /* /healthz may return text — ignore */
       }
-      setTestResult({ ok: true, message: `✅ Serveur joignable — version ${version}` });
+      setTestResult({ ok: true, message: `✅ ${t("Serveur joignable — version {version}", { version })}` });
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       setTestResult({ ok: false, message: `❌ ${msg}` });
@@ -107,8 +108,8 @@ export default function Settings() {
     <>
       <div className="page-header">
         <div>
-          <h1 className="page-title">Réglages</h1>
-          <p className="page-subtitle">Recherche, préférences d'affichage, fournisseur d'IA et connexion au serveur.</p>
+          <h1 className="page-title">{t("Réglages")}</h1>
+          <p className="page-subtitle">{t("Recherche, préférences d'affichage, fournisseur d'IA et connexion au serveur.")}</p>
         </div>
       </div>
 
@@ -118,21 +119,21 @@ export default function Settings() {
           style={{ borderRadius: "var(--radius-sm) var(--radius-sm) 0 0" }}
           onClick={() => setTab("general")}
         >
-          ⚙ Général
+          ⚙ {t("Général")}
         </button>
         <button
           className={`btn ${tab === "diagnostics" ? "btn-primary" : "btn-ghost"}`}
           style={{ borderRadius: "var(--radius-sm) var(--radius-sm) 0 0" }}
           onClick={() => setTab("diagnostics")}
         >
-          ✦ Diagnostique
+          ✦ {t("Diagnostique")}
         </button>
         <button
           className={`btn ${tab === "feedback" ? "btn-primary" : "btn-ghost"}`}
           style={{ borderRadius: "var(--radius-sm) var(--radius-sm) 0 0" }}
           onClick={() => setTab("feedback")}
         >
-          💬 Feedback
+          💬 {t("Feedback")}
         </button>
       </div>
 
@@ -186,15 +187,15 @@ function GeneralSettings({
       <LegacyKeysBanner apply={apply} />
 
       <div className="grid grid-2" style={{ alignItems: "start", marginBottom: 16 }}>
-        <Card title="Réglages de recherche">
+        <Card title={t("Réglages de recherche")}>
           {!s ? (
-            <div className="empty">Chargement…</div>
+            <div className="empty">{t("Chargement…")}</div>
           ) : (
             <>
               <div className="setting-row">
                 <div className="meta">
                   <strong>Top-K</strong>
-                  Nombre de fiches de départ récupérés par requête.
+                  {t("Nombre de fiches de départ récupérés par requête.")}
                 </div>
                 <input
                   type="number"
@@ -206,8 +207,8 @@ function GeneralSettings({
               </div>
               <div className="setting-row">
                 <div className="meta">
-                  <strong>Poids lexical</strong>
-                  0 = vectoriel seul, 1 = BM25 seul.
+                  <strong>{t("Poids lexical")}</strong>
+                  {t("0 = vectoriel seul, 1 = BM25 seul.")}
                 </div>
                 <input
                   type="number"
@@ -220,8 +221,8 @@ function GeneralSettings({
               </div>
               <div className="setting-row">
                 <div className="meta">
-                  <strong>Profondeur d'expansion</strong>
-                  Sauts ajoutés à chaque concept de départ lors du parcours.
+                  <strong>{t("Profondeur d'expansion")}</strong>
+                  {t("Sauts ajoutés à chaque concept de départ lors du parcours.")}
                 </div>
                 <input
                   type="number"
@@ -235,35 +236,35 @@ function GeneralSettings({
           )}
         </Card>
 
-        <Card title="Préférences d'affichage">
+        <Card title={t("Préférences d'affichage")}>
           {!s ? (
-            <div className="empty">Chargement…</div>
+            <div className="empty">{t("Chargement…")}</div>
           ) : (
             <>
               <div className="setting-row">
                 <div className="meta">
-                  <strong>Thème</strong>
-                  Jeu de couleurs (clair uniquement pour le moment).
+                  <strong>{t("Thème")}</strong>
+                  {t("Jeu de couleurs (clair uniquement pour le moment).")}
                 </div>
                 <select
                   value={s.ui.theme}
                   onChange={(e) => apply({ ui: { theme: e.target.value } })}
                 >
-                  <option value="light">Clair</option>
-                  <option value="dark">Sombre</option>
+                  <option value="light">{t("Clair")}</option>
+                  <option value="dark">{t("Sombre")}</option>
                 </select>
               </div>
               <div className="setting-row">
                 <div className="meta">
-                  <strong>Disposition du graphe</strong>
-                  Moteur de disposition de la vue graphe.
+                  <strong>{t("Disposition du graphe")}</strong>
+                  {t("Moteur de disposition de la vue graphe.")}
                 </div>
                 <select
                   value={s.ui.graph_layout}
                   onChange={(e) => apply({ ui: { graph_layout: e.target.value } })}
                 >
-                  <option value="dagre">Dagre (hiérarchique)</option>
-                  <option value="force">Dirigé par forces</option>
+                  <option value="dagre">{t("Dagre (hiérarchique)")}</option>
+                  <option value="force">{t("Dirigé par forces")}</option>
                 </select>
               </div>
             </>
@@ -286,13 +287,13 @@ function GeneralSettings({
       )}
 
       <Card
-        title="Connexion serveur"
-        subtitle="Adresses des backends et jeton d'accès. Stockés dans ce navigateur uniquement — les clés des fournisseurs LLM sont côté serveur."
+        title={t("Connexion serveur")}
+        subtitle={t("Adresses des backends et jeton d'accès. Stockés dans ce navigateur uniquement — les clés des fournisseurs LLM sont côté serveur.")}
       >
         {/* Server URLs (always visible) */}
         <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 12 }}>
           <label className="field">
-            <span>URL de base de l'API ontologie</span>
+            <span>{t("URL de base de l'API ontologie")}</span>
             <input
               type="text"
               value={cfg.ontologyApiUrl}
@@ -301,18 +302,18 @@ function GeneralSettings({
             />
           </label>
           <div className="field">
-            <label>Jeton Bearer (facultatif)</label>
+            <label>{t("Jeton Bearer (facultatif)")}</label>
             <KeyField
               label=""
               value={cfg.ontologyBearerToken}
               onChange={(v) => updateCfg("ontologyBearerToken", v)}
               show={showBearer}
               onToggle={() => setShowBearer((v) => !v)}
-              placeholder="(laisser vide si le serveur est ouvert)"
+              placeholder={t("(laisser vide si le serveur est ouvert)")}
             />
           </div>
           <label className="field">
-            <span>URL du serveur d'authentification</span>
+            <span>{t("URL du serveur d'authentification")}</span>
             <input
               type="text"
               value={cfg.authApiUrl}
@@ -323,9 +324,9 @@ function GeneralSettings({
         </div>
 
         <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
-          <button className="btn btn-primary" onClick={handleSave}>💾 Tout enregistrer</button>
+          <button className="btn btn-primary" onClick={handleSave}>💾 {t("Tout enregistrer")}</button>
           <button className="btn btn-outline" onClick={handleTest} disabled={testing}>
-            {testing ? "Test…" : "🔌 Tester la connexion"}
+            {testing ? t("Test…") : `🔌 ${t("Tester la connexion")}`}
           </button>
         </div>
         {testResult && (
@@ -335,7 +336,7 @@ function GeneralSettings({
         )}
 
         <p className="field-hint" style={{ marginTop: 12 }}>
-          Base d'API actuellement résolue : <code>{apiBase() || "(same-origin)"}</code>.
+          {t("Base d'API actuellement résolue :")} <code>{apiBase() || "(same-origin)"}</code>.
         </p>
       </Card>
 
@@ -355,12 +356,12 @@ function DangerZone() {
 
   const onReset = async () => {
     const ok = await confirm({
-      title: "Réinitialiser toutes les données",
+      title: t("Réinitialiser toutes les données"),
       message:
-        "Tous les concepts, relations, règles, actions et le schéma seront supprimés définitivement du store. " +
-        "Les réglages (fournisseur LLM, préférences) sont conservés. Continuer ?",
-      confirmLabel: "Tout supprimer",
-      cancelLabel: "Annuler",
+        t("Tous les concepts, relations, règles, actions et le schéma seront supprimés définitivement du store.") + " " +
+        t("Les réglages (fournisseur LLM, préférences) sont conservés. Continuer ?"),
+      confirmLabel: t("Tout supprimer"),
+      cancelLabel: t("Annuler"),
       danger: true,
     });
     if (!ok) return;
@@ -377,16 +378,16 @@ function DangerZone() {
 
   return (
     <Card
-      title="Zone de danger"
-      subtitle="Repartir de zéro. Irréversible : le store est vidé, le graphe, le schéma et l'index avec."
+      title={t("Zone de danger")}
+      subtitle={t("Repartir de zéro. Irréversible : le store est vidé, le graphe, le schéma et l'index avec.")}
     >
       {err && <div className="error-banner">{err}</div>}
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 12, flexWrap: "wrap" }}>
         <button className="btn btn-danger" onClick={onReset} disabled={busy}>
-          {busy ? "Réinitialisation…" : "🗑 Réinitialiser toutes les données"}
+          {busy ? t("Réinitialisation…") : `🗑 ${t("Réinitialiser toutes les données")}`}
         </button>
         <span className="muted" style={{ fontSize: 12 }}>
-          Équivalent CLI : <code>ontology --data ./data reset</code> (serveur arrêté).
+          {t("Équivalent CLI :")} <code>ontology --data ./data reset</code> {t("(serveur arrêté).")}
         </span>
       </div>
     </Card>
@@ -447,17 +448,15 @@ function LegacyKeysBanner({
   return (
     <div className="warn-banner" style={{ marginBottom: 16 }}>
       <p style={{ margin: 0 }}>
-        <strong>Clés stockées dans ce navigateur.</strong> Une version
-        précédente conservait la configuration des fournisseurs en
-        localStorage ({names}). Elle n&apos;est plus utilisée : la
-        configuration vit désormais côté serveur.
+        <strong>{t("Clés stockées dans ce navigateur.")}</strong>{" "}
+        {t("Une version précédente conservait la configuration des fournisseurs en localStorage ({names}). Elle n'est plus utilisée : la configuration vit désormais côté serveur.", { names })}
       </p>
       <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
         <button className="btn btn-primary" onClick={importToServer} disabled={busy}>
-          {busy ? "Import…" : "↑ Importer vers le serveur"}
+          {busy ? t("Import…") : `↑ ${t("Importer vers le serveur")}`}
         </button>
         <button className="btn btn-outline" onClick={discard} disabled={busy}>
-          🗑 Supprimer du navigateur
+          🗑 {t("Supprimer du navigateur")}
         </button>
       </div>
     </div>
@@ -508,9 +507,9 @@ function DiagnosticsPanel() {
         return await res.text();
       });
       results.push({
-        name: "Serveur ontologie",
+        name: t("Serveur ontologie"),
         status: r.err ? "error" : "ok",
-        summary: r.err ? "Injoignable" : `Connexion active (${(r.value ?? "").toString().trim()})`,
+        summary: r.err ? t("Injoignable") : t("Connexion active ({value})", { value: (r.value ?? "").toString().trim() }),
         latencyMs: r.ms,
         details: r.err ? errMsg(r.err) : `GET ${base}/healthz → 200`,
       });
@@ -519,20 +518,20 @@ function DiagnosticsPanel() {
     // 2. Settings load
     const settingsRes = await time(() => getSettings());
     results.push({
-      name: "Paramètres serveur",
+      name: t("Paramètres serveur"),
       status: settingsRes.err ? "error" : "ok",
-      summary: settingsRes.err ? "Échec du chargement" : "Réglages chargés",
+      summary: settingsRes.err ? t("Échec du chargement") : t("Réglages chargés"),
       latencyMs: settingsRes.ms,
-      details: settingsRes.err ? errMsg(settingsRes.err) : `provider actif: ${settingsRes.value?.llm.active_provider ?? "—"}`,
+      details: settingsRes.err ? errMsg(settingsRes.err) : t("provider actif: {name}", { name: settingsRes.value?.llm.active_provider ?? "—" }),
     });
 
     // 3. Stats / Données
     const statsRes = await time(() => getStats());
     if (statsRes.err) {
       results.push({
-        name: "Données",
+        name: t("Données"),
         status: "error",
-        summary: "Impossible de charger les statistiques",
+        summary: t("Impossible de charger les statistiques"),
         latencyMs: statsRes.ms,
         details: errMsg(statsRes.err),
       });
@@ -540,11 +539,11 @@ function DiagnosticsPanel() {
       const s = statsRes.value!;
       const empty = s.concepts === 0 && s.relations === 0;
       results.push({
-        name: "Données",
+        name: t("Données"),
         status: empty ? "warn" : "ok",
-        summary: `${s.concepts} concepts, ${s.relations} relations, ${s.rules} règles, ${s.actions} actions`,
+        summary: t("{concepts} concepts, {relations} relations, {rules} règles, {actions} actions", { concepts: s.concepts, relations: s.relations, rules: s.rules, actions: s.actions }),
         latencyMs: statsRes.ms,
-        details: `Types — concepts:${s.concept_types}, relations:${s.relation_types}, règles:${s.rule_types}, actions:${s.action_types}`,
+        details: t("Types — concepts:{concepts}, relations:{relations}, règles:{rules}, actions:{actions}", { concepts: s.concept_types, relations: s.relation_types, rules: s.rule_types, actions: s.action_types }),
       });
     }
 
@@ -570,7 +569,7 @@ function DiagnosticsPanel() {
       results.push({
         name: `LLM (${provider})`,
         status: r.err ? "warn" : "ok",
-        summary: r.err ? "Non configuré ou injoignable" : `Connexion OK${r.value?.model ? ` (${r.value.model})` : ""}`,
+        summary: r.err ? t("Non configuré ou injoignable") : `${t("Connexion OK")}${r.value?.model ? ` (${r.value.model})` : ""}`,
         latencyMs: r.ms,
         details: r.err ? errMsg(r.err) : JSON.stringify(r.value),
       });
@@ -581,11 +580,11 @@ function DiagnosticsPanel() {
       const start = performance.now();
       const jwt = typeof window !== "undefined" ? window.localStorage.getItem("msBE.token") : null;
       results.push({
-        name: "Authentification",
+        name: t("Authentification"),
         status: jwt ? "ok" : "warn",
-        summary: jwt ? "JWT présent dans le navigateur" : "Aucun JWT — accès anonyme",
+        summary: jwt ? t("JWT présent dans le navigateur") : t("Aucun JWT — accès anonyme"),
         latencyMs: performance.now() - start,
-        details: jwt ? `Longueur du token: ${jwt.length} caractères` : "Connectez-vous pour activer les routes protégées.",
+        details: jwt ? t("Longueur du token: {n} caractères", { n: jwt.length }) : t("Connectez-vous pour activer les routes protégées."),
       });
     }
 
@@ -594,9 +593,9 @@ function DiagnosticsPanel() {
       const start = performance.now();
       const hasUrl = cfgHas("ontologyApiUrl");
       results.push({
-        name: "Configuration locale",
+        name: t("Configuration locale"),
         status: hasUrl ? "ok" : "warn",
-        summary: hasUrl ? "providerConfig chargé" : "providerConfig vide",
+        summary: hasUrl ? t("providerConfig chargé") : t("providerConfig vide"),
         latencyMs: performance.now() - start,
         details: `apiBase = ${apiBase() || "(same-origin)"}`,
       });
@@ -614,9 +613,9 @@ function DiagnosticsPanel() {
         ok = false;
       }
       results.push({
-        name: "Stockage navigateur",
+        name: t("Stockage navigateur"),
         status: ok ? "ok" : "error",
-        summary: ok ? "localStorage accessible" : "localStorage indisponible",
+        summary: ok ? t("localStorage accessible") : t("localStorage indisponible"),
         latencyMs: performance.now() - start,
       });
     }
@@ -643,12 +642,12 @@ function DiagnosticsPanel() {
       title={
         <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
           <span style={{ color: "var(--accent)" }}>✦</span>
-          Auto-diagnostic de l'application
+          {t("Auto-diagnostic de l'application")}
         </span>
       }
       actions={
         <button className="btn btn-primary" onClick={run} disabled={running}>
-          {running ? "Analyse…" : "↻ Relancer"}
+          {running ? t("Analyse…") : `↻ ${t("Relancer")}`}
         </button>
       }
     >
@@ -662,22 +661,22 @@ function DiagnosticsPanel() {
           style={{ marginBottom: 16 }}
         >
           <strong style={{ display: "block", marginBottom: 4 }}>
-            {overallStatus === "error" ? "Erreurs détectées"
-              : overallStatus === "warn" ? "Avertissements détectés"
-              : "Tous les contrôles sont passés"}
+            {overallStatus === "error" ? t("Erreurs détectées")
+              : overallStatus === "warn" ? t("Avertissements détectés")
+              : t("Tous les contrôles sont passés")}
           </strong>
-          {okCount} OK · {warnCount} avertissement{warnCount > 1 ? "s" : ""} · {errCount} erreur{errCount > 1 ? "s" : ""} · {Math.round(totalMs)} ms
+          {okCount} OK · {warnCount > 1 ? t("{n} avertissements", { n: warnCount }) : t("{n} avertissement", { n: warnCount })} · {errCount > 1 ? t("{n} erreurs", { n: errCount }) : t("{n} erreur", { n: errCount })} · {Math.round(totalMs)} ms
         </div>
       )}
 
       <div className="grid grid-4" style={{ gap: 12, marginBottom: 16 }}>
-        <InfoTile label="Environnement" value={env} />
-        <InfoTile label="Plateforme" value={platform} />
+        <InfoTile label={t("Environnement")} value={env} />
+        <InfoTile label={t("Plateforme")} value={platform} />
         <InfoTile label="API base" value={apiBase() || "(same-origin)"} />
-        <InfoTile label="Dernière vérification" value={lastRun ? lastRun.toLocaleTimeString() : "—"} />
+        <InfoTile label={t("Dernière vérification")} value={lastRun ? lastRun.toLocaleTimeString() : "—"} />
       </div>
 
-      {checks.length === 0 && running && <div className="empty">Analyse en cours…</div>}
+      {checks.length === 0 && running && <div className="empty">{t("Analyse en cours…")}</div>}
 
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         {checks.map((c, i) => (
@@ -953,8 +952,8 @@ function LlmServerSection({ settings, onPatch }: LlmServerSectionProps) {
       setMsg({
         kind: "ok",
         text: model
-          ? `${providerLabel} appliqué avec le modèle ${model}. Effectif immédiatement.`
-          : `${providerLabel} enregistré. Choisissez un modèle pour pouvoir générer.`,
+          ? t("{provider} appliqué avec le modèle {model}. Effectif immédiatement.", { provider: providerLabel, model })
+          : t("{provider} enregistré. Choisissez un modèle pour pouvoir générer.", { provider: providerLabel }),
       });
     });
 
@@ -965,12 +964,12 @@ function LlmServerSection({ settings, onPatch }: LlmServerSectionProps) {
         const where = res.endpoint ? ` — ${res.endpoint}` : "";
         setMsg({
           kind: "ok",
-          text: `Connexion ${providerLabel} OK${res.model ? ` (modèle ${res.model})` : ""}${where}`,
+          text: `${t("Connexion {provider} OK", { provider: providerLabel })}${res.model ? ` (${t("modèle {model}", { model: res.model })})` : ""}${where}`,
         });
       } else {
         setMsg({
           kind: "err",
-          text: `${res.error ?? "échec"}${res.endpoint ? ` — appel : ${res.endpoint}` : ""}`,
+          text: `${res.error ?? t("échec")}${res.endpoint ? ` — ${t("appel :")} ${res.endpoint}` : ""}`,
         });
       }
     });
@@ -981,7 +980,7 @@ function LlmServerSection({ settings, onPatch }: LlmServerSectionProps) {
       if (res.error && res.models.length === 0) {
         setMsg({
           kind: "err",
-          text: `${res.error}${res.endpoint ? ` — appel : ${res.endpoint}` : ""}`,
+          text: `${res.error}${res.endpoint ? ` — ${t("appel :")} ${res.endpoint}` : ""}`,
         });
         return;
       }
@@ -992,8 +991,8 @@ function LlmServerSection({ settings, onPatch }: LlmServerSectionProps) {
       setMsg({
         kind: stillThere || !model ? "ok" : "warn",
         text: stillThere || !model
-          ? `${res.models.length} modèle(s) chargé(s) depuis ${providerLabel}.`
-          : `${res.models.length} modèle(s) chargé(s), mais « ${model} » n'y figure pas.`,
+          ? t("{n} modèle(s) chargé(s) depuis {provider}.", { n: res.models.length, provider: providerLabel })
+          : t("{n} modèle(s) chargé(s), mais « {model} » n'y figure pas.", { n: res.models.length, model }),
       });
     });
 
@@ -1001,7 +1000,7 @@ function LlmServerSection({ settings, onPatch }: LlmServerSectionProps) {
     run("detect", async () => {
       const res = await listInfomaniakProducts(apiKey.trim() || undefined);
       if (res.products.length === 0) {
-        setMsg({ kind: "err", text: res.error ?? "Aucun produit AI Tools trouvé." });
+        setMsg({ kind: "err", text: res.error ?? t("Aucun produit AI Tools trouvé.") });
         return;
       }
       setProducts(res.products);
@@ -1009,14 +1008,14 @@ function LlmServerSection({ settings, onPatch }: LlmServerSectionProps) {
         setProductId(res.products[0].product_id);
         setMsg({
           kind: "ok",
-          text: `Product ID détecté : ${res.products[0].product_id}${
+          text: `${t("Product ID détecté :")} ${res.products[0].product_id}${
             res.products[0].name ? ` (${res.products[0].name})` : ""
           }`,
         });
       } else {
         setMsg({
           kind: "warn",
-          text: `${res.products.length} produits AI Tools — choisissez-en un.`,
+          text: t("{n} produits AI Tools — choisissez-en un.", { n: res.products.length }),
         });
       }
     });
@@ -1028,39 +1027,38 @@ function LlmServerSection({ settings, onPatch }: LlmServerSectionProps) {
       title={
         <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
           <span style={{ color: "var(--accent)" }}>✦</span>
-          Configuration {providerLabel}
+          {t("Configuration {provider}", { provider: providerLabel })}
         </span>
       }
-      subtitle="Fournisseur, clé et modèle. Enregistrés côté serveur, appliqués sans redémarrage."
+      subtitle={t("Fournisseur, clé et modèle. Enregistrés côté serveur, appliqués sans redémarrage.")}
       actions={
         configured ? (
-          <span className="badge badge-success">⊘ Configuré</span>
+          <span className="badge badge-success">⊘ {t("Configuré")}</span>
         ) : (
-          <span className="badge badge-warn">Non configuré</span>
+          <span className="badge badge-warn">{t("Non configuré")}</span>
         )
       }
     >
       {applied ? (
         <p className="field-hint" style={{ marginTop: 0, marginBottom: 12 }}>
-          Actif : <strong>{applied.name}</strong>
+          {t("Actif :")} <strong>{applied.name}</strong>
           {applied.model ? (
             <>
               {" · "}
               <code>{applied.model}</code>
             </>
           ) : (
-            " — aucun modèle sélectionné"
+            ` — ${t("aucun modèle sélectionné")}`
           )}
         </p>
       ) : (
         <p className="field-hint" style={{ marginTop: 0, marginBottom: 12 }}>
-          Aucun fournisseur actif : les réponses utilisent le modèle « echo »
-          hors-ligne.
+          {t("Aucun fournisseur actif : les réponses utilisent le modèle « echo » hors-ligne.")}
         </p>
       )}
 
       <label className="field">
-        <span>Fournisseur</span>
+        <span>{t("Fournisseur")}</span>
         <select value={provider} onChange={(e) => setProvider(e.target.value)}>
           {Object.entries(PROVIDER_LABELS).map(([k, v]) => (
             <option key={k} value={k}>
@@ -1071,13 +1069,13 @@ function LlmServerSection({ settings, onPatch }: LlmServerSectionProps) {
       </label>
 
       <label className="field" style={{ marginTop: 16 }}>
-        <span>Clé API {providerLabel}</span>
+        <span>{t("Clé API {provider}", { provider: providerLabel })}</span>
         <div className="key-field-wrapper">
           <input
             type={showKey ? "text" : "password"}
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
-            placeholder={configured ? "•••••••••• (laisser vide pour conserver)" : "sk-…"}
+            placeholder={configured ? t("•••••••••• (laisser vide pour conserver)") : "sk-…"}
             autoComplete="off"
             spellCheck={false}
           />
@@ -1085,20 +1083,19 @@ function LlmServerSection({ settings, onPatch }: LlmServerSectionProps) {
             type="button"
             className="key-toggle-btn"
             onClick={() => setShowKey((v) => !v)}
-            title={showKey ? "Masquer" : "Afficher"}
+            title={showKey ? t("Masquer") : t("Afficher")}
           >
             👁
           </button>
         </div>
         {configured && (
           <p className="field-hint">
-            Clé enregistrée : <code>{hint}</code>. Le serveur ne la renvoie
-            jamais ; laissez le champ vide pour la conserver.
+            {t("Clé enregistrée :")} <code>{hint}</code>. {t("Le serveur ne la renvoie jamais ; laissez le champ vide pour la conserver.")}
           </p>
         )}
         {provider === "openai" && (
           <p className="field-hint">
-            Format sk-proj-… —{" "}
+            {t("Format")} sk-proj-… —{" "}
             <a
               href="https://platform.openai.com/api-keys"
               target="_blank"
@@ -1110,7 +1107,7 @@ function LlmServerSection({ settings, onPatch }: LlmServerSectionProps) {
         )}
         {provider === "anthropic" && (
           <p className="field-hint">
-            Format sk-ant-… —{" "}
+            {t("Format")} sk-ant-… —{" "}
             <a
               href="https://console.anthropic.com/settings/keys"
               target="_blank"
@@ -1122,7 +1119,7 @@ function LlmServerSection({ settings, onPatch }: LlmServerSectionProps) {
         )}
         {isInfomaniak && (
           <p className="field-hint">
-            Jeton créé dans le Manager Infomaniak avec le scope{" "}
+            {t("Jeton créé dans le Manager Infomaniak avec le scope")}{" "}
             <code>ai-tools</code>.
           </p>
         )}
@@ -1146,12 +1143,12 @@ function LlmServerSection({ settings, onPatch }: LlmServerSectionProps) {
               disabled={busy !== null || (!apiKey.trim() && !configured)}
               title={
                 apiKey.trim() || configured
-                  ? "Lire le product ID depuis /1/ai"
-                  : "Saisissez d'abord la clé API"
+                  ? t("Lire le product ID depuis /1/ai")
+                  : t("Saisissez d'abord la clé API")
               }
               style={{ whiteSpace: "nowrap" }}
             >
-              {busy === "detect" ? "…" : "🔍 Détecter"}
+              {busy === "detect" ? "…" : `🔍 ${t("Détecter")}`}
             </button>
           </div>
           {products.length > 1 && (
@@ -1160,7 +1157,7 @@ function LlmServerSection({ settings, onPatch }: LlmServerSectionProps) {
               onChange={(e) => setProductId(e.target.value)}
               style={{ marginTop: 8 }}
             >
-              <option value="">— choisir un produit —</option>
+              <option value="">{t("— choisir un produit —")}</option>
               {products.map((p) => (
                 <option key={p.product_id} value={p.product_id}>
                   {p.name ? `${p.name} (${p.product_id})` : p.product_id}
@@ -1169,7 +1166,7 @@ function LlmServerSection({ settings, onPatch }: LlmServerSectionProps) {
             </select>
           )}
           <p className="field-hint">
-            L'URL appelée en découle :{" "}
+            {t("L'URL appelée en découle :")}{" "}
             <code>
               api.infomaniak.com/2/ai/{productId || "{product_id}"}/openai/v1
             </code>
@@ -1179,7 +1176,7 @@ function LlmServerSection({ settings, onPatch }: LlmServerSectionProps) {
 
       <label className="field" style={{ marginTop: 16 }}>
         <span style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <span>Modèle</span>
+          <span>{t("Modèle")}</span>
           <button
             type="button"
             onClick={loadModels}
@@ -1192,16 +1189,16 @@ function LlmServerSection({ settings, onPatch }: LlmServerSectionProps) {
               fontSize: 12,
               padding: 0,
             }}
-            title="Interroger le catalogue du fournisseur"
+            title={t("Interroger le catalogue du fournisseur")}
           >
-            {busy === "models" ? "…" : "↻ Charger les modèles"}
+            {busy === "models" ? "…" : `↻ ${t("Charger les modèles")}`}
           </button>
         </span>
         <select
           value={modelIsCustom ? "__custom__" : model}
           onChange={(e) => setModel(e.target.value === "__custom__" ? "" : e.target.value)}
         >
-          <option value="">— aucun —</option>
+          <option value="">{t("— aucun —")}</option>
           {models.map((m) => (
             <option key={m.id} value={m.id}>
               {m.label}
@@ -1210,35 +1207,34 @@ function LlmServerSection({ settings, onPatch }: LlmServerSectionProps) {
               {m.kind && m.kind !== "llm" ? ` · ${m.kind}` : ""}
             </option>
           ))}
-          <option value="__custom__">Saisir manuellement…</option>
+          <option value="__custom__">{t("Saisir manuellement…")}</option>
         </select>
         {modelIsCustom && (
           <input
             type="text"
             value={model}
             onChange={(e) => setModel(e.target.value)}
-            placeholder="nom-du-modèle"
+            placeholder={t("nom-du-modèle")}
             style={{ marginTop: 8 }}
           />
         )}
         {models.length === 0 && (
           <p className="field-hint">
             {isInfomaniak
-              ? "Le catalogue Infomaniak dépend de votre compte : cliquez sur « Charger les modèles »."
-              : "Aucun modèle chargé — cliquez sur « Charger les modèles »."}
+              ? t("Le catalogue Infomaniak dépend de votre compte : cliquez sur « Charger les modèles ».")
+              : t("Aucun modèle chargé — cliquez sur « Charger les modèles ».")}
           </p>
         )}
         {models.some((m) => m.kind && m.kind !== "llm") && (
           <p className="field-hint">
-            Le catalogue contient aussi des modèles non conversationnels
-            (image, audio…), signalés par leur type.
+            {t("Le catalogue contient aussi des modèles non conversationnels (image, audio…), signalés par leur type.")}
           </p>
         )}
       </label>
 
       <div className="grid grid-2" style={{ gap: 16, marginTop: 16 }}>
         <label className="field">
-          <span>Température ({temperature.toFixed(2)})</span>
+          <span>{t("Température ({value})", { value: temperature.toFixed(2) })}</span>
           <input
             type="range"
             min={0}
@@ -1249,7 +1245,7 @@ function LlmServerSection({ settings, onPatch }: LlmServerSectionProps) {
           />
         </label>
         <label className="field">
-          <span>Tokens max</span>
+          <span>{t("Tokens max")}</span>
           <input
             type="number"
             min={1}
@@ -1273,22 +1269,21 @@ function LlmServerSection({ settings, onPatch }: LlmServerSectionProps) {
             padding: 0,
           }}
         >
-          {showAdvanced ? "▾" : "▸"} Avancé — URL de base
+          {showAdvanced ? "▾" : "▸"} {t("Avancé — URL de base")}
         </button>
         {showAdvanced && (
           <label className="field" style={{ marginTop: 8 }}>
-            <span>URL de base (laisser vide sauf proxy / préproduction)</span>
+            <span>{t("URL de base (laisser vide sauf proxy / préproduction)")}</span>
             <input
               type="text"
               value={baseUrl}
               onChange={(e) => setBaseUrl(e.target.value)}
               placeholder={
-                isInfomaniak ? "(déduite du product ID)" : "(URL par défaut du fournisseur)"
+                isInfomaniak ? t("(déduite du product ID)") : t("(URL par défaut du fournisseur)")
               }
             />
             <p className="field-hint">
-              Le segment <code>/v1</code> est ajouté seulement s'il manque : les
-              deux écritures d'une URL fonctionnent.
+              {t("Le segment")} <code>/v1</code> {t("est ajouté seulement s'il manque : les deux écritures d'une URL fonctionnent.")}
             </p>
           </label>
         )}
@@ -1301,7 +1296,7 @@ function LlmServerSection({ settings, onPatch }: LlmServerSectionProps) {
           disabled={busy !== null}
           style={{ flex: 1, padding: 12 }}
         >
-          {busy === "save" ? "Application…" : "✓ Appliquer"}
+          {busy === "save" ? t("Application…") : `✓ ${t("Appliquer")}`}
         </button>
         <button
           className="btn btn-outline"
@@ -1309,12 +1304,11 @@ function LlmServerSection({ settings, onPatch }: LlmServerSectionProps) {
           disabled={busy !== null}
           style={{ flex: 1, padding: 12 }}
         >
-          {busy === "test" ? "Test…" : `✦ Tester ${providerLabel}`}
+          {busy === "test" ? t("Test…") : `✦ ${t("Tester {provider}", { provider: providerLabel })}`}
         </button>
       </div>
       <p className="field-hint" style={{ marginTop: 8 }}>
-        « Détecter », « Charger les modèles » et « Tester » utilisent les valeurs
-        saisies sans les enregistrer. Seul « Appliquer » écrit la configuration.
+        {t("« Détecter », « Charger les modèles » et « Tester » utilisent les valeurs saisies sans les enregistrer. Seul « Appliquer » écrit la configuration.")}
       </p>
       {msg && (
         <div
@@ -1368,18 +1362,18 @@ function OcrSection({ settings, onPatch }: OcrSectionProps) {
       title={
         <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
           <span style={{ color: "var(--accent)" }}>👁</span>
-          Moteur OCR
+          {t("Moteur OCR")}
         </span>
       }
-      subtitle="Sélectionnez le moteur de reconnaissance optique de caractères"
+      subtitle={t("Sélectionnez le moteur de reconnaissance optique de caractères")}
     >
       <label className="field">
-        <span>Fournisseur OCR principal</span>
+        <span>{t("Fournisseur OCR principal")}</span>
         <select
           value={ocr.provider}
           onChange={(e) => onPatch({ provider: e.target.value })}
         >
-          <option value="tesseract">Tesseract (local — gratuit)</option>
+          <option value="tesseract">{t("Tesseract (local — gratuit)")}</option>
           <option value="google_vision">Google Cloud Vision</option>
         </select>
       </label>
@@ -1394,9 +1388,9 @@ function OcrSection({ settings, onPatch }: OcrSectionProps) {
           }}
         >
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <strong>Tesseract (local)</strong>
+            <strong>{t("Tesseract (local)")}</strong>
             <span className={tessAvail ? "badge badge-success" : "badge badge-warn"}>
-              {tessAvail ? "⊘ Disponible" : "⚠ Indisponible"}
+              {tessAvail ? `⊘ ${t("Disponible")}` : `⚠ ${t("Indisponible")}`}
             </span>
           </div>
           <div style={{ marginTop: 8, fontSize: 13, color: "var(--muted)", display: "flex", flexDirection: "column", gap: 2 }}>
@@ -1417,11 +1411,11 @@ function OcrSection({ settings, onPatch }: OcrSectionProps) {
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <strong>Google Cloud Vision</strong>
             <span className={googleConfigured ? "badge badge-success" : "badge badge-warn"}>
-              {googleConfigured ? "⊘ Configuré" : "Non configuré"}
+              {googleConfigured ? `⊘ ${t("Configuré")}` : t("Non configuré")}
             </span>
           </div>
           <div style={{ marginTop: 8, fontSize: 13, color: "var(--muted)" }}>
-            Auth : clé d'API {ocr.google_api_key_hint && (<code style={{ marginLeft: 6 }}>{ocr.google_api_key_hint}</code>)}
+            {t("Auth : clé d'API")} {ocr.google_api_key_hint && (<code style={{ marginLeft: 6 }}>{ocr.google_api_key_hint}</code>)}
           </div>
         </div>
       </div>
@@ -1440,9 +1434,9 @@ function OcrSection({ settings, onPatch }: OcrSectionProps) {
         }}
       >
         <div>
-          <div style={{ fontWeight: 600 }}>Bascule automatique</div>
+          <div style={{ fontWeight: 600 }}>{t("Bascule automatique")}</div>
           <div style={{ fontSize: 13, color: "var(--muted)" }}>
-            Si le moteur principal échoue ou produit un résultat insuffisant, basculer automatiquement sur l'autre moteur.
+            {t("Si le moteur principal échoue ou produit un résultat insuffisant, basculer automatiquement sur l'autre moteur.")}
           </div>
         </div>
         <label style={{ position: "relative", display: "inline-block", width: 44, height: 24 }}>
@@ -1480,7 +1474,7 @@ function OcrSection({ settings, onPatch }: OcrSectionProps) {
       </div>
 
       <label className="field" style={{ marginTop: 16 }}>
-        <span>Seuil minimum de texte (caractères)</span>
+        <span>{t("Seuil minimum de texte (caractères)")}</span>
         <input
           type="number"
           min={0}
@@ -1489,12 +1483,12 @@ function OcrSection({ settings, onPatch }: OcrSectionProps) {
           onChange={(e) => onPatch({ min_text_threshold: Number(e.target.value) })}
         />
         <p className="field-hint">
-          Si l'OCR retourne moins de {ocr.min_text_threshold} caractères, la bascule est déclenchée.
+          {t("Si l'OCR retourne moins de {n} caractères, la bascule est déclenchée.", { n: ocr.min_text_threshold })}
         </p>
       </label>
 
       <label className="field" style={{ marginTop: 16 }}>
-        <span>Langues OCR (Tesseract)</span>
+        <span>{t("Langues OCR (Tesseract)")}</span>
         <input
           type="text"
           value={ocr.tesseract_languages}
@@ -1502,12 +1496,12 @@ function OcrSection({ settings, onPatch }: OcrSectionProps) {
           placeholder="fra+deu+eng"
         />
         <p className="field-hint">
-          Codes ISO 639-2 séparés par <code>+</code> (ex. <code>fra+deu+eng</code>). Les packs correspondants doivent être installés.
+          {t("Codes ISO 639-2 séparés par")} <code>+</code> ({t("ex.")} <code>fra+deu+eng</code>). {t("Les packs correspondants doivent être installés.")}
         </p>
       </label>
 
       <label className="field" style={{ marginTop: 16 }}>
-        <span>Clé API Google Cloud Vision</span>
+        <span>{t("Clé API Google Cloud Vision")}</span>
         <div style={{ display: "flex", gap: 8 }}>
           <div className="key-field-wrapper" style={{ flex: 1 }}>
             <input
@@ -1522,7 +1516,7 @@ function OcrSection({ settings, onPatch }: OcrSectionProps) {
               type="button"
               className="key-toggle-btn"
               onClick={() => setShowKey((v) => !v)}
-              title={showKey ? "Masquer" : "Afficher"}
+              title={showKey ? t("Masquer") : t("Afficher")}
             >👁</button>
           </div>
           <button
@@ -1531,7 +1525,7 @@ function OcrSection({ settings, onPatch }: OcrSectionProps) {
             disabled={saving || !apiKey.trim()}
             style={{ whiteSpace: "nowrap" }}
           >
-            {saving ? "Sauvegarde…" : "💾 Sauvegarder"}
+            {saving ? t("Sauvegarde…") : `💾 ${t("Sauvegarder")}`}
           </button>
         </div>
       </label>
@@ -1565,8 +1559,8 @@ function KeyField({ label, value, onChange, show, onToggle, placeholder }: KeyFi
           type="button"
           className="key-toggle-btn"
           onClick={onToggle}
-          aria-label={show ? "Masquer la clé" : "Afficher la clé"}
-          title={show ? "Masquer" : "Afficher"}
+          aria-label={show ? t("Masquer la clé") : t("Afficher la clé")}
+          title={show ? t("Masquer") : t("Afficher")}
         >
           👁
         </button>
@@ -1601,9 +1595,9 @@ function FeedbackListPanel() {
   const kindBadge = (k: string) => {
     const map: Record<string, { bg: string; fg: string; label: string }> = {
       bug:         { bg: "#fde7e9", fg: "#b3261e", label: "🐞 Bug" },
-      error:       { bg: "#fff4e0", fg: "#8a5a00", label: "⚠ Erreur" },
-      evolution:   { bg: "#e1ecff", fg: "#1f4ba8", label: "✦ Évolution" },
-      improvement: { bg: "#e3f6e8", fg: "#1f7a3a", label: "💡 Amélioration" },
+      error:       { bg: "#fff4e0", fg: "#8a5a00", label: `⚠ ${t("Erreur")}` },
+      evolution:   { bg: "#e1ecff", fg: "#1f4ba8", label: `✦ ${t("Évolution")}` },
+      improvement: { bg: "#e3f6e8", fg: "#1f7a3a", label: `💡 ${t("Amélioration")}` },
     };
     const m = map[k] ?? { bg: "#eee", fg: "#444", label: k };
     return (
@@ -1615,21 +1609,21 @@ function FeedbackListPanel() {
   };
 
   return (
-    <Card title="Feedback reçus" subtitle="Bugs, suggestions et améliorations envoyés depuis l'application.">
+    <Card title={t("Feedback reçus")} subtitle={t("Bugs, suggestions et améliorations envoyés depuis l'application.")}>
       {error && <div className="error-banner">{error}</div>}
       {!items ? (
-        <div className="empty">Chargement…</div>
+        <div className="empty">{t("Chargement…")}</div>
       ) : items.length === 0 ? (
-        <div className="empty">Aucun feedback pour l'instant.</div>
+        <div className="empty">{t("Aucun feedback pour l'instant.")}</div>
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: selected ? "1fr 1fr" : "1fr", gap: 16 }}>
           <div>
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr style={{ textAlign: "left", borderBottom: "1px solid var(--border)" }}>
-                  <th style={{ padding: 8 }}>Type</th>
-                  <th style={{ padding: 8 }}>Titre</th>
-                  <th style={{ padding: 8 }}>Date</th>
+                  <th style={{ padding: 8 }}>{t("Type")}</th>
+                  <th style={{ padding: 8 }}>{t("Titre")}</th>
+                  <th style={{ padding: 8 }}>{t("Date")}</th>
                   <th style={{ padding: 8 }} />
                 </tr>
               </thead>
@@ -1653,7 +1647,7 @@ function FeedbackListPanel() {
                       <button
                         className="btn btn-ghost"
                         onClick={(e) => { e.stopPropagation(); remove(f.id); }}
-                        title="Supprimer"
+                        title={t("Supprimer")}
                       >🗑</button>
                     </td>
                   </tr>
@@ -1678,7 +1672,7 @@ function FeedbackListPanel() {
               )}
               {selected.url && (
                 <p style={{ fontSize: 12, color: "var(--muted)" }}>
-                  URL : <code>{selected.url}</code>
+                  {t("URL :")} <code>{selected.url}</code>
                 </p>
               )}
               {selected.user_agent && (
@@ -1688,17 +1682,17 @@ function FeedbackListPanel() {
               )}
               {selected.screenshot && (
                 <div style={{ marginTop: 12 }}>
-                  <div style={{ fontWeight: 600, marginBottom: 4 }}>Capture d'écran</div>
+                  <div style={{ fontWeight: 600, marginBottom: 4 }}>{t("Capture d'écran")}</div>
                   <img
                     src={selected.screenshot}
-                    alt="capture d'écran"
+                    alt={t("capture d'écran")}
                     style={{ maxWidth: "100%", border: "1px solid var(--border)", borderRadius: 6 }}
                   />
                 </div>
               )}
               {selected.frontend_logs && (
                 <details style={{ marginTop: 12 }}>
-                  <summary>Logs frontend ({selected.frontend_logs.split("\n").length} lignes)</summary>
+                  <summary>{t("Logs frontend ({n} lignes)", { n: selected.frontend_logs.split("\n").length })}</summary>
                   <pre style={{ maxHeight: 240, overflow: "auto", background: "var(--panel-2)", padding: 8, fontSize: 11 }}>
                     {selected.frontend_logs}
                   </pre>
@@ -1706,7 +1700,7 @@ function FeedbackListPanel() {
               )}
               {selected.backend_logs && (
                 <details style={{ marginTop: 8 }}>
-                  <summary>Logs backend ({selected.backend_logs.split("\n").length} lignes)</summary>
+                  <summary>{t("Logs backend ({n} lignes)", { n: selected.backend_logs.split("\n").length })}</summary>
                   <pre style={{ maxHeight: 240, overflow: "auto", background: "var(--panel-2)", padding: 8, fontSize: 11 }}>
                     {selected.backend_logs}
                   </pre>
