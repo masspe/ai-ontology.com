@@ -5,10 +5,12 @@
 [![CI](https://github.com/masspe/ai-ontology.com/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/masspe/ai-ontology.com/actions/workflows/ci.yml)
 [![Rust line coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmasspe%2Fai-ontology.com%2Fcoverage-badges%2Frust.json)](docs/ARCHITECTURE.md#tests-and-coverage)
 [![Web line coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmasspe%2Fai-ontology.com%2Fcoverage-badges%2Fweb.json)](docs/ARCHITECTURE.md#tests-and-coverage)
+[![Release](https://img.shields.io/github/v/release/masspe/ai-ontology.com?label=release)](https://github.com/masspe/ai-ontology.com/releases)
+[![Container image](https://img.shields.io/badge/ghcr.io-masspe%2Fai--ontology-0db7ed?logo=docker&logoColor=white)](https://github.com/masspe/ai-ontology.com/pkgs/container/ai-ontology)
 [![Image build and end-to-end test](https://img.shields.io/badge/image-built%20%26%20tested%20in%20CI-2ea44f)](.github/workflows/ci.yml)
 [![Upgrade tested](https://img.shields.io/badge/upgrade-previous%20main%20%E2%86%92%20current-2ea44f)](scripts/upgrade_check.sh)
 [![OpenAPI](https://img.shields.io/badge/API-OpenAPI%203-6BA539)](crates/server/src/openapi.rs)
-[![Rust](https://img.shields.io/badge/Rust-2021%20edition-dea584)](Cargo.toml)
+[![Rust](https://img.shields.io/badge/Rust-1.98%2B-dea584?logo=rust)](Cargo.toml)
 [![License: AGPL-3.0 or commercial](https://img.shields.io/badge/license-AGPL--3.0%20or%20commercial-blue)](#license)
 [![PRs welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)](CONTRIBUTING.md)
 
@@ -72,7 +74,9 @@ API.
 ## Try it in five minutes
 
 ```bash
-docker compose up -d --build
+docker run -d -p 5000:5000 -v ontology-data:/data ghcr.io/masspe/ai-ontology:0.1.0
+# open http://localhost:5000 — or, for the two-client layout with backups and memory limits:
+docker compose up -d          # pulls the same image; add --build to build it from this checkout
 # open http://localhost:5001 — create the first account (it becomes the administrator),
 # then click « Essayer avec l'exemple finance » (try the finance example) and ask a question.
 ```

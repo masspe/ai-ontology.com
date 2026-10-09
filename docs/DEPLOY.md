@@ -24,7 +24,8 @@ its own data volume, its own accounts, its own memory limit.
 ## 2. Starting a client
 
 ```sh
-docker compose up -d --build          # two example clients: acme, globex
+docker compose up -d                  # two example clients: acme, globex (pulls the published image)
+docker compose up -d --build          # same, building the image from this checkout
 open http://localhost:5001 in a browser (acme; globex is on 5002)
 ```
 
@@ -141,7 +142,7 @@ one client:
 
 ```sh
 docker stop acme
-docker run --rm -v acme-data:/data -v acme-backups:/backups --entrypoint sh ontology:local \
+docker run --rm -v acme-data:/data -v acme-backups:/backups --entrypoint sh ghcr.io/masspe/ai-ontology:0.1.0 \
   -c 'mv /data/store /data/store.old && /usr/local/bin/ontology --data /data restore /backups'
 docker start acme
 ```
@@ -161,8 +162,9 @@ A new image opens the previous one's store as is: the format is versioned and
 migrated automatically on open. The CI checks this on every change (job
 `upgrade`, `scripts/upgrade_check.sh`: the previous version of `main` writes a
 store, the current version opens it, writes to it, compacts, backs up and
-restores). Procedure: back up (§5), `docker compose pull` or `build`,
-`docker compose up -d`; the container's log says what was migrated. Rollback:
+restores). Procedure: back up (§5), set the new version tag of the image in
+`compose.yaml` (`ghcr.io/masspe/ai-ontology:<version>`, or `--build` from a
+checkout), `docker compose up -d`; the container's log says what was migrated. Rollback:
 stop, restore the backup into a fresh volume, restart on the previous image.
 
 ## 7. End-to-end check
