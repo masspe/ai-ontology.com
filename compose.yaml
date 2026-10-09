@@ -20,7 +20,7 @@
 # refuses to start and says by how much, instead of being killed later.
 
 x-tenant: &tenant
-  image: ghcr.io/masspe/ai-ontology:0.1.0
+  image: ghcr.io/masspe/ai-ontology:0.1.1
   pull_policy: missing
   restart: unless-stopped
   mem_limit: 4g

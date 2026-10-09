@@ -74,7 +74,7 @@ API.
 ## Try it in five minutes
 
 ```bash
-docker run -d -p 5000:5000 -v ontology-data:/data ghcr.io/masspe/ai-ontology:0.1.0
+docker run -d -p 5000:5000 -v ontology-data:/data ghcr.io/masspe/ai-ontology:0.1.1
 # open http://localhost:5000 — or, for the two-client layout with backups and memory limits:
 docker compose up -d          # pulls the same image; add --build to build it from this checkout
 # open http://localhost:5001 — create the first account (it becomes the administrator),
