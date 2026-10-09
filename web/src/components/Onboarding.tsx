@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Mediasoft-Commercial
 // Copyright (C) 2026 Mediasoft & Cie S.A.
 //
-// The first day (ROADMAP §3.9 lot A, point 1): while the graph is empty,
+// The first day: while the graph is empty,
 // the dashboard is replaced by three numbered steps — describe your data,
 // drop your files, ask a question — each opening once the previous one is
 // done, plus the finance example in one click. It disappears by itself

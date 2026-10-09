@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Mediasoft-Commercial
 # Copyright (C) 2026 Mediasoft & Cie S.A.
 #
-# Upgrade drill (ROADMAP §3.8.5): a store written by the PREVIOUS version
+# Upgrade drill: a store written by the PREVIOUS version
 # of the binary is opened by the CURRENT one. Hydration must give the same
 # graph (stats and export identical), the current version must still write
 # to it, compact it (rewriting it in its own format), reopen it, and back

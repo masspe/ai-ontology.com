@@ -5,7 +5,7 @@
 // Dual-licensed: AGPL-3.0-or-later OR a commercial license
 // from Mediasoft & Cie S.A. See LICENSE and LICENSE-COMMERCIAL.md.
 
-//! Built-in user authentication (ROADMAP.md §3.8.3, decided 2026-09-29):
+//! Built-in user authentication:
 //! the `/auth/*` routes the web UI calls, served by the binary instead of
 //! the Node `auth-server`. Same contract, same `users.json` file (the
 //! hashes it wrote with bcryptjs verify here), same JWT (HS256, `iss`
@@ -17,7 +17,7 @@
 //! /auth/users`). `allow_signup` reopens it for deployments that want it.
 //! OAuth (Google, Microsoft) is not served here yet: the start routes
 //! bounce to the login page with `error=<provider>_not_configured`, as the
-//! Node server does when it has no client id (ROADMAP §3.8.3b).
+//! Node server does when it has no client id.
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -112,7 +112,7 @@ pub struct PublicUser {
     pub role: String,
 }
 
-/// A named API key of the tenant (ROADMAP §3.8.6) for machine callers:
+/// A named API key of the tenant for machine callers:
 /// the secret (`ok_` + 64 hex) is shown once at creation and kept hashed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

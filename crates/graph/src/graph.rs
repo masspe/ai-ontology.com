@@ -446,8 +446,8 @@ impl OntologyGraph {
         }
     }
 
-    /// Enter bulk-load mode (`STORAGE-PLAN.md` phase 4, item 4;
-    /// `PERFORMANCE.md` §7.8). Every public mutation keeps working — primary
+    /// Enter bulk-load mode (`PERFORMANCE.md`
+    /// §7.8). Every public mutation keeps working — primary
     /// maps, the name index and adjacency are maintained, so validation,
     /// upserts, deletes and cascades behave exactly as in normal mode — but
     /// the derived indexes (sorted sets, per-type buckets, name trigrams,
@@ -600,7 +600,7 @@ impl OntologyGraph {
         self.validate_candidate(&g, candidate)
     }
 
-    /// Schema transition rules (STORAGE-PLAN.md §5.1, hardened after the
+    /// Schema transition rules (STORAGE.md §10.10, hardened after the
     /// phase 3 review): domain identifiers valid, a child in its parent's
     /// domain, and nothing that has instances may move, change shape or
     /// disappear — the records on disk would otherwise be routed, validated
@@ -2036,7 +2036,7 @@ impl OntologyGraph {
         Ok((total, page))
     }
 
-    /// Cursor listing (T1, `STORAGE-PLAN.md` §8): the page that starts
+    /// Cursor listing (T1): the page that starts
     /// **strictly after** `after` in the order of `list_concepts_page` with
     /// the same filters, and the cursor of the next page (`None` once the
     /// page is short: the listing is exhausted). The sorted indexes are

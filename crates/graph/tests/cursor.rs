@@ -5,7 +5,7 @@
 // Dual-licensed: AGPL-3.0-or-later OR a commercial license
 // from Mediasoft & Cie S.A. See LICENSE and LICENSE-COMMERCIAL.md.
 
-//! T1 (`STORAGE-PLAN.md` §8): walking a listing by cursor yields exactly
+//! Cursor listing (T1): walking a listing by cursor yields exactly
 //! the offset listing, page after page, on every scan path (global sorted
 //! set, one type bucket, k-way merge over subtypes, trigram search with and
 //! without a type filter; relations globally, by adjacency and by type),

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Mediasoft-Commercial
 // Copyright (C) 2026 Mediasoft & Cie S.A.
 //
-// The four entries (ROADMAP §3.9 lot B, tranche 2): a page each for
+// The four entries: a page each for
 // Accueil and Réglages, a menu for Importer and Explorer. Native
 // <details> menus: no state; Escape and the focus leaving the menu close it.
 

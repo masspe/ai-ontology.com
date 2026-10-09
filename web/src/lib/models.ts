@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Mediasoft-Commercial
 // Copyright (C) 2026 Mediasoft & Cie S.A.
 //
-// Ready-made data models for the first day (ROADMAP §3.9 lot A, point 1):
+// Ready-made data models for the first day:
 // schemas only, bundled from `examples/models` and the finance example.
 
 import chantiers from "../../../examples/models/chantiers.json?raw";

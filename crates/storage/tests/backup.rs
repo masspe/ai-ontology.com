@@ -5,7 +5,7 @@
 // Dual-licensed: AGPL-3.0-or-later OR a commercial license
 // from Mediasoft & Cie S.A. See LICENSE and LICENSE-COMMERCIAL.md.
 
-//! Backup and restore (ROADMAP §3.8.4): a backup restores to the same
+//! Backup and restore: a backup restores to the same
 //! graph, a repeated backup copies only what changed, a compaction's
 //! removed partitions disappear from the backup, and the refusals hold.
 

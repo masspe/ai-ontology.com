@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Mediasoft-Commercial
 // Copyright (C) 2026 Mediasoft & Cie S.A.
 //
-// Rendering tests of the home page (ROADMAP §3.9 lot B, point 3): the
+// Rendering tests of the home page: the
 // question box, the stat tiles, what is to do (a review in progress, a
 // failed import), this week's imports, the last questions, the rules, the
 // first-day steps while the graph is empty, the 15 s poll, the error

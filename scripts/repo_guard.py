@@ -5,7 +5,7 @@
 # This file is part of ai-ontology.com.
 # Dual-licensed: AGPL-3.0-or-later OR a commercial license
 # from Mediasoft & Cie S.A. See LICENSE and LICENSE-COMMERCIAL.md.
-"""Refuse the file shapes used by the 2026-09-24 supply-chain injection.
+"""Refuse file shapes that hide executable code or internal notes in the tree.
 
 Runs in CI on every push and PR (`python3 scripts/repo_guard.py`) over the
 tracked files, and refuses:
@@ -15,17 +15,18 @@ tracked files, and refuses:
   auto-task     a VS Code task with `runOn: folderOpen`, or a settings
                 file enabling `task.allowAutomaticTasks`
   vscode-dir    any tracked file under `.vscode/` (the .gitignore excludes
-                it on purpose; the attack un-ignored it)
+                it on purpose)
   npm-hook      a package.json with a lifecycle hook (`preinstall`,
                 `postinstall`, `prepare`) - none is needed in this repo
   obfuscated    a source file with javascript-obfuscator identifiers
                 (`_0x1a2b`), a line over 2 000 characters, or code hidden
                 after a run of 80+ spaces on the same line
+  internal-doc  a development document that lives in the private notes
+                repository (`docs/ROADMAP*`, `docs/*PLAN*`, `docs/INCIDENT*`),
+                or a text file that points to one
 
 Exit 1 with one line per finding. `--self-test` checks every rule fires on
 a synthetic bad tree and stays silent on this repository.
-
-See docs/INCIDENT-2026-09-25.md for what these shapes looked like.
 """
 
 from __future__ import annotations
@@ -50,6 +51,13 @@ BINARY_EXT = set(FONT_MAGIC) | {
     ".zip", ".gz", ".xlsx", ".docx", ".wasm",
 }
 SOURCE_EXT = {".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".py", ".rs", ".sh", ".ps1"}
+
+# Development notes live in a private repository next to this one; the public
+# tree must neither contain them nor point to them. The patterns are joined at
+# runtime so this file does not match itself.
+INTERNAL_DOC = re.compile(r"^docs/(" + "|".join(["ROADMAP", r"[^/]*PLAN", "INCIDENT"]) + ")")
+INTERNAL_REF = re.compile("|".join(["STORAGE-" "PLAN", "INCIDENT-" "2026", "ROAD" r"MAP\.md"]).encode())
+TEXT_EXT = SOURCE_EXT | {".md", ".yml", ".yaml", ".toml", ".json", ".html", ".txt", ".npmrc"}
 
 OBF_IDENT = re.compile(rb"_0x[0-9a-f]{4,}")
 HIDDEN_CODE = re.compile(rb"\S {80,}\S")
@@ -102,6 +110,11 @@ def check_file(root: pathlib.Path, rel: str) -> list[str]:
             if hook in scripts:
                 out.append(f"{rel}: npm-hook - scripts.{hook}")
 
+    if INTERNAL_DOC.match(rel):
+        out.append(f"{rel}: internal-doc - belongs to the private notes repository")
+    elif (ext in TEXT_EXT or name in (".npmrc", ".gitattributes")) and INTERNAL_REF.search(data):
+        out.append(f"{rel}: internal-doc - points to a document of the private notes repository")
+
     if ext in SOURCE_EXT:
         n = len(OBF_IDENT.findall(data))
         if n >= OBF_IDENT_MIN:
@@ -146,6 +159,11 @@ def self_test() -> int:
             "b.js": b"export default r;" + b" " * 149 + b"evil();\n",
             "c.js": b"x=1;" + b"y" * 2100 + b"\n",
             "ok.rs": b"fn main() {\n    println!(\"hi\");\n}\n",
+            "docs/ROAD" "MAP.md": b"# roadmap\n",
+            "docs/STORAGE-" "PLAN.md": b"# plan\n",
+            "docs/INCIDENT-" "2026-01-01.md": b"# incident\n",
+            "docs/NOTES.md": b"see STORAGE-" b"PLAN.md section 3\n",
+            "docs/FINE.md": b"# storage format\nsee STORAGE.md section 7\n",
         }
         for rel, content in bad.items():
             p = root / rel
@@ -162,10 +180,14 @@ def self_test() -> int:
             ("a.js", "obfuscated"),
             ("b.js", "obfuscated"),
             ("c.js", "obfuscated"),
+            ("docs/ROAD" "MAP.md", "internal-doc"),
+            ("docs/STORAGE-" "PLAN.md", "internal-doc"),
+            ("docs/INCIDENT-" "2026-01-01.md", "internal-doc"),
+            ("docs/NOTES.md", "internal-doc"),
         ]
         for rel, rule in expect:
             assert any(f.startswith(rel) and rule in f for f in found), (rel, rule, found)
-        assert not [f for f in found if f.startswith(("fonts/real.woff2", "ok.rs"))], found
+        assert not [f for f in found if f.startswith(("fonts/real.woff2", "ok.rs", "docs/FINE.md"))], found
     here = pathlib.Path(__file__).resolve().parent.parent
     clean = run(here)
     assert not clean, clean
@@ -181,7 +203,7 @@ def main(argv: list[str]) -> int:
     for f in findings:
         print(f)
     if findings:
-        print(f"repo_guard: {len(findings)} finding(s) - see docs/INCIDENT-2026-09-25.md", file=sys.stderr)
+        print(f"repo_guard: {len(findings)} finding(s)", file=sys.stderr)
         return 1
     print("repo_guard: clean")
     return 0

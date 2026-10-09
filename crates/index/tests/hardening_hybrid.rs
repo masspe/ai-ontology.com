@@ -497,7 +497,7 @@ fn unit_vectors(n: usize, dim: usize, seed: u64) -> Vec<Vec<f32>> {
         .collect()
 }
 
-/// Tranche 2a (STORAGE-PLAN.md §8 R): above 16 384 rows the scan is split
+/// Parallel scan: above 16 384 rows the scan is split
 /// across the cores; its result must be the one a single scan gives.
 #[test]
 fn parallel_scan_returns_the_same_top_k_as_a_single_scan() {
@@ -543,7 +543,7 @@ fn parallel_scan_returns_the_same_top_k_as_a_single_scan() {
     assert!(idx.search(q, 0).is_empty());
 }
 
-/// Tranche 2a: `reindex_all` tokenises and embeds on every core; the index
+/// Parallel reindex: `reindex_all` tokenises and embeds on every core; the index
 /// it builds must rank like one filled concept by concept.
 #[test]
 fn parallel_reindex_matches_incremental_indexing() {

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Mediasoft-Commercial
 // Copyright (C) 2026 Mediasoft & Cie S.A.
 //
-// "Essayer avec l'exemple finance" (ROADMAP §3.9 lot A, point 2): the
+// "Essayer avec l'exemple finance": the
 // example shipped in `examples/finance` is sent to the server through the
 // ordinary upload endpoint, from the browser, in the order its README gives
 // (the same order `ontology serve --seed` uses). No server change: the

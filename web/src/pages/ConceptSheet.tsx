@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Mediasoft-Commercial
 // Copyright (C) 2026 Mediasoft & Cie S.A.
 //
-// The sheet of one concept (ROADMAP §3.9 lot B, point 2): on one screen,
+// The sheet of one concept: on one screen,
 // what it is, its links to other sheets, the documents it came from, the
 // rules and actions that concern it, and the corrections, made in place.
 
