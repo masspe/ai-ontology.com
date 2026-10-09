@@ -587,7 +587,7 @@ Conditions : `ontology bench` (binaire release, Windows 11, portable 14 threads,
 16 Go dont 4 à 5 Go libres, SSD NVMe), stores synthétiques du générateur
 (`--ns 5 --payload 1300`, noms courts H4, relations 80 % intra-domaine /
 20 % inter-domaines), une exécution par point, machine par ailleurs au repos.
-Les chiffres sont reproductibles avec les commandes du README (§ Benchmarks).
+Les chiffres sont reproductibles avec les commandes de `docs/ARCHITECTURE.md` (§ Benchmarks).
 
 **Hydratation (P0, tout en mémoire).** `decode` = parcours décodé de tout
 le store sans graphe (`scan_records`) ; `apply` = hydratation totale moins
