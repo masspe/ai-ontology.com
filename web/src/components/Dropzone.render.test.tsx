@@ -11,7 +11,7 @@ import Dropzone from "./Dropzone";
 import { fireEvent, makeFile, screen } from "../test/render";
 
 function zone(): HTMLElement {
-  return screen.getByText("Drop files here or click to upload").closest(".dropzone") as HTMLElement;
+  return screen.getByText("Déposez des fichiers ici ou cliquez pour téléverser").closest(".dropzone") as HTMLElement;
 }
 
 function input(): HTMLInputElement {
@@ -25,7 +25,7 @@ afterEach(() => {
 describe("Dropzone", () => {
   it("shows the default hint, or the one given", () => {
     const { unmount } = render(<Dropzone onFile={() => {}} />);
-    expect(screen.getByText("JSONL, CSV, XLSX, triples, text or ontology JSON")).toBeInTheDocument();
+    expect(screen.getByText("JSONL, CSV, XLSX, triplets, texte ou JSON d'ontologie")).toBeInTheDocument();
     unmount();
     render(<Dropzone onFile={() => {}} hint="PDF only" accept=".pdf" />);
     expect(screen.getByText("PDF only")).toBeInTheDocument();

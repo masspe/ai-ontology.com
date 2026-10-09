@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { Navigate, useLocation } from "react-router-dom";
 import { msBE } from "../lib/msBE";
+import { t } from "../lib/i18n";
 
 export default function ProtectedRoute({ children }) {
   const loc = useLocation();
@@ -19,7 +20,7 @@ export default function ProtectedRoute({ children }) {
   }, [state]);
 
   if (state === "checking") {
-    return <div style={{ padding: 24 }}>Loading…</div>;
+    return <div style={{ padding: 24 }}>{t("Chargement…")}</div>;
   }
   if (state === "anon") {
     const next = encodeURIComponent(loc.pathname + loc.search);

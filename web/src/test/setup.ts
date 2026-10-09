@@ -11,6 +11,7 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, configure } from "@testing-library/react";
 import { afterEach, beforeEach, vi } from "vitest";
+import { setLang } from "../lib/i18n";
 
 // `findBy*` / `waitFor` poll for this long before failing. The default of
 // one second is tight for the 1 500-line pages when several jsdom workers
@@ -24,6 +25,8 @@ beforeEach(() => {
   // The interactive guide opens alone on a first visit; page tests are not
   // first visits (Tour.render.test.tsx removes this to test that path).
   window.localStorage.setItem("tour.v1", JSON.stringify({ done: true }));
+  // Tests assert the French texts; the English rendering has its own tests.
+  setLang("fr", false);
   vi.stubGlobal(
     "fetch",
     vi.fn(() => Promise.reject(new Error("network access is disabled in unit tests"))),

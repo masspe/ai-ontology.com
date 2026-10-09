@@ -246,7 +246,7 @@ describe("prepareForIngest — DOCX body text", () => {
   it("reports a 'Parsing <name>…' progress status", async () => {
     const seen: PrepareProgress[] = [];
     await prepareForIngest(await docx("m.docx", W(P("x"))), { onProgress: (p) => seen.push(p) });
-    expect(seen).toEqual([{ status: "Parsing m.docx…" }]);
+    expect(seen).toEqual([{ status: "Analyse de m.docx…" }]);
   });
 });
 
@@ -260,7 +260,7 @@ describe("prepareForIngest — DOCX embedded images", () => {
     );
     expect(recognize).toHaveBeenCalledOnce();
     expect(seen).toEqual([
-      { status: "Parsing m.docx…" },
+      { status: "Analyse de m.docx…" },
       { status: "OCR m.docx · image 1/1", fraction: 1 },
     ]);
   });
@@ -343,8 +343,8 @@ describe("prepareForIngest — PDF", () => {
     expect(args.canvas.height).toBe(21);
     expect(recognize).toHaveBeenCalledOnce();
     expect(seen).toEqual([
-      { status: "Parsing scan.pdf…" },
-      { status: "Reading scan.pdf · page 1/1", fraction: 1 },
+      { status: "Analyse de scan.pdf…" },
+      { status: "Lecture de scan.pdf · page 1/1", fraction: 1 },
       { status: "OCR scan.pdf · page 1/1", fraction: 1 },
       // the page-level OCR call passes no progress callback, so no "OCR…" entry
     ]);
@@ -372,9 +372,9 @@ describe("prepareForIngest — PDF", () => {
     const seen: PrepareProgress[] = [];
     await prepareForIngest(f("d.pdf"), { onProgress: (p) => seen.push(p) });
     expect(seen).toEqual([
-      { status: "Parsing d.pdf…" },
-      { status: "Reading d.pdf · page 1/2", fraction: 0.5 },
-      { status: "Reading d.pdf · page 2/2", fraction: 1 },
+      { status: "Analyse de d.pdf…" },
+      { status: "Lecture de d.pdf · page 1/2", fraction: 0.5 },
+      { status: "Lecture de d.pdf · page 2/2", fraction: 1 },
     ]);
   });
 });

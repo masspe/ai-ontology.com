@@ -3,6 +3,7 @@ import { useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { msBE } from "../lib/msBE";
 import { useToast } from "../components/Toast.jsx";
+import { t } from "../lib/i18n";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -28,8 +29,8 @@ export default function Login() {
 
   function validate() {
     const e = {};
-    if (!EMAIL_RE.test(email)) e.email = "Email invalide";
-    if (!password) e.password = "Mot de passe requis";
+    if (!EMAIL_RE.test(email)) e.email = t("Email invalide");
+    if (!password) e.password = t("Mot de passe requis");
     setErrors(e);
     return Object.keys(e).length === 0;
   }
@@ -40,10 +41,10 @@ export default function Login() {
     setLoading(true);
     try {
       await msBE.auth.login({ email: email.trim(), password });
-      toast.success("Connexion réussie");
+      toast.success(t("Connexion réussie"));
       nav(next, { replace: true });
     } catch (err) {
-      toast.error(err.message || "Échec de connexion");
+      toast.error(err.message || t("Échec de connexion"));
     } finally {
       setLoading(false);
     }
@@ -52,16 +53,16 @@ export default function Login() {
   return (
     <div style={wrap}>
       <form onSubmit={onSubmit} style={card} noValidate>
-        <h1 style={{ marginTop: 0 }}>Se connecter</h1>
+        <h1 style={{ marginTop: 0 }}>{t("Se connecter")}</h1>
 
-        <label style={label}>Email
+        <label style={label}>{t("Email")}
           <input type="email" autoComplete="email" value={email}
             onChange={(e) => setEmail(e.target.value)} style={input}
             aria-invalid={!!errors.email} />
           {errors.email && <span style={errStyle}>{errors.email}</span>}
         </label>
 
-        <label style={label}>Mot de passe
+        <label style={label}>{t("Mot de passe")}
           <input type="password" autoComplete="current-password" value={password}
             onChange={(e) => setPassword(e.target.value)} style={input}
             aria-invalid={!!errors.password} />
@@ -69,20 +70,20 @@ export default function Login() {
         </label>
 
         <button type="submit" disabled={loading} style={primaryBtn}>
-          {loading ? "Connexion…" : "Se connecter"}
+          {loading ? t("Connexion…") : t("Se connecter")}
         </button>
 
-        <div style={divider}><span>ou</span></div>
+        <div style={divider}><span>{t("ou")}</span></div>
 
         <a href={msBE.auth.googleLoginUrl(next)} style={oauthBtn("#fff", "#111", "#ddd")}>
-          Continuer avec Google
+          {t("Continuer avec Google")}
         </a>
         <a href={msBE.auth.microsoftLoginUrl(next)} style={oauthBtn("#2f2f2f", "#fff", "#2f2f2f")}>
-          Continuer avec Microsoft
+          {t("Continuer avec Microsoft")}
         </a>
 
         <p style={{ marginTop: 16 }}>
-          Pas de compte ? <Link to={`/signup?next=${encodeURIComponent(next)}`}>Créer un compte</Link>
+          {t("Pas de compte ?")} <Link to={`/signup?next=${encodeURIComponent(next)}`}>{t("Créer un compte")}</Link>
         </p>
       </form>
     </div>

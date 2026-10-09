@@ -44,7 +44,7 @@ const emptyProposal: OntologyProposal = {
 describe("OntologyGraph", () => {
   it("shows the empty hint when there is nothing to draw (null or empty subgraph)", () => {
     const { container, rerender } = render(<OntologyGraph subgraph={null} />);
-    expect(container.textContent).toContain("Generate or upload sources to populate the ontology graph.");
+    expect(container.textContent).toContain("Générez ou importez des sources pour remplir le graphe de l'ontologie.");
     expect(container.querySelector("svg")).toBeNull();
     expect(container.querySelector(".og-legend")).toBeNull();
 

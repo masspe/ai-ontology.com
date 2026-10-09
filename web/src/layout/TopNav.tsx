@@ -7,6 +7,7 @@
 
 import { NavLink, useLocation } from "react-router-dom";
 import { NAV_GROUPS, type NavGroup } from "./nav";
+import { t } from "../lib/i18n";
 
 function closeMenu(e: React.MouseEvent) {
   (e.currentTarget as HTMLElement).closest("details")?.removeAttribute("open");
@@ -62,7 +63,7 @@ function Group({ group }: { group: NavGroup }) {
 
 export default function TopNav() {
   return (
-    <nav className="topnav" aria-label="Navigation">
+    <nav className="topnav" aria-label={t("Navigation")}>
       <NavLink to="/" className="topnav-brand" aria-label="AI Ontology Studio">
         <span className="sidebar-logo">A</span>
       </NavLink>

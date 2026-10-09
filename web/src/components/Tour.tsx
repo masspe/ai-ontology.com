@@ -11,6 +11,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { NAV_ITEMS } from "../layout/nav";
+import { t } from "../lib/i18n";
 
 export interface TourStep {
   /** Page to show for this step. */
@@ -24,30 +25,47 @@ export interface TourStep {
 const KEY = "tour.v1";
 const OPEN_EVENT = "tour:open";
 
+// Getters: the sentences are read when the guide renders, in the active language.
 export const TOUR_STEPS: TourStep[] = [
   {
     path: "/",
     target: "help",
-    title: "Bienvenue",
-    text: "Ce guide présente chaque partie de l'application, page par page. Vous pouvez le rouvrir à tout moment avec ce bouton « ? », et sauter directement à une partie depuis le sommaire.",
+    get title() {
+      return t("Bienvenue");
+    },
+    get text() {
+      return t("Ce guide présente chaque partie de l'application, page par page. Vous pouvez le rouvrir à tout moment avec ce bouton « ? », et sauter directement à une partie depuis le sommaire.");
+    },
   },
   ...NAV_ITEMS.map((item) => ({
     path: item.to,
     target: item.tour,
-    title: item.label,
-    text: item.guide,
+    get title() {
+      return item.label;
+    },
+    get text() {
+      return item.guide;
+    },
   })),
   {
     path: "/",
     target: "search",
-    title: "Recherche",
-    text: "Depuis n'importe quelle page : tapez une question ou un nom de fiche, la réponse arrive sur la page Questions.",
+    get title() {
+      return t("Recherche");
+    },
+    get text() {
+      return t("Depuis n'importe quelle page : tapez une question ou un nom de fiche, la réponse arrive sur la page Questions.");
+    },
   },
   {
     path: "/",
     target: "feedback",
-    title: "Retour d'expérience",
-    text: "Un bouton pour nous signaler ce qui manque ou ce qui gêne, avec une capture d'écran si vous le souhaitez.",
+    get title() {
+      return t("Retour d'expérience");
+    },
+    get text() {
+      return t("Un bouton pour nous signaler ce qui manque ou ce qui gêne, avec une capture d'écran si vous le souhaitez.");
+    },
   },
 ];
 
@@ -180,9 +198,9 @@ export default function Tour() {
       <div className="tour-card" style={cardStyle} ref={cardRef} tabIndex={-1}>
         <div className="tour-head">
           <span className="muted">
-            Étape {step + 1} sur {TOUR_STEPS.length}
+            {t("Étape {n} sur {total}", { n: step + 1, total: TOUR_STEPS.length })}
           </span>
-          <button className="icon-btn" aria-label="Fermer le guide" onClick={close}>
+          <button className="icon-btn" aria-label={t("Fermer le guide")} onClick={close}>
             ×
           </button>
         </div>
@@ -191,7 +209,7 @@ export default function Tour() {
         </h2>
         <p className="tour-text">{current.text}</p>
         {summary && (
-          <ol className="tour-summary" aria-label="Sommaire">
+          <ol className="tour-summary" aria-label={t("Sommaire")}>
             {TOUR_STEPS.map((s, i) => (
               <li key={s.target + i}>
                 <button
@@ -209,19 +227,19 @@ export default function Tour() {
         )}
         <div className="tour-actions">
           <button className="btn-ghost" onClick={() => setSummary((v) => !v)} aria-expanded={summary}>
-            Sommaire
+            {t("Sommaire")}
           </button>
           <span style={{ flex: 1 }} />
           <button className="btn-ghost" onClick={() => setStep(step - 1)} disabled={step === 0}>
-            Précédent
+            {t("Précédent")}
           </button>
           {last ? (
             <button className="btn-primary" onClick={close}>
-              Terminer
+              {t("Terminer")}
             </button>
           ) : (
             <button className="btn-primary" onClick={() => setStep(step + 1)}>
-              Suivant
+              {t("Suivant")}
             </button>
           )}
         </div>

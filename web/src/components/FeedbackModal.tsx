@@ -4,6 +4,7 @@
 import { useRef, useState } from "react";
 import { createFeedback, type FeedbackKind } from "../api";
 import { getLogTail } from "../lib/logBuffer";
+import { t } from "../lib/i18n";
 
 interface Props {
   open: boolean;
@@ -20,11 +21,11 @@ interface KindMeta {
   border: string;
 }
 
-const KINDS: KindMeta[] = [
+const kinds = (): KindMeta[] => [
   { key: "bug",         label: "Bug",         icon: "🐞", bg: "#fde7e9", fg: "#b3261e", border: "#f5b5b9" },
-  { key: "error",       label: "Erreur",      icon: "⚠",  bg: "#fff4e0", fg: "#8a5a00", border: "#f3d08a" },
-  { key: "evolution",   label: "Évolution",   icon: "✦",  bg: "#e1ecff", fg: "#1f4ba8", border: "#bcd1f6" },
-  { key: "improvement", label: "Amélioration",icon: "💡", bg: "#e3f6e8", fg: "#1f7a3a", border: "#b6e3c4" },
+  { key: "error",       label: t(t("Erreur")),      icon: "⚠",  bg: "#fff4e0", fg: "#8a5a00", border: "#f3d08a" },
+  { key: "evolution",   label: t(t("Évolution")),   icon: "✦",  bg: "#e1ecff", fg: "#1f4ba8", border: "#bcd1f6" },
+  { key: "improvement", label: t(t("Amélioration")),icon: "💡", bg: "#e3f6e8", fg: "#1f7a3a", border: "#b6e3c4" },
 ];
 
 export default function FeedbackModal({ open, onClose, onSubmitted }: Props) {
@@ -58,7 +59,7 @@ export default function FeedbackModal({ open, onClose, onSubmitted }: Props) {
         getDisplayMedia: (c: DisplayMediaStreamOptions) => Promise<MediaStream>;
       });
       if (!md?.getDisplayMedia) {
-        throw new Error("Capture d'écran non supportée par ce navigateur.");
+        throw new Error(t("Capture d'écran non supportée par ce navigateur."));
       }
       const stream = await md.getDisplayMedia({ video: true, audio: false });
       const track = stream.getVideoTracks()[0];
@@ -72,7 +73,7 @@ export default function FeedbackModal({ open, onClose, onSubmitted }: Props) {
       canvas.width = video.videoWidth || 1280;
       canvas.height = video.videoHeight || 720;
       const ctx = canvas.getContext("2d");
-      if (!ctx) throw new Error("Canvas 2D non disponible.");
+      if (!ctx) throw new Error(t("Canvas 2D non disponible."));
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       track.stop();
       stream.getTracks().forEach((t) => t.stop());
@@ -87,14 +88,14 @@ export default function FeedbackModal({ open, onClose, onSubmitted }: Props) {
     if (!file) return;
     const reader = new FileReader();
     reader.onload = () => setScreenshot(reader.result as string);
-    reader.onerror = () => setError("Lecture du fichier impossible.");
+    reader.onerror = () => setError(t("Lecture du fichier impossible."));
     reader.readAsDataURL(file);
   };
 
   const submit = async () => {
     setError(null);
     if (!title.trim()) {
-      setError("Le titre est obligatoire.");
+      setError(t("Le titre est obligatoire."));
       return;
     }
     setBusy(true);
@@ -123,21 +124,20 @@ export default function FeedbackModal({ open, onClose, onSubmitted }: Props) {
         <div className="feedback-head">
           <div>
             <h2 style={{ margin: 0, display: "flex", alignItems: "center", gap: 8 }}>
-              <span>💬</span> Envoyer un feedback
+              <span>💬</span> {t("Envoyer un feedback")}
             </h2>
             <p style={{ marginTop: 6, color: "var(--muted)", fontSize: 13 }}>
-              Aidez-nous à améliorer l'application. Les logs navigateur et serveur
-              récents seront joints automatiquement.
+              {t("Aidez-nous à améliorer l'application. Les logs navigateur et serveur récents seront joints automatiquement.")}
             </p>
           </div>
-          <button className="icon-btn" onClick={close} title="Fermer">×</button>
+          <button className="icon-btn" onClick={close} title={t(t("Fermer"))}>×</button>
         </div>
 
         <div className="feedback-body">
           <div className="field">
-            <span>Type</span>
+            <span>{t(t("Type"))}</span>
             <div className="feedback-kinds">
-              {KINDS.map((k) => {
+              {kinds().map((k) => {
                 const active = k.key === kind;
                 return (
                   <button
@@ -160,45 +160,45 @@ export default function FeedbackModal({ open, onClose, onSubmitted }: Props) {
           </div>
 
           <label className="field">
-            <span>Titre <span style={{ color: "#b3261e" }}>*</span></span>
+            <span>{t("Titre")} <span style={{ color: "#b3261e" }}>*</span></span>
             <input
               type="text"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              placeholder="Résumez en quelques mots…"
+              placeholder={t(t("Résumez en quelques mots…"))}
             />
           </label>
 
           <label className="field">
-            <span>Description</span>
+            <span>{t(t("Description"))}</span>
             <textarea
               rows={4}
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="Décrivez ce qui s'est passé, les étapes pour reproduire, etc."
+              placeholder={t(t("Décrivez ce qui s'est passé, les étapes pour reproduire, etc."))}
             />
           </label>
 
           <div className="field">
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span>Capture d'écran</span>
+              <span>{t(t("Capture d'écran"))}</span>
               <div style={{ display: "flex", gap: 6 }}>
                 <button type="button" className="btn btn-outline" onClick={capture}>
-                  📷 Capturer
+                  📷 {t("Capturer")}
                 </button>
                 <button
                   type="button"
                   className="btn btn-outline"
                   onClick={() => fileInputRef.current?.click()}
                 >
-                  Importer
+                  {t(t("Importer"))}
                 </button>
                 <button
                   type="button"
                   className="btn btn-outline"
                   onClick={() => setScreenshot(null)}
                   disabled={!screenshot}
-                  title="Supprimer"
+                  title={t(t("Supprimer"))}
                 >🗑</button>
                 <input
                   ref={fileInputRef}
@@ -211,7 +211,7 @@ export default function FeedbackModal({ open, onClose, onSubmitted }: Props) {
             </div>
             {screenshot && (
               <div className="feedback-preview">
-                <img src={screenshot} alt="capture" />
+                <img src={screenshot} alt={t("capture")} />
               </div>
             )}
           </div>
@@ -220,9 +220,9 @@ export default function FeedbackModal({ open, onClose, onSubmitted }: Props) {
         </div>
 
         <div className="feedback-foot">
-          <button className="btn btn-ghost" onClick={close} disabled={busy}>Annuler</button>
+          <button className="btn btn-ghost" onClick={close} disabled={busy}>{t(t("Annuler"))}</button>
           <button className="btn btn-primary" onClick={submit} disabled={busy}>
-            {busy ? "Envoi…" : "Envoyer"}
+            {busy ? t(t("Envoi…")) : t(t("Envoyer"))}
           </button>
         </div>
       </div>
