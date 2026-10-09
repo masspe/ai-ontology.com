@@ -18,6 +18,7 @@ import type {
   ProposalRelation,
 } from "../lib/proposalTypes";
 import Card from "./Card";
+import { t } from "../lib/i18n";
 
 // ---------- decision heuristic ----------
 
@@ -48,14 +49,14 @@ export function ConflictBadge({ conflict }: { conflict?: ConflictInfo | null }) 
           color: "#15803d",
         }}
       >
-        nouveau
+        {t("nouveau")}
       </span>
     );
   }
   const palette: Record<ConflictInfo["kind"]["kind"], { bg: string; fg: string; label: string }> = {
-    exists: { bg: "#fef3c7", fg: "#a16207", label: "existe déjà" },
-    type_mismatch: { bg: "#fee2e2", fg: "#b91c1c", label: "type différent" },
-    dangling_ref: { bg: "#fee2e2", fg: "#b91c1c", label: "référence manquante" },
+    exists: { bg: "#fef3c7", fg: "#a16207", label: t("existe déjà") },
+    type_mismatch: { bg: "#fee2e2", fg: "#b91c1c", label: t("type différent") },
+    dangling_ref: { bg: "#fee2e2", fg: "#b91c1c", label: t("référence manquante") },
   };
   const p = palette[conflict.kind.kind];
   return (
@@ -89,9 +90,9 @@ export function DecisionPicker({
       onChange={(e) => onChange(e.target.value as DecisionAction)}
       style={{ fontSize: 12, padding: "2px 4px" }}
     >
-      <option value="create_new">Créer</option>
-      {allowMerge && <option value="merge">Fusionner avec l'existant</option>}
-      <option value="skip">Ignorer</option>
+      <option value="create_new">{t("Créer")}</option>
+      {allowMerge && <option value="merge">{t("Fusionner avec l'existant")}</option>}
+      <option value="skip">{t("Ignorer")}</option>
     </select>
   );
 }
@@ -100,7 +101,7 @@ export function ConfidenceBar({ value }: { value?: number }) {
   const pct = Math.round(Math.max(0, Math.min(1, value ?? 0)) * 100);
   const color = pct >= 70 ? "#16a34a" : pct >= 40 ? "#eab308" : "#dc2626";
   return (
-    <div title={`confiance ${pct}%`} style={{ width: 40, height: 4, background: "#e5e7eb", borderRadius: 2 }}>
+    <div title={t("confiance {pct}%", { pct })} style={{ width: 40, height: 4, background: "#e5e7eb", borderRadius: 2 }}>
       <div style={{ width: `${pct}%`, height: "100%", background: color, borderRadius: 2 }} />
     </div>
   );
@@ -173,35 +174,35 @@ export function ReviewPanel(props: ReviewPanelProps) {
       <Card>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
           <div style={{ display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
-            <strong>{proposal.source?.name ?? "Document"}</strong>
+            <strong>{proposal.source?.name ?? t("Document")}</strong>
             {proposal.source?.encoding && (
               <span style={{ fontSize: 12, color: "#475569" }}>
-                encodage : <code>{proposal.source.encoding}</code>
+                {t("encodage :")} <code>{proposal.source.encoding}</code>
                 {proposal.source?.had_bom ? " (BOM)" : ""}
               </span>
             )}
             {proposal.language && (
               <span style={{ fontSize: 12, color: "#475569" }}>
-                langue : <code>{proposal.language.code}</code>{" "}
+                {t("langue :")} <code>{proposal.language.code}</code>{" "}
                 ({Math.round(proposal.language.confidence * 100)}%)
               </span>
             )}
           </div>
           <div style={{ display: "flex", gap: 6 }}>
-            <button onClick={() => props.onBulkDecision("create_new")}>Tout accepter</button>
-            <button onClick={() => props.onBulkDecision("skip")}>Tout ignorer</button>
+            <button onClick={() => props.onBulkDecision("create_new")}>{t("Tout accepter")}</button>
+            <button onClick={() => props.onBulkDecision("skip")}>{t("Tout ignorer")}</button>
           </div>
         </div>
         <div style={{ marginTop: 8, fontSize: 13, color: "#0f172a" }}>
-          <span style={{ marginRight: 12 }}>Créer : <strong>{counters.create}</strong></span>
-          <span style={{ marginRight: 12 }}>Fusionner : <strong>{counters.merge}</strong></span>
-          <span>Ignorer : <strong>{counters.skip}</strong></span>
+          <span style={{ marginRight: 12 }}>{t("Créer :")} <strong>{counters.create}</strong></span>
+          <span style={{ marginRight: 12 }}>{t("Fusionner :")} <strong>{counters.merge}</strong></span>
+          <span>{t("Ignorer :")} <strong>{counters.skip}</strong></span>
         </div>
       </Card>
 
       {proposal.concept_types.length > 0 && (
-        <Section title={`Nouveaux types de fiche (${proposal.concept_types.length})`}>
-          <Table headers={["Nom", "Parent", "Conflit", "Confiance", "Décision"]}>
+        <Section title={t("Nouveaux types de fiche ({n})", { n: proposal.concept_types.length })}>
+          <Table headers={[t("Nom"), t("Parent"), t("Conflit"), t("Confiance"), t("Décision")]}>
             {proposal.concept_types.map((ct) => (
               <tr key={ct.client_ref}>
                 <td>{ct.name}</td>
@@ -222,8 +223,8 @@ export function ReviewPanel(props: ReviewPanelProps) {
       )}
 
       {proposal.relation_types.length > 0 && (
-        <Section title={`Nouveaux types de lien (${proposal.relation_types.length})`}>
-          <Table headers={["Nom", "Domaine → Cible", "Conflit", "Confiance", "Décision"]}>
+        <Section title={t("Nouveaux types de lien ({n})", { n: proposal.relation_types.length })}>
+          <Table headers={[t("Nom"), t("Domaine → Cible"), t("Conflit"), t("Confiance"), t("Décision")]}>
             {proposal.relation_types.map((rt) => (
               <tr key={rt.client_ref}>
                 <td>{rt.name}</td>
@@ -244,8 +245,8 @@ export function ReviewPanel(props: ReviewPanelProps) {
       )}
 
       {proposal.concepts.length > 0 && (
-        <Section title={`Fiches (${proposal.concepts.length})`}>
-          <Table headers={["Type", "Nom", "Description", "Propriétés", "Conflit", "Confiance", "Décision"]}>
+        <Section title={t("Fiches ({n})", { n: proposal.concepts.length })}>
+          <Table headers={[t("Type"), t("Nom"), t("Description"), t("Propriétés"), t("Conflit"), t("Confiance"), t("Décision")]}>
             {proposal.concepts.map((c) => (
               <tr key={c.client_ref}>
                 <td style={{ color: "#475569" }}>{c.concept_type}</td>
@@ -295,8 +296,8 @@ export function ReviewPanel(props: ReviewPanelProps) {
       )}
 
       {proposal.relations.length > 0 && (
-        <Section title={`Liens (${proposal.relations.length})`}>
-          <Table headers={["Type", "Source", "Cible", "Conflit", "Confiance", "Décision"]}>
+        <Section title={t("Liens ({n})", { n: proposal.relations.length })}>
+          <Table headers={[t("Type"), t("Source"), t("Cible"), t("Conflit"), t("Confiance"), t("Décision")]}>
             {proposal.relations.map((r) => (
               <tr key={r.client_ref}>
                 <td style={{ color: "#475569" }}>{r.relation_type}</td>
@@ -318,14 +319,14 @@ export function ReviewPanel(props: ReviewPanelProps) {
       )}
 
       {proposal.rules.length > 0 && (
-        <Section title={`Règles (${proposal.rules.length})`}>
-          <Table headers={["Type", "Nom", "Si → Alors", "Conflit", "Décision"]}>
+        <Section title={t("Règles ({n})", { n: proposal.rules.length })}>
+          <Table headers={[t("Type"), t("Nom"), t("Si → Alors"), t("Conflit"), t("Décision")]}>
             {proposal.rules.map((r) => (
               <tr key={r.client_ref}>
                 <td style={{ color: "#475569" }}>{r.rule_type}</td>
                 <td>{r.name}</td>
                 <td style={{ color: "#475569", fontSize: 12 }}>
-                  <em>si</em> {r.when || "—"} <em>alors</em> {r.then || "—"}
+                  <em>{t("si")}</em> {r.when || "—"} <em>{t("alors")}</em> {r.then || "—"}
                 </td>
                 <td><ConflictBadge conflict={r.conflict} /></td>
                 <td>
@@ -342,8 +343,8 @@ export function ReviewPanel(props: ReviewPanelProps) {
       )}
 
       {proposal.actions.length > 0 && (
-        <Section title={`Actions (${proposal.actions.length})`}>
-          <Table headers={["Type", "Nom", "Sujet", "Objet", "Conflit", "Décision"]}>
+        <Section title={t("Actions ({n})", { n: proposal.actions.length })}>
+          <Table headers={[t("Type"), t("Nom"), t("Sujet"), t("Objet"), t("Conflit"), t("Décision")]}>
             {proposal.actions.map((a) => (
               <tr key={a.client_ref}>
                 <td style={{ color: "#475569" }}>{a.action_type}</td>
@@ -365,7 +366,7 @@ export function ReviewPanel(props: ReviewPanelProps) {
       )}
 
       <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8 }}>
-        <button onClick={props.onCancel}>{props.cancelLabel ?? "Annuler"}</button>
+        <button onClick={props.onCancel}>{props.cancelLabel ?? t("Annuler")}</button>
         <button
           onClick={props.onApply}
           disabled={props.applyDisabled}
@@ -378,7 +379,7 @@ export function ReviewPanel(props: ReviewPanelProps) {
             cursor: props.applyDisabled ? "not-allowed" : "pointer",
           }}
         >
-          {props.applyLabel ?? "Ajouter aux données"}
+          {props.applyLabel ?? t("Ajouter aux données")}
         </button>
       </div>
     </div>
@@ -394,23 +395,23 @@ export function ApplyReportView({ report, onReset, resetLabel }: {
 }) {
   return (
     <Card>
-      <h2 style={{ marginTop: 0 }}>Ajout terminé</h2>
+      <h2 style={{ marginTop: 0 }}>{t("Ajout terminé")}</h2>
       <div style={{ display: "flex", gap: 24, marginBottom: 16 }}>
-        <Stat label="Créés" value={report.created} color="#16a34a" />
-        <Stat label="Fusionnés" value={report.merged} color="#2563eb" />
-        <Stat label="Ignorés" value={report.skipped} color="#94a3b8" />
-        <Stat label="Échoués" value={report.failed} color="#dc2626" />
+        <Stat label={t("Créés")} value={report.created} color="#16a34a" />
+        <Stat label={t("Fusionnés")} value={report.merged} color="#2563eb" />
+        <Stat label={t("Ignorés")} value={report.skipped} color="#94a3b8" />
+        <Stat label={t("Échoués")} value={report.failed} color="#dc2626" />
       </div>
 
-      <OutcomeList title="Types de fiche" rows={report.concept_types} />
-      <OutcomeList title="Types de lien" rows={report.relation_types} />
-      <OutcomeList title="Fiches" rows={report.concepts} />
-      <OutcomeList title="Liens" rows={report.relations} />
-      <OutcomeList title="Règles" rows={report.rules} />
-      <OutcomeList title="Actions" rows={report.actions} />
+      <OutcomeList title={t("Types de fiche")} rows={report.concept_types} />
+      <OutcomeList title={t("Types de lien")} rows={report.relation_types} />
+      <OutcomeList title={t("Fiches")} rows={report.concepts} />
+      <OutcomeList title={t("Liens")} rows={report.relations} />
+      <OutcomeList title={t("Règles")} rows={report.rules} />
+      <OutcomeList title={t("Actions")} rows={report.actions} />
 
       <button onClick={onReset} style={{ marginTop: 12 }}>
-        {resetLabel ?? "Importer un autre document"}
+        {resetLabel ?? t("Importer un autre document")}
       </button>
     </Card>
   );
@@ -441,10 +442,10 @@ function OutcomeList({ title, rows }: { title: string; rows: [string, ApplyOutco
                 {outcome.status === "failed" ? (
                   <span style={{ color: "#dc2626" }}>{outcome.error}</span>
                 ) : outcome.status === "skipped" ? (
-                  <span style={{ color: "#94a3b8" }}>ignoré</span>
+                  <span style={{ color: "#94a3b8" }}>{t("ignoré")}</span>
                 ) : (
                   <span style={{ color: outcome.status === "merged" ? "#2563eb" : "#16a34a" }}>
-                    {outcome.status === "merged" ? "fusionné" : "créé"} #{outcome.id}
+                    {outcome.status === "merged" ? t("fusionné") : t("créé")} #{outcome.id}
                   </span>
                 )}
               </td>

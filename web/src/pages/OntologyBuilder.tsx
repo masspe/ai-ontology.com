@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Mediasoft-Commercial
 // Copyright (C) 2026 Mediasoft & Cie S.A.
 
+import { t } from "../lib/i18n";
 import { useEffect, useState } from "react";
 import JSZip from "jszip";
 import Card from "../components/Card";
@@ -46,10 +47,10 @@ import {
 
 const MAX_DESC = 4000;
 
-const EXAMPLES = [
-  "Un suivi des contrats : parties, accords, clauses, obligations et dates de renouvellement.",
-  "Une base de connaissances de recherche : publications, auteurs, institutions, sujets et citations.",
-  "Un modèle clinique couvrant patients, diagnostics, médicaments, interventions et résultats.",
+const examples = (): string[] => [
+  t("Un suivi des contrats : parties, accords, clauses, obligations et dates de renouvellement."),
+  t("Une base de connaissances de recherche : publications, auteurs, institutions, sujets et citations."),
+  t("Un modèle clinique couvrant patients, diagnostics, médicaments, interventions et résultats."),
 ];
 
 const KIND_BY_EXT: Record<string, string> = {
@@ -114,10 +115,10 @@ function fmtBytes(b: number): string {
 
 function fmtAgo(ts: number): string {
   const diff = Math.max(0, Math.floor(Date.now() / 1000 - ts));
-  if (diff < 60) return `il y a ${diff} s`;
-  if (diff < 3600) return `il y a ${Math.floor(diff / 60)} min`;
-  if (diff < 86400) return `il y a ${Math.floor(diff / 3600)} h`;
-  return `il y a ${Math.floor(diff / 86400)} j`;
+  if (diff < 60) return t("il y a {n} s", { n: diff });
+  if (diff < 3600) return t("il y a {n} min", { n: Math.floor(diff / 60) });
+  if (diff < 86400) return t("il y a {n} h", { n: Math.floor(diff / 3600) });
+  return t("il y a {n} j", { n: Math.floor(diff / 86400) });
 }
 
 function buildFilesContext(files: FileRecord[]): string {
@@ -199,8 +200,8 @@ export default function OntologyBuilder() {
       setProposed(res.ontology);
       setInfo(
         files.length > 0
-          ? `Brouillon généré à partir de votre description et de ${files.length} fichier(s). Cliquez sur Enregistrer le modèle pour l'appliquer.`
-          : "Brouillon du modèle généré. Cliquez sur Enregistrer le modèle pour l'appliquer.",
+          ? t("Brouillon généré à partir de votre description et de {n} fichier(s). Cliquez sur Enregistrer le modèle pour l'appliquer.", { n: files.length })
+          : t("Brouillon du modèle généré. Cliquez sur Enregistrer le modèle pour l'appliquer."),
       );
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
@@ -223,7 +224,7 @@ export default function OntologyBuilder() {
       }
       await replaceOntology(proposed);
       setProposed(null);
-      setInfo(`Modèle enregistré. ${impact ? wordImpact(impact) : ""}`.trim());
+      setInfo(`${t("Modèle enregistré.")} ${impact ? wordImpact(impact) : ""}`.trim());
       await refresh();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
@@ -269,7 +270,7 @@ export default function OntologyBuilder() {
     sourceLabel: string,
   ): Promise<void> => {
     if (files.length === 0) {
-      setInfo(`${sourceLabel} : aucun fichier importable trouvé.`);
+      setInfo(t("{src} : aucun fichier importable trouvé.", { src: sourceLabel }));
       return;
     }
     const parts: ProposalPart[] = [];
@@ -277,7 +278,7 @@ export default function OntologyBuilder() {
     const willOcr = files.some(needsPreprocessing);
     if (willOcr) {
       setInfo(
-        `${sourceLabel} : préparation de ${files.length} fichier(s) — l'OCR peut prendre un moment au premier lancement, le temps de télécharger les données de langue…`,
+        t("{src} : préparation de {n} fichier(s) — l'OCR peut prendre un moment au premier lancement, le temps de télécharger les données de langue…", { src: sourceLabel, n: files.length }),
       );
     }
     for (let i = 0; i < files.length; i++) {
@@ -286,10 +287,10 @@ export default function OntologyBuilder() {
         const prepared = await prepareForIngest(f, {
           onProgress: (p) =>
             setInfo(
-              `Analyse ${i + 1}/${files.length} (${f.name}) : ${p.status}`,
+              t("Analyse {i}/{n} ({name}) : {status}", { i: i + 1, n: files.length, name: f.name, status: p.status }),
             ),
         });
-        setInfo(`Analyse ${i + 1}/${files.length} : ${f.name}…`);
+        setInfo(t("Analyse {i}/{n} : {name}…", { i: i + 1, n: files.length, name: f.name }));
         const proposal = await analyzeIngest({ file: prepared });
         parts.push({ file: f.name, proposal });
       } catch (e) {
@@ -300,7 +301,7 @@ export default function OntologyBuilder() {
       setError(
         failures.length > 0
           ? failures.slice(0, 3).join(" | ")
-          : `${sourceLabel} : rien n'a pu être analysé.`,
+          : t("{src} : rien n'a pu être analysé.", { src: sourceLabel }),
       );
       setInfo(null);
       return;
@@ -319,9 +320,9 @@ export default function OntologyBuilder() {
     setIngestProposal(merged);
     setIngestDecisions(decisions);
     setApplyReport(null);
-    const tail = failures.length ? ` · ${failures.length} en échec` : "";
+    const tail = failures.length ? ` · ${t("{n} en échec", { n: failures.length })}` : "";
     setInfo(
-      `${sourceLabel} : ${merged.concepts.length} fiche(s) et ${merged.relations.length} lien(s) proposés à partir de ${parts.length}/${files.length} fichier(s)${tail}. Vérifiez ci-dessous, puis cliquez sur Ajouter aux données.`,
+      t("{src} : {n} fiche(s) et {m} lien(s) proposés à partir de {ok}/{total} fichier(s){tail}. Vérifiez ci-dessous, puis cliquez sur Ajouter aux données.", { src: sourceLabel, n: merged.concepts.length, m: merged.relations.length, ok: parts.length, total: files.length, tail }),
     );
     if (failures.length) setError(failures.slice(0, 3).join(" | "));
   };
@@ -335,7 +336,7 @@ export default function OntologyBuilder() {
       const inputs = ext === "zip" ? await expandZips([file]) : [file];
       await analyzeManyAndPreview(
         inputs,
-        ext === "zip" ? `Archive ${file.name}` : file.name,
+        ext === "zip" ? t("Archive {name}", { name: file.name }) : file.name,
       );
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
@@ -361,10 +362,10 @@ export default function OntologyBuilder() {
       }
       const rootName =
         ((fileList[0] as File & { webkitRelativePath?: string }).webkitRelativePath ?? "")
-          .split("/")[0] || "dossier";
-      setInfo(`Parcours de ${rootName} (${all.length} fichier(s) candidat(s))…`);
+          .split("/")[0] || t("dossier");
+      setInfo(t("Parcours de {name} ({n} fichier(s) candidat(s))…", { name: rootName, n: all.length }));
       const flat = await expandZips(all);
-      await analyzeManyAndPreview(flat, `Dossier ${rootName}`);
+      await analyzeManyAndPreview(flat, t("Dossier {name}", { name: rootName }));
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -395,7 +396,7 @@ export default function OntologyBuilder() {
       setIngestProposal(null);
       setIngestDecisions({});
       setInfo(
-        `Appliqué : ${report.created} créé(s), ${report.merged} fusionné(s), ${report.skipped} ignoré(s), ${report.failed} en échec.`,
+        t("Appliqué : {a} créé(s), {b} fusionné(s), {c} ignoré(s), {d} en échec.", { a: report.created, b: report.merged, c: report.skipped, d: report.failed }),
       );
       await refresh();
     } catch (e: unknown) {
@@ -416,7 +417,7 @@ export default function OntologyBuilder() {
 
   const clearAll = async () => {
     if (files.length === 0) return;
-    if (!(await confirm({ title: "Retirer les fichiers importés", message: `Retirer ${files.length} fichier(s) de la liste ? Les données déjà importées restent dans le graphe.`, confirmLabel: "Retirer", cancelLabel: "Annuler", danger: true }))) return;
+    if (!(await confirm({ title: t("Retirer les fichiers importés"), message: t("Retirer {n} fichier(s) de la liste ? Les données déjà importées restent dans le graphe.", { n: files.length }), confirmLabel: t("Retirer"), cancelLabel: t("Annuler"), danger: true }))) return;
     for (const f of files) {
       try {
         await deleteFile(f.id);
@@ -429,14 +430,14 @@ export default function OntologyBuilder() {
 
   const conceptTypeCount = ontology ? Object.keys(ontology.concept_types).length : 0;
   const confidence = stats && stats.concepts > 0 ? Math.min(99, 70 + Math.round((stats.relations / Math.max(1, stats.concepts)) * 10)) : 92;
-  const confidenceLabel = confidence >= 85 ? "Élevée" : confidence >= 65 ? "Moyenne" : "Faible";
+  const confidenceLabel = confidence >= 85 ? t("Élevée") : confidence >= 65 ? t("Moyenne") : t("Faible");
 
   return (
     <>
       <div className="page-header">
         <div>
-          <h1 className="page-title">Modèle de données</h1>
-          <p className="page-subtitle">Les types de fiches et les liens permis, décrits en langage courant ou déduits de vos fichiers.</p>
+          <h1 className="page-title">{t("Modèle de données")}</h1>
+          <p className="page-subtitle">{t("Les types de fiches et les liens permis, décrits en langage courant ou déduits de vos fichiers.")}</p>
         </div>
       </div>
 
@@ -449,17 +450,15 @@ export default function OntologyBuilder() {
         <Card
           title={
             <span>
-              Aperçu des fiches extraites{" "}
-              <span className="info-dot" title="Fiches extraites de vos documents par le modèle de langage — vérifiez puis appliquez">
+              {t("Aperçu des fiches extraites")}{" "}
+              <span className="info-dot" title={t("Fiches extraites de vos documents par le modèle de langage — vérifiez puis appliquez")}>
                 ⓘ
               </span>
             </span>
           }
           subtitle={
             <span className="muted" style={{ fontSize: 12 }}>
-              {ingestProposal.concepts.length} fiche(s) ·{" "}
-              {ingestProposal.relations.length} lien(s) ·{" "}
-              {ingestProposal.concept_types.length} nouveau(x) type(s) de fiche
+              {t("{n} fiche(s) · {m} lien(s) · {k} nouveau(x) type(s) de fiche", { n: ingestProposal.concepts.length, m: ingestProposal.relations.length, k: ingestProposal.concept_types.length })}
             </span>
           }
           style={{ marginBottom: 16 }}
@@ -503,8 +502,8 @@ export default function OntologyBuilder() {
             onApply={applyIngestProposal}
             onCancel={cancelIngestProposal}
             applyDisabled={applyBusy}
-            applyLabel={applyBusy ? "Application…" : "Ajouter aux données"}
-            cancelLabel="Abandonner"
+            applyLabel={applyBusy ? t("Application…") : t("Ajouter aux données")}
+            cancelLabel={t("Abandonner")}
           />
         </Card>
       )}
@@ -514,7 +513,7 @@ export default function OntologyBuilder() {
           <ApplyReportView
             report={applyReport}
             onReset={() => setApplyReport(null)}
-            resetLabel="Fermer"
+            resetLabel={t("Fermer")}
           />
         </div>
       )}
@@ -524,16 +523,16 @@ export default function OntologyBuilder() {
         <div className="builder-left">
           {/* Describe Your Ontology */}
           <Card
-            title={<span>Décrivez votre modèle de données <span className="info-dot" title="Description en langage courant utilisée par le modèle de langage">ⓘ</span></span>}
+            title={<span>{t("Décrivez votre modèle de données")} <span className="info-dot" title={t("Description en langage courant utilisée par le modèle de langage")}>ⓘ</span></span>}
             actions={
               <button className="chip-btn" onClick={() => setShowExamples((v) => !v)}>
-                <span aria-hidden>⊞</span> Exemples
+                <span aria-hidden>⊞</span> {t("Exemples")}
               </button>
             }
           >
             {showExamples && (
               <div className="examples-list">
-                {EXAMPLES.map((ex, i) => (
+                {examples().map((ex, i) => (
                   <button
                     key={i}
                     className="example-chip"
@@ -551,7 +550,7 @@ export default function OntologyBuilder() {
               className="desc-textarea"
               rows={6}
               maxLength={MAX_DESC}
-              placeholder="Décrivez la structure du modèle : types de fiches, liens, propriétés et contraintes..."
+              placeholder={t("Décrivez la structure du modèle : types de fiches, liens, propriétés et contraintes...")}
               value={description}
               onChange={(e) => setDescription(e.target.value)}
             />
@@ -562,25 +561,25 @@ export default function OntologyBuilder() {
                 onClick={handleGenerate}
                 disabled={busy !== "idle" || (!description.trim() && files.length === 0)}
               >
-                <span aria-hidden>✦</span> {busy === "generate" ? "Génération…" : "Générer le modèle"}
+                <span aria-hidden>✦</span> {busy === "generate" ? t("Génération…") : t("Générer le modèle")}
               </button>
             </div>
           </Card>
 
           {/* Upload Files */}
           <Card
-            title={<span>Importer des fichiers (facultatif) <span className="info-dot" title="Les fichiers sont importés dans le graphe">ⓘ</span></span>}
+            title={<span>{t("Importer des fichiers (facultatif)")} <span className="info-dot" title={t("Les fichiers sont importés dans le graphe")}>ⓘ</span></span>}
             style={{ marginTop: 16 }}
           >
             <Dropzone
               onFile={handleUpload}
               disabled={busy !== "idle"}
-              hint="Formats acceptés : ZIP (extrait automatiquement), PDF, DOC/DOCX, images (PNG/JPG/… OCR automatique), CSV, XLSX, JSON, TXT, MD (50 Mo max.)"
+              hint={t("Formats acceptés : ZIP (extrait automatiquement), PDF, DOC/DOCX, images (PNG/JPG/… OCR automatique), CSV, XLSX, JSON, TXT, MD (50 Mo max.)")}
             />
 
             <div className="folder-row">
               <label className={`folder-btn${busy !== "idle" ? " disabled" : ""}`}>
-                <span aria-hidden>📁</span> Choisir un dossier
+                <span aria-hidden>📁</span> {t("Choisir un dossier")}
                 <input
                   type="file"
                   /* @ts-expect-error non-standard but widely supported */
@@ -596,13 +595,13 @@ export default function OntologyBuilder() {
                 />
               </label>
               <span className="folder-hint">
-                Choisissez un dossier : chaque fichier pris en charge (ZIP imbriqués compris) est extrait et importé.
+                {t("Choisissez un dossier : chaque fichier pris en charge (ZIP imbriqués compris) est extrait et importé.")}
               </span>
             </div>
 
             {files.length > 0 && (
               <>
-                <div className="upload-section-title">Fichiers importés</div>
+                <div className="upload-section-title">{t("Fichiers importés")}</div>
                 <ul className="upload-list">
                   {files.slice(0, 8).map((f) => {
                     const ic = iconForFile(f);
@@ -615,12 +614,12 @@ export default function OntologyBuilder() {
                           <div className="file-sub">{fmtBytes(f.size)} · {f.kind.toUpperCase()}</div>
                         </div>
                         <span className={`status-pill ${processed ? "ok" : "warn"}`}>
-                          {processed ? "Traité" : "Analysé"}
+                          {processed ? t("Traité") : t("Analysé")}
                         </span>
                         <span className={`status-check ${processed ? "ok" : "warn"}`} aria-hidden>
                           {processed ? "✓" : "ⓘ"}
                         </span>
-                        <button className="kebab-btn" title="Retirer" onClick={() => handleDeleteFile(f.id)}>⋮</button>
+                        <button className="kebab-btn" title={t("Retirer")} onClick={() => handleDeleteFile(f.id)}>⋮</button>
                       </li>
                     );
                   })}
@@ -630,13 +629,13 @@ export default function OntologyBuilder() {
 
             <div className="upload-actions">
               <button className="action-btn" onClick={refresh} disabled={busy !== "idle"}>
-                <span aria-hidden>🔍</span> Analyser les fichiers
+                <span aria-hidden>🔍</span> {t("Analyser les fichiers")}
               </button>
               <button className="action-btn" onClick={refresh} disabled={busy !== "idle"}>
-                <span aria-hidden>⇄</span> Fusionner les sources
+                <span aria-hidden>⇄</span> {t("Fusionner les sources")}
               </button>
               <button className="action-btn danger" onClick={clearAll} disabled={busy !== "idle" || files.length === 0}>
-                <span aria-hidden>🗑</span> Tout retirer
+                <span aria-hidden>🗑</span> {t("Tout retirer")}
               </button>
             </div>
           </Card>
@@ -645,7 +644,7 @@ export default function OntologyBuilder() {
         {/* ---------- RIGHT COLUMN ---------- */}
         <div className="builder-right">
           <Card
-            title={<span>Graphe du modèle <span className="info-dot" title="Vue en direct du modèle de données actuel">ⓘ</span></span>}
+            title={<span>{t("Graphe du modèle")} <span className="info-dot" title={t("Vue en direct du modèle de données actuel")}>ⓘ</span></span>}
             className="graph-card"
           >
             <div className="graph-area">
@@ -653,7 +652,7 @@ export default function OntologyBuilder() {
               {proposed && (
                 <div className="graph-preview-overlay">
                   <div className="muted" style={{ marginBottom: 6, fontSize: 12 }}>
-                    Schéma proposé · cliquez sur <strong>Enregistrer le modèle</strong> pour l'appliquer
+                    {t("Schéma proposé · cliquez sur")} <strong>{t("Enregistrer le modèle")}</strong> {t("pour l'appliquer")}
                   </div>
                   <pre className="json-view" style={{ maxHeight: 360 }}>
                     {JSON.stringify(proposed, null, 2)}
@@ -664,20 +663,20 @@ export default function OntologyBuilder() {
           </Card>
 
           <Card
-            title={<span>Chiffres du modèle <span className="info-dot" title="Comptages tirés du graphe en direct">ⓘ</span></span>}
+            title={<span>{t("Chiffres du modèle")} <span className="info-dot" title={t("Comptages tirés du graphe en direct")}>ⓘ</span></span>}
             subtitle={
               <span className="insights-sub">
-                Dernière mise à jour : {lastUpdated ? fmtAgo(lastUpdated) : "—"}
-                <button className="link-btn-sm" onClick={refresh} title="Actualiser">↻</button>
+                {t("Dernière mise à jour :")} {lastUpdated ? fmtAgo(lastUpdated) : "—"}
+                <button className="link-btn-sm" onClick={refresh} title={t("Actualiser")}>↻</button>
               </span>
             }
             style={{ marginTop: 16 }}
           >
             <div className="insights-grid">
-              <InsightTile icon="👥" label="Fiches" value={stats?.concepts ?? 0} delta={stats?.deltas.concepts_pct} color="#dbeafe" iconColor="#2563eb" />
-              <InsightTile icon="⌬" label="Liens" value={stats?.relations ?? 0} delta={stats?.deltas.relations_pct} color="#ede9fe" iconColor="#7c3aed" />
-              <InsightTile icon="▦" label="Types de fiches" value={conceptTypeCount} delta={stats?.deltas.concept_types_pct} color="#dcfce7" iconColor="#16a34a" />
-              <InsightTile icon="✓" label="Confiance" value={`${confidence}%`} hint={confidenceLabel} color="#fef3c7" iconColor="#d97706" />
+              <InsightTile icon="👥" label={t("Fiches")} value={stats?.concepts ?? 0} delta={stats?.deltas.concepts_pct} color="#dbeafe" iconColor="#2563eb" />
+              <InsightTile icon="⌬" label={t("Liens")} value={stats?.relations ?? 0} delta={stats?.deltas.relations_pct} color="#ede9fe" iconColor="#7c3aed" />
+              <InsightTile icon="▦" label={t("Types de fiches")} value={conceptTypeCount} delta={stats?.deltas.concept_types_pct} color="#dcfce7" iconColor="#16a34a" />
+              <InsightTile icon="✓" label={t("Confiance")} value={`${confidence}%`} hint={confidenceLabel} color="#fef3c7" iconColor="#d97706" />
             </div>
           </Card>
         </div>
@@ -686,10 +685,10 @@ export default function OntologyBuilder() {
       {/* ---------- BOTTOM BAR ---------- */}
       <div className="builder-footer">
         <a className="footer-btn" href={exportGraphUrl("jsonl")}>
-          <span aria-hidden>⤓</span> Exporter <span aria-hidden>▾</span>
+          <span aria-hidden>⤓</span> {t("Exporter")} <span aria-hidden>▾</span>
         </a>
         <button className="footer-btn primary" onClick={handleSave} disabled={!proposed || busy !== "idle"}>
-          <span aria-hidden>💾</span> Enregistrer le modèle
+          <span aria-hidden>💾</span> {t("Enregistrer le modèle")}
         </button>
       </div>
 
@@ -922,7 +921,7 @@ function InsightTile({ icon, label, value, delta, hint, color, iconColor }: Insi
         <div className="label">{label}</div>
         {delta != null && (
           <div className={`delta ${cls}`} style={{ color: cls === "up" ? "#16a34a" : cls === "down" ? "#dc2626" : "var(--muted)" }}>
-            {arrow} {Math.abs(delta).toFixed(0)} % vs dernière exécution
+            {arrow} {t("{n} % vs dernière exécution", { n: Math.abs(delta).toFixed(0) })}
           </div>
         )}
         {delta == null && hint && (

@@ -8,6 +8,8 @@
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
+import { t } from "./lib/i18n";
+
 const ENV_BASE = (import.meta.env.VITE_API_BASE as string | undefined) ?? "";
 
 const PROVIDER_CONFIG_KEY = "ontology.providerConfig";
@@ -106,12 +108,8 @@ export class ApiError extends Error {
  */
 export function unreachableMessage(url: string, e: unknown): string {
   const detail = e instanceof Error ? e.message : String(e);
-  const target = url.startsWith("http") ? new URL(url).origin : "le proxy Vite";
-  return (
-    `API injoignable sur ${target} (${detail}). ` +
-    `Le serveur est-il démarré ? Avec \`npm run dev\` il compile d'abord (1 à 2 minutes) : réessaie ensuite. ` +
-    `L'adresse se règle dans Réglages → Connexion serveur.`
-  );
+  const target = url.startsWith("http") ? new URL(url).origin : t("le proxy Vite");
+  return t("API injoignable sur {target} ({detail}). Le serveur est-il démarré ? Avec `npm run dev` il compile d'abord (1 à 2 minutes) : réessaie ensuite. L'adresse se règle dans Réglages → Connexion serveur.", { target, detail });
 }
 
 /** `fetch` whose network-level failures become readable `ApiError`s. */

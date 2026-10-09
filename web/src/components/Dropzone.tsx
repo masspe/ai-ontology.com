@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Mediasoft & Cie S.A.
 
 import { useRef, useState } from "react";
+import { t } from "../lib/i18n";
 
 interface Props {
   onFile: (file: File) => void;
@@ -31,8 +32,8 @@ export default function Dropzone({ onFile, accept, hint, disabled }: Props) {
       }}
     >
       <div style={{ fontSize: 28 }}>⇪</div>
-      <h4>Drop files here or click to upload</h4>
-      <p>{hint ?? "JSONL, CSV, XLSX, triples, text or ontology JSON"}</p>
+      <h4>{t("Déposez des fichiers ici ou cliquez pour téléverser")}</h4>
+      <p>{hint ?? t("JSONL, CSV, XLSX, triplets, texte ou JSON d'ontologie")}</p>
       <input
         ref={inputRef}
         type="file"

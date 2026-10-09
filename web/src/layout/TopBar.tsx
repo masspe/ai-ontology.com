@@ -8,6 +8,7 @@ import { openTour } from "../components/Tour";
 import TopNav from "./TopNav";
 // @ts-expect-error JS module without types (shared with the auth pages)
 import { msBE } from "../lib/msBE";
+import { getLang, setLang, t } from "../lib/i18n";
 
 function initials(name: string | undefined, email: string | undefined): string {
   const src = (name || email || "").trim();
@@ -60,7 +61,7 @@ export default function TopBar() {
       <form className="topbar-search" onSubmit={onSubmit} data-tour="search">
         <span className="topbar-search-icon">⌕</span>
         <input
-          placeholder="Rechercher une fiche, poser une question…"
+          placeholder={t("Rechercher une fiche, poser une question…")}
           value={q}
           onChange={(e) => setQ(e.target.value)}
         />
@@ -69,20 +70,28 @@ export default function TopBar() {
         <button
           className="btn btn-outline"
           onClick={() => setFeedbackOpen(true)}
-          title="Envoyer un feedback"
+          title={t("Envoyer un feedback")}
           data-tour="feedback"
           style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
         >
           💬 Feedback
         </button>
-        <button className="icon-btn" title="Guide" aria-label="Guide" data-tour="help" onClick={openTour}>
+        <button
+          className="btn-ghost lang-toggle"
+          title={t("Changer de langue")}
+          aria-label={t("Changer de langue")}
+          onClick={() => setLang(getLang() === "fr" ? "en" : "fr")}
+        >
+          {getLang() === "fr" ? "EN" : "FR"}
+        </button>
+        <button className="icon-btn" title={t("Guide")} aria-label={t("Guide")} data-tour="help" onClick={openTour}>
           ?
         </button>
         <div className="account" ref={menuRef} data-tour="account">
           <button
             className="avatar"
-            title="Compte"
-            aria-label="Compte"
+            title={t("Compte")}
+            aria-label={t("Compte")}
             aria-expanded={menuOpen}
             onClick={() => setMenuOpen((v) => !v)}
           >
@@ -91,14 +100,14 @@ export default function TopBar() {
           {menuOpen && (
             <div className="account-menu" role="menu">
               <div className="account-who">
-                <strong>{user?.name || "Utilisateur"}</strong>
+                <strong>{user?.name || t("Utilisateur")}</strong>
                 {user?.email && <span className="muted">{user.email}</span>}
               </div>
               <button className="btn-ghost" role="menuitem" onClick={() => { setMenuOpen(false); nav("/settings"); }}>
-                Paramètres
+                {t("Paramètres")}
               </button>
               <button className="btn-ghost" role="menuitem" onClick={() => void logout()}>
-                Se déconnecter
+                {t("Se déconnecter")}
               </button>
             </div>
           )}
