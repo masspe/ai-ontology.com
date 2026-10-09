@@ -10,7 +10,7 @@
 # /data/users.json (first account = administrator) and its JWT secret in
 # /data/jwt.secret (generated on first start; to provide your own, add
 # `--jwt-secret-env ONTOLOGY_JWT_SECRET` to the command and set that
-# variable). See compose.yaml and docs/DEPLOIEMENT.md.
+# variable). See compose.yaml and docs/DEPLOY.md.
 
 FROM node:22-slim AS web
 WORKDIR /web

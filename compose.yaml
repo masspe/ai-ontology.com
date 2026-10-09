@@ -52,6 +52,6 @@ volumes:
   globex-data:
   # `POST /backup` copies the store here (incremental); point these at the
   # external storage (a mounted share, a bucket via a FUSE mount) or copy
-  # them out of the host with your usual tool. See docs/DEPLOIEMENT.md §5.
+  # them out of the host with your usual tool. See docs/DEPLOY.md §5.
   acme-backups:
   globex-backups:
