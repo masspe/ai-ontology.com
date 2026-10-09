@@ -1,0 +1,143 @@
+name: release
+
+# On a version tag (`v0.1.0`): the container image goes to ghcr.io under the
+# version, the major.minor and `latest`; a GitHub release is created with the
+# matching CHANGELOG section; one archive per platform (the `ontology` binary,
+# the built web UI, the licences and the deployment guide) is attached to it.
+# Everything is pushed with the workflow token: no extra secret.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  guard:
+    name: repo guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - run: python3 scripts/repo_guard.py
+
+  image:
+    name: image (ghcr.io)
+    needs: guard
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/ai-ontology
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+      - uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  release:
+    name: github release
+    needs: guard
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Create the release from the CHANGELOG section of this version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then echo "release exists"; exit 0; fi
+          awk -v v="${GITHUB_REF_NAME#v}" '/^## \[/{p = index($0, "[" v "]") > 0; next} p' CHANGELOG.md > notes.md
+          if [ -s notes.md ]; then
+            gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file notes.md
+          else
+            gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes
+          fi
+
+  archive:
+    name: archive (${{ matrix.target }})
+    needs: release
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ubuntu-22.04: the oldest glibc the runners offer, so the binary
+          # runs on more distributions than one built on 24.04 would.
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            bin: ontology
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bin: ontology.exe
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            bin: ontology
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build the web UI (same-origin, no base URL baked in)
+        working-directory: web
+        env:
+          VITE_API_BASE: ""
+          VITE_AUTH_API_BASE: ""
+        run: |
+          npm ci
+          npx vite build
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - run: cargo build --release --locked --bin ontology
+      - name: Package
+        run: |
+          name="ai-ontology-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          mkdir -p "dist/$name/web"
+          cp "target/release/${{ matrix.bin }}" "dist/$name/"
+          cp -r web/dist/. "dist/$name/web/"
+          cp README.md LICENSE LICENSE-COMMERCIAL.md CHANGELOG.md docs/DEPLOY.md "dist/$name/"
+          cat > "dist/$name/START.md" <<'EOF'
+          # Start
+
+              ./ontology --data ./data serve --bind 127.0.0.1:5000 --web ./web --login
+
+          Then open http://127.0.0.1:5000, create the first account (it becomes
+          the administrator) and configure a language model under Réglages.
+          `--memory-mode strict` refuses a store that does not fit the memory
+          budget instead of being killed later. Everything else: DEPLOY.md.
+          EOF
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          ls -l dist
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$GITHUB_REF_NAME" dist/*.tar.gz --clobber

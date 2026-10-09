@@ -14,6 +14,8 @@ members = [
 version = "0.1.0"
 edition = "2021"
 license = "AGPL-3.0-or-later"
+# Oldest toolchain the workspace is built with (the image uses rust:1.98).
+rust-version = "1.98"
 authors = ["Mediasoft & Cie S.A."]
 repository = "https://github.com/masspe/ai-ontology.com"
 

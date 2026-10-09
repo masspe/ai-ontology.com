@@ -2,7 +2,8 @@
 # has its own data volume, memory limit, users and secret. Routing between
 # tenants is the reverse proxy's job (one hostname per service).
 #
-#   docker compose up -d --build
+#   docker compose up -d            # pulls the published image
+#   docker compose up -d --build    # or builds it from this checkout
 #   open http://localhost:5001  (tenant "acme"), http://localhost:5002 ("globex")
 #
 # The first account created on a tenant becomes its administrator and
@@ -19,7 +20,8 @@
 # refuses to start and says by how much, instead of being killed later.
 
 x-tenant: &tenant
-  image: ontology:local
+  image: ghcr.io/masspe/ai-ontology:0.1.0
+  pull_policy: missing
   restart: unless-stopped
   mem_limit: 4g
   # environment:
@@ -39,7 +41,7 @@ x-tenant: &tenant
 services:
   acme:
     <<: *tenant
-    build: .          # built once; globex reuses the image
+    build: .          # `--build` builds here once; globex reuses the image
     ports: ["5001:5000"]
     volumes: ["acme-data:/data", "acme-backups:/backups"]
   globex:
