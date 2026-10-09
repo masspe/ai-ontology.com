@@ -5,9 +5,43 @@
 // Dual-licensed: AGPL-3.0-or-later OR a commercial license
 // from Mediasoft & Cie S.A. See LICENSE and LICENSE-COMMERCIAL.md.
 
-use ontology_graph::{Ontology, Subgraph};
+use ontology_graph::{Concept, Ontology, PropertyValue, Subgraph};
 use ontology_index::ScoredConcept;
 use std::fmt::Write;
+
+/// A property value as the model should read it: `18000`, not `18000.0`;
+/// lists joined with ` / `.
+fn property_text(v: &PropertyValue) -> String {
+    match v {
+        PropertyValue::Text(t) => t.clone(),
+        PropertyValue::Number(n) if n.fract() == 0.0 && n.abs() < 1e15 => format!("{}", *n as i64),
+        PropertyValue::Number(n) => format!("{n}"),
+        PropertyValue::Bool(b) => b.to_string(),
+        PropertyValue::List(items) => items
+            .iter()
+            .map(property_text)
+            .collect::<Vec<_>>()
+            .join(" / "),
+    }
+}
+
+/// ` {key=value, key=value}` for a concept with properties, sorted by key so
+/// the prompt is byte-stable (prefix caching); empty otherwise. This is how
+/// an invoice's `amount_eur` or `issue_date` reaches the model: the name and
+/// description alone cannot answer a question about amounts.
+fn render_properties(c: &Concept) -> String {
+    if c.properties.is_empty() {
+        return String::new();
+    }
+    let mut pairs: Vec<_> = c.properties.iter().collect();
+    pairs.sort_by(|a, b| a.0.cmp(b.0));
+    let body = pairs
+        .into_iter()
+        .map(|(k, v)| format!("{k}={}", property_text(v)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(" {{{body}}}")
+}
 
 /// Turn a `PascalCase` / `snake_case` relation type into a lowercase verb
 /// phrase suitable for prose ("WorksFor" → "works for"). Used as a fallback
@@ -173,7 +207,7 @@ impl<'a> PromptBuilder<'a> {
         }
         out.push_str("\n# Subgraph\n");
         out.push_str(
-            "# Each line: `#<id> [depth] (Type) Name — description`. \
+            "# Each line: `#<id> [depth] (Type) Name — description {property=value, …}`. \
                       Cite the `#<id>` tokens verbatim in your answer.\n",
         );
         for c in &subgraph.concepts {
@@ -185,7 +219,7 @@ impl<'a> PromptBuilder<'a> {
             };
             let _ = writeln!(
                 out,
-                "- #{} [{}] ({}) {}{}",
+                "- #{} [{}] ({}) {}{}{}",
                 c.id.0,
                 depth,
                 c.concept_type,
@@ -195,6 +229,7 @@ impl<'a> PromptBuilder<'a> {
                 } else {
                     format!(" — {desc}")
                 },
+                render_properties(c),
             );
             if out.len() >= self.max_context_chars {
                 break;
@@ -515,7 +550,17 @@ mod tests {
         let o = rich_ontology(&["Company", "Person", "Contract"]);
         let alice = Concept::new(ConceptId(7), "Person", "Alice");
         let bob = Concept::new(ConceptId(9), "Person", "Bob").with_description("signs things");
-        let c1 = Concept::new(ConceptId(11), "Contract", "C-1");
+        let mut c1 = Concept::new(ConceptId(11), "Contract", "C-1");
+        // Properties reach the prompt, sorted by key, numbers without a
+        // trailing `.0`: that is what a question about an amount needs.
+        c1.properties.insert(
+            "amount_eur".into(),
+            ontology_graph::PropertyValue::Number(18000.0),
+        );
+        c1.properties.insert(
+            "issue_date".into(),
+            ontology_graph::PropertyValue::Text("2025-03-31".into()),
+        );
         let mut subgraph = Subgraph {
             seeds: vec![ConceptId(7)],
             concepts: vec![alice, bob, c1],
@@ -553,7 +598,10 @@ mod tests {
             out.contains("- #9 [1] (Person) Bob — signs things\n"),
             "{out}"
         );
-        assert!(out.contains("- #11 [2] (Contract) C-1\n"), "{out}");
+        assert!(
+            out.contains("- #11 [2] (Contract) C-1 {amount_eur=18000, issue_date=2025-03-31}\n"),
+            "properties on the subgraph line: {out}"
+        );
         assert!(
             out.contains("- #7 Alice — works alongside Bob.   (raw: Alice -[WorksWith]-> Bob)\n"),
             "description used as verb: {out}"
