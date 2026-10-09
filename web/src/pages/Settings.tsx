@@ -1560,7 +1560,7 @@ function KeyField({ label, value, onChange, show, onToggle, placeholder }: KeyFi
           className="key-toggle-btn"
           onClick={onToggle}
           aria-label={show ? t("Masquer la clé") : t("Afficher la clé")}
-          title={show ? "Masquer" : "Afficher"}
+          title={show ? t("Masquer") : t("Afficher")}
         >
           👁
         </button>

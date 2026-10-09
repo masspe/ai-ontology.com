@@ -23,9 +23,9 @@ interface KindMeta {
 
 const kinds = (): KindMeta[] => [
   { key: "bug",         label: "Bug",         icon: "🐞", bg: "#fde7e9", fg: "#b3261e", border: "#f5b5b9" },
-  { key: "error",       label: t(t("Erreur")),      icon: "⚠",  bg: "#fff4e0", fg: "#8a5a00", border: "#f3d08a" },
-  { key: "evolution",   label: t(t("Évolution")),   icon: "✦",  bg: "#e1ecff", fg: "#1f4ba8", border: "#bcd1f6" },
-  { key: "improvement", label: t(t("Amélioration")),icon: "💡", bg: "#e3f6e8", fg: "#1f7a3a", border: "#b6e3c4" },
+  { key: "error",       label: t("Erreur"),      icon: "⚠",  bg: "#fff4e0", fg: "#8a5a00", border: "#f3d08a" },
+  { key: "evolution",   label: t("Évolution"),   icon: "✦",  bg: "#e1ecff", fg: "#1f4ba8", border: "#bcd1f6" },
+  { key: "improvement", label: t("Amélioration"),icon: "💡", bg: "#e3f6e8", fg: "#1f7a3a", border: "#b6e3c4" },
 ];
 
 export default function FeedbackModal({ open, onClose, onSubmitted }: Props) {
@@ -130,12 +130,12 @@ export default function FeedbackModal({ open, onClose, onSubmitted }: Props) {
               {t("Aidez-nous à améliorer l'application. Les logs navigateur et serveur récents seront joints automatiquement.")}
             </p>
           </div>
-          <button className="icon-btn" onClick={close} title={t(t("Fermer"))}>×</button>
+          <button className="icon-btn" onClick={close} title={t("Fermer")}>×</button>
         </div>
 
         <div className="feedback-body">
           <div className="field">
-            <span>{t(t("Type"))}</span>
+            <span>{t("Type")}</span>
             <div className="feedback-kinds">
               {kinds().map((k) => {
                 const active = k.key === kind;
@@ -165,23 +165,23 @@ export default function FeedbackModal({ open, onClose, onSubmitted }: Props) {
               type="text"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              placeholder={t(t("Résumez en quelques mots…"))}
+              placeholder={t("Résumez en quelques mots…")}
             />
           </label>
 
           <label className="field">
-            <span>{t(t("Description"))}</span>
+            <span>{t("Description")}</span>
             <textarea
               rows={4}
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder={t(t("Décrivez ce qui s'est passé, les étapes pour reproduire, etc."))}
+              placeholder={t("Décrivez ce qui s'est passé, les étapes pour reproduire, etc.")}
             />
           </label>
 
           <div className="field">
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span>{t(t("Capture d'écran"))}</span>
+              <span>{t("Capture d'écran")}</span>
               <div style={{ display: "flex", gap: 6 }}>
                 <button type="button" className="btn btn-outline" onClick={capture}>
                   📷 {t("Capturer")}
@@ -191,14 +191,14 @@ export default function FeedbackModal({ open, onClose, onSubmitted }: Props) {
                   className="btn btn-outline"
                   onClick={() => fileInputRef.current?.click()}
                 >
-                  {t(t("Importer"))}
+                  {t("Importer")}
                 </button>
                 <button
                   type="button"
                   className="btn btn-outline"
                   onClick={() => setScreenshot(null)}
                   disabled={!screenshot}
-                  title={t(t("Supprimer"))}
+                  title={t("Supprimer")}
                 >🗑</button>
                 <input
                   ref={fileInputRef}
@@ -220,9 +220,9 @@ export default function FeedbackModal({ open, onClose, onSubmitted }: Props) {
         </div>
 
         <div className="feedback-foot">
-          <button className="btn btn-ghost" onClick={close} disabled={busy}>{t(t("Annuler"))}</button>
+          <button className="btn btn-ghost" onClick={close} disabled={busy}>{t("Annuler")}</button>
           <button className="btn btn-primary" onClick={submit} disabled={busy}>
-            {busy ? t(t("Envoi…")) : t(t("Envoyer"))}
+            {busy ? t("Envoi…") : t("Envoyer")}
           </button>
         </div>
       </div>

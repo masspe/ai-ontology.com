@@ -80,7 +80,11 @@ export default function TopBar() {
           className="btn-ghost lang-toggle"
           title={t("Changer de langue")}
           aria-label={t("Changer de langue")}
-          onClick={() => setLang(getLang() === "fr" ? "en" : "fr")}
+          onClick={() => {
+            if (window.confirm(t("Changer de langue recharge la page : ce qui n'est pas enregistré sera perdu. Continuer ?"))) {
+              setLang(getLang() === "fr" ? "en" : "fr");
+            }
+          }}
         >
           {getLang() === "fr" ? "EN" : "FR"}
         </button>
