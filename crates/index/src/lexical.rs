@@ -29,7 +29,7 @@ pub struct LexicalIndex {
 /// Terms are interned to a `u32` once: a posting is two integers and a
 /// document's term list is a `Vec<u32>`. The `String`-per-posting layout
 /// this replaced allocated ~100 strings per document, and was half of
-/// `reindex_all` at 2×10⁵ (STORAGE-PLAN.md §8 R, tranche 2a).
+/// `reindex_all` at 2×10⁵.
 #[derive(Debug, Default)]
 struct Inner {
     /// term -> term id

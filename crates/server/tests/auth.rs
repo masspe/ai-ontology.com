@@ -5,8 +5,8 @@
 // Dual-licensed: AGPL-3.0-or-later OR a commercial license
 // from Mediasoft & Cie S.A. See LICENSE and LICENSE-COMMERCIAL.md.
 
-//! Built-in authentication (ROADMAP.md §3.8.3) and the web UI served by the
-//! binary (§3.8.2): the `/auth/*` contract of the Node server, the users
+//! Built-in authentication and the web UI served by the
+//! binary: the `/auth/*` contract of the Node server, the users
 //! file it wrote, the sign-up policy, administration, and the static
 //! fallback that hands every non-API path to `index.html`.
 
@@ -634,7 +634,7 @@ async fn admin_token(app: &Router) -> String {
     v["token"].as_str().unwrap().to_string()
 }
 
-/// Named API keys (ROADMAP §3.8.6): minted by an administrator, shown
+/// Named API keys: minted by an administrator, shown
 /// once, stored hashed, usable as a bearer for the API but nobody for
 /// `/auth/me`, revoked at once.
 #[tokio::test]
@@ -774,7 +774,7 @@ async fn api_keys_are_minted_once_stored_hashed_and_revoked_at_once() {
     assert_eq!(st, StatusCode::OK);
 }
 
-/// The audit log (ROADMAP §3.8.6): every successful write with its caller
+/// The audit log: every successful write with its caller
 /// (a user's email, a key's name), nothing for reads or refused writes,
 /// read back by administrators only.
 #[tokio::test]

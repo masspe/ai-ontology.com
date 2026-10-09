@@ -6,7 +6,7 @@
 // from Mediasoft & Cie S.A. See LICENSE and LICENSE-COMMERCIAL.md.
 
 //! Memory budget, per-domain cost estimation and the load plan taken at
-//! startup — the "socle" of `STORAGE-PLAN.md` §7.1 (STORAGE.md §8.1, R14,
+//! startup — the "socle" of (STORAGE.md §8.1, R14,
 //! R17, decision D5).
 //!
 //! * The **budget** is read from the execution environment, never from

@@ -9,8 +9,8 @@ invariants en ajoutant du code.
 Document compagnon : [`STORAGE.md`](./STORAGE.md) couvre la couche
 **stockage** (format binaire, partitionnement par domaine `ns`, hydratation,
 recovery, mémoire contrainte) et continue la numérotation ici — H11+ et R7+.
-Le plan d'implémentation correspondant est dans
-[`STORAGE-PLAN.md`](./STORAGE-PLAN.md).
+L'implémentation a suivi par phases (chemin d'écriture, conteneur binaire,
+partitionnement par `ns`, mesures et codec, mémoire contrainte) et est livrée.
 
 > **Mise à jour du 2026-09-08.** `STORAGE.md` lève le non-objectif
 > « persistance » (§1) et assouplit H1 (§2). Tout le reste de ce document
@@ -81,8 +81,8 @@ précisément pour rendre cette règle structurellement vraie.
 
 Cette règle se compose avec R8 de `STORAGE.md` (« disque avant mémoire ») :
 la séquence complète d'une mutation est *append disque → DashMap primaire →
-index dérivés → bump de génération*. Depuis la phase 1 de `STORAGE-PLAN.md`,
-chaque méthode mutante existe en deux moitiés — `prepare_*` / `preview_*`
+index dérivés → bump de génération*. Depuis la phase 1 de l'implémentation
+du stockage, chaque méthode mutante existe en deux moitiés — `prepare_*` / `preview_*`
 (validation et allocation d'id, sans effet) puis `apply_prepared_*` /
 `apply_*_update` (insertion et maintenance des index) — et les handlers HTTP,
 `ingest_records` et le CLI appellent l'append du store **entre** les deux. Les
@@ -190,8 +190,7 @@ d'API irréversible du passage en mémoire contrainte, `GET /concepts` et
 `GET /relations` doivent exposer `cursor=` / `next_cursor` **avant** toute
 implémentation des paliers, `offset` restant accepté mais déprécié. La clé
 de curseur est exactement la clé de `concepts_sorted`, `(concept_type, name,
-id)` — c'est R6 qui rend le curseur possible sans nouvel index. Chantier T1
-de `STORAGE-PLAN.md`.
+id)` — c'est R6 qui rend le curseur possible sans nouvel index. Chantier T1.
 
 ### 4.3 `track_total` (à la Elasticsearch)
 
@@ -358,8 +357,8 @@ Chaque insertion/suppression de relation paie en plus :
 Ce coût est celui de la **mémoire seule**. Le coût disque (sérialisation,
 `write` bufferisé, `fsync` amorti par group commit) s'y ajoute et est chiffré
 dans `STORAGE.md` §7.7 ; sans group commit, le `fsync` domine tout ce qui
-précède d'un facteur 5. Depuis la phase 1 de `STORAGE-PLAN.md`, `FileStore`
-fait un `fdatasync` par `append` et **un seul** par `append_batch` ; le chemin
+précède d'un facteur 5. Depuis la phase 1 de l'implémentation du
+stockage, `FileStore` fait un `fdatasync` par `append` et **un seul** par `append_batch` ; le chemin
 HTTP unitaire paie donc un `fsync` par requête, la cascade d'un
 `DELETE /concepts/{id}` en paie un pour tout le lot, et `ingest_records`
 regroupe les concepts consécutifs par 256.
@@ -420,8 +419,8 @@ sur ≤ 256 entrées) mais non nul. Sous H2, OK.
 contention inutile puisque personne ne lit pendant le démarrage. Correct,
 mais c'est le poste qui dominera le démarrage une fois le format binaire en
 place (`STORAGE.md` §7.1 : le parsing domine, puis viennent les index). Un
-`OntologyGraph::bulk_load` construisant les index en une passe est prévu en
-phase 4 de `STORAGE-PLAN.md`, **seulement si la mesure le justifie**. Il
+`OntologyGraph::bulk_load` construisant les index en une passe était prévu en
+phase 4, **seulement si la mesure le justifie**. Il
 devra rester une méthode publique de `OntologyGraph` (R1) et bumper une fois
 la génération (R2).
 
@@ -439,10 +438,9 @@ Gain mesuré : 1,4–1,75× à 200 k / 1 M, 1,1–1,2× à 500 k / 2,5 M. La
 reconstruction coûte 0,4 à 1,7 s ; la maintenance par mutation des index
 dérivés coûtait donc (temps gagné + reconstruction) 45 à 65 % d'`apply` à
 200 k et 15 à 26 % à 500 k ; le reste est dans les structures primaires des
-relations (`STORAGE-PLAN.md` §6.6). Le profil par échantillonnage annoncé
+relations (`STORAGE.md` §7.8). Le profil par échantillonnage annoncé
 ci-dessus n'a pas été fait ; l'imputation est une soustraction. Il est
-planifié comme T6 dans `STORAGE-PLAN.md` §8, à faire avant le chantier
-relations de la phase 5, parce que le remède (pré-dimensionnement, table de
+à faire (chantier T6) avant le chantier relations de la phase 5, parce que le remède (pré-dimensionnement, table de
 symboles ou CSR) dépend de ce qu'il montrera. Effet de
 bord : les `BTreeSet` bâtis d'un bloc sont plus denses (−3 % de tas mesuré à
 200 k).
@@ -504,7 +502,7 @@ Checklist :
 | Handlers HTTP avec ETag | [`crates/server/src/lib.rs`](../crates/server/src/lib.rs) — `list_concepts`, `list_relations` |
 | `subgraph_handler` seeds fixés | idem |
 | Bugfix UTF-8 truncate | [`crates/rag/src/prompt.rs`](../crates/rag/src/prompt.rs) |
-| Couche stockage (`Store`, `FileStore`, `LogRecord`, `apply`) | [`crates/storage/src/`](../crates/storage/src/) — format cible dans [`STORAGE.md`](./STORAGE.md), plan dans [`STORAGE-PLAN.md`](./STORAGE-PLAN.md) |
+| Couche stockage (`Store`, `FileStore`, `LogRecord`, `apply`) | [`crates/storage/src/`](../crates/storage/src/) — format cible dans [`STORAGE.md`](./STORAGE.md) |
 | Attribution des ids (`IdAllocator`, compteur unique partagé) | [`crates/graph/src/id.rs`](../crates/graph/src/id.rs) |
 
 ---

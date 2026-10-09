@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Mediasoft-Commercial
 // Copyright (C) 2026 Mediasoft & Cie S.A.
 //
-// Questions pinned to the home page (ROADMAP §3.9 lot B, point 5): ids of
+// Questions pinned to the home page: ids of
 // saved queries, per browser.
 
 const KEY = "queries.pinned.v1";

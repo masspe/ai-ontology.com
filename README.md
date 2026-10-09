@@ -54,7 +54,7 @@ by `vitest.config.ts` thresholds.
 | Crate              | Lines covered | Role |
 | ------------------ | ------------- | ---- |
 | `ontology-graph`   | ![graph line coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmasspe%2Fai-ontology.com%2Fcoverage-badges%2Fcrate-graph.json&label=lines&style=flat-square) | Concepts, typed relations, schema validation, traversals. |
-| `ontology-storage` | ![storage line coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmasspe%2Fai-ontology.com%2Fcoverage-badges%2Fcrate-storage.json&label=lines&style=flat-square) | Binary segmented store (`<data>/store/`): framed records with CRC, positional index, per-batch fsync, torn-tail recovery, memory-mapped sealed segments; automatic migration from the legacy `graph.log`. Pluggable `Store` trait. Format in [docs/STORAGE.md](docs/STORAGE.md), plan in [docs/STORAGE-PLAN.md](docs/STORAGE-PLAN.md). |
+| `ontology-storage` | ![storage line coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmasspe%2Fai-ontology.com%2Fcoverage-badges%2Fcrate-storage.json&label=lines&style=flat-square) | Binary segmented store (`<data>/store/`): framed records with CRC, positional index, per-batch fsync, torn-tail recovery, memory-mapped sealed segments; automatic migration from the legacy `graph.log`. Pluggable `Store` trait. Format in [docs/STORAGE.md](docs/STORAGE.md). |
 | `ontology-index`   | ![index line coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmasspe%2Fai-ontology.com%2Fcoverage-badges%2Fcrate-index.json&label=lines&style=flat-square) | Lexical (TF-IDF) + vector (cosine) + graph-expansion retrieval. |
 | `ontology-io`      | ![io line coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmasspe%2Fai-ontology.com%2Fcoverage-badges%2Fcrate-io.json&label=lines&style=flat-square) | `Source` / `Sink` traits with JSONL and triples adapters. |
 | `ontology-rag`     | ![rag line coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmasspe%2Fai-ontology.com%2Fcoverage-badges%2Fcrate-rag.json&label=lines&style=flat-square) | Prompt builder + `LanguageModel` trait (echo, Anthropic, OpenAI, DeepSeek; with prompt caching). |
@@ -190,8 +190,7 @@ retrieval is a function of `top_k` and `TraversalSpec`, not of total graph size.
   positional index rebuilt from the data if lost, a torn tail truncated on
   restart, sealed segments memory-mapped. A legacy `graph.log` is migrated
   automatically (and verifiably) on first start. All behind a pluggable
-  `Store` trait; format in [docs/STORAGE.md](docs/STORAGE.md), plan in
-  [docs/STORAGE-PLAN.md](docs/STORAGE-PLAN.md).
+  `Store` trait; format in [docs/STORAGE.md](docs/STORAGE.md).
 * **Provider-agnostic LLM layer with caching.** Anthropic, OpenAI, DeepSeek, or
   an offline echo model behind one `LanguageModel` trait — with prompt/prefix
   caching that drops repeat-query input cost to ≈10% on a stable knowledge base.
@@ -332,8 +331,10 @@ npm install
 cp .env.example .env              # then set JWT_SECRET and OAUTH_STATE_SECRET
 ```
 
-See [auth-server/README.md](./auth-server/README.md) for Google / Microsoft
-OAuth setup. The ontology API needs no environment variable at all — the LLM
+The Node `auth-server` is **optional**: the binary's built-in login (`serve --login`)
+covers sign-up, sessions, accounts and API keys; keep the Node server only for
+Google / Microsoft OAuth sign-in. See [auth-server/README.md](./auth-server/README.md)
+for that setup. The ontology API needs no environment variable at all — the LLM
 provider is configured in the UI (**Settings → Configuration**) and stored in
 `data/settings.json`.
 
@@ -455,8 +456,7 @@ into your Prometheus scrape config alongside the bearer token.
 | `ontology_stream_sealed_segments{ns}`, `ontology_stream_data_bytes{ns}`, `ontology_stream_records{ns}`, `ontology_stream_last_seq{ns}`, `ontology_stream_syncs{ns}` | One series per storage domain (`ns="meta"` is the schema stream): sealed segments, bytes of `.data`, records, last sequence number, syncs since open. |
 | `ontology_domain_tier{ns,tier}` | 1 on the current memory tier of each domain (`p0` everything in memory, `p1` payloads on disk). |
 
-The per-stream families exist only on the segment store (the default);
-they are the T3 deliverable of `docs/STORAGE-PLAN.md` §8.
+The per-stream families exist only on the segment store (the default).
 
 ## Ingest formats
 
@@ -589,7 +589,7 @@ Two credentials open the API, both as `Authorization: Bearer …`:
   Node `auth-server` is read as is), tokens are HS256 JWTs signed with
   `<data>/jwt.secret` (generated on first start) or the variable named by
   `--jwt-secret-env`. Login is rate-limited per IP. Google / Microsoft
-  sign-in is not served by the binary yet (ROADMAP §3.8.3b).
+  sign-in is not served by the binary yet; the optional Node `auth-server/` covers it.
 - **A service token** (`--auth-env NAME`) for machine callers: the flag
   names an environment variable rather than taking the literal value, so
   the token never appears in process listings; comparison is constant-time.
@@ -689,7 +689,7 @@ figures instead of being killed later.
 
 ## Benchmarks (`ontology bench`)
 
-The measurements of `docs/STORAGE-PLAN.md` phase 4 are reproducible with a
+The capacity measurements of `docs/STORAGE.md` §7.8 are reproducible with a
 dedicated data directory (never point it at real data):
 
 ```bash

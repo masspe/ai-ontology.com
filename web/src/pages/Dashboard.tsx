@@ -244,7 +244,7 @@ export default function Dashboard() {
 
   const samples = history?.samples ?? [];
 
-  // The first day (ROADMAP §3.9 lot A): an empty graph shows the three
+  // The first day: an empty graph shows the three
   // steps instead of empty tiles; the dashboard returns with the data.
   const hasModel = Boolean(ontology && Object.keys(ontology.concept_types).length > 0);
   const hasData = (stats?.concepts ?? 0) > 0;

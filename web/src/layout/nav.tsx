@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Mediasoft-Commercial
 // Copyright (C) 2026 Mediasoft & Cie S.A.
 //
-// The menu (ROADMAP §3.9): one source for the top navigation and the
+// The menu: one source for the top navigation and the
 // guide: each entry carries its `tour` anchor and the two sentences the
 // guide says.
 

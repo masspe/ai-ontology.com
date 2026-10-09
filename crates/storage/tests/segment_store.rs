@@ -5,7 +5,7 @@
 // Dual-licensed: AGPL-3.0-or-later OR a commercial license
 // from Mediasoft & Cie S.A. See LICENSE and LICENSE-COMMERCIAL.md.
 
-//! `SegmentStore` contract (STORAGE-PLAN.md phase 2): records route to the
+//! `SegmentStore` contract: records route to the
 //! right stream, a batch costs one sync per touched stream, segments roll
 //! and seal, the store survives a restart, a crash in either active
 //! segment or a lost manifest, refuses a second writer, names the partition

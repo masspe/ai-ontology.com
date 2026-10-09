@@ -122,13 +122,13 @@ pub trait Store: Send + Sync + 'static {
             .await
     }
 
-    /// Per-stream figures for `/metrics` (T3). `None` for stores without
+    /// Per-stream figures for `/metrics`. `None` for stores without
     /// streams (memory, legacy file store).
     fn store_stats(&self) -> Option<crate::segment_store::StoreStats> {
         None
     }
 
-    /// Copy the store's files to `dest` (ROADMAP §3.8.4). Only the segment
+    /// Copy the store's files to `dest`. Only the segment
     /// store has files worth copying.
     async fn backup(&self, dest: &std::path::Path) -> StoreResult<crate::BackupReport> {
         Err(StoreError::Format(format!(

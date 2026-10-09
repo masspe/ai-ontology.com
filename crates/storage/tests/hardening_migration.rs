@@ -5,7 +5,7 @@
 // Dual-licensed: AGPL-3.0-or-later OR a commercial license
 // from Mediasoft & Cie S.A. See LICENSE and LICENSE-COMMERCIAL.md.
 
-//! Legacy `graph.log` migration (STORAGE-PLAN.md §4.3): a record kind this
+//! Legacy `graph.log` migration: a record kind this
 //! build no longer knows (`Clear`, removed by D3) stops the migration
 //! before anything is created; legacy tombstones are routed by replaying
 //! the log, and a tombstone of an entity that never existed is dropped.

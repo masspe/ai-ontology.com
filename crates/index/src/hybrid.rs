@@ -125,8 +125,8 @@ impl HybridIndex {
         self.reindex_all_timed();
     }
 
-    /// `reindex_all` with its three costs apart, for the bench and the plan
-    /// (STORAGE-PLAN.md §8 R): reading every concept's text (payloads come
+    /// `reindex_all` with its three costs apart, for the bench:
+    /// reading every concept's text (payloads come
     /// from disk in P1), the lexical postings, the vectors. Tokenising and
     /// embedding are pure, so they run on every core with scoped threads;
     /// only the inserts take the locks.

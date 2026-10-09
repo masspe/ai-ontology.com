@@ -1,7 +1,7 @@
 # Modèles prêts à l'emploi
 
 Schémas (types de fiches et de liens, sans données) proposés au premier
-jour par l'étape « Décrivez vos données » de l'interface (ROADMAP §3.9).
+jour par l'étape « Décrivez vos données » de l'interface.
 L'exemple finance complet (schéma et données) est dans `../finance`.
 
 | Fichier | Pour |

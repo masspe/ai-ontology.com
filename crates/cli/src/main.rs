@@ -206,7 +206,7 @@ enum Cmd {
     /// schema from the store, durably. Refused while a server holds the
     /// store (LOCK). Irreversible; `settings.json` is kept.
     Reset,
-    /// Benchmarks of `STORAGE-PLAN.md` phase 4: generate a large store,
+    /// Benchmarks (`STORAGE.md` §7.7-7.8): generate a large store,
     /// time hydration, appends, queries and compaction. Requires `--data`.
     Bench {
         #[command(subcommand)]
@@ -422,7 +422,7 @@ async fn main() -> Result<()> {
         Cmd::Serve { ns: Some(ns), .. } if !ns.is_empty() => Some(ns.clone()),
         _ => None,
     };
-    // Memory socle (STORAGE-PLAN.md §7.1): estimate before loading (R14),
+    // Memory socle (STORAGE.md §8.1): estimate before loading (R14),
     // refuse or load partially instead of being killed (R17).
     let memory_mode: ontology_storage::MemoryMode = cli.memory_mode.into();
     let budget = match cli.memory_budget_mb {

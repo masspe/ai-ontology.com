@@ -5,7 +5,7 @@
 // Dual-licensed: AGPL-3.0-or-later OR a commercial license
 // from Mediasoft & Cie S.A. See LICENSE and LICENSE-COMMERCIAL.md.
 
-//! Audit log of the writes (ROADMAP §3.8.6): who did what, when, on which
+//! Audit log of the writes: who did what, when, on which
 //! path, one JSON line per successful mutating request, appended to a
 //! file next to the data. Read back by `GET /audit` (the last N lines).
 

@@ -403,7 +403,7 @@ impl Ontology {
         out
     }
 
-    /// Domain rules (STORAGE-PLAN.md §5.1): every declared `ns` is a valid
+    /// Domain rules: every declared `ns` is a valid
     /// identifier, and a child type that declares a `ns` declares the same
     /// one as its parent — otherwise `?type=Parent&include_subtypes` would
     /// silently span domains.
