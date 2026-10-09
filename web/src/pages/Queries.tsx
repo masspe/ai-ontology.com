@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Mediasoft-Commercial
 // Copyright (C) 2026 Mediasoft & Cie S.A.
 
+import { t } from "../lib/i18n";
 import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { pinnedIds, togglePin } from "../lib/pins";
@@ -88,7 +89,7 @@ export default function Queries() {
   };
 
   const remove = async (id: number) => {
-    if (!(await confirm({ title: "Supprimer la question", message: "Supprimer cette question enregistrée ?", confirmLabel: "Supprimer", cancelLabel: "Annuler", danger: true }))) return;
+    if (!(await confirm({ title: t("Supprimer la question"), message: t("Supprimer cette question enregistrée ?"), confirmLabel: t("Supprimer"), cancelLabel: t("Annuler"), danger: true }))) return;
     try {
       await deleteQuery(id);
       if (pinned.includes(id)) setPinned(togglePin(id));
@@ -102,47 +103,47 @@ export default function Queries() {
     <>
       <div className="page-header">
         <div>
-          <h1 className="page-title">Questions</h1>
-          <p className="page-subtitle">Posez une question à vos données, gardez celles qui servent, épinglez-les à l'accueil.</p>
+          <h1 className="page-title">{t("Questions")}</h1>
+          <p className="page-subtitle">{t("Posez une question à vos données, gardez celles qui servent, épinglez-les à l'accueil.")}</p>
         </div>
       </div>
 
       {error && <div className="error-banner">{error}</div>}
 
-      <Card title="Poser une question" subtitle="La réponse arrive au fil de l'eau et cite les fiches sur lesquelles elle s'appuie." style={{ marginBottom: 16 }}>
+      <Card title={t("Poser une question")} subtitle={t("La réponse arrive au fil de l'eau et cite les fiches sur lesquelles elle s'appuie.")} style={{ marginBottom: 16 }}>
         <StreamingAnswer defaultQuery={initialQ} />
       </Card>
 
       <div className="grid grid-2" style={{ alignItems: "start" }}>
-        <Card title="Enregistrer une question">
+        <Card title={t("Enregistrer une question")}>
           <div className="field">
-            <label>Nom</label>
-            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Échéances de renouvellement" />
+            <label>{t("Nom")}</label>
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder={t("Échéances de renouvellement")} />
           </div>
           <div className="field">
-            <label>Question</label>
-            <textarea value={query} onChange={(e) => setQuery(e.target.value)} rows={3} placeholder="Quels sont les prochains renouvellements…" />
+            <label>{t("Question")}</label>
+            <textarea value={query} onChange={(e) => setQuery(e.target.value)} rows={3} placeholder={t("Quels sont les prochains renouvellements…")} />
           </div>
           <div className="field" style={{ maxWidth: 160 }}>
-            <label>Fiches consultées (Top-K)</label>
+            <label>{t("Fiches consultées (Top-K)")}</label>
             <input type="number" min={1} max={50} value={topK} onChange={(e) => setTopK(Number(e.target.value))} />
           </div>
           <button className="btn-primary" onClick={save} disabled={busy || !name.trim() || !query.trim()}>
-            Enregistrer
+            {t("Enregistrer")}
           </button>
         </Card>
 
-        <Card title="Questions enregistrées" actions={<button onClick={refresh}>Recharger</button>}>
+        <Card title={t("Questions enregistrées")} actions={<button onClick={refresh}>{t("Recharger")}</button>}>
           {queries.length === 0 ? (
-            <div className="empty">Aucune question enregistrée. Posez-en une ci-dessus : la réponse cite les fiches d'où elle vient, et vous pourrez la garder.</div>
+            <div className="empty">{t("Aucune question enregistrée. Posez-en une ci-dessus : la réponse cite les fiches d'où elle vient, et vous pourrez la garder.")}</div>
           ) : (
             <table className="table">
               <thead>
                 <tr>
-                  <th>Nom</th>
-                  <th>Fiches consultées</th>
-                  <th>Dernière exécution</th>
-                  <th className="actions">Actions</th>
+                  <th>{t("Nom")}</th>
+                  <th>{t("Fiches consultées")}</th>
+                  <th>{t("Dernière exécution")}</th>
+                  <th className="actions">{t("Actions")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -157,15 +158,15 @@ export default function Queries() {
                       {q.last_run_at ? new Date(q.last_run_at * 1000).toLocaleString() : "—"}
                     </td>
                     <td className="actions">
-                      <button onClick={() => run(q)} disabled={busy}>Exécuter</button>{" "}
+                      <button onClick={() => run(q)} disabled={busy}>{t("Exécuter")}</button>{" "}
                       <button
                         onClick={() => setPinned(togglePin(q.id))}
                         aria-pressed={pinned.includes(q.id)}
-                        title={pinned.includes(q.id) ? "Retirer de l'accueil" : "Épingler à l'accueil"}
+                        title={pinned.includes(q.id) ? t("Retirer de l'accueil") : t("Épingler à l'accueil")}
                       >
                         {pinned.includes(q.id) ? "★" : "☆"}
                       </button>{" "}
-                      <button className="btn-danger" onClick={() => remove(q.id)}>Supprimer</button>
+                      <button className="btn-danger" onClick={() => remove(q.id)}>{t("Supprimer")}</button>
                     </td>
                   </tr>
                 ))}
@@ -176,7 +177,7 @@ export default function Queries() {
       </div>
 
       {lastResult && (
-        <Card title={`Réponse · ${lastResult.name}`} style={{ marginTop: 16 }}>
+        <Card title={t("Réponse · {name}", { name: lastResult.name })} style={{ marginTop: 16 }}>
           <div className="answer-box">{lastResult.answer.answer}</div>
           {lastResult.answer.subgraph && lastResult.answer.subgraph.concepts.length > 0 && (
             <div className="citations">

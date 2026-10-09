@@ -6,6 +6,7 @@ import { useEffect } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { msBE } from "../lib/msBE";
 import { useToast } from "../components/Toast.jsx";
+import { t } from "../lib/i18n";
 
 function safeNext(raw) {
   if (!raw || !raw.startsWith("/") || raw.startsWith("//")) return "/";
@@ -49,10 +50,10 @@ export default function OAuthCallback() {
       // a failure so `.finally` does not leave an unhandled rejection behind.
       msBE.auth.me().catch(() => null).finally(() => nav(next, { replace: true }));
     } else {
-      toast.error("Jeton OAuth manquant");
+      toast.error(t("Jeton OAuth manquant"));
       nav("/login", { replace: true });
     }
   }, [loc.search, loc.hash, nav, toast]);
 
-  return <div style={{ padding: 24 }}>Finalisation de la connexion…</div>;
+  return <div style={{ padding: 24 }}>{t("Finalisation de la connexion…")}</div>;
 }

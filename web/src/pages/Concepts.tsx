@@ -31,6 +31,7 @@ import {
   type StatsHistory,
   exportGraphUrl,
 } from "../api";
+import { getLang, t } from "../lib/i18n";
 
 // ---------------------------------------------------------------------------
 // Constants & helpers
@@ -53,7 +54,7 @@ export function truncate(s: string, max: number): string {
 
 function fmtDate(ts?: number | null): string {
   if (!ts) return "—";
-  return new Date(ts * 1000).toLocaleDateString("fr-CH", {
+  return new Date(ts * 1000).toLocaleDateString(getLang() === "fr" ? "fr-CH" : "en-GB", {
     year: "numeric",
     month: "short",
     day: "numeric",
@@ -63,10 +64,10 @@ function fmtDate(ts?: number | null): string {
 // `key` is the filter value (the server's status word); `label` is what the user sees.
 export function conceptStatus(c: Concept): { key: string; label: string; cls: string } {
   const raw = (c.properties?.status as string | undefined)?.toLowerCase();
-  if (raw === "reviewed") return { key: "reviewed", label: "Vérifiée", cls: "badge-accent" };
-  if (raw === "draft") return { key: "draft", label: "Brouillon", cls: "badge-warn" };
-  if (raw === "archived") return { key: "archived", label: "Archivée", cls: "badge-danger" };
-  return { key: "active", label: "Active", cls: "badge-success" };
+  if (raw === "reviewed") return { key: "reviewed", label: t("Vérifiée"), cls: "badge-accent" };
+  if (raw === "draft") return { key: "draft", label: t("Brouillon"), cls: "badge-warn" };
+  if (raw === "archived") return { key: "archived", label: t("Archivée"), cls: "badge-danger" };
+  return { key: "active", label: t("Active"), cls: "badge-success" };
 }
 
 export function conceptUpdatedAt(c: Concept): number | null {
@@ -257,7 +258,7 @@ function RichStat({ label, value, display, deltaPct, icon, tone, spark, sparkCol
         {deltaPct != null && (
           <div className={`stat-delta ${cls}`}>
             <span>{arrow} {Math.abs(deltaPct).toFixed(0)} %</span>
-            <span className="muted">vs le mois dernier</span>
+            <span className="muted">{t("vs le mois dernier")}</span>
           </div>
         )}
       </div>
@@ -307,7 +308,7 @@ function HierarchyNode({ node, depth }: { node: TreeNode; depth: number }) {
             type="button"
             className="tree-toggle"
             onClick={() => setOpen((v) => !v)}
-            aria-label={open ? "Replier" : "Déplier"}
+            aria-label={open ? t("Replier") : t("Déplier")}
           >
             <span className="tree-toggle-icon">{open ? Icon.chevDown : Icon.chevRight}</span>
           </button>
@@ -525,7 +526,7 @@ export default function Concepts() {
   const openCreate = () => {
     const types = ontology ? Object.keys(ontology.concept_types) : [];
     if (types.length === 0) {
-      setError("Aucun type de fiche n'est défini pour l'instant. Créez-en un d'abord dans le modèle de données.");
+      setError(t("Aucun type de fiche n'est défini pour l'instant. Créez-en un d'abord dans le modèle de données."));
       return;
     }
     setError(null);
@@ -541,7 +542,7 @@ export default function Concepts() {
     setError(null);
     try {
       await createConcept(data);
-      setInfo(`Fiche « ${data.name} » créée.`);
+      setInfo(t("Fiche « {name} » créée.", { name: data.name }));
       setCreateOpen(false);
       setCursors([]);
       setReloadTick((t) => t + 1);
@@ -565,7 +566,7 @@ export default function Concepts() {
         name: data.name,
         description: data.description,
       });
-      setInfo(`Fiche « ${updated.name} » mise à jour.`);
+      setInfo(t("Fiche « {name} » mise à jour.", { name: updated.name }));
       setSelected(updated);
       setEditingConcept(null);
       setConcepts((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
@@ -580,17 +581,17 @@ export default function Concepts() {
 
   const handleDelete = async (c: Concept) => {
     const ok = await confirm({
-      title: "Supprimer la fiche",
-      message: `Supprimer la fiche « ${c.name} » ? Cette action est irréversible.`,
-      confirmLabel: "Supprimer",
-      cancelLabel: "Annuler",
+      title: t("Supprimer la fiche"),
+      message: t("Supprimer la fiche « {name} » ? Cette action est irréversible.", { name: c.name }),
+      confirmLabel: t("Supprimer"),
+      cancelLabel: t("Annuler"),
       danger: true,
     });
     if (!ok) return;
     setBusy(true);
     try {
       await deleteConcept(c.id);
-      setInfo(`Fiche « ${c.name} » supprimée.`);
+      setInfo(t("Fiche « {name} » supprimée.", { name: c.name }));
       removeFromView([c.id]);
       await Promise.all([refreshSidecar(), refreshRecent()]);
     } catch (e: unknown) {
@@ -637,10 +638,12 @@ export default function Concepts() {
     const ids = [...checked];
     if (ids.length === 0) return;
     const ok = await confirm({
-      title: "Supprimer les fiches sélectionnées",
-      message: `Supprimer ${ids.length} fiche${ids.length > 1 ? "s" : ""} et tous les liens qui y sont attachés ? Cette action est irréversible.`,
-      confirmLabel: `Supprimer ${ids.length}`,
-      cancelLabel: "Annuler",
+      title: t("Supprimer les fiches sélectionnées"),
+      message: ids.length > 1
+        ? t("Supprimer {n} fiches et tous les liens qui y sont attachés ? Cette action est irréversible.", { n: ids.length })
+        : t("Supprimer {n} fiche et tous les liens qui y sont attachés ? Cette action est irréversible.", { n: ids.length }),
+      confirmLabel: t("Supprimer {n}", { n: ids.length }),
+      cancelLabel: t("Annuler"),
       danger: true,
     });
     if (!ok) return;
@@ -648,8 +651,15 @@ export default function Concepts() {
     setError(null);
     try {
       const r = await deleteConcepts(ids);
-      const rel = r.relations > 0 ? ` et ${r.relations} lien${r.relations > 1 ? "s" : ""}` : "";
-      setInfo(`Supprimé : ${r.deleted} fiche${r.deleted > 1 ? "s" : ""}${rel}.`);
+      const rel =
+        r.relations > 1 ? ` ${t("et {n} liens", { n: r.relations })}`
+        : r.relations > 0 ? ` ${t("et {n} lien", { n: r.relations })}`
+        : "";
+      setInfo(
+        r.deleted > 1
+          ? t("Supprimé : {n} fiches{rel}.", { n: r.deleted, rel })
+          : t("Supprimé : {n} fiche{rel}.", { n: r.deleted, rel }),
+      );
       removeFromView(ids);
       await Promise.all([refreshSidecar(), refreshRecent()]);
     } catch (e: unknown) {
@@ -706,9 +716,9 @@ export default function Concepts() {
     <>
       <div className="page-header">
         <div>
-          <h2 className="page-title">Fiches</h2>
+          <h2 className="page-title">{t("Fiches")}</h2>
           <p className="page-subtitle">
-            Toutes les fiches de vos données : parcourir, filtrer, corriger, ouvrir la page de chacune.
+            {t("Toutes les fiches de vos données : parcourir, filtrer, corriger, ouvrir la page de chacune.")}
           </p>
         </div>
       </div>
@@ -719,7 +729,7 @@ export default function Concepts() {
       {/* Stat row */}
       <div className="dash-row dash-row-stats">
         <RichStat
-          label="Fiches au total"
+          label={t("Fiches au total")}
           value={stats?.concepts ?? 0}
           deltaPct={stats ? stats.deltas.concepts_pct * 100 : undefined}
           icon={Icon.layers}
@@ -728,7 +738,7 @@ export default function Concepts() {
           sparkColor="#2563eb"
         />
         <RichStat
-          label="Types de fiches"
+          label={t("Types de fiches")}
           value={stats?.concept_types ?? 0}
           deltaPct={stats ? stats.deltas.concept_types_pct * 100 : undefined}
           icon={Icon.group}
@@ -737,7 +747,7 @@ export default function Concepts() {
           sparkColor="#7c3aed"
         />
         <RichStat
-          label="Liens établis"
+          label={t("Liens établis")}
           value={stats?.relations ?? 0}
           deltaPct={stats ? stats.deltas.relations_pct * 100 : undefined}
           icon={Icon.share}
@@ -746,7 +756,7 @@ export default function Concepts() {
           sparkColor="#d97706"
         />
         <RichStat
-          label="Taux de couverture"
+          label={t("Taux de couverture")}
           value={coverage ?? 0}
           display={coverage == null ? "—" : `${coverage}%`}
           icon={Icon.shield}
@@ -759,12 +769,12 @@ export default function Concepts() {
       {/* Library + Details */}
       <div className="concepts-grid">
         <Card
-          title="Bibliothèque de fiches"
+          title={t("Bibliothèque de fiches")}
           actions={
             <button className="btn-primary" onClick={openCreate} disabled={busy}>
               <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
                 <span style={{ width: 14, height: 14, display: "inline-flex" }}>{Icon.plus}</span>
-                Créer une fiche
+                {t("Créer une fiche")}
               </span>
             </button>
           }
@@ -773,44 +783,44 @@ export default function Concepts() {
             <div className="search-input">
               <span className="search-icon">{Icon.search}</span>
               <input
-                placeholder="Rechercher une fiche…"
+                placeholder={t("Rechercher une fiche…")}
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
               />
             </div>
             <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
-              <option value="">Tous les domaines</option>
+              <option value="">{t("Tous les domaines")}</option>
               {typeNames.map((t) => (
                 <option key={t} value={t}>{t}</option>
               ))}
             </select>
             <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
-              <option value="">Tous les statuts</option>
-              <option value="active">Active</option>
-              <option value="reviewed">Vérifiée</option>
-              <option value="draft">Brouillon</option>
-              <option value="archived">Archivée</option>
+              <option value="">{t("Tous les statuts")}</option>
+              <option value="active">{t("Active")}</option>
+              <option value="reviewed">{t("Vérifiée")}</option>
+              <option value="draft">{t("Brouillon")}</option>
+              <option value="archived">{t("Archivée")}</option>
             </select>
             <select value={sort} onChange={(e) => setSort(e.target.value as typeof sort)}>
-              <option value="updated">Tri : dernière mise à jour</option>
-              <option value="name">Tri : nom</option>
-              <option value="type">Tri : type</option>
+              <option value="updated">{t("Tri : dernière mise à jour")}</option>
+              <option value="name">{t("Tri : nom")}</option>
+              <option value="type">{t("Tri : type")}</option>
             </select>
           </div>
 
           {checked.size > 0 && (
-            <div className="bulk-bar" role="toolbar" aria-label="Actions groupées">
+            <div className="bulk-bar" role="toolbar" aria-label={t("Actions groupées")}>
               <span>
-                <strong>{checked.size}</strong> sélectionnée{checked.size > 1 ? "s" : ""}
+                <strong>{checked.size}</strong> {checked.size > 1 ? t("sélectionnées") : t("sélectionnée")}
               </span>
               <button className="btn-danger" onClick={handleBulkDelete} disabled={busy}>
                 <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
                   <span style={{ width: 14, height: 14, display: "inline-flex" }}>{Icon.trash}</span>
-                  Supprimer la sélection
+                  {t("Supprimer la sélection")}
                 </span>
               </button>
               <button className="btn-outline" onClick={() => setChecked(new Set())} disabled={busy}>
-                Vider la sélection
+                {t("Vider la sélection")}
               </button>
             </div>
           )}
@@ -821,19 +831,19 @@ export default function Concepts() {
                 <th className="check-col">
                   <input
                     type="checkbox"
-                    aria-label="Sélectionner toutes les fiches de cette page"
+                    aria-label={t("Sélectionner toutes les fiches de cette page")}
                     checked={allOnPageChecked}
                     onChange={toggleAllOnPage}
                     disabled={concepts.length === 0}
                   />
                 </th>
-                <th>Nom</th>
-                <th>Domaine</th>
-                <th>Description</th>
-                <th>Statut</th>
-                <th>Liens</th>
-                <th>Dernière mise à jour</th>
-                <th className="actions">Actions</th>
+                <th>{t("Nom")}</th>
+                <th>{t("Domaine")}</th>
+                <th>{t("Description")}</th>
+                <th>{t("Statut")}</th>
+                <th>{t("Liens")}</th>
+                <th>{t("Dernière mise à jour")}</th>
+                <th className="actions">{t("Actions")}</th>
               </tr>
             </thead>
             <tbody>
@@ -842,13 +852,14 @@ export default function Concepts() {
                   <td colSpan={8} className="empty">
                     {!search && !typeFilter && !statusFilter && Object.keys(types).length > 0 ? (
                       <>
-                        Aucune fiche pour l'instant. Le modèle est en place ({Object.keys(types).length} type(s) de fiche :{" "}
-                        {Object.keys(types).slice(0, 5).join(", ")}
-                        {Object.keys(types).length > 5 ? "…" : ""}) ; les fiches viendront de vos fichiers.{" "}
-                        <Link to="/files">Déposer des fichiers</Link> ou <Link to="/">essayer l'exemple finance</Link>.
+                        {t("Aucune fiche pour l'instant. Le modèle est en place ({n} type(s) de fiche : {list}) ; les fiches viendront de vos fichiers.", {
+                          n: Object.keys(types).length,
+                          list: Object.keys(types).slice(0, 5).join(", ") + (Object.keys(types).length > 5 ? "…" : ""),
+                        })}{" "}
+                        <Link to="/files">{t("Déposer des fichiers")}</Link> {t("ou")} <Link to="/">{t("essayer l'exemple finance")}</Link>.
                       </>
                     ) : (
-                      "Aucune fiche ne correspond aux filtres actuels."
+                      t("Aucune fiche ne correspond aux filtres actuels.")
                     )}
                   </td>
                 </tr>
@@ -867,7 +878,7 @@ export default function Concepts() {
                     <td className="check-col" onClick={(e) => e.stopPropagation()}>
                       <input
                         type="checkbox"
-                        aria-label={`Sélectionner la fiche ${c.name}`}
+                        aria-label={t("Sélectionner la fiche {name}", { name: c.name })}
                         checked={checked.has(c.id)}
                         onChange={() => toggleChecked(c.id)}
                       />
@@ -898,15 +909,15 @@ export default function Concepts() {
                     <td className="actions">
                       <button
                         className="icon-btn"
-                        title="Modifier"
+                        title={t("Modifier")}
                         onClick={(e) => { e.stopPropagation(); handleEdit(c); }}
                       >
                         <span style={{ width: 16, height: 16, display: "inline-flex" }}>{Icon.pencil}</span>
                       </button>
                       <button
                         className="icon-btn icon-btn-danger"
-                        title="Supprimer la fiche"
-                        aria-label={`Supprimer la fiche ${c.name}`}
+                        title={t("Supprimer la fiche")}
+                        aria-label={t("Supprimer la fiche {name}", { name: c.name })}
                         onClick={(e) => { e.stopPropagation(); handleDelete(c); }}
                       >
                         <span style={{ width: 16, height: 16, display: "inline-flex" }}>{Icon.trash}</span>
@@ -920,19 +931,19 @@ export default function Concepts() {
 
           <div className="pagination">
             <span className="muted">
-              Fiches {showingFrom}–{showingTo} sur {fmtNum(total)}
+              {t("Fiches {from}–{to} sur {total}", { from: showingFrom, to: showingTo, total: fmtNum(total) })}
             </span>
             <div className="pager">
               <button
-                aria-label="Page précédente"
+                aria-label={t("Page précédente")}
                 disabled={page === 0}
                 onClick={() => setCursors((c) => c.slice(0, -1))}
               >
                 ‹
               </button>
-              <span className="pager-active">Page {page + 1}</span>
+              <span className="pager-active">{t("Page {n}", { n: page + 1 })}</span>
               <button
-                aria-label="Page suivante"
+                aria-label={t("Page suivante")}
                 disabled={!nextCursor}
                 onClick={() => nextCursor && setCursors((c) => [...c, nextCursor])}
               >
@@ -943,7 +954,7 @@ export default function Concepts() {
         </Card>
 
         <div className="concepts-side">
-          <Card title="Détail de la fiche">
+          <Card title={t("Détail de la fiche")}>
             {selected ? (
               <>
                 <ConceptDetails
@@ -959,14 +970,14 @@ export default function Concepts() {
                 />
               </>
             ) : (
-              <div className="empty">Sélectionnez une fiche dans la bibliothèque.</div>
+              <div className="empty">{t("Sélectionnez une fiche dans la bibliothèque.")}</div>
             )}
           </Card>
 
-          <Card title="Hiérarchie des types">
+          <Card title={t("Hiérarchie des types")}>
             {hierarchy.length === 0 ? (
               <div className="empty">
-                Aucun type de fiche pour l'instant. <Link to="/builder">Définir le modèle</Link>
+                {t("Aucun type de fiche pour l'instant.")} <Link to="/builder">{t("Définir le modèle")}</Link>
               </div>
             ) : (
               <div className="concept-tree">
@@ -982,18 +993,18 @@ export default function Concepts() {
       {/* Activity + Domains + Quick Actions */}
       <div className="dash-row dash-row-three">
         <Card
-          title="Activité récente"
-          actions={<Link to="/builder" className="btn-ghost-link">Tout voir</Link>}
+          title={t("Activité récente")}
+          actions={<Link to="/builder" className="btn-ghost-link">{t("Tout voir")}</Link>}
         >
           {recent.length === 0 ? (
-            <div className="empty">Aucune activité récente.</div>
+            <div className="empty">{t("Aucune activité récente.")}</div>
           ) : (
             <ul className="activity-list">
               {recent.map((c) => (
                 <li key={c.id}>
                   <span className="activity-dot" style={{ background: conceptIconColor(c.name) }} />
                   <span className="activity-text">
-                    Fiche <strong>« {c.name} »</strong> ajoutée
+                    {t("Fiche")} <strong>« {c.name} »</strong> {t("ajoutée")}
                   </span>
                   <span className="activity-time muted">{fmtDate(conceptUpdatedAt(c))}</span>
                 </li>
@@ -1003,11 +1014,11 @@ export default function Concepts() {
         </Card>
 
         <Card
-          title="Principaux domaines"
-          actions={<Link to="/builder" className="btn-ghost-link">Tout voir</Link>}
+          title={t("Principaux domaines")}
+          actions={<Link to="/builder" className="btn-ghost-link">{t("Tout voir")}</Link>}
         >
           {domainList.length === 0 ? (
-            <div className="empty">Chargement des domaines…</div>
+            <div className="empty">{t("Chargement des domaines…")}</div>
           ) : (
             <ul className="domain-list">
               {domainList.map((d) => (
@@ -1028,20 +1039,20 @@ export default function Concepts() {
           )}
         </Card>
 
-        <Card title="Actions rapides">
+        <Card title={t("Actions rapides")}>
           <div className="quick-actions">
             <Link to="/files" className="quick-action qa-blue">
               <span className="qa-icon">{Icon.upload}</span>
               <div>
-                <div className="qa-title">Importer des fiches</div>
-                <div className="qa-sub muted">Depuis des fichiers ou des sources</div>
+                <div className="qa-title">{t("Importer des fiches")}</div>
+                <div className="qa-sub muted">{t("Depuis des fichiers ou des sources")}</div>
               </div>
             </Link>
             <Link to="/builder" className="quick-action qa-violet">
               <span className="qa-icon">{Icon.spark}</span>
               <div>
-                <div className="qa-title">Générer avec l'IA</div>
-                <div className="qa-sub muted">Générer des fiches automatiquement</div>
+                <div className="qa-title">{t("Générer avec l'IA")}</div>
+                <div className="qa-sub muted">{t("Générer des fiches automatiquement")}</div>
               </div>
             </Link>
             <button
@@ -1049,14 +1060,14 @@ export default function Concepts() {
               className="quick-action qa-amber"
               onClick={() => {
                 if (checked.size > 0) void handleBulkDelete();
-                else setInfo("Cochez les cases de la bibliothèque pour sélectionner des fiches, puis supprimez-les ensemble.");
+                else setInfo(t("Cochez les cases de la bibliothèque pour sélectionner des fiches, puis supprimez-les ensemble."));
               }}
             >
               <span className="qa-icon">{Icon.trash}</span>
               <div style={{ textAlign: "left" }}>
-                <div className="qa-title">Suppression groupée</div>
+                <div className="qa-title">{t("Suppression groupée")}</div>
                 <div className="qa-sub muted">
-                  {checked.size > 0 ? `Supprimer ${checked.size} fiche${checked.size > 1 ? "s" : ""}` : "Sélectionnez des fiches, puis supprimez-les"}
+                  {checked.size > 1 ? t("Supprimer {n} fiches", { n: checked.size }) : checked.size > 0 ? t("Supprimer {n} fiche", { n: checked.size }) : t("Sélectionnez des fiches, puis supprimez-les")}
                 </div>
               </div>
             </button>
@@ -1119,7 +1130,7 @@ function CreateConceptModal({ typeNames, busy, onClose, onSubmit }: CreateConcep
         if (!name) setName(firstType);
         if (firstDef?.description && !description) setDescription(firstDef.description);
       } else {
-        setAiError("L'IA n'a renvoyé aucune fiche. Essayez une consigne plus précise.");
+        setAiError(t("L'IA n'a renvoyé aucune fiche. Essayez une consigne plus précise."));
       }
     } catch (e) {
       setAiError(e instanceof Error ? e.message : String(e));
@@ -1148,16 +1159,16 @@ function CreateConceptModal({ typeNames, busy, onClose, onSubmit }: CreateConcep
         onClick={(e) => e.stopPropagation()}
       >
         <div className="modal-head">
-          <h3 id="create-concept-title">Créer une fiche</h3>
-          <button className="modal-close" onClick={onClose} aria-label="Fermer">×</button>
+          <h3 id="create-concept-title">{t("Créer une fiche")}</h3>
+          <button className="modal-close" onClick={onClose} aria-label={t("Fermer")}>×</button>
         </div>
 
         <div className="modal-section">
-          <label className="modal-label">Générer avec l'IA à partir d'une consigne</label>
+          <label className="modal-label">{t("Générer avec l'IA à partir d'une consigne")}</label>
           <textarea
             className="modal-input"
             rows={2}
-            placeholder="p. ex. « Un éditeur de logiciels suisse spécialisé dans la construction »"
+            placeholder={t("p. ex. « Un éditeur de logiciels suisse spécialisé dans la construction »")}
             value={aiPrompt}
             onChange={(e) => setAiPrompt(e.target.value)}
           />
@@ -1168,22 +1179,22 @@ function CreateConceptModal({ typeNames, busy, onClose, onSubmit }: CreateConcep
               disabled={aiBusy || !aiPrompt.trim()}
               onClick={handleGenerate}
             >
-              {aiBusy ? "Génération…" : "Générer"}
+              {aiBusy ? t("Génération…") : t("Générer")}
             </button>
             {aiError && <span className="modal-ai-error">{aiError}</span>}
             {!aiError && (
               <span className="muted" style={{ fontSize: 12 }}>
-                Le brouillon remplira les champs ci-dessous — vous pourrez les modifier avant d'enregistrer.
+                {t("Le brouillon remplira les champs ci-dessous — vous pourrez les modifier avant d'enregistrer.")}
               </span>
             )}
           </div>
         </div>
 
-        <div className="modal-divider"><span>ou remplir à la main</span></div>
+        <div className="modal-divider"><span>{t("ou remplir à la main")}</span></div>
 
         <form onSubmit={handleSubmit} className="modal-form">
           <label className="modal-label">
-            Nom de la fiche
+            {t("Nom de la fiche")}
             <input
               className="modal-input"
               autoFocus
@@ -1193,7 +1204,7 @@ function CreateConceptModal({ typeNames, busy, onClose, onSubmit }: CreateConcep
             />
           </label>
           <label className="modal-label">
-            Type de fiche
+            {t("Type de fiche")}
             <select
               className="modal-input"
               value={conceptType}
@@ -1206,7 +1217,7 @@ function CreateConceptModal({ typeNames, busy, onClose, onSubmit }: CreateConcep
             </select>
           </label>
           <label className="modal-label">
-            Description (facultative)
+            {t("Description (facultative)")}
             <textarea
               className="modal-input"
               rows={3}
@@ -1216,10 +1227,10 @@ function CreateConceptModal({ typeNames, busy, onClose, onSubmit }: CreateConcep
           </label>
           <div className="modal-actions">
             <button type="button" className="btn-ghost" onClick={onClose} disabled={busy}>
-              Annuler
+              {t("Annuler")}
             </button>
             <button type="submit" className="btn-primary" disabled={!canSubmit}>
-              {busy ? "Création…" : "Créer"}
+              {busy ? t("Création…") : t("Créer")}
             </button>
           </div>
         </form>
@@ -1291,13 +1302,13 @@ function EditConceptModal({ concept, busy, onClose, onSubmit }: EditConceptModal
         onClick={(e) => e.stopPropagation()}
       >
         <div className="modal-head">
-          <h3 id="edit-concept-title">Modifier la fiche</h3>
-          <button className="modal-close" onClick={onClose} aria-label="Fermer">×</button>
+          <h3 id="edit-concept-title">{t("Modifier la fiche")}</h3>
+          <button className="modal-close" onClick={onClose} aria-label={t("Fermer")}>×</button>
         </div>
 
         <form className="modal-form" onSubmit={handleSubmit}>
           <label className="modal-label">
-            Nom
+            {t("Nom")}
             <input
               className="modal-input"
               type="text"
@@ -1308,7 +1319,7 @@ function EditConceptModal({ concept, busy, onClose, onSubmit }: EditConceptModal
             />
           </label>
           <label className="modal-label">
-            Description
+            {t("Description")}
             <textarea
               className="modal-input"
               rows={4}
@@ -1318,10 +1329,10 @@ function EditConceptModal({ concept, busy, onClose, onSubmit }: EditConceptModal
           </label>
           <div className="modal-actions">
             <button type="button" className="btn-ghost" onClick={onClose} disabled={busy}>
-              Annuler
+              {t("Annuler")}
             </button>
             <button type="submit" className="btn-primary" disabled={!canSubmit}>
-              {busy ? "Enregistrement…" : "Enregistrer"}
+              {busy ? t("Enregistrement…") : t("Enregistrer")}
             </button>
           </div>
         </form>
@@ -1377,7 +1388,7 @@ function ConceptDetails({ concept, domain, onEdit, onDelete }: DetailsProps) {
             <span className="badge badge-accent">{concept.concept_type}</span>
           </div>
           <p className="cd-desc muted">
-            {concept.description ? truncate(concept.description, 2000) : "Aucune description."}
+            {concept.description ? truncate(concept.description, 2000) : t("Aucune description.")}
           </p>
         </div>
       </div>
@@ -1386,7 +1397,7 @@ function ConceptDetails({ concept, domain, onEdit, onDelete }: DetailsProps) {
         <dt>URI</dt>
         <dd className="mono">urn:concept:{concept.concept_type.toLowerCase()}:{concept.id}</dd>
 
-        <dt>Synonymes / mots-clés</dt>
+        <dt>{t("Synonymes / mots-clés")}</dt>
         <dd>
           {synonyms.length === 0 ? (
             <span className="muted">—</span>
@@ -1397,16 +1408,16 @@ function ConceptDetails({ concept, domain, onEdit, onDelete }: DetailsProps) {
           )}
         </dd>
 
-        <dt>Domaine</dt>
+        <dt>{t("Domaine")}</dt>
         <dd>{domain}</dd>
 
-        <dt>Responsable</dt>
+        <dt>{t("Responsable")}</dt>
         <dd>{owner}</dd>
 
-        <dt>Dernière mise à jour</dt>
+        <dt>{t("Dernière mise à jour")}</dt>
         <dd>{fmtDate(updated)}</dd>
 
-        <dt>Propriétés ({propEntries.length})</dt>
+        <dt>{t("Propriétés ({n})", { n: propEntries.length })}</dt>
         <dd>
           {propEntries.length === 0 ? (
             <span className="muted">—</span>
@@ -1429,25 +1440,25 @@ function ConceptDetails({ concept, domain, onEdit, onDelete }: DetailsProps) {
         <button onClick={onEdit}>
           <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
             <span style={{ width: 14, height: 14, display: "inline-flex" }}>{Icon.pencil}</span>
-            Modifier la fiche
+            {t("Modifier la fiche")}
           </span>
         </button>
         <Link to={`/graph?seed=${concept.id}`} className="btn-link-wrap">
           <button>
             <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
               <span style={{ width: 14, height: 14, display: "inline-flex" }}>{Icon.share}</span>
-              Voir les liens
+              {t("Voir les liens")}
             </span>
           </button>
         </Link>
         <a className="btn btn-outline" href={exportGraphUrl("jsonl")} download style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
           <span style={{ width: 14, height: 14, display: "inline-flex" }}>{Icon.download}</span>
-          Exporter
+          {t("Exporter")}
         </a>
         <button className="btn-danger" onClick={onDelete}>
           <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
             <span style={{ width: 14, height: 14, display: "inline-flex" }}>{Icon.trash}</span>
-            Supprimer
+            {t("Supprimer")}
           </span>
         </button>
       </div>
@@ -1534,17 +1545,17 @@ function RelationsPanel({ concept, ontology, allConcepts }: RelationsPanelProps)
       setTargetId("");
       await refresh();
     } catch (err) {
-      toast.error("Ajout impossible : " + (err as Error).message);
+      toast.error(t("Ajout impossible : {msg}", { msg: (err as Error).message }));
     }
   }
 
   async function onDelete(id: number) {
-    if (!(await confirm({ title: "Supprimer le lien", message: "Supprimer ce lien ?", confirmLabel: "Supprimer", cancelLabel: "Annuler", danger: true }))) return;
+    if (!(await confirm({ title: t("Supprimer le lien"), message: t("Supprimer ce lien ?"), confirmLabel: t("Supprimer"), cancelLabel: t("Annuler"), danger: true }))) return;
     try {
       await deleteRelation(id);
       await refresh();
     } catch (err) {
-      toast.error("Suppression impossible : " + (err as Error).message);
+      toast.error(t("Suppression impossible : {msg}", { msg: (err as Error).message }));
     }
   }
 
@@ -1557,12 +1568,12 @@ function RelationsPanel({ concept, ontology, allConcepts }: RelationsPanelProps)
         <span className="rel-other">
           {other
             ? `${other.concept_type}: ${other.name}`
-            : `Fiche #${otherId}`}
+            : t("Fiche #{id}", { id: otherId })}
         </span>
         <button
           type="button"
           className="rel-del"
-          aria-label="Supprimer le lien"
+          aria-label={t("Supprimer le lien")}
           onClick={() => onDelete(r.id)}
         >
           ×
@@ -1574,7 +1585,7 @@ function RelationsPanel({ concept, ontology, allConcepts }: RelationsPanelProps)
   return (
     <div className="rel-panel">
       <div className="rel-head">
-        <strong>Liens</strong>
+        <strong>{t("Liens")}</strong>
         <button
           type="button"
           className="btn-ghost"
@@ -1582,11 +1593,11 @@ function RelationsPanel({ concept, ontology, allConcepts }: RelationsPanelProps)
           disabled={relTypeOptions.length === 0}
           title={
             relTypeOptions.length === 0
-              ? "Aucun type de lien n'a le type de cette fiche comme domaine."
+              ? t("Aucun type de lien n'a le type de cette fiche comme domaine.")
               : ""
           }
         >
-          {adding ? "Annuler" : "+ Ajouter"}
+          {adding ? t("Annuler") : `+ ${t("Ajouter")}`}
         </button>
       </div>
 
@@ -1600,7 +1611,7 @@ function RelationsPanel({ concept, ontology, allConcepts }: RelationsPanelProps)
             }}
             required
           >
-            <option value="" disabled>Type de lien…</option>
+            <option value="" disabled>{t("Type de lien…")}</option>
             {relTypeOptions.map((rt) => (
               <option key={rt.name} value={rt.name}>
                 {rt.name} ({rt.domain} → {rt.range})
@@ -1614,7 +1625,7 @@ function RelationsPanel({ concept, ontology, allConcepts }: RelationsPanelProps)
             }
             required
           >
-            <option value="" disabled>Fiche cible…</option>
+            <option value="" disabled>{t("Fiche cible…")}</option>
             {targetOptions
               .filter((c) => c.id !== concept.id)
               .map((c) => (
@@ -1623,20 +1634,20 @@ function RelationsPanel({ concept, ontology, allConcepts }: RelationsPanelProps)
                 </option>
               ))}
           </select>
-          <button type="submit" className="btn-primary">Ajouter</button>
+          <button type="submit" className="btn-primary">{t("Ajouter")}</button>
         </form>
       )}
 
       {error && <div className="banner banner-error">{error}</div>}
       {loading ? (
-        <div className="muted">Chargement des liens…</div>
+        <div className="muted">{t("Chargement des liens…")}</div>
       ) : outgoing.length === 0 && incoming.length === 0 ? (
-        <div className="muted">Aucun lien.</div>
+        <div className="muted">{t("Aucun lien.")}</div>
       ) : (
         <>
           {outgoing.length > 0 && (
             <>
-              <div className="rel-section-title muted">Sortants</div>
+              <div className="rel-section-title muted">{t("Sortants")}</div>
               <ul className="rel-list">
                 {outgoing.map((r) => renderRow(r, r.target, "out"))}
               </ul>
@@ -1644,7 +1655,7 @@ function RelationsPanel({ concept, ontology, allConcepts }: RelationsPanelProps)
           )}
           {incoming.length > 0 && (
             <>
-              <div className="rel-section-title muted">Entrants</div>
+              <div className="rel-section-title muted">{t("Entrants")}</div>
               <ul className="rel-list">
                 {incoming.map((r) => renderRow(r, r.source, "in"))}
               </ul>

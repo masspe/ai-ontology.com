@@ -3,8 +3,10 @@
 
 import { useState } from "react";
 import { askStream, type Subgraph } from "../api";
+import { t } from "../lib/i18n";
 
-const plural = (n: number, word: string) => `${n} ${word}${n > 1 ? "s" : ""}`;
+const sheets = (n: number) => (n > 1 ? t("{n} fiches", { n }) : t("{n} fiche", { n }));
+const links = (n: number) => (n > 1 ? t("{n} liens", { n }) : t("{n} lien", { n }));
 
 interface Props {
   defaultQuery?: string;
@@ -28,7 +30,7 @@ export default function StreamingAnswer({ defaultQuery = "" }: Props) {
         { query },
         {
           onRetrieved: setRetrieved,
-          onToken: (t) => setAnswer((prev) => prev + t),
+          onToken: (tok) => setAnswer((prev) => prev + tok),
           onEnd: () => setStreaming(false),
           onError: (e) => {
             setError(e);
@@ -49,7 +51,7 @@ export default function StreamingAnswer({ defaultQuery = "" }: Props) {
       <div className="field-row" style={{ marginBottom: 12 }}>
         <div className="field" style={{ flex: 1 }}>
           <textarea
-            placeholder="Posez votre question…"
+            placeholder={t("Posez votre question…")}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             rows={3}
@@ -58,10 +60,10 @@ export default function StreamingAnswer({ defaultQuery = "" }: Props) {
       </div>
       <div className="row" style={{ marginBottom: 12 }}>
         <button className="btn-primary" onClick={run} disabled={streaming || !query.trim()}>
-          {streaming ? "Réponse en cours…" : "Poser la question"}
+          {streaming ? t("Réponse en cours…") : t("Poser la question")}
         </button>
         <span className="muted" style={{ fontSize: 12 }}>
-          {retrieved ? `Réponse fondée sur ${plural(retrieved.concepts.length, "fiche")} et ${plural(retrieved.relations.length, "lien")}` : ""}
+          {retrieved ? t("Réponse fondée sur {sheets} et {links}", { sheets: sheets(retrieved.concepts.length), links: links(retrieved.relations.length) }) : ""}
         </span>
       </div>
       {error && <div className="error-banner">{error}</div>}

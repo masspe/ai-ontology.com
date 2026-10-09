@@ -11,6 +11,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { loadFinanceExample } from "../lib/example";
 import { MODELS, loadModel } from "../lib/models";
+import { t } from "../lib/i18n";
 
 interface Props {
   /** The schema has at least one concept type. */
@@ -56,12 +57,12 @@ export default function Onboarding({ hasModel, hasData, onLoaded }: Props) {
       n: 1,
       done: hasModel,
       open: true,
-      title: "Décrivez vos données",
-      text: "Quels types de fiches (Personne, Contrat, Équipement…) et quels liens entre elles ? Partez d'un modèle prêt à l'emploi, décrivez le vôtre, ou essayez l'exemple.",
+      title: t("Décrivez vos données"),
+      text: t("Quels types de fiches (Personne, Contrat, Équipement…) et quels liens entre elles ? Partez d'un modèle prêt à l'emploi, décrivez le vôtre, ou essayez l'exemple."),
       action: (
         <>
-          <select aria-label="Modèle prêt à l'emploi" value={model} onChange={(e) => void pickModel(e.target.value)}>
-            <option value="">Modèle prêt à l'emploi…</option>
+          <select aria-label={t("Modèle prêt à l'emploi")} value={model} onChange={(e) => void pickModel(e.target.value)}>
+            <option value="">{t("Modèle prêt à l'emploi…")}</option>
             {MODELS.map((m) => (
               <option key={m.key} value={m.key}>
                 {m.label}
@@ -69,7 +70,7 @@ export default function Onboarding({ hasModel, hasData, onLoaded }: Props) {
             ))}
           </select>
           <Link className="btn-primary" to="/builder">
-            Définir le modèle
+            {t("Définir le modèle")}
           </Link>
           <button
             className="btn-outline"
@@ -77,8 +78,8 @@ export default function Onboarding({ hasModel, hasData, onLoaded }: Props) {
             disabled={progress !== null}
           >
             {progress
-              ? `Chargement… ${progress[0]} / ${progress[1]}`
-              : "Essayer avec l'exemple finance (sociétés, contrats, factures)"}
+              ? t("Chargement… {done} / {total}", { done: progress[0], total: progress[1] })
+              : t("Essayer avec l'exemple finance (sociétés, contrats, factures)")}
           </button>
         </>
       ),
@@ -87,11 +88,11 @@ export default function Onboarding({ hasModel, hasData, onLoaded }: Props) {
       n: 2,
       done: hasData,
       open: hasModel,
-      title: "Déposez vos fichiers",
-      text: "Word, Excel, CSV, PDF ou texte : l'import propose des fiches et des relations que vous relisez avant de les ajouter.",
+      title: t("Déposez vos fichiers"),
+      text: t("Word, Excel, CSV, PDF ou texte : l'import propose des fiches et des relations que vous relisez avant de les ajouter."),
       action: (
         <Link className="btn-primary" to="/files">
-          Déposer des fichiers
+          {t("Déposer des fichiers")}
         </Link>
       ),
     },
@@ -99,20 +100,20 @@ export default function Onboarding({ hasModel, hasData, onLoaded }: Props) {
       n: 3,
       done: false,
       open: hasData,
-      title: "Posez une question",
-      text: "En langage courant. La réponse cite les fiches d'où elle vient.",
+      title: t("Posez une question"),
+      text: t("En langage courant. La réponse cite les fiches d'où elle vient."),
       action: (
         <Link className="btn-primary" to="/queries">
-          Poser une question
+          {t("Poser une question")}
         </Link>
       ),
     },
   ];
 
   return (
-    <section className="onboarding" aria-label="Premiers pas">
-      <h1 className="page-title">Bienvenue</h1>
-      <p className="page-subtitle">Trois étapes pour un premier graphe qui répond à vos questions.</p>
+    <section className="onboarding" aria-label={t("Premiers pas")}>
+      <h1 className="page-title">{t("Bienvenue")}</h1>
+      <p className="page-subtitle">{t("Trois étapes pour un premier graphe qui répond à vos questions.")}</p>
       {error && <div className="error-banner">{error}</div>}
       <ol className="onboarding-steps">
         {steps.map((s) => (
@@ -128,8 +129,8 @@ export default function Onboarding({ hasModel, hasData, onLoaded }: Props) {
               <h2>{s.title}</h2>
               <p className="muted">{s.text}</p>
               {s.open && !s.done && <div className="onboarding-actions">{s.action}</div>}
-              {s.done && <span className="badge badge-success">Fait</span>}
-              {!s.open && <span className="muted">Après l'étape précédente.</span>}
+              {s.done && <span className="badge badge-success">{t("Fait")}</span>}
+              {!s.open && <span className="muted">{t("Après l'étape précédente.")}</span>}
             </div>
           </li>
         ))}

@@ -78,7 +78,7 @@ docker run -d -p 5000:5000 -v ontology-data:/data ghcr.io/masspe/ai-ontology:0.1
 # open http://localhost:5000 — or, for the two-client layout with backups and memory limits:
 docker compose up -d          # pulls the same image; add --build to build it from this checkout
 # open http://localhost:5001 — create the first account (it becomes the administrator),
-# then click « Essayer avec l'exemple finance » (try the finance example) and ask a question.
+# then click "Try the finance example" on the home page and ask a question.
 ```
 
 The example (three contracts, invoices and line items in Excel, companies and
@@ -102,6 +102,7 @@ full developer setup is in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 | **Data model** | Sheet types with fields and parent types, link types with source and target types, generated from a description or chosen from ready-made models, editable with an impact preview before a change. |
 | **Explore** | A graph view with type filters and focus, a sheet page with links both ways and origin documents, saved questions, a home page with what to do next. |
 | **Ask** | Questions in plain language answered from the retrieved subgraph, with citations, streamed; lexical and vector retrieval fused per request, bounded graph expansion. |
+| **Languages** | Interface in English and French, chosen from the browser language and switchable from the top bar. |
 | **Rules and actions** | Rules and actions attached to sheet types, managed in the interface and through the API. |
 | **Accounts and keys** | Built-in sign-up and login (the first account is the administrator), named API keys for machine callers, audit log of every write. |
 | **API** | REST with an OpenAPI description served at `/docs`; Server-Sent Events for streamed answers; Prometheus metrics at `/metrics`. |

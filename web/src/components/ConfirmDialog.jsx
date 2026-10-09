@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Mediasoft-Commercial
 // Copyright (C) 2026 Mediasoft & Cie S.A.
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { t } from "../lib/i18n";
 
 const ConfirmCtx = createContext(null);
 
@@ -13,10 +14,10 @@ export function ConfirmProvider({ children }) {
       resolverRef.current = resolve;
       setState({
         opts: {
-          title: opts?.title ?? "Confirmer",
-          message: opts?.message ?? "Êtes-vous sûr ?",
-          confirmLabel: opts?.confirmLabel ?? "Confirmer",
-          cancelLabel: opts?.cancelLabel ?? "Annuler",
+          title: opts?.title ?? t("Confirmer"),
+          message: opts?.message ?? t("Êtes-vous sûr ?"),
+          confirmLabel: opts?.confirmLabel ?? t("Confirmer"),
+          cancelLabel: opts?.cancelLabel ?? t("Annuler"),
           danger: opts?.danger ?? false,
         },
       });

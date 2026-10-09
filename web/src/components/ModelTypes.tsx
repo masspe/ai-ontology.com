@@ -11,6 +11,7 @@ import Card from "./Card";
 // @ts-expect-error JSX module
 import { useConfirm } from "./ConfirmDialog.jsx";
 import { listConcepts, replaceOntology, type ConceptTypeDef, type Ontology, type RelationTypeDef } from "../api";
+import { t } from "../lib/i18n";
 
 interface Props {
   ontology: Ontology | null;
@@ -61,7 +62,7 @@ export default function ModelTypes({ ontology, onChanged }: Props) {
     let live = true;
     const names = countKey ? countKey.split("\n") : [];
     // Beyond the cap the count is unknown (`null`), not loading.
-    setCounts(Object.fromEntries(names.slice(COUNT_CAP).map((t) => [t, null])));
+    setCounts(Object.fromEntries(names.slice(COUNT_CAP).map((ty) => [ty, null])));
     names.slice(0, COUNT_CAP).forEach((type) =>
       listConcepts({ type, limit: 1, include_subtypes: false })
         .then((r) => r.total, () => null)
@@ -88,24 +89,24 @@ export default function ModelTypes({ ontology, onChanged }: Props) {
     }
   };
 
-  /** True when `t` is `anc` or one of its descendants (a parent there would make a cycle). */
-  const isUnder = (t: string, anc: string) => {
-    for (let p: string | null | undefined = t, i = 0; p && i < 64; p = ct[p]?.parent, i++) if (p === anc) return true;
+  /** True when `ty` is `anc` or one of its descendants (a parent there would make a cycle). */
+  const isUnder = (ty: string, anc: string) => {
+    for (let p: string | null | undefined = ty, i = 0; p && i < 64; p = ct[p]?.parent, i++) if (p === anc) return true;
     return false;
   };
 
-  const blockers = (t: string): string[] => {
+  const blockers = (ty: string): string[] => {
     const out: string[] = [];
-    const n = counts[t];
-    if (n) out.push(`${n} fiche(s) de ce type : supprimez-les ou changez leur type d'abord`);
-    const rels = relNames.filter((r) => rt[r].domain === t || rt[r].range === t);
-    if (rels.length) out.push(`utilisé par le(s) type(s) de lien : ${rels.join(", ")}`);
-    const kids = typeNames.filter((c) => ct[c].parent === t);
-    if (kids.length) out.push(`parent de : ${kids.join(", ")}`);
-    const rules = Object.values(ontology?.rule_types ?? {}).filter((r) => r.applies_to?.includes(t)).map((r) => r.name);
-    if (rules.length) out.push(`visé par le(s) type(s) de règle : ${rules.join(", ")}`);
-    const acts = Object.values(ontology?.action_types ?? {}).filter((a) => a.subject === t || a.object === t).map((a) => a.name);
-    if (acts.length) out.push(`visé par le(s) type(s) d'action : ${acts.join(", ")}`);
+    const n = counts[ty];
+    if (n) out.push(t("{n} fiche(s) de ce type : supprimez-les ou changez leur type d'abord", { n }));
+    const rels = relNames.filter((r) => rt[r].domain === ty || rt[r].range === ty);
+    if (rels.length) out.push(t("utilisé par le(s) type(s) de lien : {list}", { list: rels.join(", ") }));
+    const kids = typeNames.filter((c) => ct[c].parent === ty);
+    if (kids.length) out.push(t("parent de : {list}", { list: kids.join(", ") }));
+    const rules = Object.values(ontology?.rule_types ?? {}).filter((r) => r.applies_to?.includes(ty)).map((r) => r.name);
+    if (rules.length) out.push(t("visé par le(s) type(s) de règle : {list}", { list: rules.join(", ") }));
+    const acts = Object.values(ontology?.action_types ?? {}).filter((a) => a.subject === ty || a.object === ty).map((a) => a.name);
+    if (acts.length) out.push(t("visé par le(s) type(s) d'action : {list}", { list: acts.join(", ") }));
     return out;
   };
 
@@ -130,8 +131,8 @@ export default function ModelTypes({ ontology, onChanged }: Props) {
     if (!form) return;
     const name = form.editing ?? form.name.trim();
     const pool = form.kind === "concept" ? ct : rt;
-    if (!name) return setError("Le nom est obligatoire.");
-    if (!form.editing && name in pool) return setError(`Le nom « ${name} » est déjà pris.`);
+    if (!name) return setError(t("Le nom est obligatoire."));
+    if (!form.editing && name in pool) return setError(t("Le nom « {name} » est déjà pris.", { name }));
     const description = form.description.trim();
     if (form.kind === "concept") {
       const properties = form.properties.split(",").map((s) => s.trim()).filter(Boolean);
@@ -161,9 +162,9 @@ export default function ModelTypes({ ontology, onChanged }: Props) {
 
   const remove = async (kind: Kind, name: string) => {
     const ok = await confirm({
-      title: kind === "concept" ? "Supprimer ce type de fiche ?" : "Supprimer ce type de lien ?",
-      message: `« ${name} » sera retiré du modèle de données.`,
-      confirmLabel: "Supprimer",
+      title: kind === "concept" ? t("Supprimer ce type de fiche ?") : t("Supprimer ce type de lien ?"),
+      message: t("« {name} » sera retiré du modèle de données.", { name }),
+      confirmLabel: t("Supprimer"),
       danger: true,
     });
     if (!ok) return;
@@ -181,54 +182,56 @@ export default function ModelTypes({ ontology, onChanged }: Props) {
   };
 
   const set = (patch: Partial<Form>) => setForm((f) => f && { ...f, ...patch });
-  const typeOptions = (exclude?: (t: string) => boolean) =>
-    typeNames.filter((t) => !exclude?.(t)).map((t) => <option key={t} value={t}>{t}</option>);
+  const typeOptions = (exclude?: (ty: string) => boolean) =>
+    typeNames.filter((ty) => !exclude?.(ty)).map((ty) => <option key={ty} value={ty}>{ty}</option>);
   const field = { display: "flex", flexDirection: "column", gap: 4, fontSize: 12 } as const;
 
   const formView = form && (
     <div style={{ border: "1px solid var(--border, #e2e8f0)", borderRadius: 8, padding: 12, margin: "8px 0", display: "grid", gap: 8 }}>
       <strong style={{ fontSize: 13 }}>
         {form.editing
-          ? `Modifier ${form.kind === "concept" ? "le type de fiche" : "le type de lien"} « ${form.editing} »`
-          : form.kind === "concept" ? "Nouveau type de fiche" : "Nouveau type de lien"}
+          ? form.kind === "concept"
+            ? t("Modifier le type de fiche « {name} »", { name: form.editing })
+            : t("Modifier le type de lien « {name} »", { name: form.editing })
+          : form.kind === "concept" ? t("Nouveau type de fiche") : t("Nouveau type de lien")}
       </strong>
       <label style={field}>
-        Nom
+        {t("Nom")}
         <input value={form.name} readOnly={!!form.editing} onChange={(e) => set({ name: e.target.value })} />
         {form.editing && (
-          <span className="muted">Le nom ne peut pas être changé : les fiches et les liens existants y sont rattachés.</span>
+          <span className="muted">{t("Le nom ne peut pas être changé : les fiches et les liens existants y sont rattachés.")}</span>
         )}
       </label>
       <label style={field}>
-        Description
+        {t("Description")}
         <input value={form.description} onChange={(e) => set({ description: e.target.value })} />
       </label>
       {form.kind === "concept" ? (
         <>
           <label style={field}>
-            Parent
+            {t("Parent")}
             <select value={form.parent} onChange={(e) => set({ parent: e.target.value })}>
-              <option value="">(aucun)</option>
-              {typeOptions((t) => !!form.editing && isUnder(t, form.editing))}
+              <option value="">{t("(aucun)")}</option>
+              {typeOptions((ty) => !!form.editing && isUnder(ty, form.editing))}
             </select>
           </label>
           <label style={field}>
-            Propriétés (séparées par des virgules)
+            {t("Propriétés (séparées par des virgules)")}
             <input value={form.properties} onChange={(e) => set({ properties: e.target.value })} />
           </label>
         </>
       ) : (
         <>
           <label style={field}>
-            De (type de fiche)
+            {t("De (type de fiche)")}
             <select value={form.domain} onChange={(e) => set({ domain: e.target.value })}>{typeOptions()}</select>
           </label>
           <label style={field}>
-            Vers (type de fiche)
+            {t("Vers (type de fiche)")}
             <select value={form.range} onChange={(e) => set({ range: e.target.value })}>{typeOptions()}</select>
           </label>
           <label style={field}>
-            Cardinalité
+            {t("Cardinalité")}
             <select value={form.cardinality} onChange={(e) => set({ cardinality: e.target.value })}>
               {CARDINALITIES.map((c) => <option key={c} value={c}>{c}</option>)}
             </select>
@@ -236,36 +239,36 @@ export default function ModelTypes({ ontology, onChanged }: Props) {
         </>
       )}
       <div style={{ display: "flex", gap: 8 }}>
-        <button className="btn-primary" onClick={submit} disabled={busy}>Enregistrer</button>
-        <button className="btn-ghost" onClick={() => setForm(null)} disabled={busy}>Annuler</button>
+        <button className="btn-primary" onClick={submit} disabled={busy}>{t("Enregistrer")}</button>
+        <button className="btn-ghost" onClick={() => setForm(null)} disabled={busy}>{t("Annuler")}</button>
       </div>
     </div>
   );
 
   const actions = (kind: Kind, name: string, blocked: string[] = []) => (
     <td style={{ whiteSpace: "nowrap" }}>
-      <button className="btn-ghost" onClick={() => openForm(kind, name)} disabled={busy}>Modifier</button>{" "}
+      <button className="btn-ghost" onClick={() => openForm(kind, name)} disabled={busy}>{t("Modifier")}</button>{" "}
       <button
         className="btn-ghost"
         onClick={() => remove(kind, name)}
         disabled={busy || blocked.length > 0}
-        title={blocked.length ? `Suppression impossible : ${blocked.join(" · ")}` : undefined}
+        title={blocked.length ? t("Suppression impossible : {list}", { list: blocked.join(" · ") }) : undefined}
       >
-        Supprimer
+        {t("Supprimer")}
       </button>
     </td>
   );
 
-  const shownTypes = typeNames.filter((t) => matches(query, t, ct[t].description));
+  const shownTypes = typeNames.filter((ty) => matches(query, ty, ct[ty].description));
   const shownRels = relNames.filter((r) => matches(query, r, rt[r].description));
   const shown = tab === "concept" ? shownTypes : shownRels;
 
   return (
-    <Card title="Types du modèle" style={{ marginBottom: 16 }}>
+    <Card title={t("Types du modèle")} style={{ marginBottom: 16 }}>
       {error && <div className="error-banner" role="alert">{error}</div>}
       {typeNames.length + relNames.length === 0 && (
         <p className="muted">
-          Aucun type pour l'instant : installez un modèle prêt à l'emploi depuis l'accueil, ou générez-en un ci-dessous.
+          {t("Aucun type pour l'instant : installez un modèle prêt à l'emploi depuis l'accueil, ou générez-en un ci-dessous.")}
         </p>
       )}
       <div role="tablist" style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginBottom: 8 }}>
@@ -277,12 +280,12 @@ export default function ModelTypes({ ontology, onChanged }: Props) {
             className={tab === k ? "btn-primary" : "btn-outline"}
             onClick={() => { setTab(k); setForm(null); }}
           >
-            {k === "concept" ? `Types de fiche (${typeNames.length})` : `Types de lien (${relNames.length})`}
+            {k === "concept" ? t("Types de fiche ({n})", { n: typeNames.length }) : t("Types de lien ({n})", { n: relNames.length })}
           </button>
         ))}
         <input
           type="search"
-          placeholder="Rechercher par nom ou description"
+          placeholder={t("Rechercher par nom ou description")}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           style={{ flex: 1, minWidth: 160 }}
@@ -292,29 +295,29 @@ export default function ModelTypes({ ontology, onChanged }: Props) {
           onClick={() => openForm(tab, null)}
           disabled={busy || (tab === "relation" && typeNames.length === 0)}
         >
-          {tab === "concept" ? "Ajouter un type de fiche" : "Ajouter un type de lien"}
+          {tab === "concept" ? t("Ajouter un type de fiche") : t("Ajouter un type de lien")}
         </button>
       </div>
       {formView}
       {shown.length === 0 ? (
-        query && <p className="muted">Aucun type ne correspond à « {query} ».</p>
+        query && <p className="muted">{t("Aucun type ne correspond à « {query} ».", { query })}</p>
       ) : tab === "concept" ? (
         <table className="compact-table" style={{ width: "100%" }}>
           <thead>
-            <tr><th>Nom</th><th>Description</th><th>Parent</th><th>Propriétés</th><th>Fiches</th><th>Actions</th></tr>
+            <tr><th>{t("Nom")}</th><th>{t("Description")}</th><th>{t("Parent")}</th><th>{t("Propriétés")}</th><th>{t("Fiches")}</th><th>{t("Actions")}</th></tr>
           </thead>
           <tbody>
-            {shownTypes.map((t) => {
-              const props = propList(ct[t].properties);
-              const n = counts[t];
+            {shownTypes.map((ty) => {
+              const props = propList(ct[ty].properties);
+              const n = counts[ty];
               return (
-                <tr key={t}>
-                  <td><strong>{t}</strong></td>
-                  <td className="muted">{ct[t].description}</td>
-                  <td>{ct[t].parent ?? ""}</td>
+                <tr key={ty}>
+                  <td><strong>{ty}</strong></td>
+                  <td className="muted">{ct[ty].description}</td>
+                  <td>{ct[ty].parent ?? ""}</td>
                   <td title={props.join(", ")}>{props.length || ""}</td>
                   <td>{n === undefined ? "…" : n === null ? "?" : n}</td>
-                  {actions("concept", t, blockers(t))}
+                  {actions("concept", ty, blockers(ty))}
                 </tr>
               );
             })}
@@ -323,7 +326,7 @@ export default function ModelTypes({ ontology, onChanged }: Props) {
       ) : (
         <table className="compact-table" style={{ width: "100%" }}>
           <thead>
-            <tr><th>Nom</th><th>De → Vers</th><th>Cardinalité</th><th>Description</th><th>Actions</th></tr>
+            <tr><th>{t("Nom")}</th><th>{t("De → Vers")}</th><th>{t("Cardinalité")}</th><th>{t("Description")}</th><th>{t("Actions")}</th></tr>
           </thead>
           <tbody>
             {shownRels.map((r) => (

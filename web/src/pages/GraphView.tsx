@@ -25,6 +25,7 @@ import {
   type StatsHistory,
   type Subgraph,
 } from "../api";
+import { getLang, t } from "../lib/i18n";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -36,10 +37,10 @@ function fmtNum(n: number): string {
 
 function fmtAgo(ts: number): string {
   const diff = Math.max(0, Math.floor(Date.now() / 1000 - ts));
-  if (diff < 60) return `il y a ${diff} s`;
-  if (diff < 3600) return `il y a ${Math.floor(diff / 60)} min`;
-  if (diff < 86400) return `il y a ${Math.floor(diff / 3600)} h`;
-  return `il y a ${Math.floor(diff / 86400)} j`;
+  if (diff < 60) return t("il y a {n} s", { n: diff });
+  if (diff < 3600) return t("il y a {n} min", { n: Math.floor(diff / 60) });
+  if (diff < 86400) return t("il y a {n} h", { n: Math.floor(diff / 3600) });
+  return t("il y a {n} j", { n: Math.floor(diff / 86400) });
 }
 
 function xsdFor(value: unknown): string {
@@ -204,7 +205,7 @@ function Kpi({ label, value, deltaPct, deltaLabel, icon, tone, spark, sparkColor
         {deltaPct != null && (
           <div className={`stat-delta ${cls}`}>
             <span>{arrow} {Math.abs(deltaPct).toFixed(0)} %</span>
-            <span className="muted">{deltaLabel ?? "vs le mois dernier"}</span>
+            <span className="muted">{deltaLabel ?? t("vs le mois dernier")}</span>
           </div>
         )}
       </div>
@@ -237,11 +238,11 @@ function Toggle({ checked, onChange, label, icon }: { checked: boolean; onChange
 // Graph View page
 // ---------------------------------------------------------------------------
 
-const LAYOUTS: { value: LayoutDir; label: string }[] = [
-  { value: "LR", label: "Gauche → Droite" },
-  { value: "TB", label: "Haut → Bas" },
-  { value: "RL", label: "Droite → Gauche" },
-  { value: "BT", label: "Bas → Haut" },
+const layouts = (): { value: LayoutDir; label: string }[] => [
+  { value: "LR", label: t("Gauche → Droite") },
+  { value: "TB", label: t("Haut → Bas") },
+  { value: "RL", label: t("Droite → Gauche") },
+  { value: "BT", label: t("Bas → Haut") },
 ];
 
 type InspectorTab = "inspector" | "rules" | "actions";
@@ -370,7 +371,7 @@ export default function GraphView() {
     const shown = within.length > 0 ? within : all;
     return {
       options: shown.map((r) => ({ value: r.name, label: r.name, hint: `${r.domain} → ${r.range}` })),
-      note: within.length === 0 && all.length > 0 ? "Aucun type de lien entre les types de fiche choisis : tous sont listés." : undefined,
+      note: within.length === 0 && all.length > 0 ? t("Aucun type de lien entre les types de fiche choisis : tous sont listés.") : undefined,
     };
   }, [ontology, nodeTypes]);
   // Types linked to two different chosen types: the missing middle of a path.
@@ -484,11 +485,11 @@ export default function GraphView() {
     const cts = Object.keys(ontology.concept_types);
     const rts = Object.values(ontology.relation_types);
     for (const r of rts.slice(0, 3)) {
-      out.push(`Trouver tous les ${r.domain} qui ${r.name.replace(/([A-Z])/g, " $1").trim().toLowerCase()} un ${r.range} donné`);
+      out.push(t("Trouver tous les {domain} qui {rel} un {range} donné", { domain: r.domain, rel: r.name.replace(/([A-Z])/g, " $1").trim().toLowerCase(), range: r.range }));
     }
-    if (cts.length >= 2) out.push(`Afficher tous les ${cts[0]} créés par un ${cts[1]}`);
-    if (cts.length >= 2) out.push(`Lister tous les ${cts[0]} liés à ${cts[1]}`);
-    if (cts.length >= 1) out.push(`Trouver les ${cts[cts.length - 1]} récents`);
+    if (cts.length >= 2) out.push(t("Afficher tous les {a} créés par un {b}", { a: cts[0]!, b: cts[1]! }));
+    if (cts.length >= 2) out.push(t("Lister tous les {a} liés à {b}", { a: cts[0]!, b: cts[1]! }));
+    if (cts.length >= 1) out.push(t("Trouver les {a} récents", { a: cts[cts.length - 1]! }));
     return out.slice(0, 5);
   }, [ontology]);
 
@@ -560,8 +561,8 @@ export default function GraphView() {
     <>
       <div className="page-header">
         <div>
-          <h1 className="page-title">Graphe</h1>
-          <p className="page-subtitle">Les fiches et leurs liens, autour d'un point de départ, filtrés par type.</p>
+          <h1 className="page-title">{t("Graphe")}</h1>
+          <p className="page-subtitle">{t("Les fiches et leurs liens, autour d'un point de départ, filtrés par type.")}</p>
         </div>
       </div>
 
@@ -570,7 +571,7 @@ export default function GraphView() {
       {/* Row 1 — KPI tiles */}
       <div className="dash-row dash-row-stats">
         <Kpi
-          label="Fiches"
+          label={t("Fiches")}
           value={fmtNum(nodesCount)}
           icon={Icon.layers}
           tone="blue"
@@ -578,7 +579,7 @@ export default function GraphView() {
           sparkColor="#2563eb"
         />
         <Kpi
-          label="Liens"
+          label={t("Liens")}
           value={fmtNum(relsCount)}
           icon={Icon.share}
           tone="violet"
@@ -586,7 +587,7 @@ export default function GraphView() {
           sparkColor="#7c3aed"
         />
         <Kpi
-          label="Filtres actifs"
+          label={t("Filtres actifs")}
           value={fmtNum(activeFiltersCount)}
           icon={Icon.funnel}
           tone="amber"
@@ -594,7 +595,7 @@ export default function GraphView() {
           sparkColor="#d97706"
         />
         <Kpi
-          label="Santé du graphe"
+          label={t("Santé du graphe")}
           value={`${graphHealth}%`}
           icon={Icon.shield}
           tone="green"
@@ -610,8 +611,8 @@ export default function GraphView() {
           className="gv-canvas-card"
           title={
             <span className="gv-canvas-title">
-              <span>Graphe de l'ontologie</span>
-              <span className="badge-live"><span className="dot" /> En direct</span>
+              <span>{t("Graphe de l'ontologie")}</span>
+              <span className="badge-live"><span className="dot" /> {t("En direct")}</span>
             </span>
           }
           actions={
@@ -619,12 +620,12 @@ export default function GraphView() {
               <div className="gv-toolbar-group gv-layout-picker">
                 <button className="gv-tool-btn" onClick={() => setLayoutOpen((v) => !v)}>
                   <span className="gv-tool-icon">{Icon.layout}</span>
-                  <span>Disposition</span>
+                  <span>{t("Disposition")}</span>
                   <span className="gv-caret">▾</span>
                 </button>
                 {layoutOpen && (
                   <ul className="gv-layout-menu" onMouseLeave={() => setLayoutOpen(false)}>
-                    {LAYOUTS.map((l) => (
+                    {layouts().map((l) => (
                       <li key={l.value}>
                         <button
                           className={`gv-layout-item${layoutDir === l.value ? " active" : ""}`}
@@ -637,20 +638,20 @@ export default function GraphView() {
                   </ul>
                 )}
               </div>
-              <button className="gv-tool-btn icon" onClick={() => canvasRef.current?.zoomIn()} aria-label="Zoom avant">{Icon.plus}</button>
-              <button className="gv-tool-btn icon" onClick={() => canvasRef.current?.zoomOut()} aria-label="Zoom arrière">{Icon.minus}</button>
-              <button className="gv-tool-btn icon" onClick={() => canvasRef.current?.fit()} aria-label="Ajuster la vue">{Icon.fit}</button>
-              <button className="gv-tool-btn icon" onClick={onFullscreen} aria-label="Plein écran">{Icon.expand}</button>
-              <button className="gv-tool-btn icon" onClick={() => setHighlightPaths((v) => !v)} aria-label="Basculer le surlignage des chemins">{Icon.funnel}</button>
-              <button className="gv-tool-btn icon" onClick={() => loadSubgraph()} aria-label="Actualiser" disabled={busy}>{Icon.refresh}</button>
+              <button className="gv-tool-btn icon" onClick={() => canvasRef.current?.zoomIn()} aria-label={t("Zoom avant")}>{Icon.plus}</button>
+              <button className="gv-tool-btn icon" onClick={() => canvasRef.current?.zoomOut()} aria-label={t("Zoom arrière")}>{Icon.minus}</button>
+              <button className="gv-tool-btn icon" onClick={() => canvasRef.current?.fit()} aria-label={t("Ajuster la vue")}>{Icon.fit}</button>
+              <button className="gv-tool-btn icon" onClick={onFullscreen} aria-label={t("Plein écran")}>{Icon.expand}</button>
+              <button className="gv-tool-btn icon" onClick={() => setHighlightPaths((v) => !v)} aria-label={t("Basculer le surlignage des chemins")}>{Icon.funnel}</button>
+              <button className="gv-tool-btn icon" onClick={() => loadSubgraph()} aria-label={t("Actualiser")} disabled={busy}>{Icon.refresh}</button>
             </div>
           }
         >
-          <div className="gv-filterbar" role="group" aria-label="Filtres et réglages">
+          <div className="gv-filterbar" role="group" aria-label={t("Filtres et réglages")}>
             <div className="files-search gv-fb-search">
               <span className="files-search-icon">{Icon.search}</span>
               <input
-                placeholder={large ? "Rechercher une fiche… (Entrée)" : "Rechercher une fiche…"}
+                placeholder={large ? t("Rechercher une fiche… (Entrée)") : t("Rechercher une fiche…")}
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 onKeyDown={(e) => {
@@ -660,22 +661,22 @@ export default function GraphView() {
               />
             </div>
             <MultiSelect
-              label="Types de fiche"
+              label={t("Types de fiche")}
               options={nodeOptions}
               selected={nodeTypes}
               onChange={chooseNodeTypes}
-              allLabel={large ? "au moins un sur un grand graphe" : "Tous les types"}
+              allLabel={large ? t("au moins un sur un grand graphe") : t("Tous les types")}
             />
             <MultiSelect
-              label="Types de lien"
+              label={t("Types de lien")}
               options={relCross.options}
               selected={relTypes}
               onChange={setRelTypes}
-              allLabel="Tous les liens"
+              allLabel={t("Tous les liens")}
               note={relCross.note}
             />
             <label className="gv-fb-depth">
-              <span className="gv-filter-label">Profondeur</span>
+              <span className="gv-filter-label">{t("Profondeur")}</span>
               <input
                 type="range"
                 min={1}
@@ -685,37 +686,37 @@ export default function GraphView() {
                 onChange={(e) => setDepth(Number(e.target.value))}
                 className="gv-slider"
               />
-              <span className="muted gv-depth-value">{depth} niveau{depth > 1 ? "x" : ""}</span>
+              <span className="muted gv-depth-value">{depth > 1 ? t("{n} niveaux", { n: depth }) : t("{n} niveau", { n: depth })}</span>
             </label>
             <div className="gv-toggles">
-              <Toggle checked={showLabels} onChange={setShowLabels} label="Afficher les libellés" icon={Icon.funnel} />
-              <Toggle checked={clusterView} onChange={setClusterView} label="Vue groupée" icon={Icon.layers} />
-              <Toggle checked={highlightPaths} onChange={setHighlightPaths} label="Surligner les chemins" icon={Icon.share} />
-              <Toggle checked={showConstraints} onChange={setShowConstraints} label="Afficher les contraintes" icon={Icon.shield} />
+              <Toggle checked={showLabels} onChange={setShowLabels} label={t("Afficher les libellés")} icon={Icon.funnel} />
+              <Toggle checked={clusterView} onChange={setClusterView} label={t("Vue groupée")} icon={Icon.layers} />
+              <Toggle checked={highlightPaths} onChange={setHighlightPaths} label={t("Surligner les chemins")} icon={Icon.share} />
+              <Toggle checked={showConstraints} onChange={setShowConstraints} label={t("Afficher les contraintes")} icon={Icon.shield} />
             </div>
           </div>
 
           <div id="gv-canvas-wrap" className="gv-canvas">
             {large && !canLoad && (
               <div className="empty" data-testid="select-first">
-                {total!.toLocaleString("fr-CH")} fiches : trop pour tout afficher d'un coup. Choisissez un ou
-                plusieurs types de fiche ci-dessus, ou cherchez une fiche ; le graphe montre alors jusqu'à{" "}
-                {SUBGRAPH_LIMIT} fiches autour de la sélection.
+                {t("{total} fiches : trop pour tout afficher d'un coup. Choisissez un ou plusieurs types de fiche ci-dessus, ou cherchez une fiche ; le graphe montre alors jusqu'à {max} fiches autour de la sélection.", {
+                  total: total!.toLocaleString(getLang() === "fr" ? "fr-CH" : "en-GB"),
+                  max: SUBGRAPH_LIMIT,
+                })}
               </div>
             )}
             {total === 0 && subgraph && subgraph.concepts.length === 0 && conceptTypes.length > 0 && !search.trim() && (
               <div className="empty" data-testid="model-only">
-                Le modèle est en place ({conceptTypes.length} type(s) de fiche) mais il n'y a pas encore de fiche à
-                afficher : le graphe se remplit avec vos fichiers.
+                {t("Le modèle est en place ({n} type(s) de fiche) mais il n'y a pas encore de fiche à afficher : le graphe se remplit avec vos fichiers.", { n: conceptTypes.length })}
               </div>
             )}
             {/* Only direct links between the chosen types are drawn: say so
                 when that leaves none, and name the types in the middle. */}
             {nodeTypes.length > 0 && relTypes.length === 0 && !search.trim() && filteredSubgraph && filteredSubgraph.concepts.length >= 2 && filteredSubgraph.relations.length === 0 && (
               <div className="gv-canvas-note" data-testid="no-direct-link" role="status">
-                Aucun lien direct entre les types choisis. Ajoutez un type intermédiaire
-                {intermediates.length > 0 ? ` (par exemple : ${intermediates.join(", ")})` : ""} pour voir les liens
-                qui les relient.
+                {intermediates.length > 0
+                  ? t("Aucun lien direct entre les types choisis. Ajoutez un type intermédiaire (par exemple : {list}) pour voir les liens qui les relient.", { list: intermediates.join(", ") })
+                  : t("Aucun lien direct entre les types choisis. Ajoutez un type intermédiaire pour voir les liens qui les relient.")}
               </div>
             )}
             <GraphCanvas
@@ -732,11 +733,11 @@ export default function GraphView() {
             />
           </div>
           <div className="gv-legend">
-            <span className="gv-legend-item"><span className="dot" style={{ background: "#2563eb" }} /> Classe</span>
-            <span className="gv-legend-item"><span className="dot" style={{ background: "#16a34a" }} /> Entité</span>
-            <span className="gv-legend-item"><span className="dot" style={{ background: "#7c3aed" }} /> Lien</span>
-            <span className="gv-legend-item"><span className="dot" style={{ background: "#d97706" }} /> Type de donnée</span>
-            <span className="gv-legend-item"><span className="dot" style={{ background: "#dc2626" }} /> Contrainte</span>
+            <span className="gv-legend-item"><span className="dot" style={{ background: "#2563eb" }} /> {t("Classe")}</span>
+            <span className="gv-legend-item"><span className="dot" style={{ background: "#16a34a" }} /> {t("Entité")}</span>
+            <span className="gv-legend-item"><span className="dot" style={{ background: "#7c3aed" }} /> {t("Lien")}</span>
+            <span className="gv-legend-item"><span className="dot" style={{ background: "#d97706" }} /> {t("Type de donnée")}</span>
+            <span className="gv-legend-item"><span className="dot" style={{ background: "#dc2626" }} /> {t("Contrainte")}</span>
           </div>
         </Card>
 
@@ -745,23 +746,23 @@ export default function GraphView() {
           className="gv-inspector-card"
           title={
             <span className="gv-inspector-head">
-              <span>Inspecteur de fiche</span>
+              <span>{t("Inspecteur de fiche")}</span>
             </span>
           }
           actions={
             <span className="gv-inspector-nav">
-              <button className="icon-btn" aria-label="Précédent" onClick={() => setCollapseInspector(true)}>{Icon.chevL}</button>
-              <button className="icon-btn" aria-label="Suivant" onClick={() => setCollapseInspector(false)}>{Icon.chevR}</button>
+              <button className="icon-btn" aria-label={t("Précédent")} onClick={() => setCollapseInspector(true)}>{Icon.chevL}</button>
+              <button className="icon-btn" aria-label={t("Suivant")} onClick={() => setCollapseInspector(false)}>{Icon.chevR}</button>
             </span>
           }
         >
           <div className="gv-tabs">
-            <button className={`gv-tab${tab === "inspector" ? " active" : ""}`} onClick={() => setTab("inspector")}>Inspecteur</button>
+            <button className={`gv-tab${tab === "inspector" ? " active" : ""}`} onClick={() => setTab("inspector")}>{t("Inspecteur")}</button>
             <button className={`gv-tab${tab === "rules" ? " active" : ""}`} onClick={() => setTab("rules")}>
-              Règles <span className="gv-tab-count">{rules.length}</span>
+              {t("Règles")} <span className="gv-tab-count">{rules.length}</span>
             </button>
             <button className={`gv-tab${tab === "actions" ? " active" : ""}`} onClick={() => setTab("actions")}>
-              Actions <span className="gv-tab-count">{actions.length}</span>
+              {t("Actions")} <span className="gv-tab-count">{actions.length}</span>
             </button>
           </div>
 
@@ -775,26 +776,26 @@ export default function GraphView() {
                   <span className="gv-inspector-name" style={{ color: conceptTypeColors[selectedConcept.concept_type] ?? "var(--accent)" }}>
                     {selectedConcept.name}
                   </span>
-                  <span className="badge badge-accent">Classe</span>
+                  <span className="badge badge-accent">{t("Classe")}</span>
                 </div>
                 <div className="gv-inspector-uri">
-                  <Link to={`/concepts/${selectedConcept.id}`}>Ouvrir la fiche</Link>
+                  <Link to={`/concepts/${selectedConcept.id}`}>{t("Ouvrir la fiche")}</Link>
                 </div>
                 {(selectedConcept.description || selectedTypeDef?.description) && (
                   <p className="gv-inspector-desc">{selectedConcept.description || selectedTypeDef?.description}</p>
                 )}
 
-                <h4 className="gv-section-h">Aperçu</h4>
+                <h4 className="gv-section-h">{t("Aperçu")}</h4>
                 <ul className="gv-overview">
-                  <li><span className="muted">Type de fiche</span><span>{selectedConcept.concept_type}<span className="gv-chev">{Icon.chevR}</span></span></li>
-                  <li><span className="muted">Liens au total</span><span>{selectedStats.total}<span className="gv-chev">{Icon.chevR}</span></span></li>
-                  <li><span className="muted">Liens entrants</span><span>{selectedStats.incoming}<span className="gv-chev">{Icon.chevR}</span></span></li>
-                  <li><span className="muted">Liens sortants</span><span>{selectedStats.outgoing}<span className="gv-chev">{Icon.chevR}</span></span></li>
+                  <li><span className="muted">{t("Type de fiche")}</span><span>{selectedConcept.concept_type}<span className="gv-chev">{Icon.chevR}</span></span></li>
+                  <li><span className="muted">{t("Liens au total")}</span><span>{selectedStats.total}<span className="gv-chev">{Icon.chevR}</span></span></li>
+                  <li><span className="muted">{t("Liens entrants")}</span><span>{selectedStats.incoming}<span className="gv-chev">{Icon.chevR}</span></span></li>
+                  <li><span className="muted">{t("Liens sortants")}</span><span>{selectedStats.outgoing}<span className="gv-chev">{Icon.chevR}</span></span></li>
                 </ul>
 
-                <h4 className="gv-section-h">Propriétés ({selectedProps.length})</h4>
+                <h4 className="gv-section-h">{t("Propriétés ({n})", { n: selectedProps.length })}</h4>
                 {selectedProps.length === 0 ? (
-                  <div className="muted gv-empty-mini">Aucune propriété déclarée.</div>
+                  <div className="muted gv-empty-mini">{t("Aucune propriété déclarée.")}</div>
                 ) : (
                   <ul className="gv-props">
                     {selectedProps.map((p) => (
@@ -808,35 +809,35 @@ export default function GraphView() {
 
                 <div className="gv-inspector-actions">
                   <button className="btn-ghost-outline" onClick={onFocusNode}>
-                    <span>{Icon.focus}</span> Centrer la fiche
+                    <span>{Icon.focus}</span> {t("Centrer la fiche")}
                   </button>
                   <button className="btn-ghost-outline" onClick={onExpandNeighbors}>
-                    <span>{Icon.share}</span> Étendre le voisinage
+                    <span>{Icon.share}</span> {t("Étendre le voisinage")}
                   </button>
                   <button className="btn-primary gv-run" onClick={onRunQuery}>
-                    <span>{Icon.play}</span> Lancer la requête
+                    <span>{Icon.play}</span> {t("Lancer la requête")}
                   </button>
                 </div>
               </div>
             ) : (
-              <div className="empty gv-empty">Cliquez sur une fiche du graphe pour voir son type, ses propriétés et ses liens.</div>
+              <div className="empty gv-empty">{t("Cliquez sur une fiche du graphe pour voir son type, ses propriétés et ses liens.")}</div>
             )
           )}
 
           {tab === "rules" && (
             rules.length === 0 ? (
-              <div className="empty gv-empty">Aucune règle déclarée dans cette ontologie.</div>
+              <div className="empty gv-empty">{t("Aucune règle déclarée dans cette ontologie.")}</div>
             ) : (
               <ul className="gv-rule-list">
                 {rules.map((r) => (
                   <li key={r.name} className="gv-rule-card">
                     <div className="gv-rule-head">
                       <span className="gv-rule-name">{r.name}</span>
-                      {r.strict ? <span className="badge badge-danger">stricte</span> : <span className="badge badge-accent">indicative</span>}
+                      {r.strict ? <span className="badge badge-danger">{t("stricte")}</span> : <span className="badge badge-accent">{t("indicative")}</span>}
                     </div>
                     {r.description && <p className="muted gv-rule-desc">{r.description}</p>}
-                    {r.when && <div className="gv-rule-row"><span className="gv-rule-k">SI</span><span className="gv-rule-v">{r.when}</span></div>}
-                    {r.then && <div className="gv-rule-row"><span className="gv-rule-k">ALORS</span><span className="gv-rule-v">{r.then}</span></div>}
+                    {r.when && <div className="gv-rule-row"><span className="gv-rule-k">{t("SI")}</span><span className="gv-rule-v">{r.when}</span></div>}
+                    {r.then && <div className="gv-rule-row"><span className="gv-rule-k">{t("ALORS")}</span><span className="gv-rule-v">{r.then}</span></div>}
                     {r.applies_to && r.applies_to.length > 0 && (
                       <div className="gv-rule-tags">
                         {r.applies_to.map((t) => <span key={t} className="badge">{t}</span>)}
@@ -850,31 +851,31 @@ export default function GraphView() {
 
           {tab === "actions" && (
             actions.length === 0 ? (
-              <div className="empty gv-empty">Aucune action déclarée dans cette ontologie.</div>
+              <div className="empty gv-empty">{t("Aucune action déclarée dans cette ontologie.")}</div>
             ) : (
               <ul className="gv-rule-list">
                 {actions.map((a) => (
                   <li key={a.name} className="gv-rule-card">
                     <div className="gv-rule-head">
                       <span className="gv-rule-name">{a.name}</span>
-                      <span className="badge badge-success">action</span>
+                      <span className="badge badge-success">{t("action")}</span>
                     </div>
                     {a.description && <p className="muted gv-rule-desc">{a.description}</p>}
                     <div className="gv-rule-row">
-                      <span className="gv-rule-k">SUJET</span>
+                      <span className="gv-rule-k">{t("SUJET")}</span>
                       <span className="gv-rule-v">
                         {a.subject}{a.object ? <> → <strong>{a.object}</strong></> : null}
                       </span>
                     </div>
                     {a.parameters && a.parameters.length > 0 && (
                       <div className="gv-rule-row">
-                        <span className="gv-rule-k">PARAMÈTRES</span>
+                        <span className="gv-rule-k">{t("PARAMÈTRES")}</span>
                         <span className="gv-rule-tags">
                           {a.parameters.map((p) => <span key={p} className="badge">{p}</span>)}
                         </span>
                       </div>
                     )}
-                    {a.effect && <div className="gv-rule-row"><span className="gv-rule-k">EFFET</span><span className="gv-rule-v">{a.effect}</span></div>}
+                    {a.effect && <div className="gv-rule-row"><span className="gv-rule-k">{t("EFFET")}</span><span className="gv-rule-v">{a.effect}</span></div>}
                   </li>
                 ))}
               </ul>
@@ -886,11 +887,11 @@ export default function GraphView() {
       {/* Row 3 — Recent Paths / Activity / Suggestions */}
       <div className="dash-row dash-row-three">
         <Card
-          title="Chemins récents / vues enregistrées"
-          actions={<button className="btn-ghost-link" onClick={() => navigate("/queries")}>Tout voir</button>}
+          title={t("Chemins récents / vues enregistrées")}
+          actions={<button className="btn-ghost-link" onClick={() => navigate("/queries")}>{t("Tout voir")}</button>}
         >
           {recentPaths.length === 0 ? (
-            <div className="empty gv-empty">Aucune vue enregistrée pour l'instant.</div>
+            <div className="empty gv-empty">{t("Aucune vue enregistrée pour l'instant.")}</div>
           ) : (
             <ul className="gv-path-list">
               {recentPaths.map((p) => (
@@ -905,11 +906,11 @@ export default function GraphView() {
         </Card>
 
         <Card
-          title="Activité du graphe"
-          actions={<button className="btn-ghost-link" onClick={() => navigate("/files")}>Tout voir</button>}
+          title={t("Activité du graphe")}
+          actions={<button className="btn-ghost-link" onClick={() => navigate("/files")}>{t("Tout voir")}</button>}
         >
           {activity.length === 0 ? (
-            <div className="empty gv-empty">Aucune activité récente.</div>
+            <div className="empty gv-empty">{t("Aucune activité récente.")}</div>
           ) : (
             <ul className="gv-activity">
               {activity.map((f) => {
@@ -920,10 +921,10 @@ export default function GraphView() {
                   : s === "analyzed" ? "info"
                   : "warn";
                 const verb =
-                  tone === "ok" ? "Import terminé pour"
-                  : tone === "err" ? "Validation échouée sur"
-                  : tone === "info" ? "Fiche mise à jour depuis"
-                  : "Ingestion en cours pour";
+                  tone === "ok" ? t("Import terminé pour")
+                  : tone === "err" ? t("Validation échouée sur")
+                  : tone === "info" ? t("Fiche mise à jour depuis")
+                  : t("Ingestion en cours pour");
                 return (
                   <li key={f.id} className="gv-activity-item">
                     <span className={`gv-act-ic gv-act-${tone}`}>{Icon.activity}</span>
@@ -937,11 +938,11 @@ export default function GraphView() {
         </Card>
 
         <Card
-          title="Suggestions de requêtes"
-          actions={<button className="btn-ghost-link" onClick={() => navigate("/queries")}>Tout voir</button>}
+          title={t("Suggestions de requêtes")}
+          actions={<button className="btn-ghost-link" onClick={() => navigate("/queries")}>{t("Tout voir")}</button>}
         >
           {querySuggestions.length === 0 ? (
-            <div className="empty gv-empty">Aucune suggestion disponible.</div>
+            <div className="empty gv-empty">{t("Aucune suggestion disponible.")}</div>
           ) : (
             <ul className="gv-suggestions">
               {querySuggestions.map((q, i) => (

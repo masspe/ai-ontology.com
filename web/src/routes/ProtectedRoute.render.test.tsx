@@ -2,7 +2,7 @@
 // Copyright (C) 2026 Mediasoft & Cie S.A.
 //
 // Rendering tests of the route guard: anonymous → redirect to
-// `/login?next=<path+search>`; token present → "Loading…" until `me()`
+// `/login?next=<path+search>`; token present → "Chargement…" until `me()`
 // settles, then the children (user) or the redirect (no user / error).
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -47,17 +47,17 @@ describe("ProtectedRoute", () => {
     mount("/files?tab=2");
     expect(screen.getByTestId("location")).toHaveTextContent("/login?next=%2Ffiles%3Ftab%3D2");
     expect(screen.queryByTestId("secret")).not.toBeInTheDocument();
-    expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
+    expect(screen.queryByText("Chargement…")).not.toBeInTheDocument();
     expect(meMock).not.toHaveBeenCalled();
   });
 
-  it("with a stored token: shows Loading…, then renders the children once me() returns a user", async () => {
+  it("with a stored token: shows Chargement…, then renders the children once me() returns a user", async () => {
     window.localStorage.setItem("msBE.token", "jwt");
     mount("/files");
-    expect(screen.getByText("Loading…")).toBeInTheDocument();
+    expect(screen.getByText("Chargement…")).toBeInTheDocument();
     expect(screen.queryByTestId("secret")).not.toBeInTheDocument();
     expect(await screen.findByTestId("secret")).toHaveTextContent("secret content");
-    expect(screen.queryByText("Loading…")).not.toBeInTheDocument();
+    expect(screen.queryByText("Chargement…")).not.toBeInTheDocument();
     expect(meMock).toHaveBeenCalledTimes(1);
   });
 
@@ -81,7 +81,7 @@ describe("ProtectedRoute", () => {
     let resolve!: (v: unknown) => void;
     meMock.mockImplementation(() => new Promise((r) => (resolve = r)));
     const { unmount } = mount("/files");
-    expect(screen.getByText("Loading…")).toBeInTheDocument();
+    expect(screen.getByText("Chargement…")).toBeInTheDocument();
     unmount();
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     resolve({ id: 1 });
