@@ -5,10 +5,10 @@ binary, a server you run, backup by copying files. It assumes Docker on a Linux 
 
 ## 1. What the image contains
 
-A single image, `Dockerfile` at the repository root, four stages: build of the
-web interface (Node), Rust dependency cache, compilation of the `ontology`
-binary, and a minimal final image (distroless) with the binary and the
-interface. At startup the binary does everything on port 5000:
+A single image, `Dockerfile` at the repository root, five stages (web build, dependency recipe, dependency cache, compilation,
+runtime): build of the web interface (Node), the Rust dependency recipe and
+cache, compilation of the `ontology` binary, and a minimal final image
+(distroless) with the binary and the interface. At startup the binary does everything on port 5000:
 
 - the API (`/concepts`, `/retrieve`, `/metrics`, …);
 - the web interface, served for every address that is not an API route
@@ -25,7 +25,7 @@ its own data volume, its own accounts, its own memory limit.
 
 ```sh
 docker compose up -d --build          # two example clients: acme, globex
-open http://localhost:5001            # acme
+open http://localhost:5001 in a browser (acme; globex is on 5002)
 ```
 
 `compose.yaml` shows the model: one service per client, one volume per
@@ -60,7 +60,7 @@ TOKEN=$(curl -s -X POST http://localhost:5001/auth/login \
   -d '{"email":"admin@acme.ch","password":"…"}' | python3 -c 'import json,sys;print(json.load(sys.stdin)["token"])')
 curl -s -X POST http://localhost:5001/auth/users -H "authorization: Bearer $TOKEN" \
   -H 'content-type: application/json' \
-  -d '{"email":"jean@acme.ch","password":"Mot2Passe!","name":"Jean"}'
+  -d '{"email":"jean@acme.ch","password":"Passw0rd-example!","name":"Jean"}'
 ```
 
 Rules: valid address, password of 8 characters and three classes (uppercase,
@@ -82,8 +82,8 @@ key** rather than lending their own account: `POST /auth/keys {"name":"ERP"}`
 returns the secret once (`ok_…`); `GET /auth/keys` lists the keys (name,
 prefix, creation, by whom), `DELETE /auth/keys/<id>` revokes immediately. The
 key is presented like a token (`Authorization: Bearer ok_…`); it opens the
-API, but not account management, nor reset, nor backup (a logged-in
-administrator only). The `users.json` file keeps only a fingerprint.
+API, but not account management, reset or backup, which need a signed-in
+user. The `users.json` file keeps only a fingerprint.
 
 Every successful write (read-only POSTs, such as search, question and
 analysis, excluded) is recorded in `/data/audit.jsonl` (one JSON line: time,

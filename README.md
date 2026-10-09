@@ -53,16 +53,17 @@ search finds documents, not facts. Both leave the knowledge where it was:
 unstructured. `ai-ontology` takes a different route:
 
 1. **Describe your data** in everyday words, or pick a ready-made model
-   (contracts and invoices, people and organisations, equipment and
-   procedures). The model is a small ontology: sheet types, their fields,
+   (construction sites and subcontractors, contracts and invoices, people
+   and organisations). The model is a small ontology: sheet types, their fields,
    the link types between them.
 2. **Drop your files.** Word, Excel, PDF, CSV, JSONL, plain text. The import
    proposes sheets and links that match the model; you review, correct and
    confirm. Nothing enters the graph unreviewed unless you say so.
 3. **Ask.** A question is answered from the sheets and links retrieved for
    it, by the language model of your choice, and comes back with the list
-   of sheets it used. The model is held to the graph: it cannot cite a sheet
-   that does not exist.
+   of sheets it used. Citations are checked against the retrieved sheets: a
+   cited id that is not one of them is dropped, after one retry with a
+   stricter prompt.
 
 The result is a knowledge base that stays structured, that people can browse
 as a graph or sheet by sheet, and that an application can query through the
@@ -78,19 +79,22 @@ docker compose up -d --build
 
 The example (three contracts, invoices and line items in Excel, companies and
 people) and the questions it answers are in [`examples/finance`](examples/finance/README.md).
-To answer questions with a real language model, open **Settings** and enter
-a key for Anthropic, OpenAI, DeepSeek or Infomaniak; without one, an offline
-echo model shows the retrieved context instead of an answer.
+Compose starts two example clients, acme on port 5001 and globex on 5002,
+each limited to 4 GB. To answer questions with a real language model, open
+**Réglages** (Settings) and enter a key in the card **Configuration
+<provider>** for Anthropic, OpenAI, DeepSeek or Infomaniak; without one, an
+offline echo model shows the retrieved context instead of an answer.
 
-Without Docker: `cargo build --release`, then `./target/release/ontology --data ./data serve --web web/dist --login`
-after `cd web && npm ci && npm run build`. The full developer setup is in
-[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
+Without Docker: `cd web && npm ci && npm run build && cd ..`, then
+`cargo build --release`, then
+`./target/release/ontology --data ./data serve --web web/dist --login`. The
+full developer setup is in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
 
 ## What you get
 
 | | |
 |---|---|
-| **Import** | Word, Excel, PDF (with OCR for scans), CSV, JSONL, triples, plain text; an import assistant that proposes sheets and links for review before anything is written. |
+| **Import** | Word, Excel, PDF, scanned images, CSV, JSONL, triples, plain text; an import assistant that proposes sheets and links for review before anything is written. PDFs and scanned images are read in the browser (pdf.js, tesseract.js OCR); Word and Excel are flattened by the server. |
 | **Data model** | Sheet types with fields and parent types, link types with source and target types, generated from a description or chosen from ready-made models, editable with an impact preview before a change. |
 | **Explore** | A graph view with type filters and focus, a sheet page with links both ways and origin documents, saved questions, a home page with what to do next. |
 | **Ask** | Questions in plain language answered from the retrieved subgraph, with citations, streamed; lexical and vector retrieval fused per request, bounded graph expansion. |
@@ -103,8 +107,7 @@ after `cd web && npm ci && npm run build`. The full developer setup is in
 ## Built to run in production
 
 The storage and memory layers were designed and measured for stores well
-beyond what a laptop holds. The figures below were measured on a 16 GB
-GitHub runner and on the development machine; the method is in
+beyond what a laptop holds. The method is in
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#benchmarks).
 
 - **Nothing is lost on a crash.** Every write goes to disk before it changes
@@ -115,23 +118,31 @@ GitHub runner and on the development machine; the method is in
   storage domain from the store's manifest and compares it with the budget
   it reads from the container limit. In `strict` mode an oversized store
   refuses to start and prints both figures, instead of being killed later.
-- **Capacity.** 2 million sheets and 10 million links on a 16 GB node with
-  payloads kept on disk (`--tier p1`, 6.4 GB of heap after loading); about
-  9.5 million sheets and 47 million links on a 64 GB node, 13 million and
-  63 million when the node is dedicated.
-- **Retrieval stays fast at that size.** At 2 million sheets, `/retrieve`
-  answers in 66 ms at the 99th percentile and a full reindex takes 38 s.
+- **Capacity.** The 16 GB figures were measured on a GitHub runner: 2 million
+  sheets and 10 million links with payloads kept on disk (`--tier p1`, 6.4 GB
+  of heap after loading). The 64 GB figures are extrapolated from
+  measurements at 200 000 and 500 000 sheets and have not yet been measured
+  on a 64 GB machine: about 9.5 million sheets and 47 million links at the
+  default heap fraction, about 13 million and 63 million on a dedicated node
+  with `--heap-fraction 0.8`.
+- **Retrieval stays fast at that size.** At 2 million sheets, the hybrid
+  ranking behind `/retrieve` takes 66 ms at the 99th percentile (measured at
+  the graph layer, without HTTP serialisation) and a full reindex 38 s.
   Traversals are capped by depth and by node count, so the cost of a question
   depends on the question, not on the size of the graph.
 - **Backups are cheap and verified.** Sealed segments are immutable, so a
-  repeated backup copies only what changed (a 819 MB store: 30 s the first
-  time, 45 MB the second). A restore replays the whole store and is compared
+  repeated backup copies only what changed (a store of 500 000 sheets and a
+  million links, 819 MB: about 30 s the first time, measured on a development
+  workstation; when nothing changed, only the manifest and the active
+  segments, 45 MB). A restore replays the whole store and is compared
   with the original in the test suite and in the container end-to-end test.
 - **Upgrades are tested before they are merged.** The CI builds the previous
   `main`, writes two stores with it, and makes the new version open, extend,
   compact, back up and restore them.
-- **Tested.** Rust and web suites with a 90 % line-coverage floor enforced
-  per crate by the CI; the container image is built and exercised end to end
+- **Tested.** Rust and web suites. The web suite has a 90 % line-coverage
+  threshold checked on every push and pull request; the per-crate 90 % floor
+  for Rust is enforced by the `coverage` job, which runs on pushes to `main`.
+  The container image is built and exercised end to end
   (sign-up, login, API, UI, backup, restore, restart) on every push.
 
 ## For larger organisations
@@ -141,7 +152,10 @@ GitHub runner and on the development machine; the method is in
   construction, routing by hostname at your reverse proxy.
 - **Your data stays with you.** Nothing leaves your infrastructure except the
   prompts you send to the language model you chose; a Swiss-hosted provider
-  is supported out of the box, and the model can be changed per request.
+  is supported out of the box, and the provider and model can be changed at
+  any time in Settings, without a restart. (Swagger UI at `/docs` and the OCR
+  language data are loaded by the browser from public CDNs; an air-gapped
+  install has neither.)
 - **Accountability.** Named API keys per integration, an audit log of every
   write with its caller, Prometheus metrics per storage domain, an OpenAPI
   description for your integration team.
@@ -156,10 +170,11 @@ by the binary at `/docs` (Swagger UI) and `/openapi.json`.
 | Method | Path | What it does |
 |---|---|---|
 | `GET` | `/concepts`, `/concepts/:id`, `/relations` | Sheets and links, paginated by cursor, filtered by type and text. |
-| `POST` | `/concepts`, `/relations`, `/upload` | Create a sheet or a link; import a file (multipart). |
+| `POST` | `/concepts`, `/relations`, `/upload` | Create a sheet or a link; import a file (multipart: Word and Excel are flattened by the server; for a PDF, an API client sends the extracted text). |
 | `POST` | `/retrieve`, `/ask`, `/ask/stream` | Ranked sheets and subgraph for a question; the answer with citations; the same streamed. |
 | `GET` / `PUT` | `/ontology` | Read or replace the data model. |
-| `POST` | `/ontology/generate`, `/ingest/analyze` | Draft a model from a description; propose sheets and links for a file. |
+| `POST` | `/ontology/generate`, `/ingest/analyze`, `/ingest/apply` | Draft a model from a description; propose sheets and links for a file; write the reviewed proposal. |
+| `GET` / `POST` | `/rules`, `/actions`, `/queries`, `/files`, `/settings` | Rules, actions, saved questions, imported files, provider settings. |
 | `POST` | `/backup`, `/compact` | Incremental backup to the configured directory; rewrite the store from the live graph. |
 | `*` | `/auth/*`, `/audit`, `/metrics`, `/healthz`, `/stats` | Accounts and keys, audit log, Prometheus metrics, probes. |
 
@@ -182,7 +197,7 @@ ontology --data ./data serve --bind 0.0.0.0:5000 --web web/dist --login
 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Running the dev stack, tests, coverage, the things that cost an hour if you do not know them. |
 | [docs/LLM-PROVIDERS.md](docs/LLM-PROVIDERS.md) | Configuring a provider, Infomaniak AI Tools, prompt caching. |
 | [docs/STORAGE.md](docs/STORAGE.md), [docs/PERFORMANCE.md](docs/PERFORMANCE.md) | The store format and the read-path rules, in French. |
-| [examples/finance](examples/finance/README.md), [examples/models](examples/models/README.md) | The demo data set and the ready-made models. |
+| [examples/finance](examples/finance/README.md), [examples/models](examples/models/README.md) | The demo data set and the ready-made models (the models' README is in French). |
 | [auth-server/README.md](auth-server/README.md) | The optional Node server, only needed for Google / Microsoft sign-in. |
 
 ## Security
