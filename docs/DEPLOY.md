@@ -142,7 +142,7 @@ one client:
 
 ```sh
 docker stop acme
-docker run --rm -v acme-data:/data -v acme-backups:/backups --entrypoint sh ghcr.io/masspe/ai-ontology:0.1.0 \
+docker run --rm -v acme-data:/data -v acme-backups:/backups --entrypoint sh ghcr.io/masspe/ai-ontology:0.1.1 \
   -c 'mv /data/store /data/store.old && /usr/local/bin/ontology --data /data restore /backups'
 docker start acme
 ```

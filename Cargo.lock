@@ -1380,7 +1380,7 @@ checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
 name = "ontology-cli"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "axum",
@@ -1401,7 +1401,7 @@ dependencies = [
 
 [[package]]
 name = "ontology-graph"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ahash",
  "dashmap",
@@ -1414,7 +1414,7 @@ dependencies = [
 
 [[package]]
 name = "ontology-index"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ahash",
  "async-trait",
@@ -1426,7 +1426,7 @@ dependencies = [
 
 [[package]]
 name = "ontology-io"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "calamine",
@@ -1447,7 +1447,7 @@ dependencies = [
 
 [[package]]
 name = "ontology-rag"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-trait",
  "futures",
@@ -1464,7 +1464,7 @@ dependencies = [
 
 [[package]]
 name = "ontology-server"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ahash",
  "async-trait",
@@ -1498,7 +1498,7 @@ dependencies = [
 
 [[package]]
 name = "ontology-storage"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "ahash",
  "async-trait",

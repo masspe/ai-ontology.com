@@ -6,6 +6,8 @@ All notable changes to this project are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-09
+
 ### Fixed
 
 - The properties of the retrieved sheets (an invoice's `amount_eur`,
@@ -56,5 +58,6 @@ First public release.
 - Google / Microsoft sign-in is not served by the binary; the optional Node
   `auth-server/` covers it.
 
-[Unreleased]: https://github.com/masspe/ai-ontology.com/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/masspe/ai-ontology.com/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/masspe/ai-ontology.com/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/masspe/ai-ontology.com/releases/tag/v0.1.0
