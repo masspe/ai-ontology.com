@@ -6,6 +6,12 @@ All notable changes to this project are listed here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- The properties of the retrieved sheets (an invoice's `amount_eur`,
+  `issue_date`, …) now reach the prompt, so questions about amounts are
+  answered from the data instead of "I don't know".
+
 ## [0.1.0] - 2026-10-09
 
 First public release.
@@ -45,9 +51,6 @@ First public release.
 
 ### Known issues
 
-- Questions about amounts on the finance example ("total invoiced to
-  Initech?") may answer "I don't know": numeric fields do not always reach
-  the prompt.
 - The graph canvas blanks for a couple of frames when a sheet is selected on
   slow machines.
 - Google / Microsoft sign-in is not served by the binary; the optional Node
