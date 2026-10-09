@@ -165,7 +165,7 @@ function RichStat({ label, value, deltaPct, icon, tone, spark, sparkColor }: Ric
         {deltaPct != null && (
           <div className={`stat-delta ${cls}`}>
             <span>{arrow} {Math.abs(deltaPct).toFixed(0)}%</span>
-            <span className="muted">vs last period</span>
+            <span className="muted">{t("vs période précédente")}</span>
           </div>
         )}
       </div>

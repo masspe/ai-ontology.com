@@ -4,6 +4,7 @@
 // English for the pages-b area: the French sentence is the key.
 
 export const pagesB: Record<string, string> = {
+  "vs période précédente": "vs last period",
   "Supprimer la question": "Delete question",
   "Supprimer cette question enregistrée ?": "Delete this saved question?",
   "Supprimer": "Delete",

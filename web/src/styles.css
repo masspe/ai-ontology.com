@@ -72,6 +72,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .btn-outline:hover { background: var(--panel-2); border-color: var(--accent); color: var(--accent); }
 
 .btn-ghost { border-color: transparent; background: transparent; color: var(--muted); }
+.lang-toggle { min-width: 2.6em; font-weight: 600; letter-spacing: 0.04em; }
 .btn-ghost:hover { background: var(--panel-2); color: var(--text); }
 
 .btn-danger { color: var(--danger); border-color: var(--border); background: var(--panel); }

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Mediasoft-Commercial
 // Copyright (C) 2026 Mediasoft & Cie S.A.
 
-import { t } from "../lib/i18n";
+import { locale, t } from "../lib/i18n";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import Card from "../components/Card";
 import Sparkline from "../components/Sparkline";
@@ -50,11 +50,11 @@ function actionStatus(a: ActionInstance): ActionStatus {
 function actionUpdatedAt(a: ActionInstance): string {
   const v = a.parameters?.updated_at ?? a.parameters?.created_at;
   if (typeof v === "number") {
-    return new Date(v * 1000).toLocaleDateString("fr-CH", { year: "numeric", month: "short", day: "numeric" });
+    return new Date(v * 1000).toLocaleDateString(locale(), { year: "numeric", month: "short", day: "numeric" });
   }
   if (typeof v === "string") {
     const t = Date.parse(v);
-    if (!isNaN(t)) return new Date(t).toLocaleDateString("fr-CH", { year: "numeric", month: "short", day: "numeric" });
+    if (!isNaN(t)) return new Date(t).toLocaleDateString(locale(), { year: "numeric", month: "short", day: "numeric" });
   }
   return "—";
 }

@@ -7,6 +7,8 @@ export const layout: Record<string, string> = {
   "Rechercher une fiche, poser une question…": "Search a sheet, ask a question…",
   "Envoyer un feedback": "Send feedback",
   "Changer de langue": "Switch language",
+  "Changer de langue recharge la page : ce qui n'est pas enregistré sera perdu. Continuer ?":
+    "Switching the language reloads the page: unsaved changes will be lost. Continue?",
   "Guide": "Guide",
   "Compte": "Account",
   "Utilisateur": "User",
@@ -17,7 +19,7 @@ export const layout: Record<string, string> = {
   "Importer": "Import",
   "Fichiers": "Files",
   "Déposez ici vos Word, Excel, CSV, PDF ou textes. Un document part en relecture, un fichier structuré se charge directement ; chacun reste listé avec l'état de son import.": "Drop your Word, Excel, CSV, PDF or text files here. A document goes to import review, a structured file loads directly; each one stays listed with the state of its import.",
-  "Relecture d'un document": "Document review",
+  "Relecture d'un document": "Import review",
   "Un modèle de langage lit un document et propose des fiches et des liens. Vous relisez, corrigez, puis ajoutez ce qui entre dans vos données.": "A language model reads a document and proposes sheets and links. You review, correct, then add what goes into your data.",
   "Modèle de données": "Data model",
   "Les types de fiches (Personne, Contrat…), leurs propriétés et les liens permis. Il peut être généré à partir d'une description en langage courant.": "The sheet types (Person, Contract…), their properties and the allowed links. It can be generated from a plain-language description.",

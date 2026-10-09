@@ -120,7 +120,7 @@ export default function MultiSelect({ label, options, selected, onChange, allLab
           <input
             className="ms-search"
             type="search"
-            placeholder={t(t("Rechercher…"))}
+            placeholder={t("Rechercher…")}
             aria-label={t("Rechercher dans {label}", { label })}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -135,10 +135,10 @@ export default function MultiSelect({ label, options, selected, onChange, allLab
               onChange={toggleVisible}
               disabled={visible.length === 0}
             />
-            <span>{t(t("Tout sélectionner"))}</span>
+            <span>{t("Tout sélectionner")}</span>
           </label>
           <div className="ms-options">
-            {visible.length === 0 && <div className="ms-empty muted">{t(t("Aucun résultat."))}</div>}
+            {visible.length === 0 && <div className="ms-empty muted">{t("Aucun résultat.")}</div>}
             {visible.map((o) => (
               <label key={o.value} className="ms-option">
                 <input type="checkbox" checked={chosen.has(o.value)} onChange={() => toggle(o.value)} />
@@ -149,7 +149,7 @@ export default function MultiSelect({ label, options, selected, onChange, allLab
           </div>
           <div className="ms-foot">
             <button type="button" className="btn-ghost-link" onClick={() => onChange([])} disabled={n === 0}>
-              {t(t("Effacer"))}
+              {t("Effacer")}
             </button>
           </div>
         </div>

@@ -53,6 +53,11 @@ export function setLang(lang: Lang, reload = true): void {
   if (reload && typeof location !== "undefined") location.reload();
 }
 
+/** The locale for dates and numbers: Swiss French, else British English. */
+export function locale(): string {
+  return getLang() === "fr" ? "fr-CH" : "en-GB";
+}
+
 /** Translate a French sentence, substituting `{name}` placeholders. */
 export function t(fr: string, vars?: Record<string, string | number>): string {
   const lang = getLang();
