@@ -5,7 +5,7 @@
 // Dual-licensed: AGPL-3.0-or-later OR a commercial license
 // from Mediasoft & Cie S.A. See LICENSE and LICENSE-COMMERCIAL.md.
 
-//! T3 (STORAGE-PLAN.md §8): per-stream figures for `/metrics` — segments,
+//! Per-stream figures for `/metrics` — segments,
 //! bytes, records, last seq and syncs per domain, the domain's tier, and
 //! the last compaction since open.
 

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Mediasoft-Commercial
 // Copyright (C) 2026 Mediasoft & Cie S.A.
 //
-// The interactive guide behind the "?" (ROADMAP §3.9 lot A, point 6): one
+// The interactive guide behind the "?": one
 // step per part of the application, the screen darkened except the part
 // explained, a card that says what it is for, the application navigating
 // to the page itself. Opens alone on the first visit, reopens any time

@@ -6,7 +6,7 @@
 // from Mediasoft & Cie S.A. See LICENSE and LICENSE-COMMERCIAL.md.
 
 //! Bulk-load mode (`OntologyGraph::begin_bulk` / `end_bulk`,
-//! `STORAGE-PLAN.md` phase 4 item 4): the same sequence of mutations, run
+//! `PERFORMANCE.md` §7.8): the same sequence of mutations, run
 //! once in normal mode and once in bulk mode, must leave two graphs whose
 //! every observable view is identical — primary lookups, sorted listings,
 //! per-type listings, trigram search, the sorted relation / rule / action

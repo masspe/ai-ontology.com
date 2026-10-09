@@ -9,7 +9,7 @@
 //! the same graph as one written in JSON; a store switched from JSON to
 //! postcard through `compact_with_codec` keeps every record and later
 //! appends use the new codec; mixed stores read fine because every record
-//! header carries its own codec (`STORAGE.md` §7.1, `STORAGE-PLAN.md` §6).
+//! header carries its own codec (`STORAGE.md` §7.1).
 
 use ontology_graph::{
     Action, ActionId, ActionType, Concept, ConceptId, ConceptType, Ontology, OntologyGraph,

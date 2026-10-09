@@ -634,7 +634,7 @@ fn serve_refuses_bad_auth_env_and_seed_before_binding() {
     assert!(http_get(port, "/healthz").is_none());
 }
 
-/// `serve --web <dir> --users-file` (ROADMAP §3.8.2-3): the built UI is
+/// `serve --web <dir> --users-file`: the built UI is
 /// served for every non-API path, the API stays the API, the built-in
 /// login is on (so the API needs a token) and its JWT secret is generated
 /// next to the data on first start. Misconfigurations fail before binding.

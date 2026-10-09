@@ -5,7 +5,7 @@
 // Dual-licensed: AGPL-3.0-or-later OR a commercial license
 // from Mediasoft & Cie S.A. See LICENSE and LICENSE-COMMERCIAL.md.
 
-//! Payload codecs (`STORAGE.md` §7.1, `STORAGE-PLAN.md` phase 4).
+//! Payload codecs (`STORAGE.md` §7.1).
 //!
 //! The container is codec-agnostic: every record header carries the codec
 //! byte its payload was written with, so a store may hold JSON sealed

@@ -24,3 +24,6 @@ lcov.info
 # Office lock files (a spreadsheet open in Excel)
 ~$*
 **/~$*
+
+# Local assistant settings and worktrees, never shared
+.claude/

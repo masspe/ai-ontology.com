@@ -1,4 +1,4 @@
-# One container per client (STORAGE.md §10.8, ROADMAP §3.8.1): each tenant
+# One container per client (STORAGE.md §10.8): each tenant
 # has its own data volume, memory limit, users and secret. Routing between
 # tenants is the reverse proxy's job (one hostname per service).
 #

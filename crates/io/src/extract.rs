@@ -36,7 +36,7 @@ use crate::record::Record;
 /// is the full body) and to attach a `mentions` named relation from the
 /// document to every `@concept` or `@relation` endpoint it references.
 /// Documents longer than this many characters are split into fragments
-/// (decision G, STORAGE-PLAN.md §8): the document concept keeps a short
+/// (decision G, STORAGE.md §10.9): the document concept keeps a short
 /// excerpt, each fragment is a concept of type `<Type>Fragment` linked to the
 /// document by `fragment_of`, and retrieval works on fragments — payloads
 /// stay in the kilobyte range (`STORAGE.md` H16) and the full text remains

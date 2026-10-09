@@ -66,14 +66,14 @@ CSR des relations (P2–P4), seul moyen de loger 10⁷ sur 16 Go, est reporté �
 un besoin client avéré au-delà de 5×10⁶ concepts sur un nœud contraint : le
 matériel est le levier le moins cher, et le socle mémoire (§8.1) refuse ou
 réduit explicitement un chargement qui ne tient pas. Tableau de capacité en
-§8.1. C'est le jeu de données du banc de la phase 4 de `STORAGE-PLAN.md`.
+§8.1. C'est le jeu de données du banc de la phase 4.
 Le plafond dur du format est 2³² concepts par store (§10.4).
 
 Deux murs arrivent avant ceux du stockage et sont traités hors de ce
 document : l'index de retrieval (`crates/index`, reconstruit à chaque
 démarrage, recherche vectorielle en O(N)) et les payloads de plusieurs Mo
-(documents entiers dans la description d'un concept). Voir
-`STORAGE-PLAN.md` §8 (chantiers R et G).
+(documents entiers dans la description d'un concept). Ils ont fait l'objet de chantiers dédiés : le retrieval
+(§7.8) et les payloads volumineux (§10.7).
 
 ---
 
@@ -397,7 +397,7 @@ Ordres de grandeur **mesurés** (phase 4, §7.8) : 3 M d'enregistrements
 seulement 1,7 à 3,7 s de décodage ; le reste est la construction des index
 mémoire. À 10⁷ concepts / 5×10⁷ relations : ~7 à 8 min en P0 par
 extrapolation linéaire, quel que soit le codec — c'est `bulk_load`
-(`STORAGE-PLAN.md` §6, item 4), pas le codec, qui raccourcira le démarrage.
+(construction des index en une passe), pas le codec, qui raccourcira le démarrage.
 
 Le chargement est **sélectif** : `hydrate(&NsSet)` n'ouvre que les
 partitions dont le `ns` est demandé. Un voisin vivant dans un domaine non
@@ -505,7 +505,7 @@ activée pour tout l'espace de travail ; le codec 0 est désormais exact bit à
 bit, comme le codec 1.
 
 Les chiffres mesurés (générateur, hydratation, append, requêtes,
-compaction) sont dans `STORAGE-PLAN.md` §6.6 et §7.7 ci-dessous.
+compaction) sont dans §7.7 et §7.8 ci-dessous.
 
 ### 7.2 `fsync`, multiplié par le nombre de domaines
 
@@ -614,9 +614,8 @@ Le gain plafonne avec l'échelle : la maintenance des index dérivés pesait
 45 à 65 % d'`apply` à 200 k mais 15 à 26 % à 500 k ; le reste est dans les
 structures primaires, et d'abord dans les quatre listes d'adjacence par
 relation (~5 µs par relation contre ~6 µs par concept). Deux exécutions par
-point pour la colonne « après », une pour la colonne « avant ». Voir
-`STORAGE-PLAN.md` §6.6 pour l'imputation détaillée et la suite (table de
-symboles §7.4, CSR §6.3).
+point pour la colonne « après », une pour la colonne « avant ». Suite possible :
+table de symboles (§7.4), CSR (§6.3).
 
 Trois faits en sortent. (1) **La désérialisation ne domine pas** : elle pèse
 9 à 27 % de l'hydratation ; 73 à 91 % du temps est dans `apply`, c'est-à-dire
@@ -667,7 +666,7 @@ des évictions ; il est dans le critère mais sans marge : à surveiller si
 le seuil de roulement change.
 
 **Mesure à 2×10⁶ / 10⁷ — la garantie 16 Go (2026-09-28, runner CI)**.
-Workflow `bench` (STORAGE-PLAN.md §8 T2), `ubuntu-latest` : 4 vCPU, 15 Gio,
+Workflow `bench` (manuel, `.github/workflows/bench.yml`), `ubuntu-latest` : 4 vCPU, 15 Gio,
 SSD, une exécution par point, codec JSON, `--ns 5 --payload 1300`, run
 36430598736. Le tas privé est `RssAnon` sous Linux (pages anonymes
 résidentes, segments mappés exclus), l'équivalent du `PagefileUsage` de
@@ -754,7 +753,7 @@ la RAM (P1) retire ~1,3 Ko par concept, soit ~13 Go sur 45 à 50 ; il reste
 32 à 37 Go, dont 17 à 24 Go de relations et ~14 Go d'index de concepts. Sur
 16 Go, seuls le CSR de §6.3 (P2–P4 : ~16 o par arête au lieu de ~350 à 475)
 et le slot de §6.2 pour les index de concepts y mèneraient. **Décision du
-2026-09-22** (`STORAGE-PLAN.md` §6.6) : la cible est portée par le nœud,
+2026-09-22** : la cible est portée par le nœud,
 64 Go avec P1, et le CSR est reporté à un besoin client ; le tableau de
 capacité de §8.1 donne ce que chaque nœud loge à chaque palier. Réserve :
 une exécution par point, portable avec 4 à 5 Go libres (les runs à 500 k
@@ -784,7 +783,7 @@ par rejeu sont les deux leviers.
 
 La page à offset aléatoire est **O(offset)** (parcours de l'ensemble trié
 jusqu'à l'offset) : 13 ms à 500 k concepts, donc ~250 ms à 10⁷. C'était le
-chantier T1 de `STORAGE-PLAN.md` (pagination par curseur), à faire avant
+chantier T1 (pagination par curseur), à faire avant
 toute phase 5.
 
 **Retrieval, chantier R (2026-09-23)** — store 5×10⁵ / 2,5×10⁶,
@@ -798,7 +797,7 @@ description réelle, `HashEmbedder` 256 dimensions :
 | `HybridIndex::rank` p99 | 2,1 s | **100 ms** | idem |
 
 Le reste est le balayage O(N · dim) : ~0,3 s attendus à 2×10⁶, ~1,4 s à
-10⁷ ; l'HNSW (`STORAGE-PLAN.md` §8 R, tranche 2) se déclenche sur mesure
+10⁷ ; l'HNSW (chantier R, tranche 2) se déclenche sur mesure
 au-delà de 200 ms de P95. **Mesuré le 2026-09-28 à 2×10⁶** (runner 4 vCPU,
 §7.8) : p50 222 ms, p99 230 ms, `reindex_all` 61,6 s — déclencheur atteint,
 puis **tenu par la tranche 2a le même jour** : p50 60 ms, p99 66 ms,
@@ -855,8 +854,8 @@ exposées dans `GET /metrics`.
 
 - `strict` — le store refuse de démarrer si le graphe n'entre pas dans le
   budget (R17), avec le requis et le disponible. À utiliser sur un
-  déploiement dimensionné, où une dégradation silencieuse serait un
-  incident : on préfère un échec au démarrage qu'un P95 qui triple sans
+  déploiement dimensionné, où une dégradation silencieuse serait une
+  défaillance : on préfère un échec au démarrage qu'un P95 qui triple sans
   explication trois semaines plus tard.
 - `adaptive` — les paliers §8.2 s'appliquent, par domaine.
 
@@ -871,8 +870,7 @@ bug.
 > de tas et une relation ~350 à 475 o. La cible 10⁷ / 5×10⁷ pèse 45 à 50 Go
 > en P0 ; P1 en retire ~13 Go, le CSR (P2–P4) 16 à 23 Go. Pour un ratio 1:5
 > avec des payloads de 1,3 Ko, **les relations et les index de concepts
-> pèsent plus que les payloads**. Décision du 2026-09-22 (`STORAGE-PLAN.md`
-> §6.6) : cible 10⁷ / 5×10⁷ sur 64 Go avec P1 ; 2×10⁶ / 10⁷ garantis sur
+> pèsent plus que les payloads**. Décision du 2026-09-22 : cible 10⁷ / 5×10⁷ sur 64 Go avec P1 ; 2×10⁶ / 10⁷ garantis sur
 > 16 Go **en P1** (mesuré le 2026-09-28, §7.8) ; CSR sur besoin client.
 
 **Capacité par nœud et par palier** (ce que le budget de §8.1 laisse
@@ -998,7 +996,7 @@ bascule à chaud (contrôleur, §8.5) restent à faire sur besoin client.
 | Palier | Résident | `?type=` / `?q=` | Listing ordonné | Traversée 1 saut |
 |---|---|---|---|---|
 | **P0** | tout, **payloads inclus** (état actuel) | O(bucket) / trigrammes | O(K) | O(deg) heap |
-| **P1** (livré 2026-09-23, `STORAGE-PLAN.md` §7.2) | payloads relâchés (relus via `Loc` depuis les segments scellés ; ceux du segment actif restent en heap jusqu'au scellement) | O(bucket) / trigrammes | O(K) + K lectures | O(deg) heap + lectures des nœuds rendus |
+| **P1** (livré 2026-09-23) | payloads relâchés (relus via `Loc` depuis les segments scellés ; ceux du segment actif restent en heap jusqu'au scellement) | O(bucket) / trigrammes | O(K) + K lectures | O(deg) heap + lectures des nœuds rendus |
 | **P2** | sans trigrammes | O(bucket) / **scan `.srt`** | O(K) | O(deg) heap |
 | **P3** | sans `by_id` ni `*_sorted` | binaire `.ent` / scan `.srt` | fusion k-way `.srt` | O(deg) heap |
 | **P4** | sans adjacence | binaire `.ent` | fusion k-way `.srt` | binaire `.adj` + lecture contiguë |
@@ -1139,8 +1137,8 @@ autres) :
 4. Reprise de `next_seq` au `seq` du dernier enregistrement valide + 1.
 
 Un `.idx` entièrement perdu se régénère par un scan séquentiel complet du
-segment. C'est le prix de la séparation index/données, et il ne se paie que
-sur incident.
+segment. C'est le prix de la séparation index/données, et il ne se paie qu'en
+cas de perte de l'index.
 
 ---
 
@@ -1206,7 +1204,7 @@ corpus de documents de quelques Mo sature la heap en P0 bien avant le
 million d'entités, et l'index lexical indexe ce texte. Ce n'est pas le
 format qui est en cause mais le modèle : découper les documents en fragments
 ou stocker le texte hors du graphe avec une référence. À trancher avant la
-phase 3 (chantier G de `STORAGE-PLAN.md`), car le choix influence le seuil de
+phase 3 (chantier G), car le choix influence le seuil de
 roulement des segments et l'estimation R14.
 
 ### 10.8 Un store par tenant — décision T5 : un processus par tenant

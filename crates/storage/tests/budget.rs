@@ -5,7 +5,7 @@
 // Dual-licensed: AGPL-3.0-or-later OR a commercial license
 // from Mediasoft & Cie S.A. See LICENSE and LICENSE-COMMERCIAL.md.
 
-//! Memory socle on a real store (`STORAGE-PLAN.md` §7.1, R14, R17): the
+//! Memory socle on a real store (`STORAGE.md` §8.1, R14, R17): the
 //! per-domain estimate is built from the MANIFEST zone maps plus the active
 //! segments, before any data file is read; the plan refuses or narrows the
 //! load; the plan is remembered for the API.

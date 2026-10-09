@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Mediasoft-Commercial
 # Copyright (C) 2026 Mediasoft & Cie S.A.
 #
-# End-to-end check of the container image (ROADMAP §3.8.1): start it on a
+# End-to-end check of the container image: start it on a
 # fresh volume seeded with the finance example, create the administrator,
 # log in, read the graph through the API and the UI through the same port,
 # stop it the way `docker stop` does, start it again on the same volume and

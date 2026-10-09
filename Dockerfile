@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-# One image, one process per tenant (STORAGE.md §10.8, ROADMAP §3.8):
+# One image, one process per tenant (STORAGE.md §10.8):
 # 1. web stage builds the React UI (same-origin API, no env baked in);
 # 2. cargo-chef stage caches the dependency build keyed off the lockfile;
 # 3. builder compiles the `ontology` binary;

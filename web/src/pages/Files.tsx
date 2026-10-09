@@ -159,8 +159,8 @@ export default function Files() {
   }, []);
 
   // A document (text, Word, PDF) is read by the assistant first: it
-  // proposes the sheets and links it found, to check before they are added
-  // (ROADMAP §3.9 lot B, point 4). Structured files load directly.
+  // proposes the sheets and links it found, to check before they are added.
+  // Structured files load directly.
   const onUpload = async (file: File, chosenType?: string) => {
     const ext = (file.name.split(".").pop() ?? "").toLowerCase();
     if (autoKind && REVIEWED_EXTS.has(ext)) {

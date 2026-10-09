@@ -210,7 +210,7 @@ async fn get_text(app: &axum::Router, uri: &str) -> String {
     String::from_utf8_lossy(&body).into_owned()
 }
 
-/// T3 (STORAGE-PLAN.md §8): one series per domain, labelled `ns`, the
+/// Per-stream metrics: one series per domain, labelled `ns`, the
 /// domain's tier, the store-wide seq and syncs, and the last compaction
 /// once one happened.
 #[tokio::test]
