@@ -36,8 +36,8 @@ The Node `auth-server` is **optional**: the binary's built-in login (`serve --lo
 covers sign-up, sessions, accounts and API keys; keep the Node server only for
 Google / Microsoft OAuth sign-in. See [auth-server/README.md](../auth-server/README.md)
 for that setup. The ontology API needs no environment variable at all — the LLM
-provider is configured in the UI (**Settings → Configuration**) and stored in
-`data/settings.json`.
+provider is configured in the UI (**Réglages**, card **Configuration
+<provider>**) and stored in `data/settings.json`.
 
 ### Things that will cost you an hour if you do not know them
 
@@ -125,22 +125,21 @@ and finally `relations.jsonl`.
 
 
 1. Open `http://localhost:5173`, sign up or log in.
-2. Navigate to **Builder** in the sidebar (`/builder`).
+2. Open **Modèle de données** in the sidebar (`/builder`).
 3. Type a description of your domain — e.g. *“Contract management for a
    law firm: parties, clauses, obligations, effective dates, jurisdictions.”*
 4. (Optional) Attach one or more seed files. Their text is included as
    context for the LLM.
-5. Click **Generate Ontology**. The SPA calls `POST /ontology/generate`;
+5. Click **Générer le modèle**. The SPA calls `POST /ontology/generate`;
    the backend asks the configured `LanguageModel` to draft concept types,
    relation types, and example seed concepts, then returns a preview.
 6. Inspect the proposed schema in the live graph. Edit names / properties
    inline if needed.
-7. Click **Save Ontology** to `PUT /ontology` and persist it (WAL +
-   snapshot). The schema is then visible across **Graph**, **Concepts**,
+7. Click **Enregistrer le modèle** to `PUT /ontology` and persist it. The schema is then visible across **Graph**, **Concepts**,
    **Rules**, etc., and ready to receive ingested data via **Files**.
 
-> If **Generate Ontology** reports that no model is configured, open
-> **Settings → Configuration**, enter a provider key, load the model list,
+> If **Générer le modèle** reports that no model is configured, open
+> **Réglages**, card **Configuration <provider>**, enter a provider key, load the model list,
 > pick a model and click **Appliquer**. It takes effect immediately — no
 > restart.
 
@@ -153,8 +152,10 @@ cd web && npm run test:coverage # same, with the 90 % coverage thresholds enforc
 cargo llvm-cov --workspace --summary-only   # line coverage of the Rust workspace
 ```
 
-The CI enforces 90 % line coverage per Rust crate and on the web suite and
-publishes the figures as the badges of the README. How it does so is in
+The web 90 % threshold is checked on every push and pull request. The
+per-crate 90 % floor for Rust is enforced by the `coverage` job, which runs
+only on pushes to `main`, and that job publishes the figures as the badges
+of the README. How it does so is in
 [ARCHITECTURE.md](ARCHITECTURE.md#tests-and-coverage).
 
 On a 16 GB laptop with 14 threads: the `release` build of the CLI takes

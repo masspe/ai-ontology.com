@@ -36,7 +36,7 @@ no `*_API_KEY` variable and no provider flag on `ontology serve`.
 * Applying a provider or model takes effect on the next request — `/ask`,
   `/ask/stream` and `/ingest/analyze` all resolve it per call.
 
-Configure it in the UI (**Settings → Configuration**), or over the API:
+Configure it in the UI (**Réglages**, card **Configuration <provider>**), or over the API:
 
 ```bash
 curl -s -XPATCH localhost:5000/settings -H 'content-type: application/json' -d '{
@@ -65,7 +65,7 @@ Swiss-hosted open-source models behind an OpenAI-compatible API.
 
 1. Create an API token in the Infomaniak manager with the **`ai-tools`**
    scope.
-2. Paste it into **Settings → Configuration** and click **Détecter** to read
+2. Paste it into **Réglages**, card **Configuration Infomaniak**, and click **Détecter** to read
    the `product_id` from `GET https://api.infomaniak.com/1/ai`.
 3. Click **Charger les modèles** (`GET {base}/models`), pick one, then
    **Appliquer**.

@@ -10,14 +10,15 @@ client.
 
 The line-coverage badges below are live: after every push to `main` the CI
 measures line coverage of the whole Rust suite and of the web UI and publishes
-the figures. The bar is 90 % minimum, enforced per crate in CI and on the web
-suite by the `vitest.config.ts` thresholds.
+the figures. The bar is 90 % minimum: per crate for Rust, enforced by the `coverage`
+job on pushes to `main`, and on the web suite by the `vitest.config.ts`
+thresholds, checked on every push and pull request.
 
 ```
-┌──────────────┐    ┌──────────────┐    ┌──────────────┐
-│  Source       │───▶│  ingest_*    │───▶│ OntologyGraph│
-│  (jsonl, …)   │    │  (validate)  │    │  + WAL Store │
-└──────────────┘    └──────────────┘    └─────┬────────┘
+┌──────────────┐    ┌──────────────┐    ┌──────────────────┐
+│  Source       │───▶│  ingest_*    │───▶│ OntologyGraph    │
+│  (jsonl, …)   │    │  (validate)  │    │ + segmented store│
+└──────────────┘    └──────────────┘    └─────┬────────────┘
                                               │
                               ┌───────────────┴───────────────┐
                               │           HybridIndex          │
@@ -34,7 +35,7 @@ suite by the `vitest.config.ts` thresholds.
                               ┌────────────────────────────────┐
                               │  PromptBuilder → LanguageModel │
                               │  (Anthropic / OpenAI /         │
-                              │   DeepSeek / Echo)             │
+                              │   DeepSeek / Infomaniak / Echo)│
                               └────────────────────────────────┘
 ```
 
@@ -45,11 +46,11 @@ suite by the `vitest.config.ts` thresholds.
 | `ontology-graph`   | ![graph line coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmasspe%2Fai-ontology.com%2Fcoverage-badges%2Fcrate-graph.json&label=lines&style=flat-square) | Concepts, typed relations, schema validation, traversals. |
 | `ontology-storage` | ![storage line coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmasspe%2Fai-ontology.com%2Fcoverage-badges%2Fcrate-storage.json&label=lines&style=flat-square) | Binary segmented store (`<data>/store/`): framed records with CRC, positional index, per-batch fsync, torn-tail recovery, memory-mapped sealed segments; automatic migration from the legacy `graph.log`. Pluggable `Store` trait. Format in [docs/STORAGE.md](STORAGE.md). |
 | `ontology-index`   | ![index line coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmasspe%2Fai-ontology.com%2Fcoverage-badges%2Fcrate-index.json&label=lines&style=flat-square) | Lexical (TF-IDF) + vector (cosine) + graph-expansion retrieval. |
-| `ontology-io`      | ![io line coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmasspe%2Fai-ontology.com%2Fcoverage-badges%2Fcrate-io.json&label=lines&style=flat-square) | `Source` / `Sink` traits with JSONL and triples adapters. |
-| `ontology-rag`     | ![rag line coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmasspe%2Fai-ontology.com%2Fcoverage-badges%2Fcrate-rag.json&label=lines&style=flat-square) | Prompt builder + `LanguageModel` trait (echo, Anthropic, OpenAI, DeepSeek; with prompt caching). |
-| `ontology-server`  | ![server line coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmasspe%2Fai-ontology.com%2Fcoverage-badges%2Fcrate-server.json&label=lines&style=flat-square) | axum HTTP server exposing `/concepts`, `/relations`, `/retrieve`, `/ask`, `/ontology`. |
+| `ontology-io`      | ![io line coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmasspe%2Fai-ontology.com%2Fcoverage-badges%2Fcrate-io.json&label=lines&style=flat-square) | `Source` / `Sink` traits with JSONL and triples adapters; CSV, XLSX, DOCX and plain-text readers; chunking. |
+| `ontology-rag`     | ![rag line coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmasspe%2Fai-ontology.com%2Fcoverage-badges%2Fcrate-rag.json&label=lines&style=flat-square) | Prompt builder + `LanguageModel` trait (echo, Anthropic, OpenAI, DeepSeek, Infomaniak; with prompt caching). |
+| `ontology-server`  | ![server line coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmasspe%2Fai-ontology.com%2Fcoverage-badges%2Fcrate-server.json&label=lines&style=flat-square) | axum HTTP server exposing the whole REST API: `/concepts`, `/relations`, `/retrieve`, `/ask`, `/ontology`, `/upload` and `/ingest/*`, `/rules`, `/actions`, `/queries`, `/files`, `/settings`, `/auth/*`, `/audit`, `/backup`, `/compact`, `/metrics`, `/healthz`, `/stats`. |
 | `ontology-cli`     | ![cli line coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmasspe%2Fai-ontology.com%2Fcoverage-badges%2Fcrate-cli.json&label=lines&style=flat-square) | `ontology` binary tying it all together. |
-| `web/`             | ![web line coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmasspe%2Fai-ontology.com%2Fcoverage-badges%2Fweb.json&label=lines&style=flat-square) | Vite + React UI (Ask · Browse · Upload tabs). |
+| `web/`             | ![web line coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmasspe%2Fai-ontology.com%2Fcoverage-badges%2Fweb.json&label=lines&style=flat-square) | Vite + React UI (home, files, import review, data model, sheets, graph, questions, rules, actions, settings). |
 
 ## Request path
 
@@ -72,7 +73,7 @@ suite by the `vitest.config.ts` thresholds.
    knowledge base) and is what prompt caching targets (see
    [Prompt caching](#prompt-caching)).
 6. **Model.** The `LanguageModel` trait sends the prompt to Anthropic, OpenAI,
-   DeepSeek, or the `Echo` model (no network, for tests and demos). The
+   DeepSeek, Infomaniak, or the `Echo` model (no network, for tests and demos). The
    answer and its usage come back as a `RagAnswer`. Exposed as `POST /ask`.
 
 ## Storage
@@ -210,13 +211,15 @@ extrapolated, see STORAGE.md §8.1 for the assumptions):
 
 | Node | Today (P0) | With P1 (payloads on disk, `--tier p1`) |
 |---|---|---|
-| 16 GB, default fraction 0.6 | ~1.8 M concepts / 9 M relations (2 M / 10 M measured 2026-09-28 on a 16 GB runner: 9.9 GB private heap, over budget, and the retrieval index no longer fits) | **2 M / 10 M measured: 6.4 GB** private heap after hydration, the retrieval index then fits (÷1.55; ÷1.57 at 500 k) |
+| 16 GB, default fraction 0.6 | ~1.8 M concepts / 9 M relations (2 M / 10 M measured on a 16 GB runner: 9.9 GB private heap, over budget, and the retrieval index no longer fits) | **2 M / 10 M measured: 6.4 GB** private heap after hydration, the retrieval index then fits (÷1.55; ÷1.57 at 500 k) |
 | 64 GB, fraction 0.6 | ~7 M / 35 M | ~9.5 M / 47 M |
 | 64 GB, `--heap-fraction 0.8` (dedicated node) | ~9.6 M / 48 M | **~13 M / 63 M** |
 
-The design target of 10 M concepts / 50 M relations per store is therefore
-served by a 64 GB node; on 16 GB the guarantee is 2 M / 10 M **in P1** (`--tier p1`,
-measured 2026-09-28, STORAGE.md §7.8). Use `--memory-mode strict` on a sized
+The design target of 10 M concepts / 50 M relations per store needs a
+dedicated 64 GB node (`--heap-fraction 0.8`) with P1; that figure is
+extrapolated and has not yet been measured on a 64 GB machine. On 16 GB the
+guarantee is 2 M / 10 M **in P1** (`--tier p1`, measured on a GitHub runner,
+STORAGE.md §7.8). Use `--memory-mode strict` on a sized
 deployment so an oversized store fails at startup with both figures instead of
 being killed later.
 

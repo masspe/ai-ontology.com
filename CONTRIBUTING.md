@@ -28,8 +28,10 @@ git config core.hooksPath .githooks
 ## What a pull request needs
 
 - Tests at the level where the behaviour is visible: unit, integration or
-  end to end. The CI enforces **90 % line coverage** per Rust crate and on
-  the web suite; a change that lowers a crate below the bar does not merge.
+  end to end. The web suite has a 90 % line-coverage threshold checked on every
+  push and pull request. The per-crate 90 % floor for Rust is enforced by
+  the `coverage` job, which runs only on pushes to `main`: check it locally
+  with `cargo llvm-cov` before you open the pull request.
 - `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`
   and `cargo test --workspace` green; for the web, `npm run test:coverage`
   and `npx tsc --noEmit` in `web/`.
