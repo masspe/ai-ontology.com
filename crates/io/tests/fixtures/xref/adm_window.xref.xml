@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<Cross-reference xmlns="uri:schemas-progress-com:XREFD:0005">
+  <Source File-name="D:\Mediasoft\App\MS.ERP2\gd\w-items.w"><Source-guid>g</Source-guid><File-num>1</File-num>
+    <Reference Reference-type="RUN" Object-identifier="dispatch">
+      <Source-guid>g</Source-guid><File-num>1</File-num><Ref-seq>1</Ref-seq><Line-num>1</Line-num>
+      <Object-context></Object-context><Access-mode/><Detail/>
+    </Reference>
+    <Reference Reference-type="RUN" Object-identifier="GET-ATTRIBUTE">
+      <Source-guid>g</Source-guid><File-num>1</File-num><Ref-seq>2</Ref-seq><Line-num>3</Line-num>
+      <Object-context></Object-context><Access-mode/><Detail/>
+    </Reference>
+    <Reference Reference-type="RUN" Object-identifier="get-link-handle">
+      <Source-guid>g</Source-guid><File-num>1</File-num><Ref-seq>3</Ref-seq><Line-num>5</Line-num>
+      <Object-context></Object-context><Access-mode/><Detail/>
+    </Reference>
+    <Reference Reference-type="RUN" Object-identifier="gd/d-versions.w">
+      <Source-guid>g</Source-guid><File-num>1</File-num><Ref-seq>4</Ref-seq><Line-num>7</Line-num>
+      <Object-context></Object-context><Access-mode/><Detail/>
+    </Reference>
+    <Reference Reference-type="RUN" Object-identifier="VALUE(cProg)">
+      <Source-guid>g</Source-guid><File-num>1</File-num><Ref-seq>5</Ref-seq><Line-num>9</Line-num>
+      <Object-context></Object-context><Access-mode/><Detail/>
+    </Reference>
+  </Source>
+</Cross-reference>

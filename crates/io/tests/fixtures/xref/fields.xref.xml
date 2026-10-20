@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<Cross-reference xmlns="uri:schemas-progress-com:XREFD:0005">
+  <Source File-name="D:\Mediasoft\App\MS.ERP2\sd\main.p"><Source-guid>g</Source-guid><File-num>1</File-num>
+    <Reference Reference-type="ACCESS" Object-identifier="nste">
+      <Source-guid>g</Source-guid><File-num>1</File-num><Ref-seq>1</Ref-seq><Line-num>1</Line-num>
+      <Object-context>msdb.sdva</Object-context><Access-mode/><Detail/>
+    </Reference>
+    <Reference Reference-type="ACCESS" Object-identifier="peri">
+      <Source-guid>g</Source-guid><File-num>1</File-num><Ref-seq>2</Ref-seq><Line-num>2</Line-num>
+      <Object-context>msdb.sdva</Object-context><Access-mode/><Detail/>
+    </Reference>
+    <Reference Reference-type="ACCESS" Object-identifier="nste">
+      <Source-guid>g</Source-guid><File-num>1</File-num><Ref-seq>3</Ref-seq><Line-num>3</Line-num>
+      <Object-context>msdb.sdva</Object-context><Access-mode/><Detail/>
+    </Reference>
+    <Reference Reference-type="UPDATE" Object-identifier="montant">
+      <Source-guid>g</Source-guid><File-num>1</File-num><Ref-seq>4</Ref-seq><Line-num>4</Line-num>
+      <Object-context>msdb.sdva</Object-context><Access-mode/><Detail/>
+    </Reference>
+    <Reference Reference-type="ACCESS" Object-identifier="pAppl">
+      <Source-guid>g</Source-guid><File-num>1</File-num><Ref-seq>5</Ref-seq><Line-num>5</Line-num>
+      <Object-context>PUBLIC-PROPERTY</Object-context><Access-mode/><Detail/>
+    </Reference>
+    <Reference Reference-type="ACCESS" Object-identifier="x">
+      <Source-guid>g</Source-guid><File-num>1</File-num><Ref-seq>6</Ref-seq><Line-num>6</Line-num>
+      <Object-context>INPUT character</Object-context><Access-mode/><Detail/>
+    </Reference>
+  </Source>
+</Cross-reference>
