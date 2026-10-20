@@ -460,7 +460,7 @@ pub fn xref_ontology_records() -> Vec<Record> {
     use Cardinality::{ManyToMany as NN, ManyToOne as N1, OneToMany as ONE_N};
     vec![
         concept_type("Module", "A directory of the ERP source tree: the unit people talk about (payroll, accounting, …).", &["path", "program_count"]),
-        concept_type("Program", "A compiled OpenEdge program (.p procedure, .w window, .cls class). `missing` marks a program other programs run but whose compiled cross-reference is absent.", &["path", "kind", "module", "missing", "procedures", "functions", "dynamic_runs", "strings", "references"]),
+        concept_type("Program", "A compiled OpenEdge program (.p procedure, .w window, .cls class). `code` is the ERP screen code users know (ca100); `missing` marks a program other programs run but whose compiled cross-reference is absent.", &["path", "code", "kind", "module", "missing", "procedures", "functions", "dynamic_runs", "strings", "references"]),
         concept_type("Include", "An OpenEdge include file (.i), compiled into every program that includes it.", &["path"]),
         concept_type("Class", "An ABL or .NET class used by programs.", &["name"]),
         concept_type("Database", "An OpenEdge database (msdb, msec, …).", &[]),
@@ -494,6 +494,35 @@ fn names(set: &BTreeSet<String>) -> PropertyValue {
 
 fn module_of(path: &str) -> &str {
     path.split_once('/').map_or("root", |(m, _)| m)
+}
+
+/// The ERP's screen code of a program path — what business users and
+/// developers call it: `ca/w-ca100.w` → `ca100`, `db/b6-db100.w` →
+/// `db100`, `net/sd/gui/planning.cls` → `None`. The short ADM prefix
+/// (`w-` window, `b-` browser, `v-` viewer, `d-` dialog, `b6-`, …) names a
+/// part of the screen; the code is what follows: two letters, three
+/// digits, then anything (`sd100dat`).
+pub fn screen_code(path: &str) -> Option<String> {
+    let file = path.rsplit('/').next().unwrap_or(path);
+    let stem = file.rsplit_once('.').map_or(file, |(s, _)| s);
+    let code = match stem.split_once('-') {
+        Some((prefix, rest))
+            if (1..=3).contains(&prefix.len())
+                && prefix
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_ascii_alphabetic())
+                && prefix.chars().all(|c| c.is_ascii_alphanumeric()) =>
+        {
+            rest
+        }
+        _ => stem,
+    };
+    let b = code.as_bytes();
+    let looks_like_code = b.len() >= 5
+        && b[..2].iter().all(u8::is_ascii_alphabetic)
+        && b[2..5].iter().all(u8::is_ascii_digit);
+    looks_like_code.then(|| code.to_string())
 }
 
 fn concept(ty: &str, name: &str) -> Concept {
@@ -650,24 +679,23 @@ impl XrefSource {
                     .map(|c| Record::Concept(concept("Class", c).with_property("name", text(c)))),
             )
             .chain(files.iter().map(|f| {
-                Record::Concept(
-                    concept("Program", &f.program)
-                        .with_property("path", text(&f.program))
-                        .with_property("kind", text(f.kind.map_or("other", |k| k.as_str())))
-                        .with_property("module", text(module_of(&f.program)))
-                        .with_property("missing", PropertyValue::Bool(false))
-                        .with_property("procedures", names(&f.procedures))
-                        .with_property("functions", names(&f.functions))
-                        .with_property(
-                            "dynamic_runs",
-                            PropertyValue::Number(f64::from(f.dynamic_runs)),
-                        )
-                        .with_property("strings", PropertyValue::Number(f64::from(f.strings)))
-                        .with_property(
-                            "references",
-                            PropertyValue::Number(f64::from(f.references)),
-                        ),
-                )
+                let mut c = concept("Program", &f.program)
+                    .with_property("path", text(&f.program))
+                    .with_property("kind", text(f.kind.map_or("other", |k| k.as_str())))
+                    .with_property("module", text(module_of(&f.program)))
+                    .with_property("missing", PropertyValue::Bool(false))
+                    .with_property("procedures", names(&f.procedures))
+                    .with_property("functions", names(&f.functions))
+                    .with_property(
+                        "dynamic_runs",
+                        PropertyValue::Number(f64::from(f.dynamic_runs)),
+                    )
+                    .with_property("strings", PropertyValue::Number(f64::from(f.strings)))
+                    .with_property("references", PropertyValue::Number(f64::from(f.references)));
+                if let Some(code) = screen_code(&f.program) {
+                    c = c.with_property("code", text(&code));
+                }
+                Record::Concept(c)
             }))
             .chain(missing.iter().map(|m| {
                 Record::Concept(
@@ -890,6 +918,18 @@ mod tests {
             normalize_path("D:\\Mediasoft\\App\\MS.ERP2x\\y.p", &roots),
             "d:/mediasoft/app/ms.erp2x/y.p"
         );
+    }
+
+    #[test]
+    fn screen_codes_come_from_the_file_name() {
+        assert_eq!(screen_code("ca/w-ca100.w").as_deref(), Some("ca100"));
+        assert_eq!(screen_code("ca/b-ca100.w").as_deref(), Some("ca100"));
+        assert_eq!(screen_code("db/b6-db100.w").as_deref(), Some("db100"));
+        assert_eq!(screen_code("sd/d-sd100dat.p").as_deref(), Some("sd100dat"));
+        assert_eq!(screen_code("ca/ca600tot.p").as_deref(), Some("ca600tot"));
+        assert_eq!(screen_code("net/sd/gui/planning.cls"), None);
+        assert_eq!(screen_code("scripts/#8663 - purge sdva.p"), None);
+        assert_eq!(screen_code("ba/w-menu.w"), None);
     }
 
     #[test]

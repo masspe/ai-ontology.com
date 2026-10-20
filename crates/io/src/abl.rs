@@ -30,7 +30,7 @@ use std::sync::{mpsc, Arc, LazyLock, Mutex};
 use crate::charset::decode_to_utf8;
 use crate::ingest::{IngestError, Source};
 use crate::record::Record;
-use crate::xref::XREF_NS;
+use crate::xref::{screen_code, XREF_NS};
 
 fn re(pattern: &str) -> Regex {
     RegexBuilder::new(pattern)
@@ -432,6 +432,51 @@ fn text(s: &str) -> PropertyValue {
     PropertyValue::Text(s.to_string())
 }
 
+/// One ERP screen: the window, browser, viewer, … parts of a code folded
+/// together (`w-ca100.w` + `b-ca100.w` → `ca100`).
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ScreenAgg {
+    pub title: Option<String>,
+    pub tabs: Vec<String>,
+    pub menu_items: Vec<String>,
+    /// Program paths, in the order scanned.
+    pub programs: Vec<String>,
+}
+
+/// Group the windows that carry a title, tabs or menu by screen code (the
+/// path itself when the file name has no code). The `w-` part's title wins
+/// over a browser's or viewer's.
+pub fn group_screens(files: &[AblFile]) -> BTreeMap<String, ScreenAgg> {
+    let mut screens: BTreeMap<String, ScreenAgg> = BTreeMap::new();
+    for f in files {
+        if f.title.is_none() && f.tabs.is_empty() && f.menu_items.is_empty() {
+            continue;
+        }
+        let name = screen_code(&f.program).unwrap_or_else(|| f.program.clone());
+        let e = screens.entry(name).or_default();
+        let is_window = f
+            .program
+            .rsplit('/')
+            .next()
+            .is_some_and(|file| file.starts_with("w-"));
+        if f.title.is_some() && (e.title.is_none() || is_window) {
+            e.title = f.title.clone();
+        }
+        for t in &f.tabs {
+            if !e.tabs.iter().any(|x| x.eq_ignore_ascii_case(t)) {
+                e.tabs.push(t.clone());
+            }
+        }
+        for m in &f.menu_items {
+            if !e.menu_items.contains(m) {
+                e.menu_items.push(m.clone());
+            }
+        }
+        e.programs.push(f.program.clone());
+    }
+    screens
+}
+
 /// Turns scanned sources into records: `Screen` sheets linked to their
 /// `Program`, and `joined_on` links between `Table` sheets carrying the
 /// key list. Run after the xref import: `Program` and `Table` must exist.
@@ -458,8 +503,8 @@ impl AblSource {
         let decls = vec![
             Record::ConceptTypeDecl(ConceptType {
                 name: "Screen".into(),
-                description: "A window of the ERP (.w): its title, folder tabs and menu entries.".into(),
-                properties: Some(["path", "title", "tabs", "menu_items"].iter().map(|s| s.to_string()).collect()),
+                description: "A screen of the ERP, named by its code (ca100): its title, folder tabs and menu entries; the window, browser and viewer programs behind it.".into(),
+                properties: Some(["code", "title", "tabs", "menu_items", "programs"].iter().map(|s| s.to_string()).collect()),
                 ns: Some(XREF_NS.into()),
                 ..Default::default()
             }),
@@ -467,8 +512,8 @@ impl AblSource {
                 name: "implemented_by".into(),
                 domain: "Screen".into(),
                 range: "Program".into(),
-                cardinality: Cardinality::ManyToOne,
-                description: "the program behind the screen".into(),
+                cardinality: Cardinality::ManyToMany,
+                description: "is implemented by".into(),
                 ..Default::default()
             }),
             Record::RelationTypeDecl(RelationType {
@@ -477,7 +522,7 @@ impl AblSource {
                 range: "Table".into(),
                 cardinality: Cardinality::ManyToMany,
                 symmetric: true,
-                description: "the code joins the two tables; `keys` lists the field pairs (most used first), `programs` how many programs do it, weight = number of join comparisons".into(),
+                description: "is joined in the code with".into(),
                 ..Default::default()
             }),
         ];
@@ -496,35 +541,38 @@ impl AblSource {
             }
         }
 
-        let screens = files.into_iter().flat_map(move |f| {
-            let mut out = Vec::with_capacity(2);
-            if f.title.is_some() || !f.tabs.is_empty() || !f.menu_items.is_empty() {
-                let mut c = Concept::new(ConceptId(0), "Screen", &f.program)
-                    .with_property("path", text(&f.program))
-                    .with_property(
-                        "tabs",
-                        PropertyValue::List(f.tabs.iter().map(|t| text(t)).collect()),
-                    )
-                    .with_property(
-                        "menu_items",
-                        PropertyValue::List(f.menu_items.iter().map(|t| text(t)).collect()),
-                    );
-                if let Some(t) = &f.title {
-                    c = c.with_property("title", text(t));
-                    c.description = t.clone();
-                }
-                out.push(Record::Concept(c));
-                if programs.contains(&f.program) {
-                    out.push(Record::NamedRelation {
-                        relation_type: "implemented_by".into(),
-                        source_type: "Screen".into(),
-                        source_name: f.program.clone(),
-                        target_type: "Program".into(),
-                        target_name: f.program.clone(),
-                        weight: 1.0,
-                        properties: Default::default(),
-                    });
-                }
+        let grouped = group_screens(&files);
+        let screens = grouped.into_iter().flat_map(move |(name, agg)| {
+            let mut out = Vec::with_capacity(1 + agg.programs.len());
+            let mut c = Concept::new(ConceptId(0), "Screen", &name)
+                .with_property("code", text(&name))
+                .with_property(
+                    "tabs",
+                    PropertyValue::List(agg.tabs.iter().map(|t| text(t)).collect()),
+                )
+                .with_property(
+                    "menu_items",
+                    PropertyValue::List(agg.menu_items.iter().map(|t| text(t)).collect()),
+                )
+                .with_property(
+                    "programs",
+                    PropertyValue::List(agg.programs.iter().map(|t| text(t)).collect()),
+                );
+            if let Some(t) = &agg.title {
+                c = c.with_property("title", text(t));
+                c.description = t.clone();
+            }
+            out.push(Record::Concept(c));
+            for p in agg.programs.iter().filter(|p| programs.contains(*p)) {
+                out.push(Record::NamedRelation {
+                    relation_type: "implemented_by".into(),
+                    source_type: "Screen".into(),
+                    source_name: name.clone(),
+                    target_type: "Program".into(),
+                    target_name: p.clone(),
+                    weight: 1.0,
+                    properties: Default::default(),
+                });
             }
             out
         });
@@ -623,6 +671,46 @@ ASSIGN ecri.nste = ecri.nste.
         assert_eq!(u.keys["nste=nste"], 1);
         assert_eq!(u.keys["ecri=ecri"], 1);
         assert!(f.title.is_none(), "a .p has no screen");
+    }
+
+    #[test]
+    fn screens_group_their_parts_by_code() {
+        let browser = AblFile {
+            program: "ca/b-ca100.w".into(),
+            title: Some("Liste".into()),
+            tabs: vec!["Liste".into(), "Compte".into()],
+            ..Default::default()
+        };
+        let window = AblFile {
+            program: "ca/w-ca100.w".into(),
+            title: Some("ca100 - Comptabilité analytique".into()),
+            tabs: vec!["Compte".into(), "Cumuls".into()],
+            menu_items: vec!["Masquer".into()],
+            ..Default::default()
+        };
+        let silent = AblFile {
+            program: "ca/v-ca100.w".into(),
+            ..Default::default()
+        };
+        let other = AblFile {
+            program: "ba/w-menu.w".into(),
+            title: Some("Menu".into()),
+            ..Default::default()
+        };
+        let g = group_screens(&[browser, window, silent, other]);
+        assert_eq!(g.len(), 2, "{g:?}");
+        let ca100 = &g["ca100"];
+        assert_eq!(
+            ca100.title.as_deref(),
+            Some("ca100 - Comptabilité analytique")
+        );
+        assert_eq!(ca100.tabs, ["Liste", "Compte", "Cumuls"]);
+        assert_eq!(ca100.menu_items, ["Masquer"]);
+        assert_eq!(ca100.programs, ["ca/b-ca100.w", "ca/w-ca100.w"]);
+        assert!(
+            g.contains_key("ba/w-menu.w"),
+            "no code: the path is the name"
+        );
     }
 
     #[test]
