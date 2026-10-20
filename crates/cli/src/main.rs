@@ -26,6 +26,7 @@ use std::time::Duration;
 use tracing_subscriber::{fmt, EnvFilter};
 
 mod bench;
+mod xref_stats;
 
 #[derive(Parser, Debug)]
 #[command(name = "ontology", version, about = "Ontology graph + RAG CLI")]
@@ -247,6 +248,23 @@ enum Cmd {
         #[arg(long, default_value_t = 6)]
         max_depth: u32,
     },
+    /// Parse a directory of Progress OpenEdge `*.xref.xml` files and print
+    /// what an import would produce (programs, tables, fields, links,
+    /// unresolved RUN targets), without writing anything. Needs no store.
+    XrefStats {
+        /// Directory (searched recursively) or a single `.xref.xml` file.
+        path: PathBuf,
+        /// Compile root(s) to strip from paths, so `D:\App\ERP\sd\x.p` and
+        /// `sd/x.p` are one program. Repeatable.
+        #[arg(long)]
+        root: Vec<String>,
+        /// Parser threads. Default: the number of cores.
+        #[arg(long)]
+        threads: Option<usize>,
+        /// How many unresolved RUN targets and top tables to list.
+        #[arg(long, default_value_t = 30)]
+        top: usize,
+    },
     /// Container health probe: GET `url`, exit 0 on a 2xx, 1 otherwise. The
     /// runtime image has no curl; this needs no dependency either.
     Healthcheck {
@@ -344,6 +362,16 @@ async fn main() -> Result<()> {
             Ok(status) => anyhow::bail!("{url}: HTTP {status}"),
             Err(e) => anyhow::bail!("{url}: {e}"),
         };
+    }
+    if let Cmd::XrefStats {
+        path,
+        root,
+        threads,
+        top,
+    } = &cli.cmd
+    {
+        // Read-only and store-less: a running server is not disturbed.
+        return xref_stats::run(path, root, *threads, *top);
     }
     if let Cmd::Restore { src } = &cli.cmd {
         let data = cli
@@ -742,7 +770,9 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        Cmd::Healthcheck { .. } => unreachable!("handled before the store opens"),
+        Cmd::Healthcheck { .. } | Cmd::XrefStats { .. } => {
+            unreachable!("handled before the store opens")
+        }
         Cmd::Serve {
             bind,
             auth_env,

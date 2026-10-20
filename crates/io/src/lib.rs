@@ -29,6 +29,7 @@ pub mod template;
 pub mod text;
 pub mod triples;
 pub mod xlsx;
+pub mod xref;
 
 pub use charset::{decode_to_utf8, looks_binary, DecodedText};
 pub use csv::CsvSource;
@@ -57,3 +58,4 @@ pub use template::{
 pub use text::TextDocumentSource;
 pub use triples::TripleSource;
 pub use xlsx::{spreadsheet_to_text, XlsxSource};
+pub use xref::{normalize_path, parse_xref, parse_xref_file, ProgramKind, TableUse, XrefFile};
