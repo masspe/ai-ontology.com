@@ -229,40 +229,55 @@ impl OntologyGraph {
         let want_concept =
             |name: &str| -> bool { concept_filter.as_ref().is_none_or(|f| f.contains(name)) };
 
-        while let Some((node, depth)) = queue.pop_front() {
-            if depth >= spec.max_depth {
-                continue;
+        // Level by level: every edge leaving the frontier is gathered, the
+        // strongest first (stable, so equal weights keep adjacency order),
+        // and only then admitted under the node cap. A seed with a thousand
+        // weight-1 edges can no longer fill the cap before another seed's
+        // weight-50 edges are seen.
+        let mut frontier: Vec<ConceptId> = queue.drain(..).map(|(id, _)| id).collect();
+        let use_typed = !spec.relation_types.is_empty();
+        for depth in 0..spec.max_depth {
+            if frontier.is_empty() {
+                break;
             }
             // At the node cap the walk goes on over the nodes already kept,
             // adding none, so the links *between* them are still collected
             // (seeding with a full page of one type used to return nodes
-            // without a single edge). Bounded: the queue only drains.
-
-            // When a relation_type whitelist is supplied, jump straight to
-            // the typed adjacency buckets and skip cloning edges of types
-            // we'd discard anyway.
-            let use_typed = !spec.relation_types.is_empty();
-            let mut edges: Vec<Relation> = Vec::new();
-            match (spec.direction, use_typed) {
-                (Direction::Outgoing, true) => {
-                    edges.extend(self.outgoing_typed(node, &spec.relation_types))
+            // without a single edge). Bounded: the frontier only shrinks.
+            let mut edges: Vec<(ConceptId, Relation)> = Vec::new();
+            for &node in &frontier {
+                // When a relation_type whitelist is supplied, jump straight
+                // to the typed adjacency buckets and skip cloning edges of
+                // types we'd discard anyway.
+                let mut here: Vec<Relation> = Vec::new();
+                match (spec.direction, use_typed) {
+                    (Direction::Outgoing, true) => {
+                        here.extend(self.outgoing_typed(node, &spec.relation_types))
+                    }
+                    (Direction::Incoming, true) => {
+                        here.extend(self.incoming_typed(node, &spec.relation_types))
+                    }
+                    (Direction::Both, true) => {
+                        here.extend(self.outgoing_typed(node, &spec.relation_types));
+                        here.extend(self.incoming_typed(node, &spec.relation_types));
+                    }
+                    (Direction::Outgoing, false) => here.extend(self.outgoing(node)),
+                    (Direction::Incoming, false) => here.extend(self.incoming(node)),
+                    (Direction::Both, false) => {
+                        here.extend(self.outgoing(node));
+                        here.extend(self.incoming(node));
+                    }
                 }
-                (Direction::Incoming, true) => {
-                    edges.extend(self.incoming_typed(node, &spec.relation_types))
-                }
-                (Direction::Both, true) => {
-                    edges.extend(self.outgoing_typed(node, &spec.relation_types));
-                    edges.extend(self.incoming_typed(node, &spec.relation_types));
-                }
-                (Direction::Outgoing, false) => edges.extend(self.outgoing(node)),
-                (Direction::Incoming, false) => edges.extend(self.incoming(node)),
-                (Direction::Both, false) => {
-                    edges.extend(self.outgoing(node));
-                    edges.extend(self.incoming(node));
-                }
+                edges.extend(here.into_iter().map(|r| (node, r)));
             }
+            edges.sort_by(|a, b| {
+                b.1.weight
+                    .partial_cmp(&a.1.weight)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
 
-            for rel in edges {
+            let mut next: Vec<ConceptId> = Vec::new();
+            for (node, rel) in edges {
                 if !want_rel(&rel.relation_type) {
                     continue;
                 }
@@ -289,12 +304,13 @@ impl OntologyGraph {
                     visited.insert(neighbor);
                     depth_of.insert(neighbor, depth + 1);
                     concepts.push(nc);
-                    queue.push_back((neighbor, depth + 1));
+                    next.push(neighbor);
                 }
                 if emitted_edges.insert(rel.id) {
                     relations.push(rel);
                 }
             }
+            frontier = next;
         }
 
         Subgraph {
