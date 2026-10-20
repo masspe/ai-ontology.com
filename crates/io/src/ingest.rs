@@ -181,6 +181,10 @@ struct Ingester<'a> {
     /// `(concept_type, lowercase name)` → id for every pending concept, so
     /// intra-batch duplicates are caught before anything hits the disk.
     pending_names: HashMap<(String, String), ConceptId>,
+    /// Relations validated and id-allocated (`prepare_relation`), not yet
+    /// journaled nor applied. A run of relations costs one barrier per
+    /// `INGEST_BATCH_SIZE`, like a run of concepts (`STORAGE.md` §7.2).
+    pending_relations: Vec<Relation>,
     /// The in-memory ontology has type declarations not yet journaled.
     schema_dirty: bool,
     /// The ontology as it was before the first un-journaled declaration;
@@ -196,6 +200,7 @@ impl<'a> Ingester<'a> {
             stats: IngestStats::default(),
             pending: Vec::new(),
             pending_names: HashMap::new(),
+            pending_relations: Vec::new(),
             schema_dirty: false,
             schema_baseline: None,
         }
@@ -325,10 +330,18 @@ impl<'a> Ingester<'a> {
         self.flush().await
     }
 
-    /// Durability barrier: journal pending schema and concepts, then apply
-    /// the concepts to the graph. On store failure nothing is applied and
-    /// the batch is dropped (its ids stay burnt — harmless).
+    /// Durability barrier: journal pending schema, concepts and relations,
+    /// then apply them to the graph. On store failure nothing is applied
+    /// and the batch is dropped (its ids stay burnt — harmless).
     async fn flush(&mut self) -> Result<(), IngestError> {
+        self.settle_concepts().await?;
+        self.flush_relations().await
+    }
+
+    /// Journal pending schema and concepts, then apply the concepts. The
+    /// relation batch is left alone: relations only need their endpoints
+    /// applied, and settling them here would cost a barrier per relation.
+    async fn settle_concepts(&mut self) -> Result<(), IngestError> {
         self.flush_schema().await?;
         if self.pending.is_empty() {
             return Ok(());
@@ -344,6 +357,23 @@ impl<'a> Ingester<'a> {
             // already rejected everything apply would.
             self.graph.apply_prepared_concept(c)?;
             self.stats.concepts += 1;
+        }
+        Ok(())
+    }
+
+    /// Journal the relation batch under one barrier, then apply it.
+    async fn flush_relations(&mut self) -> Result<(), IngestError> {
+        if self.pending_relations.is_empty() {
+            return Ok(());
+        }
+        let batch = std::mem::take(&mut self.pending_relations);
+        if let Some(s) = self.store {
+            let records: Vec<LogRecord> = batch.iter().cloned().map(LogRecord::relation).collect();
+            s.append_batch(&records).await?;
+        }
+        for r in batch {
+            self.graph.apply_prepared_relation(r)?;
+            self.stats.relations += 1;
         }
         Ok(())
     }
@@ -404,6 +434,10 @@ impl<'a> Ingester<'a> {
         if c.id.0 != 0 && self.pending.iter().any(|p| p.id == c.id) {
             self.flush().await?;
         }
+        // Journal order is arrival order: a concept after a run of relations
+        // settles them first, so an interleaved source costs no more barriers
+        // than before relations were batched.
+        self.flush_relations().await?;
         self.check_pending_conflicts(&c)?;
         self.graph.prepare_concept(&mut c)?;
         self.pending_names
@@ -416,12 +450,35 @@ impl<'a> Ingester<'a> {
     }
 
     async fn add_relation(&mut self, mut rel: Relation) -> Result<(), IngestError> {
-        // Endpoints must be applied, so settle the batch before validating.
-        self.flush().await?;
+        // Endpoints must be applied, so settle the concepts before validating.
+        self.settle_concepts().await?;
+        // Cardinality and `functional` are counted against applied edges. A
+        // pending sibling on the limited side would slip through, so the
+        // batch is settled first — only then, so a run of `ManyToOne` edges
+        // from distinct sources still costs one barrier per batch.
+        use ontology_graph::Cardinality::{ManyToOne, OneToMany, OneToOne};
+        let (limits_out, limits_in) = self.graph.with_ontology(|o| {
+            o.relation_types
+                .get(&rel.relation_type)
+                .map_or((false, false), |rt| {
+                    (
+                        rt.functional || matches!(rt.cardinality, OneToOne | ManyToOne),
+                        matches!(rt.cardinality, OneToOne | OneToMany),
+                    )
+                })
+        });
+        let pending_sibling = self.pending_relations.iter().any(|p| {
+            p.relation_type == rel.relation_type
+                && ((limits_out && p.source == rel.source) || (limits_in && p.target == rel.target))
+        });
+        if pending_sibling {
+            self.flush_relations().await?;
+        }
         self.graph.prepare_relation(&mut rel)?;
-        self.journal(LogRecord::relation(rel.clone())).await?;
-        self.graph.apply_prepared_relation(rel)?;
-        self.stats.relations += 1;
+        self.pending_relations.push(rel);
+        if self.pending_relations.len() >= INGEST_BATCH_SIZE {
+            self.flush_relations().await?;
+        }
         Ok(())
     }
 
@@ -467,7 +524,7 @@ impl<'a> Ingester<'a> {
                 let mut tgt = self.graph.find_by_name(target_type, target_name);
                 if (src.is_none() || tgt.is_none()) && !self.pending.is_empty() {
                     // The endpoints may be sitting in the batch.
-                    self.flush().await?;
+                    self.settle_concepts().await?;
                     src = self.graph.find_by_name(source_type, source_name);
                     tgt = self.graph.find_by_name(target_type, target_name);
                 }

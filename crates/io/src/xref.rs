@@ -18,11 +18,19 @@
 //! The full ontology (sheets and links) is built from these summaries by
 //! the import; this module only parses and aggregates.
 
+use async_trait::async_trait;
+use ontology_graph::{
+    Cardinality, Concept, ConceptId, ConceptType, PropertyValue, RelationType, RuleType,
+};
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::BufRead;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{mpsc, Arc, Mutex};
+
+use crate::ingest::{IngestError, Source};
+use crate::record::Record;
 
 /// What kind of compile unit the main `<Source>` is, by extension.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,6 +110,41 @@ pub struct XrefFile {
     pub strings: u32,
     /// Every `<Reference>` seen.
     pub references: u32,
+}
+
+impl XrefFile {
+    /// Fold another summary of the same program into this one (two xref
+    /// files for one source path: counts add up, sets unite, the first
+    /// file's kind and class stand).
+    pub fn merge(&mut self, other: XrefFile) {
+        self.includes.extend(other.includes);
+        for (k, n) in other.runs {
+            *self.runs.entry(k).or_insert(0) += n;
+        }
+        for (k, n) in other.calls {
+            *self.calls.entry(k).or_insert(0) += n;
+        }
+        self.dynamic_runs += other.dynamic_runs;
+        for (k, n) in other.invokes {
+            *self.invokes.entry(k).or_insert(0) += n;
+        }
+        self.procedures.extend(other.procedures);
+        self.functions.extend(other.functions);
+        for (t, u) in other.tables {
+            let e = self.tables.entry(t).or_default();
+            e.reads += u.reads;
+            e.updates += u.updates;
+            e.creates += u.creates;
+            e.deletes += u.deletes;
+            e.fields_read.extend(u.fields_read);
+            e.fields_updated.extend(u.fields_updated);
+        }
+        self.strings += other.strings;
+        self.references += other.references;
+        if self.class.is_none() {
+            self.class = other.class;
+        }
+    }
 }
 
 /// Lower-cases, turns `\` into `/`, drops `./`, and strips the first of
@@ -278,12 +321,461 @@ fn record(out: &mut XrefFile, ty: &str, id: String, context: &str, roots: &[Stri
             out.functions.insert(id.to_ascii_lowercase());
         }
         "INVOKE" | "NEW" | "CAST" => {
-            let class = id.split(':').next().unwrap_or(&id).to_string();
-            bump(&mut out.invokes, class);
+            // `Class:member` → the class; a .NET generic comes assembly-
+            // qualified (`"Ns.List`1[[T, Asm, Version=…]]`) → `Ns.List`.
+            let class = id.trim_start_matches('"');
+            let end = class.find([':', '`', '[']).unwrap_or(class.len());
+            bump(&mut out.invokes, class[..end].to_string());
         }
         "CLASS" => out.class = Some(id),
         "STRING" => out.strings += 1,
         _ => {}
+    }
+}
+
+/// Every `*.xref.xml` under a path, parsed.
+#[derive(Debug, Default)]
+pub struct ParsedDir {
+    pub files: Vec<XrefFile>,
+    /// Files the parser refused, with the reason.
+    pub errors: Vec<(PathBuf, String)>,
+    pub bytes: u64,
+}
+
+fn collect_xref_files(path: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
+    if path.is_file() {
+        out.push(path.to_path_buf());
+        return Ok(());
+    }
+    for entry in std::fs::read_dir(path)? {
+        let p = entry?.path();
+        if p.is_dir() {
+            collect_xref_files(&p, out)?;
+        } else if p
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.to_ascii_lowercase().ends_with(".xref.xml"))
+        {
+            out.push(p);
+        }
+    }
+    Ok(())
+}
+
+/// Parse every `*.xref.xml` under `path` (searched recursively; a single
+/// file works too) on `threads` threads (default: the cores). Blocking:
+/// call it from a blocking context. The result is sorted by program path
+/// so the import order — and the ids it allocates — is deterministic.
+pub fn parse_dir(
+    path: &Path,
+    roots: &[String],
+    threads: Option<usize>,
+) -> std::io::Result<ParsedDir> {
+    let mut paths = Vec::new();
+    collect_xref_files(path, &mut paths)?;
+    paths.sort();
+    let threads = threads
+        .unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get()))
+        .max(1);
+    let roots: Arc<[String]> = roots.into();
+    let queue = Arc::new(Mutex::new(paths.into_iter()));
+    let (tx, rx) = mpsc::channel::<(PathBuf, u64, Result<XrefFile, String>)>();
+    let workers: Vec<_> = (0..threads)
+        .map(|_| {
+            let queue = Arc::clone(&queue);
+            let tx = tx.clone();
+            let roots = Arc::clone(&roots);
+            std::thread::spawn(move || loop {
+                let next = queue.lock().unwrap_or_else(|e| e.into_inner()).next();
+                let Some(p) = next else { break };
+                let size = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
+                let parsed = parse_xref_file(&p, &roots);
+                if tx.send((p, size, parsed)).is_err() {
+                    break;
+                }
+            })
+        })
+        .collect();
+    drop(tx);
+    let mut out = ParsedDir::default();
+    for (p, size, parsed) in rx {
+        out.bytes += size;
+        match parsed {
+            Ok(f) => out.files.push(f),
+            Err(e) => out.errors.push((p, e)),
+        }
+    }
+    for w in workers {
+        let _ = w.join();
+    }
+    out.files.sort_by(|a, b| a.program.cmp(&b.program));
+    Ok(out)
+}
+
+/// Storage domain of every type the xref import declares.
+pub const XREF_NS: &str = "erp";
+
+fn concept_type(name: &str, description: &str, properties: &[&str]) -> Record {
+    Record::ConceptTypeDecl(ConceptType {
+        name: name.into(),
+        description: description.into(),
+        properties: Some(properties.iter().map(|p| p.to_string()).collect()),
+        ns: Some(XREF_NS.into()),
+        ..Default::default()
+    })
+}
+
+fn relation_type(
+    name: &str,
+    domain: &str,
+    range: &str,
+    cardinality: Cardinality,
+    description: &str,
+) -> Record {
+    Record::RelationTypeDecl(RelationType {
+        name: name.into(),
+        domain: domain.into(),
+        range: range.into(),
+        cardinality,
+        description: description.into(),
+        ..Default::default()
+    })
+}
+
+fn rule(name: &str, when: &str, then: &str, applies_to: &[&str]) -> Record {
+    Record::RuleTypeDecl(RuleType {
+        name: name.into(),
+        when: when.into(),
+        then: then.into(),
+        applies_to: applies_to.iter().map(|t| t.to_string()).collect(),
+        strict: false,
+        description: String::new(),
+    })
+}
+
+/// The `erp` model: types, link types and the rules the prompt needs to
+/// reason about impact. Every link's `weight` is the number of references
+/// in the program's compiled code.
+pub fn xref_ontology_records() -> Vec<Record> {
+    use Cardinality::{ManyToMany as NN, ManyToOne as N1, OneToMany as ONE_N};
+    vec![
+        concept_type("Module", "A directory of the ERP source tree: the unit people talk about (payroll, accounting, …).", &["path", "program_count"]),
+        concept_type("Program", "A compiled OpenEdge program (.p procedure, .w window, .cls class). `missing` marks a program other programs run but whose compiled cross-reference is absent.", &["path", "kind", "module", "missing", "procedures", "functions", "dynamic_runs", "strings", "references"]),
+        concept_type("Include", "An OpenEdge include file (.i), compiled into every program that includes it.", &["path"]),
+        concept_type("Class", "An ABL or .NET class used by programs.", &["name"]),
+        concept_type("Database", "An OpenEdge database (msdb, msec, …).", &[]),
+        concept_type("Table", "A database table, named db.table.", &["db", "table"]),
+        concept_type("Field", "A table field, named db.table.field.", &["table", "field"]),
+        relation_type("belongs_to", "Program", "Module", N1, "the program's directory"),
+        relation_type("runs", "Program", "Program", NN, "RUN of another program; weight = number of RUN statements"),
+        relation_type("includes", "Program", "Include", NN, "the include is compiled into the program"),
+        relation_type("invokes", "Program", "Class", NN, "INVOKE, NEW or CAST of the class; weight = number of uses"),
+        relation_type("in_database", "Table", "Database", N1, "the table's database"),
+        relation_type("has_field", "Table", "Field", ONE_N, "the table's field"),
+        relation_type("reads", "Program", "Table", NN, "the program reads the table (ACCESS, REFERENCE, SEARCH); weight = number of references"),
+        relation_type("updates", "Program", "Table", NN, "the program updates fields of the table; weight = number of references"),
+        relation_type("creates", "Program", "Table", NN, "the program creates rows; weight = number of CREATE statements"),
+        relation_type("deletes", "Program", "Table", NN, "the program deletes rows; weight = number of DELETE statements"),
+        relation_type("reads_field", "Program", "Field", NN, "the program reads the field"),
+        relation_type("updates_field", "Program", "Field", NN, "the program updates the field"),
+        rule("table_change_impacts_writers", "a Table or Field changes (type, format, meaning)", "every Program that updates, creates, deletes or reads it is impacted; writers first", &["Table", "Field"]),
+        rule("include_change_impacts_all", "an Include changes", "every Program that includes it must be recompiled and is impacted", &["Include"]),
+        rule("answer_at_module_level", "a question is about an area of the ERP rather than a specific program", "answer with Modules and the most used Programs, not a list of every program", &["Module"]),
+    ]
+}
+
+fn text(s: &str) -> PropertyValue {
+    PropertyValue::Text(s.to_string())
+}
+
+fn names(set: &BTreeSet<String>) -> PropertyValue {
+    PropertyValue::List(set.iter().map(|s| text(s)).collect())
+}
+
+fn module_of(path: &str) -> &str {
+    path.split_once('/').map_or("root", |(m, _)| m)
+}
+
+fn concept(ty: &str, name: &str) -> Concept {
+    Concept::new(ConceptId(0), ty, name)
+}
+
+fn link(ty: &str, st: &str, sn: &str, tt: &str, tn: &str, weight: u32) -> Record {
+    Record::NamedRelation {
+        relation_type: ty.into(),
+        source_type: st.into(),
+        source_name: sn.into(),
+        target_type: tt.into(),
+        target_name: tn.into(),
+        weight: weight as f32,
+    }
+}
+
+/// Turns parsed xref summaries into the records of the `erp` model, in
+/// dependency order (types, then sheets, then links), so every link finds
+/// its endpoints already applied. Lazy: the links are produced as the
+/// ingester pulls them.
+pub struct XrefSource {
+    records: Box<dyn Iterator<Item = Record> + Send + Sync>,
+}
+
+impl XrefSource {
+    /// Parse everything under `path` (see [`parse_dir`]) and build the source.
+    pub fn from_path(
+        path: &Path,
+        roots: &[String],
+        threads: Option<usize>,
+    ) -> Result<(Self, ParsedDir), IngestError> {
+        let mut parsed = parse_dir(path, roots, threads)?;
+        let files = std::mem::take(&mut parsed.files);
+        Ok((Self::from_files(files), parsed))
+    }
+
+    pub fn from_files(files: Vec<XrefFile>) -> Self {
+        // One sheet per program: two xref files of one source path merge.
+        let mut by_program: BTreeMap<String, XrefFile> = BTreeMap::new();
+        for f in files {
+            match by_program.entry(f.program.clone()) {
+                std::collections::btree_map::Entry::Vacant(e) => {
+                    e.insert(f);
+                }
+                std::collections::btree_map::Entry::Occupied(mut e) => e.get_mut().merge(f),
+            }
+        }
+        let files: Vec<XrefFile> = by_program.into_values().collect();
+        // Identities first: a RUN target resolves to a known program by exact
+        // path, else by unique basename (the PROPATH finds `pcto.p` in `sd/`),
+        // else it is a `missing` program.
+        let known: BTreeSet<String> = files.iter().map(|f| f.program.clone()).collect();
+        let mut by_basename: HashMap<&str, Vec<&str>> = HashMap::new();
+        for p in &known {
+            by_basename
+                .entry(p.rsplit('/').next().unwrap_or(p))
+                .or_default()
+                .push(p);
+        }
+        let resolve = |target: &str| -> String {
+            if known.contains(target) {
+                return target.to_string();
+            }
+            match by_basename.get(target.rsplit('/').next().unwrap_or(target)) {
+                Some(v) if v.len() == 1 => v[0].to_string(),
+                _ => target.to_string(),
+            }
+        };
+
+        let mut missing: BTreeSet<String> = BTreeSet::new();
+        let mut modules: BTreeMap<String, u32> = BTreeMap::new();
+        let mut tables: BTreeSet<String> = BTreeSet::new();
+        let mut fields: BTreeSet<String> = BTreeSet::new();
+        let mut includes: BTreeSet<String> = BTreeSet::new();
+        // ABL names are case-insensitive and the graph's name uniqueness
+        // too: `System.object` and `System.Object` are one class, spelt as
+        // first seen.
+        let mut classes: BTreeMap<String, String> = BTreeMap::new();
+        // Per program: its RUN targets after resolution.
+        let mut resolved_runs: Vec<BTreeMap<String, u32>> = Vec::with_capacity(files.len());
+        for f in &files {
+            *modules
+                .entry(module_of(&f.program).to_string())
+                .or_insert(0) += 1;
+            includes.extend(f.includes.iter().cloned());
+            for c in f.invokes.keys() {
+                classes.entry(c.to_lowercase()).or_insert_with(|| c.clone());
+            }
+            let mut runs = BTreeMap::new();
+            for (t, n) in &f.runs {
+                let r = resolve(t);
+                if !known.contains(&r) {
+                    missing.insert(r.clone());
+                }
+                *runs.entry(r).or_insert(0) += n;
+            }
+            resolved_runs.push(runs);
+            for (t, u) in &f.tables {
+                let t = t.to_lowercase();
+                for field in u.fields_read.iter().chain(&u.fields_updated) {
+                    fields.insert(format!("{t}.{}", field.to_lowercase()));
+                }
+                tables.insert(t);
+            }
+        }
+        for m in missing.iter() {
+            modules.entry(module_of(m).to_string()).or_insert(0);
+        }
+        let databases: BTreeSet<String> = tables
+            .iter()
+            .filter_map(|t| t.split_once('.').map(|(db, _)| db.to_string()))
+            .collect();
+
+        let sheets: Vec<Record> = xref_ontology_records()
+            .into_iter()
+            .chain(
+                databases
+                    .iter()
+                    .map(|d| Record::Concept(concept("Database", d))),
+            )
+            .chain(modules.iter().map(|(m, n)| {
+                Record::Concept(
+                    concept("Module", m)
+                        .with_property("path", text(m))
+                        .with_property("program_count", PropertyValue::Number(f64::from(*n))),
+                )
+            }))
+            .chain(tables.iter().map(|t| {
+                let (db, table) = t.split_once('.').unwrap_or(("", t));
+                Record::Concept(
+                    concept("Table", t)
+                        .with_property("db", text(db))
+                        .with_property("table", text(table)),
+                )
+            }))
+            .chain(fields.iter().map(|f| {
+                let (table, field) = f.rsplit_once('.').unwrap_or(("", f));
+                Record::Concept(
+                    concept("Field", f)
+                        .with_property("table", text(table))
+                        .with_property("field", text(field)),
+                )
+            }))
+            .chain(
+                includes
+                    .iter()
+                    .map(|i| Record::Concept(concept("Include", i).with_property("path", text(i)))),
+            )
+            .chain(
+                classes
+                    .values()
+                    .map(|c| Record::Concept(concept("Class", c).with_property("name", text(c)))),
+            )
+            .chain(files.iter().map(|f| {
+                Record::Concept(
+                    concept("Program", &f.program)
+                        .with_property("path", text(&f.program))
+                        .with_property("kind", text(f.kind.map_or("other", |k| k.as_str())))
+                        .with_property("module", text(module_of(&f.program)))
+                        .with_property("missing", PropertyValue::Bool(false))
+                        .with_property("procedures", names(&f.procedures))
+                        .with_property("functions", names(&f.functions))
+                        .with_property(
+                            "dynamic_runs",
+                            PropertyValue::Number(f64::from(f.dynamic_runs)),
+                        )
+                        .with_property("strings", PropertyValue::Number(f64::from(f.strings)))
+                        .with_property(
+                            "references",
+                            PropertyValue::Number(f64::from(f.references)),
+                        ),
+                )
+            }))
+            .chain(missing.iter().map(|m| {
+                Record::Concept(
+                    concept("Program", m)
+                        .with_property("path", text(m))
+                        .with_property("kind", text(ProgramKind::of(m).as_str()))
+                        .with_property("module", text(module_of(m)))
+                        .with_property("missing", PropertyValue::Bool(true)),
+                )
+            }))
+            .collect();
+
+        let schema_links: Vec<Record> = tables
+            .iter()
+            .filter_map(|t| {
+                t.split_once('.')
+                    .map(|(db, _)| link("in_database", "Table", t, "Database", db, 1))
+            })
+            .chain(fields.iter().filter_map(|f| {
+                f.rsplit_once('.')
+                    .map(|(t, _)| link("has_field", "Table", t, "Field", f, 1))
+            }))
+            .chain(
+                missing
+                    .iter()
+                    .map(|m| link("belongs_to", "Program", m, "Module", module_of(m), 1)),
+            )
+            .collect();
+
+        // One program's links at a time; the per-program vector is small.
+        let program_links = files
+            .into_iter()
+            .zip(resolved_runs)
+            .flat_map(move |(f, runs)| {
+                let p = f.program;
+                let mut out: Vec<Record> = Vec::with_capacity(16 + f.tables.len() * 4);
+                out.push(link(
+                    "belongs_to",
+                    "Program",
+                    &p,
+                    "Module",
+                    module_of(&p),
+                    1,
+                ));
+                out.extend(
+                    runs.iter()
+                        .map(|(t, n)| link("runs", "Program", &p, "Program", t, *n)),
+                );
+                out.extend(
+                    f.includes
+                        .iter()
+                        .map(|i| link("includes", "Program", &p, "Include", i, 1)),
+                );
+                out.extend(f.invokes.iter().map(|(c, n)| {
+                    link(
+                        "invokes",
+                        "Program",
+                        &p,
+                        "Class",
+                        &classes[&c.to_lowercase()],
+                        *n,
+                    )
+                }));
+                for (t, u) in &f.tables {
+                    let t = t.to_lowercase();
+                    for (ty, n) in [
+                        ("reads", u.reads),
+                        ("updates", u.updates),
+                        ("creates", u.creates),
+                        ("deletes", u.deletes),
+                    ] {
+                        if n > 0 {
+                            out.push(link(ty, "Program", &p, "Table", &t, n));
+                        }
+                    }
+                    out.extend(u.fields_read.iter().map(|fl| {
+                        link(
+                            "reads_field",
+                            "Program",
+                            &p,
+                            "Field",
+                            &format!("{t}.{}", fl.to_lowercase()),
+                            1,
+                        )
+                    }));
+                    out.extend(u.fields_updated.iter().map(|fl| {
+                        link(
+                            "updates_field",
+                            "Program",
+                            &p,
+                            "Field",
+                            &format!("{t}.{}", fl.to_lowercase()),
+                            1,
+                        )
+                    }));
+                }
+                out
+            });
+
+        Self {
+            records: Box::new(sheets.into_iter().chain(schema_links).chain(program_links)),
+        }
+    }
+}
+
+#[async_trait]
+impl Source for XrefSource {
+    async fn next(&mut self) -> Result<Option<Record>, IngestError> {
+        Ok(self.records.next())
     }
 }
 
@@ -336,12 +828,17 @@ mod tests {
             reference("FUNCTION", "fGetDate", ""),
             reference("INVOKE", "Net.Class.Config:Get", ""),
             reference("NEW", "Net.Class.Config", ""),
+            reference(
+                "NEW",
+                "&quot;System.Collections.Generic.List`1[[DevExpress.XtraBars.BarItem, DevExpress.XtraBars.v15.2, Version=15.2.10.0]]",
+                "",
+            ),
         ]);
         let f = parse_xref(xml.as_bytes(), &roots).unwrap();
 
         assert_eq!(f.program, "sd/pcto.p");
         assert_eq!(f.kind, Some(ProgramKind::Procedure));
-        assert_eq!(f.references, 19);
+        assert_eq!(f.references, 20);
         assert_eq!(f.strings, 1);
 
         let sdva = &f.tables["msdb.sdva"];
@@ -365,6 +862,7 @@ mod tests {
         assert!(f.procedures.contains("adm-create-controls"));
         assert!(f.functions.contains("fgetdate"));
         assert_eq!(f.invokes["Net.Class.Config"], 2);
+        assert_eq!(f.invokes["System.Collections.Generic.List"], 1);
     }
 
     #[test]

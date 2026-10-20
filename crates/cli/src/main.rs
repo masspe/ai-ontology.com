@@ -11,7 +11,7 @@ use ontology_graph::{Ontology, OntologyGraph};
 use ontology_index::{HybridIndex, RetrievalRequest};
 use ontology_io::{
     export_graph, ingest_records, CsvSource, JsonlSink, JsonlSource, TextDocumentSource,
-    TripleSource, XlsxSource,
+    TripleSource, XlsxSource, XrefSource,
 };
 use ontology_rag::{EchoModel, LanguageModel, RagPipeline};
 use ontology_server::{
@@ -160,6 +160,13 @@ enum Cmd {
         /// document whole.
         #[arg(long, default_value_t = ontology_io::DEFAULT_CHUNK_CHARS)]
         chunk_chars: usize,
+        /// The path holds Progress OpenEdge `*.xref.xml` files: import them
+        /// as the `erp` model (programs, tables, fields and their links).
+        #[arg(long)]
+        xref: bool,
+        /// With `--xref`: compile root(s) stripped from paths (repeatable).
+        #[arg(long)]
+        xref_root: Vec<String>,
         path: PathBuf,
     },
     /// Print summary statistics.
@@ -514,6 +521,8 @@ async fn main() -> Result<()> {
             text_type,
             text_ext,
             chunk_chars,
+            xref,
+            xref_root,
             path,
         } => {
             if let Some(p) = ontology {
@@ -538,6 +547,22 @@ async fn main() -> Result<()> {
             // `-` reads JSONL from stdin (handy for piping).
             let stats = if path.as_os_str() == "-" {
                 let mut src = JsonlSource::stdin();
+                ingest_records(&mut src, &graph, Some(store.as_ref())).await?
+            } else if xref {
+                let started = std::time::Instant::now();
+                let (mut src, parsed) = tokio::task::spawn_blocking(move || {
+                    XrefSource::from_path(&path, &xref_root, None).map_err(anyhow::Error::from)
+                })
+                .await??;
+                eprintln!(
+                    "parsed {} MB of xref in {:.1?}; {} files refused",
+                    parsed.bytes / 1_048_576,
+                    started.elapsed(),
+                    parsed.errors.len()
+                );
+                for (p, e) in parsed.errors.iter().take(20) {
+                    eprintln!("  {}: {e}", p.display());
+                }
                 ingest_records(&mut src, &graph, Some(store.as_ref())).await?
             } else if is_dir {
                 let ty = text_type.context("--text-type required when ingesting a directory")?;

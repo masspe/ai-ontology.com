@@ -33,8 +33,9 @@ const JSONL: &[u8] = br#"{"kind":"concept","id":0,"concept_type":"Topic","name":
 {"kind":"named_relation","relation_type":"related_to","source_type":"Topic","source_name":"A","target_type":"Topic","target_name":"B"}
 "#;
 
-/// JSONL: concepts are journaled as one batch, the relation on its own; the
-/// file registry entry mirrors the ingest stats and is fully CRUD-able.
+/// JSONL: concepts are journaled as one batch, the relation as a second
+/// batch (relations are batched too, never appended one by one); the file
+/// registry entry mirrors the ingest stats and is fully CRUD-able.
 #[tokio::test]
 async fn upload_jsonl_ingests_records_and_registers_the_file() {
     let (app, graph, store) = flaky_app();
@@ -48,8 +49,12 @@ async fn upload_jsonl_ingests_records_and_registers_the_file() {
     let file_id = v["file_id"].as_u64().unwrap();
     assert_eq!(graph.concept_count(), 2);
     assert_eq!(graph.relation_count(), 2, "symmetric inverse materialized");
-    assert_eq!(store.batch_calls(), 1, "the two concepts share one barrier");
-    assert_eq!(store.append_calls(), 1, "the relation is journaled alone");
+    assert_eq!(
+        store.batch_calls(),
+        2,
+        "concepts under one barrier, the relation under the next"
+    );
+    assert_eq!(store.append_calls(), 0, "nothing is journaled one by one");
     assert_eq!(store.records_written(), 3);
 
     let (st, files) = get(&app, "/files").await;
