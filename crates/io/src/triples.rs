@@ -90,6 +90,7 @@ impl Source for TripleSource {
                 target_type: tt.clone(),
                 target_name: tn.clone(),
                 weight: 1.0,
+                properties: Default::default(),
             };
             // Only emit the relation immediately if both endpoints already
             // exist; otherwise emit the concepts now and the relation next.

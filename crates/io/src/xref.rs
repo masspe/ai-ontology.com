@@ -508,6 +508,7 @@ fn link(ty: &str, st: &str, sn: &str, tt: &str, tn: &str, weight: u32) -> Record
         target_type: tt.into(),
         target_name: tn.into(),
         weight: weight as f32,
+        properties: Default::default(),
     }
 }
 

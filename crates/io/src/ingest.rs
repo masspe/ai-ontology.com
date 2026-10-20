@@ -519,6 +519,7 @@ impl<'a> Ingester<'a> {
                 target_type,
                 target_name,
                 weight,
+                properties,
             } => {
                 let mut src = self.graph.find_by_name(source_type, source_name);
                 let mut tgt = self.graph.find_by_name(target_type, target_name);
@@ -533,6 +534,7 @@ impl<'a> Ingester<'a> {
                         let mut rel =
                             Relation::new(Default::default(), relation_type.clone(), s, t);
                         rel.weight = *weight;
+                        rel.properties = properties.clone();
                         self.add_relation(rel).await?;
                         Ok(true)
                     }

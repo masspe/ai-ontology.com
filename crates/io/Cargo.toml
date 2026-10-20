@@ -8,6 +8,7 @@ rust-version.workspace = true
 [dependencies]
 ontology-graph = { workspace = true }
 ontology-storage = { workspace = true }
+ahash = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 async-trait = { workspace = true }
@@ -21,3 +22,4 @@ unicode-normalization = "0.1"
 whatlang = "0.16"
 zip = { version = "4.6", default-features = false, features = ["deflate"] }
 quick-xml = "0.42"
+regex = { workspace = true }
