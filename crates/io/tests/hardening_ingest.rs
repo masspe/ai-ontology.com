@@ -81,6 +81,7 @@ fn named(rel: &str, src: &str, tgt: &str) -> Record {
         target_type: "Person".into(),
         target_name: tgt.into(),
         weight: 1.0,
+        properties: Default::default(),
     }
 }
 

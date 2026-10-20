@@ -1230,13 +1230,25 @@ impl OntologyGraph {
 
         if symmetric && s != t {
             // Materialize the inverse so traversals are direction-agnostic.
+            // It is the same edge seen from the other end: weight and
+            // properties (a join's key list, …) travel with it. The guard
+            // on `relations` is released before the insert below: holding
+            // it across the insert deadlocks on the map's shard lock.
+            let (relation_type, weight, properties) = {
+                let original = self.relations.get(&id).unwrap();
+                (
+                    original.relation_type.clone(),
+                    original.weight,
+                    original.properties.clone(),
+                )
+            };
             let inverse = Relation {
                 id: self.ids.next_relation(),
-                relation_type: self.relations.get(&id).unwrap().relation_type.clone(),
+                relation_type,
                 source: t,
                 target: s,
-                weight: self.relations.get(&id).unwrap().weight,
-                properties: AHashMap::new(),
+                weight,
+                properties,
             };
             let inv_id = inverse.id;
             self.out_edges.entry(t).or_default().push(inv_id);

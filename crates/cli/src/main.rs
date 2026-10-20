@@ -167,6 +167,11 @@ enum Cmd {
         /// With `--xref`: compile root(s) stripped from paths (repeatable).
         #[arg(long)]
         xref_root: Vec<String>,
+        /// The path is the root of Progress ABL sources (.p, .w, .i): add
+        /// what the cross-reference lacks — table-to-table joins and the
+        /// screens' titles and tabs. Run after `--xref`.
+        #[arg(long)]
+        abl: bool,
         path: PathBuf,
     },
     /// Print summary statistics.
@@ -523,6 +528,7 @@ async fn main() -> Result<()> {
             chunk_chars,
             xref,
             xref_root,
+            abl,
             path,
         } => {
             if let Some(p) = ontology {
@@ -563,6 +569,38 @@ async fn main() -> Result<()> {
                 for (p, e) in parsed.errors.iter().take(20) {
                     eprintln!("  {}: {e}", p.display());
                 }
+                ingest_records(&mut src, &graph, Some(store.as_ref())).await?
+            } else if abl {
+                let tables = ontology_io::TableIndex::new(
+                    graph
+                        .concepts_of_type("Table", false)
+                        .into_iter()
+                        .map(|c| c.name),
+                );
+                if tables.is_empty() {
+                    anyhow::bail!(
+                        "--abl needs the Table sheets of an xref import first (`ingest --xref`)"
+                    );
+                }
+                let programs: std::collections::BTreeSet<String> = graph
+                    .concepts_of_type("Program", false)
+                    .into_iter()
+                    .map(|c| c.name)
+                    .collect();
+                let started = std::time::Instant::now();
+                let (mut src, scanned) = tokio::task::spawn_blocking(move || {
+                    ontology_io::AblSource::from_dir(&path, &tables, programs, None)
+                        .map_err(anyhow::Error::from)
+                })
+                .await??;
+                eprintln!(
+                    "scanned {} source files ({} MB) in {:.1?}; {} with joins or screens; {} unreadable",
+                    scanned.file_count,
+                    scanned.bytes / 1_048_576,
+                    started.elapsed(),
+                    scanned.summarised,
+                    scanned.errors.len()
+                );
                 ingest_records(&mut src, &graph, Some(store.as_ref())).await?
             } else if is_dir {
                 let ty = text_type.context("--text-type required when ingesting a directory")?;

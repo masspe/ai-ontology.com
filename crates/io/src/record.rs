@@ -5,8 +5,10 @@
 // Dual-licensed: AGPL-3.0-or-later OR a commercial license
 // from Mediasoft & Cie S.A. See LICENSE and LICENSE-COMMERCIAL.md.
 
+use ahash::AHashMap;
 use ontology_graph::{
-    Action, ActionType, Concept, ConceptType, Ontology, Relation, RelationType, Rule, RuleType,
+    Action, ActionType, Concept, ConceptType, Ontology, PropertyValue, Relation, RelationType,
+    Rule, RuleType,
 };
 use serde::{Deserialize, Serialize};
 
@@ -26,6 +28,9 @@ pub enum Record {
         target_name: String,
         #[serde(default = "default_weight")]
         weight: f32,
+        /// Edge properties (a join's key list, a provenance note, …).
+        #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+        properties: AHashMap<String, PropertyValue>,
     },
     /// Ontology extension produced by the document extractor — register
     /// (or refresh) a single concept type without rewriting the whole

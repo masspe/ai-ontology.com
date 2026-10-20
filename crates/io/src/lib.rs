@@ -16,6 +16,7 @@
 //! "subject / predicate / object" triple format. Users can plug in custom
 //! sources (e.g. Kafka, S3) by implementing the trait.
 
+pub mod abl;
 pub mod charset;
 pub mod csv;
 pub mod docx;
@@ -31,6 +32,9 @@ pub mod triples;
 pub mod xlsx;
 pub mod xref;
 
+pub use abl::{
+    scan_abl, scan_dir, strip_comments, AblFile, AblSource, JoinUse, ScannedDir, TableIndex,
+};
 pub use charset::{decode_to_utf8, looks_binary, DecodedText};
 pub use csv::CsvSource;
 pub use docx::{extract_docx_text, is_zip};
