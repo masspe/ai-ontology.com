@@ -11,32 +11,10 @@
 //! written.
 
 use anyhow::{Context, Result};
-use ontology_io::{parse_xref_file, TableUse, XrefFile};
+use ontology_io::{parse_dir, TableUse, XrefFile};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
 use std::time::Instant;
-
-fn collect(path: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
-    if path.is_file() {
-        out.push(path.to_path_buf());
-        return Ok(());
-    }
-    for entry in std::fs::read_dir(path)? {
-        let p = entry?.path();
-        if p.is_dir() {
-            collect(&p, out)?;
-        } else if p
-            .file_name()
-            .and_then(|n| n.to_str())
-            .is_some_and(|n| n.to_ascii_lowercase().ends_with(".xref.xml"))
-        {
-            out.push(p);
-        }
-    }
-    Ok(())
-}
 
 #[derive(Default)]
 struct Totals {
@@ -105,52 +83,18 @@ impl Totals {
 
 pub fn run(path: &Path, roots: &[String], threads: Option<usize>, top: usize) -> Result<()> {
     let started = Instant::now();
-    let mut files = Vec::new();
-    collect(path, &mut files).with_context(|| format!("reading {}", path.display()))?;
-    files.sort();
-    let total_files = files.len();
-    eprintln!("{total_files} xref files under {}", path.display());
-
+    let parsed =
+        parse_dir(path, roots, threads).with_context(|| format!("reading {}", path.display()))?;
     let threads = threads
         .unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get()))
         .max(1);
-    let roots: Arc<[String]> = roots.into();
-    let queue = Arc::new(Mutex::new(files.into_iter()));
-    let (tx, rx) = mpsc::channel::<(PathBuf, u64, Result<XrefFile, String>)>();
-
-    let workers: Vec<_> = (0..threads)
-        .map(|_| {
-            let queue = Arc::clone(&queue);
-            let tx = tx.clone();
-            let roots = Arc::clone(&roots);
-            std::thread::spawn(move || loop {
-                let next = queue.lock().unwrap().next();
-                let Some(p) = next else { break };
-                let size = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
-                let parsed = parse_xref_file(&p, &roots);
-                if tx.send((p, size, parsed)).is_err() {
-                    break;
-                }
-            })
-        })
-        .collect();
-    drop(tx);
-
-    let mut t = Totals::default();
-    let mut done = 0usize;
-    for (p, size, parsed) in rx {
-        t.bytes += size;
-        match parsed {
-            Ok(f) => t.add(f),
-            Err(e) => t.errors.push((p, e)),
-        }
-        done += 1;
-        if done.is_multiple_of(500) {
-            eprintln!("  {done}/{total_files} ({:.0?})", started.elapsed());
-        }
-    }
-    for w in workers {
-        let _ = w.join();
+    let mut t = Totals {
+        bytes: parsed.bytes,
+        errors: parsed.errors,
+        ..Default::default()
+    };
+    for f in parsed.files {
+        t.add(f);
     }
     let elapsed = started.elapsed();
 

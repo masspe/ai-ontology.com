@@ -119,7 +119,8 @@ async fn a_batch_of_exactly_256_costs_one_barrier_and_257_costs_two() {
 }
 
 /// A `Relation` record (explicit endpoint ids) settles the pending concepts
-/// under one barrier before it is journaled itself, and its weight and
+/// under one barrier before it is staged; the concept that follows settles
+/// the relation in turn, so the journal keeps arrival order. Its weight and
 /// allocated id are what reaches the store.
 #[tokio::test]
 async fn a_relation_record_settles_the_pending_concepts_before_it_is_journaled() {
@@ -143,8 +144,12 @@ async fn a_relation_record_settles_the_pending_concepts_before_it_is_journaled()
         kinds(&store),
         vec!["concept", "concept", "concept", "relation", "concept", "concept"]
     );
-    assert_eq!(store.batch_calls(), 2, "the relation split the concept run");
-    assert_eq!(store.append_calls(), 1);
+    assert_eq!(store.batch_calls(), 3, "concepts | relation | concepts");
+    assert_eq!(
+        store.append_calls(),
+        0,
+        "relations are batched, never one by one"
+    );
     let journaled = store
         .records()
         .into_iter()
@@ -205,7 +210,7 @@ async fn a_deferred_named_relation_names_the_missing_endpoint() {
 
 /// A `NamedRelation` between two concepts still waiting in the batch
 /// resolves within the same call: the batch is settled first, then the
-/// relation is journaled — one barrier, one append.
+/// relation is journaled under its own barrier — two batches, no append.
 #[tokio::test]
 async fn a_named_relation_resolves_endpoints_sitting_in_the_pending_batch() {
     let graph = OntologyGraph::with_arc(ontology());
@@ -216,7 +221,7 @@ async fn a_named_relation_resolves_endpoints_sitting_in_the_pending_batch() {
         .unwrap();
     assert_eq!(stats.relations, 1);
     assert_eq!(kinds(&store), vec!["concept", "concept", "relation"]);
-    assert_eq!((store.batch_calls(), store.append_calls()), (1, 1));
+    assert_eq!((store.batch_calls(), store.append_calls()), (2, 0));
 }
 
 /// `Record::Ontology` replaces the whole schema: it settles the pending
