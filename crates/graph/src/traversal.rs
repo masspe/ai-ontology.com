@@ -196,14 +196,14 @@ impl OntologyGraph {
         let mut depth_of: AHashMap<ConceptId, u32> = AHashMap::new();
         let mut concepts: Vec<Concept> = Vec::new();
         let mut relations: Vec<Relation> = Vec::new();
-        let mut queue: VecDeque<(ConceptId, u32)> = VecDeque::new();
+        let mut frontier: Vec<ConceptId> = Vec::new();
 
         for &s in seeds {
             if visited.insert(s) {
                 if let Ok(c) = self.get_concept(s) {
                     concepts.push(c);
                     depth_of.insert(s, 0);
-                    queue.push_back((s, 0));
+                    frontier.push(s);
                 }
             }
         }
@@ -229,66 +229,43 @@ impl OntologyGraph {
         let want_concept =
             |name: &str| -> bool { concept_filter.as_ref().is_none_or(|f| f.contains(name)) };
 
-        // Level by level: every edge leaving the frontier is gathered, the
-        // strongest first (stable, so equal weights keep adjacency order),
-        // and only then admitted under the node cap. A seed with a thousand
-        // weight-1 edges can no longer fill the cap before another seed's
-        // weight-50 edges are seen.
-        let mut frontier: Vec<ConceptId> = queue.drain(..).map(|(id, _)| id).collect();
-        let use_typed = !spec.relation_types.is_empty();
+        // Level by level: every edge leaving the frontier is gathered as
+        // `(weight, node, edge id, neighbour)` — no clone — the strongest
+        // first (stable, so equal weights keep adjacency order), and only
+        // then admitted under the node cap. A seed with a thousand weight-1
+        // edges can no longer fill the cap before another seed's weight-50
+        // edges are seen. Once the cap is reached, only edges between kept
+        // nodes are gathered at all, so a hub costs its id list only.
+        let mut ids: Vec<RelationId> = Vec::new();
         for depth in 0..spec.max_depth {
             if frontier.is_empty() {
                 break;
             }
-            // At the node cap the walk goes on over the nodes already kept,
-            // adding none, so the links *between* them are still collected
-            // (seeding with a full page of one type used to return nodes
-            // without a single edge). Bounded: the frontier only shrinks.
-            let mut edges: Vec<(ConceptId, Relation)> = Vec::new();
+            let capped = concepts.len() >= spec.max_nodes;
+            let mut edges: Vec<(f32, ConceptId, RelationId, ConceptId)> = Vec::new();
             for &node in &frontier {
-                // When a relation_type whitelist is supplied, jump straight
-                // to the typed adjacency buckets and skip cloning edges of
-                // types we'd discard anyway.
-                let mut here: Vec<Relation> = Vec::new();
-                match (spec.direction, use_typed) {
-                    (Direction::Outgoing, true) => {
-                        here.extend(self.outgoing_typed(node, &spec.relation_types))
-                    }
-                    (Direction::Incoming, true) => {
-                        here.extend(self.incoming_typed(node, &spec.relation_types))
-                    }
-                    (Direction::Both, true) => {
-                        here.extend(self.outgoing_typed(node, &spec.relation_types));
-                        here.extend(self.incoming_typed(node, &spec.relation_types));
-                    }
-                    (Direction::Outgoing, false) => here.extend(self.outgoing(node)),
-                    (Direction::Incoming, false) => here.extend(self.incoming(node)),
-                    (Direction::Both, false) => {
-                        here.extend(self.outgoing(node));
-                        here.extend(self.incoming(node));
+                ids.clear();
+                self.adjacent_edge_ids(node, spec.direction, &spec.relation_types, &mut ids);
+                for &rid in &ids {
+                    let Some(hit) = self.with_relation(rid, |r| {
+                        let neighbor = if r.source == node { r.target } else { r.source };
+                        (want_rel(&r.relation_type) && (!capped || visited.contains(&neighbor)))
+                            .then_some((r.weight, neighbor))
+                    }) else {
+                        continue;
+                    };
+                    if let Some((weight, neighbor)) = hit {
+                        edges.push((weight, node, rid, neighbor));
                     }
                 }
-                edges.extend(here.into_iter().map(|r| (node, r)));
             }
-            edges.sort_by(|a, b| {
-                b.1.weight
-                    .partial_cmp(&a.1.weight)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
+            edges.sort_by(|a, b| b.0.total_cmp(&a.0));
 
             let mut next: Vec<ConceptId> = Vec::new();
-            for (node, rel) in edges {
-                if !want_rel(&rel.relation_type) {
-                    continue;
-                }
-                let neighbor = if rel.source == node {
-                    rel.target
-                } else {
-                    rel.source
-                };
+            for (_, _, rid, neighbor) in edges {
                 let known = visited.contains(&neighbor);
                 // At the cap an unknown neighbour is never kept: skip it before
-                // reading (and cloning) it, so a hub costs its edge list only.
+                // reading (and cloning) it.
                 if !known && concepts.len() >= spec.max_nodes {
                     continue;
                 }
@@ -299,15 +276,16 @@ impl OntologyGraph {
                 if !want_concept(&nc.concept_type) {
                     continue;
                 }
-
                 if !known {
                     visited.insert(neighbor);
                     depth_of.insert(neighbor, depth + 1);
                     concepts.push(nc);
                     next.push(neighbor);
                 }
-                if emitted_edges.insert(rel.id) {
-                    relations.push(rel);
+                if emitted_edges.insert(rid) {
+                    if let Some(rel) = self.with_relation(rid, Clone::clone) {
+                        relations.push(rel);
+                    }
                 }
             }
             frontier = next;

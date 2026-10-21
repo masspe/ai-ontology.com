@@ -94,6 +94,24 @@ pub struct RelationType {
     pub functional: bool,
 }
 
+impl RelationType {
+    /// `(limits_out, limits_in)`: whether a source may carry at most one
+    /// edge of this type, and whether a target may receive at most one.
+    pub fn limits(&self) -> (bool, bool) {
+        (
+            self.functional
+                || matches!(
+                    self.cardinality,
+                    Cardinality::OneToOne | Cardinality::ManyToOne
+                ),
+            matches!(
+                self.cardinality,
+                Cardinality::OneToOne | Cardinality::OneToMany
+            ),
+        )
+    }
+}
+
 /// A declarative rule attached to the ontology, e.g.
 /// `"every Invoice must reference a Contract"`.
 ///

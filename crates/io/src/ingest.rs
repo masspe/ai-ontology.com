@@ -6,7 +6,9 @@
 // from Mediasoft & Cie S.A. See LICENSE and LICENSE-COMMERCIAL.md.
 
 use async_trait::async_trait;
-use ontology_graph::{Concept, ConceptId, GraphError, Ontology, OntologyGraph, Relation};
+use ontology_graph::{
+    Concept, ConceptId, GraphError, Ontology, OntologyGraph, PropertyValue, Relation,
+};
 use ontology_storage::{LogRecord, Store};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -210,6 +212,12 @@ struct Ingester<'a> {
     /// Existing relations with a new weight or properties (upsert), not
     /// yet journaled nor applied; batched like the additions.
     pending_updates: Vec<Relation>,
+    /// How many of `pending` are upserts of existing sheets (counted as
+    /// `updated`, not as added concepts).
+    pending_updated: u64,
+    /// `(limits_out, limits_in, symmetric)` per relation type, memoised
+    /// until the schema changes.
+    type_limits: HashMap<String, (bool, bool, bool)>,
     opts: IngestOptions,
     /// The in-memory ontology has type declarations not yet journaled.
     schema_dirty: bool,
@@ -232,6 +240,8 @@ impl<'a> Ingester<'a> {
             pending_names: HashMap::new(),
             pending_relations: Vec::new(),
             pending_updates: Vec::new(),
+            pending_updated: 0,
+            type_limits: HashMap::new(),
             opts,
             schema_dirty: false,
             schema_baseline: None,
@@ -314,9 +324,27 @@ impl<'a> Ingester<'a> {
 
     /// Remember the schema before the first un-journaled declaration.
     fn begin_schema_change(&mut self) {
+        self.type_limits.clear();
         if self.schema_baseline.is_none() {
             self.schema_baseline = Some(self.graph.ontology());
         }
+    }
+
+    /// `(limits_out, limits_in, symmetric)` of a relation type.
+    fn type_limits(&mut self, relation_type: &str) -> (bool, bool, bool) {
+        if let Some(l) = self.type_limits.get(relation_type) {
+            return *l;
+        }
+        let l = self.graph.with_ontology(|o| {
+            o.relation_types
+                .get(relation_type)
+                .map_or((false, false, false), |rt| {
+                    let (out, inn) = rt.limits();
+                    (out, inn, rt.symmetric)
+                })
+        });
+        self.type_limits.insert(relation_type.to_string(), l);
+        l
     }
 
     /// Put the live ontology back to what it was before the declarations
@@ -356,7 +384,10 @@ impl<'a> Ingester<'a> {
     /// A no-op when nothing is pending, so a run of type declarations does
     /// not journal the ontology once per declaration.
     async fn settle_pending(&mut self) -> Result<(), IngestError> {
-        if self.pending.is_empty() {
+        if self.pending.is_empty()
+            && self.pending_relations.is_empty()
+            && self.pending_updates.is_empty()
+        {
             return Ok(());
         }
         self.flush().await
@@ -401,16 +432,17 @@ impl<'a> Ingester<'a> {
             return Ok(());
         }
         let batch = std::mem::take(&mut self.pending);
+        let updated = std::mem::take(&mut self.pending_updated);
         self.pending_names.clear();
         if let Some(s) = self.store {
             let records: Vec<LogRecord> = batch.iter().cloned().map(LogRecord::concept).collect();
             s.append_batch(&records).await?;
         }
+        self.stats.concepts += batch.len() as u64 - updated;
         for c in batch {
             // Cannot fail semantically: prepare_concept + the pending checks
             // already rejected everything apply would.
             self.graph.apply_prepared_concept(c)?;
-            self.stats.concepts += 1;
         }
         Ok(())
     }
@@ -482,38 +514,45 @@ impl<'a> Ingester<'a> {
     }
 
     async fn stage_concept(&mut self, mut c: Concept) -> Result<(), IngestError> {
-        // An explicit id that is already pending (same entity twice in one
-        // batch, e.g. a rename mid-export) is an upsert over an unapplied
-        // record: settle the batch first rather than reason about it.
-        if c.id.0 != 0 && self.pending.iter().any(|p| p.id == c.id) {
-            self.flush().await?;
-        }
         // Journal order is arrival order: a concept after a run of relations
         // settles them first, so an interleaved source costs no more barriers
         // than before relations were batched.
         self.flush_relations().await?;
         self.flush_updates().await?;
-        if self.opts.upsert && c.id.0 == 0 {
-            if let Some(id) = self.graph.find_by_name(&c.concept_type, &c.name) {
-                // The sheet already there, unchanged: nothing to journal.
-                if let Ok(prev) = self.graph.get_concept(id) {
-                    if prev.name == c.name
-                        && prev.description == c.description
-                        && prev.properties == c.properties
-                    {
-                        self.stats.unchanged += 1;
-                        return Ok(());
-                    }
-                }
-                // An explicit id is an upsert for `prepare_concept`.
-                tracing::debug!(
-                    concept_type = %c.concept_type,
-                    name = %c.name,
-                    "upsert: concept changed"
-                );
-                c.id = id;
-                self.stats.updated += 1;
+        // Upsert: the sheet with this name, if there is one, is the one
+        // being staged.
+        let existing = (self.opts.upsert && c.id.0 == 0)
+            .then(|| self.graph.find_by_name(&c.concept_type, &c.name))
+            .flatten();
+        // An id that is already pending (the same entity twice in one batch:
+        // a rename mid-export, a source naming a sheet twice) is settled
+        // first, so the comparison below sees the latest version and the
+        // last record wins.
+        if let Some(id) = existing.or((c.id.0 != 0).then_some(c.id)) {
+            if self.pending.iter().any(|p| p.id == id) {
+                self.flush().await?;
             }
+        }
+        if let Some(id) = existing {
+            // The sheet already there, unchanged: nothing to journal.
+            if let Ok(prev) = self.graph.get_concept(id) {
+                if prev.name == c.name
+                    && prev.description == c.description
+                    && prev.properties == c.properties
+                {
+                    self.stats.unchanged += 1;
+                    return Ok(());
+                }
+            }
+            // An explicit id is an upsert for `prepare_concept`.
+            tracing::debug!(
+                concept_type = %c.concept_type,
+                name = %c.name,
+                "upsert: concept changed"
+            );
+            c.id = id;
+            self.stats.updated += 1;
+            self.pending_updated += 1;
         }
         self.check_pending_conflicts(&c)?;
         self.graph.prepare_concept(&mut c)?;
@@ -529,25 +568,26 @@ impl<'a> Ingester<'a> {
     async fn add_relation(&mut self, mut rel: Relation) -> Result<(), IngestError> {
         // Endpoints must be applied, so settle the concepts before validating.
         self.settle_concepts().await?;
+        // An explicit id already pending (the same line twice; a hand-written
+        // id colliding with one just allocated) is settled first, so
+        // `prepare_relation` sees it and reassigns.
+        if rel.id.0 != 0 && self.pending_relations.iter().any(|p| p.id == rel.id) {
+            self.flush_relations().await?;
+        }
         // Cardinality and `functional` are counted against applied edges. A
-        // pending sibling on the limited side would slip through, so the
-        // batch is settled first — only then, so a run of `ManyToOne` edges
+        // pending sibling on the limited side would slip through — for a
+        // symmetric type, through its not-yet-materialised inverse — so the
+        // batch is settled first; only then, so a run of `ManyToOne` edges
         // from distinct sources still costs one barrier per batch.
-        use ontology_graph::Cardinality::{ManyToOne, OneToMany, OneToOne};
-        let (limits_out, limits_in) = self.graph.with_ontology(|o| {
-            o.relation_types
-                .get(&rel.relation_type)
-                .map_or((false, false), |rt| {
-                    (
-                        rt.functional || matches!(rt.cardinality, OneToOne | ManyToOne),
-                        matches!(rt.cardinality, OneToOne | OneToMany),
-                    )
-                })
-        });
-        let pending_sibling = self.pending_relations.iter().any(|p| {
-            p.relation_type == rel.relation_type
-                && ((limits_out && p.source == rel.source) || (limits_in && p.target == rel.target))
-        });
+        let (limits_out, limits_in, symmetric) = self.type_limits(&rel.relation_type);
+        let pending_sibling = (limits_out || limits_in)
+            && self.pending_relations.iter().any(|p| {
+                p.relation_type == rel.relation_type
+                    && ((limits_out
+                        && (p.source == rel.source || (symmetric && p.target == rel.source)))
+                        || (limits_in
+                            && (p.target == rel.target || (symmetric && p.source == rel.target))))
+            });
         if pending_sibling {
             self.flush_relations().await?;
         }
@@ -557,6 +597,65 @@ impl<'a> Ingester<'a> {
             self.flush_relations().await?;
         }
         Ok(())
+    }
+
+    /// Upsert: refresh the edge `s -[relation_type]-> t` if it exists —
+    /// applied, or still pending in this batch — and say so; `false` when
+    /// there is none and it must be added. For a symmetric type either
+    /// orientation is the same edge. The last record wins.
+    async fn upsert_relation(
+        &mut self,
+        s: ConceptId,
+        t: ConceptId,
+        relation_type: &str,
+        weight: f32,
+        properties: &ahash::AHashMap<String, PropertyValue>,
+    ) -> Result<bool, IngestError> {
+        let (_, _, symmetric) = self.type_limits(relation_type);
+        let same = |r: &Relation| {
+            r.relation_type == relation_type
+                && ((r.source == s && r.target == t)
+                    || (symmetric && r.source == t && r.target == s))
+        };
+        for pending in [&mut self.pending_relations, &mut self.pending_updates] {
+            if let Some(p) = pending.iter_mut().find(|p| same(p)) {
+                p.weight = weight;
+                p.properties = properties.clone();
+                return Ok(true);
+            }
+        }
+        let found = self
+            .graph
+            .relation_between(s, t, relation_type)
+            .or_else(|| {
+                symmetric
+                    .then(|| self.graph.relation_between(t, s, relation_type))
+                    .flatten()
+            });
+        let Some(rid) = found else {
+            return Ok(false);
+        };
+        let prev = self.graph.get_relation(rid)?;
+        if prev.weight == weight && prev.properties == *properties {
+            self.stats.unchanged += 1;
+            return Ok(true);
+        }
+        tracing::debug!(
+            relation_type,
+            source = s.0,
+            target = t.0,
+            old_weight = prev.weight,
+            new_weight = weight,
+            "upsert: relation changed"
+        );
+        let mut updated = prev;
+        updated.weight = weight;
+        updated.properties = properties.clone();
+        self.pending_updates.push(updated);
+        if self.pending_updates.len() >= INGEST_BATCH_SIZE {
+            self.flush_updates().await?;
+        }
+        Ok(true)
     }
 
     /// Returns `Ok(false)` when the record must be retried later.
@@ -576,6 +675,7 @@ impl<'a> Ingester<'a> {
                     *target = o.clone();
                     Ok(())
                 })?;
+                self.type_limits.clear();
                 self.schema_dirty = false;
                 self.schema_baseline = None;
                 self.stats.ontology_updates += 1;
@@ -608,30 +708,12 @@ impl<'a> Ingester<'a> {
                 }
                 match (src, tgt) {
                     (Some(s), Some(t)) => {
-                        if self.opts.upsert {
-                            if let Some(rid) = self.graph.relation_between(s, t, relation_type) {
-                                let prev = self.graph.get_relation(rid)?;
-                                if prev.weight == *weight && prev.properties == *properties {
-                                    self.stats.unchanged += 1;
-                                } else {
-                                    tracing::debug!(
-                                        relation_type = %relation_type,
-                                        source = %source_name,
-                                        target = %target_name,
-                                        old_weight = prev.weight,
-                                        new_weight = *weight,
-                                        "upsert: relation changed"
-                                    );
-                                    let mut updated = prev;
-                                    updated.weight = *weight;
-                                    updated.properties = properties.clone();
-                                    self.pending_updates.push(updated);
-                                    if self.pending_updates.len() >= INGEST_BATCH_SIZE {
-                                        self.flush_updates().await?;
-                                    }
-                                }
-                                return Ok(true);
-                            }
+                        if self.opts.upsert
+                            && self
+                                .upsert_relation(s, t, relation_type, *weight, properties)
+                                .await?
+                        {
+                            return Ok(true);
                         }
                         let mut rel =
                             Relation::new(Default::default(), relation_type.clone(), s, t);
@@ -841,8 +923,8 @@ pub struct IngestStats {
     pub ontology_updates: u64,
     pub rules: u64,
     pub actions: u64,
-    /// Upsert: concepts and relations that existed and changed (concepts
-    /// are counted in `concepts` too; relations only here).
+    /// Upsert: sheets and links that existed and changed. `concepts` and
+    /// `relations` count additions only.
     pub updated: u64,
     /// Upsert: records identical to what the graph had, journaled nowhere.
     pub unchanged: u64,

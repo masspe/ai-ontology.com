@@ -1557,6 +1557,7 @@ async fn path(
 fn ingest_api_error(e: ontology_io::IngestError) -> ApiError {
     match e {
         ontology_io::IngestError::Store(inner) => ApiError::Store(inner.to_string()),
+        ontology_io::IngestError::Graph(inner) => ApiError::Graph(inner),
         other => ApiError::BadRequest(other.to_string()),
     }
 }

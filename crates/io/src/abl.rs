@@ -25,7 +25,7 @@ use ontology_graph::{Cardinality, Concept, ConceptId, ConceptType, PropertyValue
 use regex::{Regex, RegexBuilder};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::{mpsc, Arc, LazyLock, Mutex};
+use std::sync::{Arc, LazyLock};
 
 use crate::charset::decode_to_utf8;
 use crate::ingest::{IngestError, Source};
@@ -231,7 +231,8 @@ fn folder_tabs(text: &str) -> Vec<String> {
                 variables.insert(id);
             }
         }
-        from = start + 1 + "folder-labels".len();
+        // Past the keyword, never past the end (a file may end on it).
+        from = (start + 1 + "folder-labels".len()).min(lower.len());
     }
     for var in variables {
         let assign = re(&format!(
@@ -338,22 +339,6 @@ pub struct ScannedDir {
     pub summarised: usize,
 }
 
-fn collect_sources(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
-    for entry in std::fs::read_dir(dir)? {
-        let p = entry?.path();
-        if p.is_dir() {
-            collect_sources(&p, out)?;
-        } else if p
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "p" | "w" | "i" | "cls"))
-        {
-            out.push(p);
-        }
-    }
-    Ok(())
-}
-
 /// Scan every `.p`, `.w`, `.i`, `.cls` under `root` on `threads` threads.
 /// Blocking. Files are decoded with the charset sniffer (the code base is
 /// ISO-8859-15), comments stripped, and summarised; files without any join
@@ -363,54 +348,34 @@ pub fn scan_dir(
     tables: &TableIndex,
     threads: Option<usize>,
 ) -> std::io::Result<ScannedDir> {
-    let mut paths = Vec::new();
-    collect_sources(root, &mut paths)?;
-    paths.sort();
+    let paths = crate::scan::walk_files(root, |p| {
+        p.extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "p" | "w" | "i" | "cls"))
+    })?;
     let file_count = paths.len();
-    let threads = threads
-        .unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get()))
-        .max(1);
     let root: Arc<Path> = root.into();
     let tables = Arc::new(tables.clone());
-    let queue = Arc::new(Mutex::new(paths.into_iter()));
-    let (tx, rx) = mpsc::channel::<(PathBuf, u64, Result<AblFile, String>)>();
-    let workers: Vec<_> = (0..threads)
-        .map(|_| {
-            let queue = Arc::clone(&queue);
-            let tx = tx.clone();
-            let root = Arc::clone(&root);
-            let tables = Arc::clone(&tables);
-            std::thread::spawn(move || loop {
-                let next = queue.lock().unwrap_or_else(|e| e.into_inner()).next();
-                let Some(p) = next else { break };
-                let result = std::fs::read(&p).map_err(|e| e.to_string()).map(|bytes| {
-                    let program = p
-                        .strip_prefix(&*root)
-                        .unwrap_or(&p)
-                        .to_string_lossy()
-                        .replace('\\', "/")
-                        .to_lowercase();
-                    (
-                        bytes.len() as u64,
-                        scan_abl(&decode_to_utf8(&bytes).text, &program, &tables),
-                    )
-                });
-                let (size, parsed) = match result {
-                    Ok((size, f)) => (size, Ok(f)),
-                    Err(e) => (0, Err(e)),
-                };
-                if tx.send((p, size, parsed)).is_err() {
-                    break;
-                }
-            })
-        })
-        .collect();
-    drop(tx);
+    let results = crate::scan::map_files(paths, threads, move |p| match std::fs::read(p) {
+        Ok(bytes) => {
+            let program = p
+                .strip_prefix(&*root)
+                .unwrap_or(p)
+                .to_string_lossy()
+                .replace('\\', "/")
+                .to_lowercase();
+            (
+                bytes.len() as u64,
+                Ok(scan_abl(&decode_to_utf8(&bytes).text, &program, &tables)),
+            )
+        }
+        Err(e) => (0, Err(e.to_string())),
+    });
     let mut out = ScannedDir {
         file_count,
         ..Default::default()
     };
-    for (p, size, parsed) in rx {
+    for (p, size, parsed) in results {
         out.bytes += size;
         match parsed {
             Ok(f) => {
@@ -420,9 +385,6 @@ pub fn scan_dir(
             }
             Err(e) => out.errors.push((p, e)),
         }
-    }
-    for w in workers {
-        let _ = w.join();
     }
     out.files.sort_by(|a, b| a.program.cmp(&b.program));
     Ok(out)
@@ -711,6 +673,14 @@ ASSIGN ecri.nste = ecri.nste.
             g.contains_key("ba/w-menu.w"),
             "no code: the path is the name"
         );
+    }
+
+    #[test]
+    fn a_window_ending_on_the_keyword_does_not_panic() {
+        let f = scan_abl("RUN x ('FOLDER-LABELS", "ca/w-x.w", &tables());
+        assert!(f.tabs.is_empty());
+        let f = scan_abl("FOLDER-LABELS", "ca/w-x.w", &tables());
+        assert!(f.tabs.is_empty());
     }
 
     #[test]

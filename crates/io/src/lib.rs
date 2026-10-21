@@ -26,6 +26,7 @@ pub mod jsonl;
 pub mod lang;
 pub mod proposal;
 pub mod record;
+pub mod scan;
 pub mod template;
 pub mod text;
 pub mod triples;
