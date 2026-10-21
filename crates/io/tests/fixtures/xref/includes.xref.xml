@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<Cross-reference xmlns="uri:schemas-progress-com:XREFD:0005">
+  <Source File-name="D:\Mediasoft\App\MS.ERP2\sd\main.p"><Source-guid>g</Source-guid><File-num>1</File-num>
+    <Reference Reference-type="INCLUDE" Object-identifier="net/web/inc/WebConfig.i">
+      <Source-guid>g</Source-guid><File-num>1</File-num><Ref-seq>1</Ref-seq><Line-num>1</Line-num>
+      <Object-context></Object-context><Access-mode/><Detail/>
+    </Reference>
+    <Reference Reference-type="INCLUDE" Object-identifier="Net\sd\Inc\ds\SalSelect.i">
+      <Source-guid>g</Source-guid><File-num>1</File-num><Ref-seq>2</Ref-seq><Line-num>2</Line-num>
+      <Object-context></Object-context><Access-mode/><Detail/>
+    </Reference>
+    <Reference Reference-type="INCLUDE" Object-identifier=".\ba\connect.i">
+      <Source-guid>g</Source-guid><File-num>1</File-num><Ref-seq>3</Ref-seq><Line-num>3</Line-num>
+      <Object-context></Object-context><Access-mode/><Detail/>
+    </Reference>
+  </Source>
+  <Source File-name="net/web/inc/WebConfig.i"><Source-guid>g</Source-guid><File-num>2</File-num></Source>
+  <Source File-name="Net\sd\Inc\ds\SalSelect.i"><Source-guid>g</Source-guid><File-num>3</File-num></Source>
+  <Source File-name=".\ba\connect.i"><Source-guid>g</Source-guid><File-num>4</File-num></Source>
+</Cross-reference>

@@ -16,6 +16,7 @@
 //! "subject / predicate / object" triple format. Users can plug in custom
 //! sources (e.g. Kafka, S3) by implementing the trait.
 
+pub mod abl;
 pub mod charset;
 pub mod csv;
 pub mod docx;
@@ -25,11 +26,16 @@ pub mod jsonl;
 pub mod lang;
 pub mod proposal;
 pub mod record;
+pub mod scan;
 pub mod template;
 pub mod text;
 pub mod triples;
 pub mod xlsx;
+pub mod xref;
 
+pub use abl::{
+    scan_abl, scan_dir, strip_comments, AblFile, AblSource, JoinUse, ScannedDir, TableIndex,
+};
 pub use charset::{decode_to_utf8, looks_binary, DecodedText};
 pub use csv::CsvSource;
 pub use docx::{extract_docx_text, is_zip};
@@ -39,8 +45,9 @@ pub use extract::{
     MAX_FRAGMENTS_PER_DOCUMENT,
 };
 pub use ingest::{
-    export_graph, ingest_records, ExportStats, IngestError, IngestStats, Sink, Source,
-    INGEST_BATCH_SIZE,
+    delete_concepts, export_graph, ingest_records, ingest_records_with, DeleteReport, ExportStats,
+    IngestError, IngestOptions, IngestStats, Sink, Source, INGEST_BATCH_SIZE,
+    PRUNE_GUARD_MIN_SHEETS,
 };
 pub use jsonl::{JsonlSink, JsonlSource};
 pub use lang::{detect_language, LangTag};
@@ -57,3 +64,8 @@ pub use template::{
 pub use text::TextDocumentSource;
 pub use triples::TripleSource;
 pub use xlsx::{spreadsheet_to_text, XlsxSource};
+pub use xref::{
+    module_of, normalize_path, parse_dir, parse_xref, parse_xref_file, screen_code,
+    xref_ontology_records, ParsedDir, ProgramKind, RunResolver, TableUse, XrefFile, XrefSource,
+    XREF_NS,
+};

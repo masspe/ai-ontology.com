@@ -11,7 +11,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.1"
+version = "0.2.0"
 edition = "2021"
 license = "AGPL-3.0-or-later"
 # Oldest toolchain the workspace is built with (the image uses rust:1.98).
@@ -41,6 +41,7 @@ hyper = "1"
 http = "1"
 calamine = "0.36"
 memmap2 = "0.9"
+regex = "1"
 crc32c = "0.6"
 proptest = "1"
 postcard = { version = "1.1", features = ["alloc"] }

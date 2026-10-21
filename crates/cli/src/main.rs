@@ -10,8 +10,8 @@ use clap::{Parser, Subcommand, ValueEnum};
 use ontology_graph::{Ontology, OntologyGraph};
 use ontology_index::{HybridIndex, RetrievalRequest};
 use ontology_io::{
-    export_graph, ingest_records, CsvSource, JsonlSink, JsonlSource, TextDocumentSource,
-    TripleSource, XlsxSource,
+    export_graph, ingest_records, ingest_records_with, CsvSource, IngestOptions, JsonlSink,
+    JsonlSource, TextDocumentSource, TripleSource, XlsxSource, XrefSource,
 };
 use ontology_rag::{EchoModel, LanguageModel, RagPipeline};
 use ontology_server::{
@@ -26,6 +26,7 @@ use std::time::Duration;
 use tracing_subscriber::{fmt, EnvFilter};
 
 mod bench;
+mod xref_stats;
 
 #[derive(Parser, Debug)]
 #[command(name = "ontology", version, about = "Ontology graph + RAG CLI")]
@@ -159,6 +160,28 @@ enum Cmd {
         /// document whole.
         #[arg(long, default_value_t = ontology_io::DEFAULT_CHUNK_CHARS)]
         chunk_chars: usize,
+        /// The path holds Progress OpenEdge `*.xref.xml` files: import them
+        /// as the `erp` model (programs, tables, fields and their links).
+        #[arg(long, conflicts_with = "abl")]
+        xref: bool,
+        /// With `--xref`: compile root(s) stripped from paths (repeatable).
+        #[arg(long, requires = "xref")]
+        xref_root: Vec<String>,
+        /// With `--xref` or `--abl`: after the import, delete what the
+        /// files no longer say — the programs (or screens) whose file is
+        /// gone, and the links a recompile dropped. Refused when a file
+        /// failed to parse, or when more than a quarter of a type's sheets
+        /// would go (another `--xref-root`?): see `--sync-force`.
+        #[arg(long)]
+        sync: bool,
+        /// With `--sync`: delete however many sheets the files no longer say.
+        #[arg(long, requires = "sync")]
+        sync_force: bool,
+        /// The path is the root of Progress ABL sources (.p, .w, .i): add
+        /// what the cross-reference lacks — table-to-table joins and the
+        /// screens' titles and tabs. Run after `--xref`.
+        #[arg(long)]
+        abl: bool,
         path: PathBuf,
     },
     /// Print summary statistics.
@@ -246,6 +269,23 @@ enum Cmd {
         to_name: String,
         #[arg(long, default_value_t = 6)]
         max_depth: u32,
+    },
+    /// Parse a directory of Progress OpenEdge `*.xref.xml` files and print
+    /// what an import would produce (programs, tables, fields, links,
+    /// unresolved RUN targets), without writing anything. Needs no store.
+    XrefStats {
+        /// Directory (searched recursively) or a single `.xref.xml` file.
+        path: PathBuf,
+        /// Compile root(s) to strip from paths, so `D:\App\ERP\sd\x.p` and
+        /// `sd/x.p` are one program. Repeatable.
+        #[arg(long)]
+        root: Vec<String>,
+        /// Parser threads. Default: the number of cores.
+        #[arg(long)]
+        threads: Option<usize>,
+        /// How many unresolved RUN targets and top tables to list.
+        #[arg(long, default_value_t = 30)]
+        top: usize,
     },
     /// Container health probe: GET `url`, exit 0 on a 2xx, 1 otherwise. The
     /// runtime image has no curl; this needs no dependency either.
@@ -344,6 +384,16 @@ async fn main() -> Result<()> {
             Ok(status) => anyhow::bail!("{url}: HTTP {status}"),
             Err(e) => anyhow::bail!("{url}: {e}"),
         };
+    }
+    if let Cmd::XrefStats {
+        path,
+        root,
+        threads,
+        top,
+    } = &cli.cmd
+    {
+        // Read-only and store-less: a running server is not disturbed.
+        return xref_stats::run(path, root, *threads, *top).await;
     }
     if let Cmd::Restore { src } = &cli.cmd {
         let data = cli
@@ -486,8 +536,23 @@ async fn main() -> Result<()> {
             text_type,
             text_ext,
             chunk_chars,
+            xref,
+            xref_root,
+            sync,
+            sync_force,
+            abl,
             path,
         } => {
+            if sync && !(xref || abl) {
+                anyhow::bail!("--sync goes with --xref or --abl");
+            }
+            // Both importers are idempotent by construction: a recompile is
+            // a re-import. `--sync` also deletes what the files no longer say.
+            let erp_opts = IngestOptions {
+                upsert: true,
+                prune: sync,
+                prune_max_fraction: if sync_force { 1.0 } else { 0.25 },
+            };
             if let Some(p) = ontology {
                 let raw = tokio::fs::read_to_string(&p).await?;
                 let onto: Ontology = serde_json::from_str(&raw)?;
@@ -511,6 +576,51 @@ async fn main() -> Result<()> {
             let stats = if path.as_os_str() == "-" {
                 let mut src = JsonlSource::stdin();
                 ingest_records(&mut src, &graph, Some(store.as_ref())).await?
+            } else if xref {
+                let started = std::time::Instant::now();
+                let (mut src, parsed) = tokio::task::spawn_blocking(move || {
+                    XrefSource::from_path(&path, &xref_root, None).map_err(anyhow::Error::from)
+                })
+                .await??;
+                eprintln!(
+                    "parsed {} MB of xref in {:.1?}; {} files refused",
+                    parsed.bytes / 1_048_576,
+                    started.elapsed(),
+                    parsed.errors.len()
+                );
+                for (p, e) in parsed.errors.iter().take(20) {
+                    eprintln!("  {}: {e}", p.display());
+                }
+                if sync && !parsed.errors.is_empty() {
+                    anyhow::bail!(
+                        "--sync refused: {} xref files failed to parse; their programs would be deleted",
+                        parsed.errors.len()
+                    );
+                }
+                ingest_records_with(&mut src, &graph, Some(store.as_ref()), erp_opts).await?
+            } else if abl {
+                let started = std::time::Instant::now();
+                let graph_for_scan = graph.clone();
+                let (mut src, scanned) = tokio::task::spawn_blocking(move || {
+                    ontology_io::AblSource::from_graph(&path, &graph_for_scan, None)
+                        .map_err(anyhow::Error::from)
+                })
+                .await??;
+                eprintln!(
+                    "scanned {} source files ({} MB) in {:.1?}; {} with joins or screens; {} unreadable",
+                    scanned.file_count,
+                    scanned.bytes / 1_048_576,
+                    started.elapsed(),
+                    scanned.summarised,
+                    scanned.errors.len()
+                );
+                if sync && !scanned.errors.is_empty() {
+                    anyhow::bail!(
+                        "--sync refused: {} source files could not be read",
+                        scanned.errors.len()
+                    );
+                }
+                ingest_records_with(&mut src, &graph, Some(store.as_ref()), erp_opts).await?
             } else if is_dir {
                 let ty = text_type.context("--text-type required when ingesting a directory")?;
                 let exts: Vec<&str> = text_ext.split(',').map(str::trim).collect();
@@ -545,8 +655,23 @@ async fn main() -> Result<()> {
                 }
             };
             index.reindex_all();
+            // The upsert and prune counters appear only when they ran.
+            let mut upsert = if stats.updated + stats.unchanged > 0 {
+                format!(
+                    " ({} updated, {} unchanged)",
+                    stats.updated, stats.unchanged
+                )
+            } else {
+                String::new()
+            };
+            if stats.pruned_concepts + stats.pruned_relations > 0 {
+                upsert.push_str(&format!(
+                    "; pruned {} sheets, {} links",
+                    stats.pruned_concepts, stats.pruned_relations
+                ));
+            }
             println!(
-                "ingested: {} concepts, {} relations, {} ontology updates",
+                "ingested: {} concepts, {} relations, {} ontology updates{upsert}",
                 stats.concepts, stats.relations, stats.ontology_updates,
             );
         }
@@ -742,7 +867,9 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        Cmd::Healthcheck { .. } => unreachable!("handled before the store opens"),
+        Cmd::Healthcheck { .. } | Cmd::XrefStats { .. } => {
+            unreachable!("handled before the store opens")
+        }
         Cmd::Serve {
             bind,
             auth_env,

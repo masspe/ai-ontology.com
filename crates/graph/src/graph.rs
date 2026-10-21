@@ -1136,15 +1136,7 @@ impl OntologyGraph {
         // so the rejection path costs nothing extra. The materialized inverse
         // for symmetric relations is pushed directly to the adjacency map
         // without going through add_relation, so it doesn't trip these checks.
-        use crate::schema::Cardinality;
-        let limits_out = matches!(
-            rt.cardinality,
-            Cardinality::OneToOne | Cardinality::ManyToOne
-        ) || rt.functional;
-        let limits_in = matches!(
-            rt.cardinality,
-            Cardinality::OneToOne | Cardinality::OneToMany
-        );
+        let (limits_out, limits_in) = rt.limits();
         if limits_out {
             if let Some(by_type) = self.out_edges_typed.get(&rel.source) {
                 if let Some(adj) = by_type.get(&rel.relation_type) {
@@ -1230,13 +1222,25 @@ impl OntologyGraph {
 
         if symmetric && s != t {
             // Materialize the inverse so traversals are direction-agnostic.
+            // It is the same edge seen from the other end: weight and
+            // properties (a join's key list, …) travel with it. The guard
+            // on `relations` is released before the insert below: holding
+            // it across the insert deadlocks on the map's shard lock.
+            let (relation_type, weight, properties) = {
+                let original = self.relations.get(&id).unwrap();
+                (
+                    original.relation_type.clone(),
+                    original.weight,
+                    original.properties.clone(),
+                )
+            };
             let inverse = Relation {
                 id: self.ids.next_relation(),
-                relation_type: self.relations.get(&id).unwrap().relation_type.clone(),
+                relation_type,
                 source: t,
                 target: s,
-                weight: self.relations.get(&id).unwrap().weight,
-                properties: AHashMap::new(),
+                weight,
+                properties,
             };
             let inv_id = inverse.id;
             self.out_edges.entry(t).or_default().push(inv_id);
@@ -1328,6 +1332,81 @@ impl OntologyGraph {
         self.relations.iter().map(|e| e.value().clone()).collect()
     }
 
+    /// The ids of the edges at `node` in `direction`, restricted to `types`
+    /// when given. Ids only — the traversal reads what it needs through
+    /// [`with_relation`](Self::with_relation) and clones an edge only once
+    /// it is admitted.
+    pub(crate) fn adjacent_edge_ids(
+        &self,
+        node: ConceptId,
+        direction: crate::traversal::Direction,
+        types: &[String],
+        out: &mut Vec<RelationId>,
+    ) {
+        use crate::traversal::Direction;
+        let (outgoing, incoming) = match direction {
+            Direction::Outgoing => (true, false),
+            Direction::Incoming => (false, true),
+            Direction::Both => (true, true),
+        };
+        if types.is_empty() {
+            if outgoing {
+                if let Some(adj) = self.out_edges.get(&node) {
+                    out.extend(adj.iter().copied());
+                }
+            }
+            if incoming {
+                if let Some(adj) = self.in_edges.get(&node) {
+                    out.extend(adj.iter().copied());
+                }
+            }
+            return;
+        }
+        if outgoing {
+            if let Some(by_type) = self.out_edges_typed.get(&node) {
+                for t in types {
+                    if let Some(adj) = by_type.get(t) {
+                        out.extend(adj.iter().copied());
+                    }
+                }
+            }
+        }
+        if incoming {
+            if let Some(by_type) = self.in_edges_typed.get(&node) {
+                for t in types {
+                    if let Some(adj) = by_type.get(t) {
+                        out.extend(adj.iter().copied());
+                    }
+                }
+            }
+        }
+    }
+
+    /// Read an edge in place, without cloning it.
+    pub(crate) fn with_relation<R>(
+        &self,
+        id: RelationId,
+        f: impl FnOnce(&Relation) -> R,
+    ) -> Option<R> {
+        self.relations.get(&id).map(|r| f(&r))
+    }
+
+    /// The id of `source -[relation_type]-> target`, if that edge exists.
+    /// Scans the typed adjacency of `source` — O(degree in that type), no
+    /// clone: the lookup an idempotent import makes once per link.
+    pub fn relation_between(
+        &self,
+        source: ConceptId,
+        target: ConceptId,
+        relation_type: &str,
+    ) -> Option<RelationId> {
+        let by_type = self.out_edges_typed.get(&source)?;
+        let adj = by_type.get(relation_type)?;
+        adj.iter()
+            .copied()
+            .find(|rid| self.relations.get(rid).is_some_and(|r| r.target == target))
+    }
+
     /// Compute the relation that `patch` would produce, without applying it.
     /// Pure: the graph is unchanged. Pairs with
     /// [`apply_relation_update`](Self::apply_relation_update) for the R8
@@ -1359,6 +1438,25 @@ impl OntologyGraph {
         entry.properties = updated.properties;
         let snapshot = entry.clone();
         drop(entry);
+        // A symmetric relation's materialised inverse is the same edge seen
+        // from the other end: it follows the update.
+        let symmetric = self
+            .ontology
+            .read()
+            .relation_type(&snapshot.relation_type)
+            .map(|rt| rt.symmetric)
+            .unwrap_or(false);
+        if symmetric && snapshot.source != snapshot.target {
+            let inverse = self
+                .relation_between(snapshot.target, snapshot.source, &snapshot.relation_type)
+                .filter(|rid| *rid != snapshot.id);
+            if let Some(rid) = inverse {
+                if let Some(mut inv) = self.relations.get_mut(&rid) {
+                    inv.weight = snapshot.weight;
+                    inv.properties = snapshot.properties.clone();
+                }
+            }
+        }
         // R2: the relation set changed — the `list_relations_page` cache
         // and the HTTP ETag both key on this generation.
         self.bump_relations_gen();
