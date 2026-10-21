@@ -46,6 +46,16 @@ All notable changes to this project are listed here. The format follows
 - Updating a symmetric relation left its inverse untouched.
 - Graph errors from the concept delete handler were reported as 400.
 
+### Security
+
+- `zip` 4.6 → 9.0 and `calamine` 0.36 → 0.37 (which brings `zip` 9 of its
+  own): RUSTSEC-2026-0367, -0368 and -0369, all three in
+  `ZipArchive::extract`, which this code base never calls — it reads named
+  entries out of `.docx` and spreadsheet archives. One `zip` in the tree
+  now instead of two, and one `quick-xml`.
+- `rustls` 0.23.45 → 0.23.46, `rustls-webpki` 0.103.15 → 0.103.16,
+  `webpki-roots` 1.0.7 → 1.0.10: RUSTSEC-2026-0346 to -0349, -0381, -0382.
+
 ## [0.1.1] - 2026-10-09
 
 ### Fixed
