@@ -6,6 +6,46 @@ All notable changes to this project are listed here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-21
+
+### Added
+
+- Import of a Progress OpenEdge code base as a software model: `ontology
+  ingest --xref` reads the compiler's `*.xref.xml` cross-reference (6 880
+  files, 8 GB, in half a minute) into Module, Program, Include, Class,
+  Database, Table and Field sheets with the links between them (runs,
+  includes, invokes, reads, updates, creates, deletes, field-level
+  access); `ontology ingest --abl` reads the `.p`/`.w`/`.i` sources for
+  what the cross-reference lacks — the joins between tables, with their
+  keys, and the screens with their code (`ca100`), title, tabs and menu.
+  `ontology xref-stats` is the dry run: the import counted, not written.
+- Re-import in place: `--xref` and `--abl` update what changed and
+  journal nothing for what did not; `--sync` deletes what the files no
+  longer say (a program whose file is gone, a link a recompile dropped),
+  refused above a quarter of a type's sheets unless `--sync-force`.
+- `PropertyValue` constructors (`From<&str>`, `From<String>`, `list()`);
+  `NamedRelation` records carry properties; `RelationType::limits()`.
+
+### Changed
+
+- Relations are journaled in batches like concepts (one barrier per 256
+  instead of one per relation). Journal order stays arrival order; a
+  constrained type settles the batch only when a pending sibling shares
+  the limited endpoint, including through a symmetric type's inverse.
+- Subgraph expansion admits the strongest links first under the node
+  cap, round-robin across relation types, and clones an edge only once
+  admitted.
+- The prompt caps property values (240 characters, 16 list items), shows
+  a link's properties and weight in its facts, and keeps the facts a
+  share of the budget — sheets give way first, by whole lines.
+- Symmetric inverse edges carry the original's properties and follow
+  its updates.
+
+### Fixed
+
+- Updating a symmetric relation left its inverse untouched.
+- Graph errors from the concept delete handler were reported as 400.
+
 ## [0.1.1] - 2026-10-09
 
 ### Fixed
@@ -58,6 +98,7 @@ First public release.
 - Google / Microsoft sign-in is not served by the binary; the optional Node
   `auth-server/` covers it.
 
-[Unreleased]: https://github.com/masspe/ai-ontology.com/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/masspe/ai-ontology.com/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/masspe/ai-ontology.com/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/masspe/ai-ontology.com/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/masspe/ai-ontology.com/releases/tag/v0.1.0

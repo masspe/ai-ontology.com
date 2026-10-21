@@ -46,7 +46,7 @@ thresholds, checked on every push and pull request.
 | `ontology-graph`   | ![graph line coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmasspe%2Fai-ontology.com%2Fcoverage-badges%2Fcrate-graph.json&label=lines&style=flat-square) | Concepts, typed relations, schema validation, traversals. |
 | `ontology-storage` | ![storage line coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmasspe%2Fai-ontology.com%2Fcoverage-badges%2Fcrate-storage.json&label=lines&style=flat-square) | Binary segmented store (`<data>/store/`): framed records with CRC, positional index, per-batch fsync, torn-tail recovery, memory-mapped sealed segments; automatic migration from the legacy `graph.log`. Pluggable `Store` trait. Format in [docs/STORAGE.md](STORAGE.md). |
 | `ontology-index`   | ![index line coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmasspe%2Fai-ontology.com%2Fcoverage-badges%2Fcrate-index.json&label=lines&style=flat-square) | Lexical (TF-IDF) + vector (cosine) + graph-expansion retrieval. |
-| `ontology-io`      | ![io line coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmasspe%2Fai-ontology.com%2Fcoverage-badges%2Fcrate-io.json&label=lines&style=flat-square) | `Source` / `Sink` traits with JSONL and triples adapters; CSV, XLSX, DOCX and plain-text readers; chunking. |
+| `ontology-io`      | ![io line coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmasspe%2Fai-ontology.com%2Fcoverage-badges%2Fcrate-io.json&label=lines&style=flat-square) | `Source` / `Sink` traits with JSONL and triples adapters; CSV, XLSX, DOCX and plain-text readers; chunking. Software-model readers for Progress OpenEdge: the compiler's XREF-XML cross-reference (`xref`) and the ABL sources (`abl`), see [Software model import](#software-model-import). |
 | `ontology-rag`     | ![rag line coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmasspe%2Fai-ontology.com%2Fcoverage-badges%2Fcrate-rag.json&label=lines&style=flat-square) | Prompt builder + `LanguageModel` trait (echo, Anthropic, OpenAI, DeepSeek, Infomaniak; with prompt caching). |
 | `ontology-server`  | ![server line coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmasspe%2Fai-ontology.com%2Fcoverage-badges%2Fcrate-server.json&label=lines&style=flat-square) | axum HTTP server exposing the whole REST API: `/concepts`, `/relations`, `/retrieve`, `/ask`, `/ontology`, `/upload` and `/ingest/*`, `/rules`, `/actions`, `/queries`, `/files`, `/settings`, `/auth/*`, `/audit`, `/backup`, `/compact`, `/metrics`, `/healthz`, `/stats`. |
 | `ontology-cli`     | ![cli line coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fmasspe%2Fai-ontology.com%2Fcoverage-badges%2Fcrate-cli.json&label=lines&style=flat-square) | `ontology` binary tying it all together. |
@@ -248,6 +248,47 @@ All HTTP clients retry 408 / 409 / 429 / 5xx with full-jitter
 exponential backoff (default 3 retries; configurable via
 `with_max_retries`). When the server sends a `retry-after`
 header it's honored verbatim.
+
+## Software model import
+
+A code base can be imported as a graph of its own structure — the first
+reader is for Progress OpenEdge (`crates/io/src/xref.rs`, `abl.rs`), the
+model it produces is technology-neutral:
+
+| Sheets | Links |
+| ------ | ----- |
+| `Module`, `Program` (with its ERP screen `code`), `Include`, `Class`, `Database`, `Table`, `Field`, `Screen` | `belongs_to`, `runs`, `includes`, `invokes`, `reads` / `updates` / `creates` / `deletes` (program → table), `reads_field` / `updates_field`, `in_database`, `has_field`, `joined_on` (table ↔ table, with `keys`), `implemented_by` (screen → program) |
+
+Two sources feed it, in this order:
+
+1. **`ontology ingest --xref --xref-root <compile root> <dir>`** reads the
+   compiler's `COMPILE … XREF-XML` output. A file is streamed one
+   `<Reference>` at a time and reduced to a per-program summary (tables by
+   access mode, fields, runs, includes, invoked classes); the raw
+   references never exist in memory at once. `RUN` targets resolve by
+   exact path, then by unique file name (the PROPATH), else become a
+   `missing` program so no link is lost. Names are folded case-insensitively.
+   Every link's `weight` is the number of references in the compiled code.
+2. **`ontology ingest --abl <source root>`** scans the `.p`/`.w`/`.i`
+   sources with a few patterns over the comment-stripped text — no ABL
+   grammar — for what the cross-reference cannot say: `a.f = b.g` and
+   `FOR EACH a OF b` joins between tables the graph already knows, and the
+   screens' titles, folder tabs and menu entries, grouped by screen code
+   (`w-ca100.w`, `b-ca100.w` → `ca100`).
+
+Both run through the regular ingester with `IngestOptions { upsert }`: a
+re-import updates what changed and journals nothing for what did not;
+`--sync` adds `prune` — the sheets of the declared types the source did
+not re-emit, and the links of the declared types leaving a re-emitted
+sheet that it did not re-emit, are deleted under one barrier (refused
+above a quarter of a type's sheets, see `--sync-force`). `ontology
+xref-stats` is the dry run: the import's records counted instead of
+written. The directory walk and worker pool are shared (`scan.rs`); a
+reader's panic is an error for that file, never a file lost silently.
+
+Measured on a 6 880-program ERP (8.1 GB of xref, 5.1 M lines of source):
+parse 7–20 s, first import 33 s, re-import 33–48 s with nothing to
+journal, source scan 4 s; the store opens in 9 s.
 
 ## Observability
 
