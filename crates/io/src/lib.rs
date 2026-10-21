@@ -65,6 +65,7 @@ pub use text::TextDocumentSource;
 pub use triples::TripleSource;
 pub use xlsx::{spreadsheet_to_text, XlsxSource};
 pub use xref::{
-    normalize_path, parse_dir, parse_xref, parse_xref_file, screen_code, xref_ontology_records,
-    ParsedDir, ProgramKind, TableUse, XrefFile, XrefSource, XREF_NS,
+    module_of, normalize_path, parse_dir, parse_xref, parse_xref_file, screen_code,
+    xref_ontology_records, ParsedDir, ProgramKind, RunResolver, TableUse, XrefFile, XrefSource,
+    XREF_NS,
 };

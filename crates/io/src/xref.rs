@@ -104,7 +104,8 @@ pub struct XrefFile {
     pub procedures: BTreeSet<String>,
     /// User-defined functions the program defines (`FUNCTION`).
     pub functions: BTreeSet<String>,
-    /// `db.table` → use.
+    /// `db.table` → use. Table and field names are lower-case: ABL names
+    /// are case-insensitive, and the parser folds the spellings.
     pub tables: BTreeMap<String, TableUse>,
     /// `STRING` references (literals), counted only.
     pub strings: u32,
@@ -423,40 +424,68 @@ pub fn xref_ontology_records() -> Vec<Record> {
     use Cardinality::{ManyToMany as NN, ManyToOne as N1, OneToMany as ONE_N};
     vec![
         concept_type("Module", "A directory of the ERP source tree: the unit people talk about (payroll, accounting, …).", &["path", "program_count"]),
-        concept_type("Program", "A compiled OpenEdge program (.p procedure, .w window, .cls class). `code` is the ERP screen code users know (ca100); `missing` marks a program other programs run but whose compiled cross-reference is absent.", &["path", "code", "kind", "module", "missing", "procedures", "functions", "dynamic_runs", "strings", "references"]),
+        concept_type("Program", "A compiled OpenEdge program (.p procedure, .w window, .cls class). `code` is the ERP screen code users know (ca100); `missing` marks a program other programs run but whose compiled cross-reference is absent. The weight of every link leaving a program is the number of references in its compiled code.", &["path", "code", "kind", "module", "missing", "procedures", "functions", "dynamic_runs", "strings", "references"]),
         concept_type("Include", "An OpenEdge include file (.i), compiled into every program that includes it.", &["path"]),
         concept_type("Class", "An ABL or .NET class used by programs.", &["name"]),
         concept_type("Database", "An OpenEdge database (msdb, msec, …).", &[]),
         concept_type("Table", "A database table, named db.table.", &["db", "table"]),
         concept_type("Field", "A table field, named db.table.field.", &["table", "field"]),
-        relation_type("belongs_to", "Program", "Module", N1, "the program's directory"),
-        relation_type("runs", "Program", "Program", NN, "RUN of another program; weight = number of RUN statements"),
-        relation_type("includes", "Program", "Include", NN, "the include is compiled into the program"),
-        relation_type("invokes", "Program", "Class", NN, "INVOKE, NEW or CAST of the class; weight = number of uses"),
-        relation_type("in_database", "Table", "Database", N1, "the table's database"),
-        relation_type("has_field", "Table", "Field", ONE_N, "the table's field"),
-        relation_type("reads", "Program", "Table", NN, "the program reads the table (ACCESS, REFERENCE, SEARCH); weight = number of references"),
-        relation_type("updates", "Program", "Table", NN, "the program updates fields of the table; weight = number of references"),
-        relation_type("creates", "Program", "Table", NN, "the program creates rows; weight = number of CREATE statements"),
-        relation_type("deletes", "Program", "Table", NN, "the program deletes rows; weight = number of DELETE statements"),
-        relation_type("reads_field", "Program", "Field", NN, "the program reads the field"),
-        relation_type("updates_field", "Program", "Field", NN, "the program updates the field"),
+        relation_type("belongs_to", "Program", "Module", N1, "belongs to module"),
+        relation_type("runs", "Program", "Program", NN, "runs"),
+        relation_type("includes", "Program", "Include", NN, "includes"),
+        relation_type("invokes", "Program", "Class", NN, "invokes"),
+        relation_type("in_database", "Table", "Database", N1, "is in database"),
+        relation_type("has_field", "Table", "Field", ONE_N, "has field"),
+        relation_type("reads", "Program", "Table", NN, "reads"),
+        relation_type("updates", "Program", "Table", NN, "updates"),
+        relation_type("creates", "Program", "Table", NN, "creates rows in"),
+        relation_type("deletes", "Program", "Table", NN, "deletes rows in"),
+        relation_type("reads_field", "Program", "Field", NN, "reads field"),
+        relation_type("updates_field", "Program", "Field", NN, "updates field"),
         rule("table_change_impacts_writers", "a Table or Field changes (type, format, meaning)", "every Program that updates, creates, deletes or reads it is impacted; writers first", &["Table", "Field"]),
         rule("include_change_impacts_all", "an Include changes", "every Program that includes it must be recompiled and is impacted", &["Include"]),
         rule("answer_at_module_level", "a question is about an area of the ERP rather than a specific program", "answer with Modules and the most used Programs, not a list of every program", &["Module"]),
     ]
 }
 
-fn text(s: &str) -> PropertyValue {
-    PropertyValue::Text(s.to_string())
-}
-
-fn names(set: &BTreeSet<String>) -> PropertyValue {
-    PropertyValue::List(set.iter().map(|s| text(s)).collect())
-}
-
-fn module_of(path: &str) -> &str {
+/// The first directory of a program path: the module people name.
+pub fn module_of(path: &str) -> &str {
     path.split_once('/').map_or("root", |(m, _)| m)
+}
+
+/// What a `RUN` target names: the compiled program with that exact path,
+/// else the one compiled program with that file name (the PROPATH finds
+/// `pcto.p` in `sd/`), else a program that was never compiled.
+pub struct RunResolver {
+    known: BTreeSet<String>,
+    by_basename: HashMap<String, Vec<String>>,
+}
+
+impl RunResolver {
+    pub fn new(known: BTreeSet<String>) -> Self {
+        let mut by_basename: HashMap<String, Vec<String>> = HashMap::new();
+        for p in &known {
+            by_basename
+                .entry(p.rsplit('/').next().unwrap_or(p).to_string())
+                .or_default()
+                .push(p.clone());
+        }
+        Self { known, by_basename }
+    }
+
+    /// The program's identity and whether it is a compiled one.
+    pub fn resolve(&self, target: &str) -> (String, bool) {
+        if self.known.contains(target) {
+            return (target.to_string(), true);
+        }
+        match self
+            .by_basename
+            .get(target.rsplit('/').next().unwrap_or(target))
+        {
+            Some(v) if v.len() == 1 => (v[0].clone(), true),
+            _ => (target.to_string(), false),
+        }
+    }
 }
 
 /// The ERP's screen code of a program path — what business users and
@@ -536,26 +565,8 @@ impl XrefSource {
             }
         }
         let files: Vec<XrefFile> = by_program.into_values().collect();
-        // Identities first: a RUN target resolves to a known program by exact
-        // path, else by unique basename (the PROPATH finds `pcto.p` in `sd/`),
-        // else it is a `missing` program.
-        let known: BTreeSet<String> = files.iter().map(|f| f.program.clone()).collect();
-        let mut by_basename: HashMap<&str, Vec<&str>> = HashMap::new();
-        for p in &known {
-            by_basename
-                .entry(p.rsplit('/').next().unwrap_or(p))
-                .or_default()
-                .push(p);
-        }
-        let resolve = |target: &str| -> String {
-            if known.contains(target) {
-                return target.to_string();
-            }
-            match by_basename.get(target.rsplit('/').next().unwrap_or(target)) {
-                Some(v) if v.len() == 1 => v[0].to_string(),
-                _ => target.to_string(),
-            }
-        };
+        // Identities first.
+        let resolver = RunResolver::new(files.iter().map(|f| f.program.clone()).collect());
 
         let mut missing: BTreeSet<String> = BTreeSet::new();
         let mut modules: BTreeMap<String, u32> = BTreeMap::new();
@@ -578,19 +589,18 @@ impl XrefSource {
             }
             let mut runs = BTreeMap::new();
             for (t, n) in &f.runs {
-                let r = resolve(t);
-                if !known.contains(&r) {
+                let (r, compiled) = resolver.resolve(t);
+                if !compiled {
                     missing.insert(r.clone());
                 }
                 *runs.entry(r).or_insert(0) += n;
             }
             resolved_runs.push(runs);
             for (t, u) in &f.tables {
-                let t = t.to_lowercase();
                 for field in u.fields_read.iter().chain(&u.fields_updated) {
-                    fields.insert(format!("{t}.{}", field.to_lowercase()));
+                    fields.insert(format!("{t}.{field}"));
                 }
-                tables.insert(t);
+                tables.insert(t.clone());
             }
         }
         for m in missing.iter() {
@@ -611,7 +621,7 @@ impl XrefSource {
             .chain(modules.iter().map(|(m, n)| {
                 Record::Concept(
                     concept("Module", m)
-                        .with_property("path", text(m))
+                        .with_property("path", PropertyValue::from(m))
                         .with_property("program_count", PropertyValue::Number(f64::from(*n))),
                 )
             }))
@@ -619,36 +629,41 @@ impl XrefSource {
                 let (db, table) = t.split_once('.').unwrap_or(("", t));
                 Record::Concept(
                     concept("Table", t)
-                        .with_property("db", text(db))
-                        .with_property("table", text(table)),
+                        .with_property("db", PropertyValue::from(db))
+                        .with_property("table", PropertyValue::from(table)),
                 )
             }))
             .chain(fields.iter().map(|f| {
                 let (table, field) = f.rsplit_once('.').unwrap_or(("", f));
                 Record::Concept(
                     concept("Field", f)
-                        .with_property("table", text(table))
-                        .with_property("field", text(field)),
+                        .with_property("table", PropertyValue::from(table))
+                        .with_property("field", PropertyValue::from(field)),
                 )
             }))
-            .chain(
-                includes
-                    .iter()
-                    .map(|i| Record::Concept(concept("Include", i).with_property("path", text(i)))),
-            )
-            .chain(
-                classes
-                    .values()
-                    .map(|c| Record::Concept(concept("Class", c).with_property("name", text(c)))),
-            )
+            .chain(includes.iter().map(|i| {
+                Record::Concept(concept("Include", i).with_property("path", PropertyValue::from(i)))
+            }))
+            .chain(classes.values().map(|c| {
+                Record::Concept(concept("Class", c).with_property("name", PropertyValue::from(c)))
+            }))
             .chain(files.iter().map(|f| {
                 let mut c = concept("Program", &f.program)
-                    .with_property("path", text(&f.program))
-                    .with_property("kind", text(f.kind.map_or("other", |k| k.as_str())))
-                    .with_property("module", text(module_of(&f.program)))
+                    .with_property("path", PropertyValue::from(&f.program))
+                    .with_property(
+                        "kind",
+                        PropertyValue::from(f.kind.map_or("other", |k| k.as_str())),
+                    )
+                    .with_property("module", PropertyValue::from(module_of(&f.program)))
                     .with_property("missing", PropertyValue::Bool(false))
-                    .with_property("procedures", names(&f.procedures))
-                    .with_property("functions", names(&f.functions))
+                    .with_property(
+                        "procedures",
+                        PropertyValue::list(f.procedures.iter().cloned()),
+                    )
+                    .with_property(
+                        "functions",
+                        PropertyValue::list(f.functions.iter().cloned()),
+                    )
                     .with_property(
                         "dynamic_runs",
                         PropertyValue::Number(f64::from(f.dynamic_runs)),
@@ -656,16 +671,16 @@ impl XrefSource {
                     .with_property("strings", PropertyValue::Number(f64::from(f.strings)))
                     .with_property("references", PropertyValue::Number(f64::from(f.references)));
                 if let Some(code) = screen_code(&f.program) {
-                    c = c.with_property("code", text(&code));
+                    c = c.with_property("code", PropertyValue::from(&code));
                 }
                 Record::Concept(c)
             }))
             .chain(missing.iter().map(|m| {
                 Record::Concept(
                     concept("Program", m)
-                        .with_property("path", text(m))
-                        .with_property("kind", text(ProgramKind::of(m).as_str()))
-                        .with_property("module", text(module_of(m)))
+                        .with_property("path", PropertyValue::from(m))
+                        .with_property("kind", PropertyValue::from(ProgramKind::of(m).as_str()))
+                        .with_property("module", PropertyValue::from(module_of(m)))
                         .with_property("missing", PropertyValue::Bool(true)),
                 )
             }))
@@ -725,7 +740,6 @@ impl XrefSource {
                         .map(|(c, n)| link("invokes", "Program", &p, "Class", c, *n)),
                 );
                 for (t, u) in &f.tables {
-                    let t = t.to_lowercase();
                     for (ty, n) in [
                         ("reads", u.reads),
                         ("updates", u.updates),
@@ -733,7 +747,7 @@ impl XrefSource {
                         ("deletes", u.deletes),
                     ] {
                         if n > 0 {
-                            out.push(link(ty, "Program", &p, "Table", &t, n));
+                            out.push(link(ty, "Program", &p, "Table", t, n));
                         }
                     }
                     out.extend(u.fields_read.iter().map(|fl| {
@@ -742,7 +756,7 @@ impl XrefSource {
                             "Program",
                             &p,
                             "Field",
-                            &format!("{t}.{}", fl.to_lowercase()),
+                            &format!("{t}.{fl}"),
                             1,
                         )
                     }));
@@ -752,7 +766,7 @@ impl XrefSource {
                             "Program",
                             &p,
                             "Field",
-                            &format!("{t}.{}", fl.to_lowercase()),
+                            &format!("{t}.{fl}"),
                             1,
                         )
                     }));
@@ -883,6 +897,28 @@ mod tests {
             normalize_path("D:\\Mediasoft\\App\\MS.ERP2x\\y.p", &roots),
             "d:/mediasoft/app/ms.erp2x/y.p"
         );
+    }
+
+    #[test]
+    fn run_targets_resolve_exactly_then_by_unique_file_name() {
+        let r = RunResolver::new(
+            ["sd/pcto.p", "ba/user.p", "spec/x/ba/user.p"]
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+        );
+        assert_eq!(r.resolve("sd/pcto.p"), ("sd/pcto.p".into(), true));
+        assert_eq!(
+            r.resolve("pcto.p"),
+            ("sd/pcto.p".into(), true),
+            "the PROPATH"
+        );
+        assert_eq!(
+            r.resolve("user.p"),
+            ("user.p".into(), false),
+            "two candidates: no guess"
+        );
+        assert_eq!(r.resolve("fr/facture.p"), ("fr/facture.p".into(), false));
     }
 
     #[test]

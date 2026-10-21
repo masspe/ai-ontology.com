@@ -31,6 +31,7 @@ use crate::charset::decode_to_utf8;
 use crate::ingest::{IngestError, Source};
 use crate::record::Record;
 use crate::xref::{screen_code, XREF_NS};
+use ontology_graph::OntologyGraph;
 
 fn re(pattern: &str) -> Regex {
     RegexBuilder::new(pattern)
@@ -65,6 +66,13 @@ static MENU_ITEM: LazyLock<Regex> =
     LazyLock::new(|| re(r#"\bMENU-ITEM\s+[\w-]+\s+LABEL\s+"([^"]*)""#));
 static QUOTED: LazyLock<Regex> = LazyLock::new(|| re(r#"'([^']*)'|"([^"]*)""#));
 static IDENT: LazyLock<Regex> = LazyLock::new(|| re(r"\b([A-Za-z_][\w-]*)\s*\+"));
+static FOLDER_LABELS: LazyLock<Regex> = LazyLock::new(|| re(r"folder-labels"));
+/// `vfolder = "a|b"` or `vfolder = vfolder + "|c"`: a tab list assigned to a
+/// variable, any variable; the caller keeps the ones a `FOLDER-LABELS`
+/// statement concatenates.
+static TAB_ASSIGN: LazyLock<Regex> = LazyLock::new(|| {
+    re(r#"\b([A-Za-z_][\w-]*)\s*=\s*(?:[A-Za-z_][\w-]*\s*\+\s*)?["']([^"']*\|[^"']*)["']"#)
+});
 
 /// The tables the graph knows, by `db.table` and by bare name.
 #[derive(Debug, Default, Clone)]
@@ -202,10 +210,8 @@ fn folder_tabs(text: &str) -> Vec<String> {
         }
     };
     let mut variables: BTreeSet<String> = BTreeSet::new();
-    let lower = text.to_ascii_lowercase();
-    let mut from = 0;
-    while let Some(pos) = lower[from..].find("folder-labels") {
-        let mut start = from + pos;
+    for m in FOLDER_LABELS.find_iter(text) {
+        let mut start = m.start();
         // `'FOLDER-LABELS = ':U + 'Liste|Compte'`: the keyword sits inside
         // a literal, so the window opens at that literal's quote and the
         // literals then pair up correctly.
@@ -231,17 +237,12 @@ fn folder_tabs(text: &str) -> Vec<String> {
                 variables.insert(id);
             }
         }
-        // Past the keyword, never past the end (a file may end on it).
-        from = (start + 1 + "folder-labels".len()).min(lower.len());
     }
-    for var in variables {
-        let assign = re(&format!(
-            r#"\b{}\s*=\s*(?:{}\s*\+\s*)?["']([^"']*\|[^"']*)["']"#,
-            regex::escape(&var),
-            regex::escape(&var)
-        ));
-        for m in assign.captures_iter(text) {
-            push_literal(&m[1]);
+    if !variables.is_empty() {
+        for m in TAB_ASSIGN.captures_iter(text) {
+            if variables.contains(&m[1].to_ascii_lowercase()) {
+                push_literal(&m[2]);
+            }
         }
     }
     tabs
@@ -390,10 +391,6 @@ pub fn scan_dir(
     Ok(out)
 }
 
-fn text(s: &str) -> PropertyValue {
-    PropertyValue::Text(s.to_string())
-}
-
 /// One ERP screen: the window, browser, viewer, … parts of a code folded
 /// together (`w-ca100.w` + `b-ca100.w` → `ca100`).
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -447,6 +444,33 @@ pub struct AblSource {
 }
 
 impl AblSource {
+    /// The scanner needs the `Table` and `Program` sheets of the xref
+    /// import (see `xref_ontology_records`): take them from the graph.
+    pub fn from_graph(
+        root: &Path,
+        graph: &OntologyGraph,
+        threads: Option<usize>,
+    ) -> Result<(Self, ScannedDir), IngestError> {
+        let tables = TableIndex::new(
+            graph
+                .concepts_of_type("Table", false)
+                .into_iter()
+                .map(|c| c.name),
+        );
+        if tables.is_empty() {
+            return Err(IngestError::Source(
+                "no Table sheets in the graph: import the cross-reference first (`ingest --xref`)"
+                    .into(),
+            ));
+        }
+        let programs = graph
+            .concepts_of_type("Program", false)
+            .into_iter()
+            .map(|c| c.name)
+            .collect();
+        Self::from_dir(root, &tables, programs, threads)
+    }
+
     pub fn from_dir(
         root: &Path,
         tables: &TableIndex,
@@ -507,21 +531,21 @@ impl AblSource {
         let screens = grouped.into_iter().flat_map(move |(name, agg)| {
             let mut out = Vec::with_capacity(1 + agg.programs.len());
             let mut c = Concept::new(ConceptId(0), "Screen", &name)
-                .with_property("code", text(&name))
+                .with_property("code", PropertyValue::from(&name))
                 .with_property(
                     "tabs",
-                    PropertyValue::List(agg.tabs.iter().map(|t| text(t)).collect()),
+                    PropertyValue::List(agg.tabs.iter().map(PropertyValue::from).collect()),
                 )
                 .with_property(
                     "menu_items",
-                    PropertyValue::List(agg.menu_items.iter().map(|t| text(t)).collect()),
+                    PropertyValue::List(agg.menu_items.iter().map(PropertyValue::from).collect()),
                 )
                 .with_property(
                     "programs",
-                    PropertyValue::List(agg.programs.iter().map(|t| text(t)).collect()),
+                    PropertyValue::List(agg.programs.iter().map(PropertyValue::from).collect()),
                 );
             if let Some(t) = &agg.title {
-                c = c.with_property("title", text(t));
+                c = c.with_property("title", PropertyValue::from(t));
                 c.description = t.clone();
             }
             out.push(Record::Concept(c));
@@ -545,7 +569,7 @@ impl AblSource {
             let mut properties = ahash::AHashMap::default();
             properties.insert(
                 "keys".to_string(),
-                PropertyValue::List(keys.iter().map(|(k, _)| text(k)).collect()),
+                PropertyValue::list(keys.iter().map(|(k, _)| k.as_str())),
             );
             properties.insert(
                 "programs".to_string(),

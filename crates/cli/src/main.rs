@@ -393,7 +393,7 @@ async fn main() -> Result<()> {
     } = &cli.cmd
     {
         // Read-only and store-less: a running server is not disturbed.
-        return xref_stats::run(path, root, *threads, *top);
+        return xref_stats::run(path, root, *threads, *top).await;
     }
     if let Cmd::Restore { src } = &cli.cmd {
         let data = cli
@@ -599,25 +599,10 @@ async fn main() -> Result<()> {
                 }
                 ingest_records_with(&mut src, &graph, Some(store.as_ref()), erp_opts).await?
             } else if abl {
-                let tables = ontology_io::TableIndex::new(
-                    graph
-                        .concepts_of_type("Table", false)
-                        .into_iter()
-                        .map(|c| c.name),
-                );
-                if tables.is_empty() {
-                    anyhow::bail!(
-                        "--abl needs the Table sheets of an xref import first (`ingest --xref`)"
-                    );
-                }
-                let programs: std::collections::BTreeSet<String> = graph
-                    .concepts_of_type("Program", false)
-                    .into_iter()
-                    .map(|c| c.name)
-                    .collect();
                 let started = std::time::Instant::now();
+                let graph_for_scan = graph.clone();
                 let (mut src, scanned) = tokio::task::spawn_blocking(move || {
-                    ontology_io::AblSource::from_dir(&path, &tables, programs, None)
+                    ontology_io::AblSource::from_graph(&path, &graph_for_scan, None)
                         .map_err(anyhow::Error::from)
                 })
                 .await??;
