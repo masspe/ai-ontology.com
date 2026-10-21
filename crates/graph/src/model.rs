@@ -19,7 +19,34 @@ pub enum PropertyValue {
     List(Vec<PropertyValue>),
 }
 
+impl From<&str> for PropertyValue {
+    fn from(s: &str) -> Self {
+        Self::Text(s.to_string())
+    }
+}
+
+impl From<&String> for PropertyValue {
+    fn from(s: &String) -> Self {
+        Self::Text(s.clone())
+    }
+}
+
+impl From<String> for PropertyValue {
+    fn from(s: String) -> Self {
+        Self::Text(s)
+    }
+}
+
 impl PropertyValue {
+    /// A list of texts.
+    pub fn list<I, S>(items: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        Self::List(items.into_iter().map(|s| Self::Text(s.into())).collect())
+    }
+
     pub fn as_text(&self) -> Option<&str> {
         match self {
             PropertyValue::Text(t) => Some(t),
@@ -319,6 +346,31 @@ pub struct RelationPatch {
     pub weight: Option<f32>,
     #[serde(default)]
     pub properties: Option<AHashMap<String, PropertyValue>>,
+}
+
+#[cfg(test)]
+mod constructor_tests {
+    use super::*;
+
+    #[test]
+    fn texts_and_lists_build_from_strings() {
+        assert_eq!(PropertyValue::from("a"), PropertyValue::Text("a".into()));
+        assert_eq!(
+            PropertyValue::from(&"b".to_string()),
+            PropertyValue::Text("b".into())
+        );
+        assert_eq!(
+            PropertyValue::from("c".to_string()),
+            PropertyValue::Text("c".into())
+        );
+        assert_eq!(
+            PropertyValue::list(["x", "y"]),
+            PropertyValue::List(vec![
+                PropertyValue::Text("x".into()),
+                PropertyValue::Text("y".into())
+            ])
+        );
+    }
 }
 
 #[cfg(test)]

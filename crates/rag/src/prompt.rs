@@ -289,9 +289,7 @@ impl<'a> PromptBuilder<'a> {
                     .relation_types
                     .get(&r.relation_type)
                     .map(|rt| rt.description.as_str())
-                    // A short description reads as the verb of the fact; a
-                    // long one belongs to the schema section only.
-                    .filter(|d| !d.is_empty() && d.len() <= 60)
+                    .filter(|d| !d.is_empty())
                     .map(|d| d.to_string())
                     .unwrap_or_else(|| humanize_relation(&r.relation_type));
                 let _ = writeln!(
