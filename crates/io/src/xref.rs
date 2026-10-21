@@ -273,23 +273,25 @@ pub fn parse_xref_file(path: &Path, roots: &[String]) -> Result<XrefFile, String
 
 fn record(out: &mut XrefFile, ty: &str, id: String, context: &str, roots: &[String]) {
     match ty {
-        // Field-level: identifier is the field, context the table.
+        // Field-level: identifier is the field, context the table. ABL names
+        // are case-insensitive and the xref spells them as the code does
+        // (`msdb.x`, `msDB.x`): one entry per table, lower-case.
         "ACCESS" | "UPDATE" => {
             if let Some(t) = table_name(context) {
-                let u = out.tables.entry(t.to_string()).or_default();
+                let u = out.tables.entry(t.to_lowercase()).or_default();
                 if ty == "ACCESS" {
                     u.reads += 1;
-                    u.fields_read.insert(id);
+                    u.fields_read.insert(id.to_lowercase());
                 } else {
                     u.updates += 1;
-                    u.fields_updated.insert(id);
+                    u.fields_updated.insert(id.to_lowercase());
                 }
             }
         }
         // Table-level: identifier is the table.
         "REFERENCE" | "SEARCH" | "SORT-ACCESS" | "CREATE" | "DELETE" => {
             if let Some(t) = table_name(&id) {
-                let u = out.tables.entry(t.to_string()).or_default();
+                let u = out.tables.entry(t.to_lowercase()).or_default();
                 match ty {
                     "CREATE" => u.creates += 1,
                     "DELETE" => u.deletes += 1,
@@ -337,6 +339,9 @@ fn record(out: &mut XrefFile, ty: &str, id: String, context: &str, roots: &[Stri
 #[derive(Debug, Default)]
 pub struct ParsedDir {
     pub files: Vec<XrefFile>,
+    /// Program identities of every parsed file (kept when `files` is moved
+    /// out by [`XrefSource::from_path`]): what a `--sync` keeps.
+    pub programs: BTreeSet<String>,
     /// Files the parser refused, with the reason.
     pub errors: Vec<(PathBuf, String)>,
     pub bytes: u64,
@@ -558,6 +563,7 @@ impl XrefSource {
     ) -> Result<(Self, ParsedDir), IngestError> {
         let mut parsed = parse_dir(path, roots, threads)?;
         let files = std::mem::take(&mut parsed.files);
+        parsed.programs = files.iter().map(|f| f.program.clone()).collect();
         Ok((Self::from_files(files), parsed))
     }
 
@@ -749,16 +755,18 @@ impl XrefSource {
                         .iter()
                         .map(|i| link("includes", "Program", &p, "Include", i, 1)),
                 );
-                out.extend(f.invokes.iter().map(|(c, n)| {
-                    link(
-                        "invokes",
-                        "Program",
-                        &p,
-                        "Class",
-                        &classes[&c.to_lowercase()],
-                        *n,
-                    )
-                }));
+                // `System.Object` and `System.object` are one class: one link.
+                let mut invoked: BTreeMap<&str, u32> = BTreeMap::new();
+                for (c, n) in &f.invokes {
+                    *invoked
+                        .entry(classes[&c.to_lowercase()].as_str())
+                        .or_insert(0) += n;
+                }
+                out.extend(
+                    invoked
+                        .iter()
+                        .map(|(c, n)| link("invokes", "Program", &p, "Class", c, *n)),
+                );
                 for (t, u) in &f.tables {
                     let t = t.to_lowercase();
                     for (ty, n) in [
@@ -801,6 +809,25 @@ impl XrefSource {
     }
 }
 
+/// After a re-import: delete the `Program` sheets (and their links) that
+/// the compiled set no longer contains — `keep` is the set of programs
+/// just parsed. Sheets flagged `missing` (never compiled) stay: they are
+/// run targets, not compiled units. Returns (sheets, links) removed.
+pub async fn retire_programs(
+    graph: &ontology_graph::OntologyGraph,
+    store: Option<&dyn ontology_storage::Store>,
+    keep: &BTreeSet<String>,
+) -> Result<crate::ingest::DeleteReport, IngestError> {
+    let gone: Vec<ConceptId> = graph
+        .concepts_of_type("Program", false)
+        .into_iter()
+        .filter(|c| c.properties.get("missing") != Some(&PropertyValue::Bool(true)))
+        .filter(|c| !keep.contains(&c.name))
+        .map(|c| c.id)
+        .collect();
+    crate::ingest::delete_concepts(graph, store, &gone).await
+}
+
 #[async_trait]
 impl Source for XrefSource {
     async fn next(&mut self) -> Result<Option<Record>, IngestError> {
@@ -841,7 +868,7 @@ mod tests {
             reference("COMPILE", "D:\\Mediasoft\\App\\MS.ERP2\\sd\\Pcto.p", ""),
             reference("STRING", "Soci&amp;t&#233;", ""),
             reference("ACCESS", "nste", "msdb.sdva"),
-            reference("ACCESS", "peri", "msdb.sdva"),
+            reference("ACCESS", "PERI", "msDB.sdva"),
             reference("UPDATE", "nste", "msdb.sdva"),
             reference("ACCESS", "pAppl", "PUBLIC-PROPERTY"),
             reference("SEARCH", "msdb.batc", ""),

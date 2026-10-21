@@ -10,8 +10,8 @@ use clap::{Parser, Subcommand, ValueEnum};
 use ontology_graph::{Ontology, OntologyGraph};
 use ontology_index::{HybridIndex, RetrievalRequest};
 use ontology_io::{
-    export_graph, ingest_records, CsvSource, JsonlSink, JsonlSource, TextDocumentSource,
-    TripleSource, XlsxSource, XrefSource,
+    export_graph, ingest_records, ingest_records_with, CsvSource, IngestOptions, JsonlSink,
+    JsonlSource, TextDocumentSource, TripleSource, XlsxSource, XrefSource,
 };
 use ontology_rag::{EchoModel, LanguageModel, RagPipeline};
 use ontology_server::{
@@ -167,6 +167,11 @@ enum Cmd {
         /// With `--xref`: compile root(s) stripped from paths (repeatable).
         #[arg(long)]
         xref_root: Vec<String>,
+        /// With `--xref`: after the import, delete the programs (and their
+        /// links) whose xref file is gone. Programs that were never
+        /// compiled (`missing`) stay.
+        #[arg(long)]
+        sync: bool,
         /// The path is the root of Progress ABL sources (.p, .w, .i): add
         /// what the cross-reference lacks — table-to-table joins and the
         /// screens' titles and tabs. Run after `--xref`.
@@ -528,6 +533,7 @@ async fn main() -> Result<()> {
             chunk_chars,
             xref,
             xref_root,
+            sync,
             abl,
             path,
         } => {
@@ -569,7 +575,23 @@ async fn main() -> Result<()> {
                 for (p, e) in parsed.errors.iter().take(20) {
                     eprintln!("  {}: {e}", p.display());
                 }
-                ingest_records(&mut src, &graph, Some(store.as_ref())).await?
+                // Idempotent by construction: a recompile is a re-import.
+                let upsert = IngestOptions { upsert: true };
+                let stats =
+                    ingest_records_with(&mut src, &graph, Some(store.as_ref()), upsert).await?;
+                if sync {
+                    let gone = ontology_io::retire_programs(
+                        &graph,
+                        Some(store.as_ref()),
+                        &parsed.programs,
+                    )
+                    .await?;
+                    eprintln!(
+                        "sync: {} programs no longer compiled removed with {} links",
+                        gone.deleted, gone.relations
+                    );
+                }
+                stats
             } else if abl {
                 let tables = ontology_io::TableIndex::new(
                     graph
@@ -601,7 +623,8 @@ async fn main() -> Result<()> {
                     scanned.summarised,
                     scanned.errors.len()
                 );
-                ingest_records(&mut src, &graph, Some(store.as_ref())).await?
+                let upsert = IngestOptions { upsert: true };
+                ingest_records_with(&mut src, &graph, Some(store.as_ref()), upsert).await?
             } else if is_dir {
                 let ty = text_type.context("--text-type required when ingesting a directory")?;
                 let exts: Vec<&str> = text_ext.split(',').map(str::trim).collect();
@@ -636,8 +659,17 @@ async fn main() -> Result<()> {
                 }
             };
             index.reindex_all();
+            // The upsert counters appear only when an upsert ran.
+            let upsert = if stats.updated + stats.unchanged > 0 {
+                format!(
+                    " ({} updated, {} unchanged)",
+                    stats.updated, stats.unchanged
+                )
+            } else {
+                String::new()
+            };
             println!(
-                "ingested: {} concepts, {} relations, {} ontology updates",
+                "ingested: {} concepts, {} relations, {} ontology updates{upsert}",
                 stats.concepts, stats.relations, stats.ontology_updates,
             );
         }

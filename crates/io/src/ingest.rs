@@ -157,7 +157,29 @@ pub async fn ingest_records<S: Source + ?Sized>(
     graph: &Arc<OntologyGraph>,
     store: Option<&dyn Store>,
 ) -> Result<IngestStats, IngestError> {
-    let mut ing = Ingester::new(graph, store);
+    ingest_records_with(source, graph, store, IngestOptions::default()).await
+}
+
+/// How an ingest treats what is already in the graph.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct IngestOptions {
+    /// A concept whose `(type, name)` exists is updated in place (same id,
+    /// new description and properties); a `NamedRelation` whose endpoints
+    /// and type exist has its weight and properties refreshed. Identical
+    /// records journal nothing. Off, a duplicate name is an error — the
+    /// right answer for a CSV loaded twice by mistake, the wrong one for
+    /// a re-import after a recompile.
+    pub upsert: bool,
+}
+
+/// [`ingest_records`] with options.
+pub async fn ingest_records_with<S: Source + ?Sized>(
+    source: &mut S,
+    graph: &Arc<OntologyGraph>,
+    store: Option<&dyn Store>,
+    opts: IngestOptions,
+) -> Result<IngestStats, IngestError> {
+    let mut ing = Ingester::new(graph, store, opts);
     let outcome = ing.run(source).await;
     if outcome.is_err() {
         // Whatever failed, the live ontology must not keep type declarations
@@ -185,6 +207,10 @@ struct Ingester<'a> {
     /// journaled nor applied. A run of relations costs one barrier per
     /// `INGEST_BATCH_SIZE`, like a run of concepts (`STORAGE.md` §7.2).
     pending_relations: Vec<Relation>,
+    /// Existing relations with a new weight or properties (upsert), not
+    /// yet journaled nor applied; batched like the additions.
+    pending_updates: Vec<Relation>,
+    opts: IngestOptions,
     /// The in-memory ontology has type declarations not yet journaled.
     schema_dirty: bool,
     /// The ontology as it was before the first un-journaled declaration;
@@ -193,7 +219,11 @@ struct Ingester<'a> {
 }
 
 impl<'a> Ingester<'a> {
-    fn new(graph: &'a Arc<OntologyGraph>, store: Option<&'a dyn Store>) -> Self {
+    fn new(
+        graph: &'a Arc<OntologyGraph>,
+        store: Option<&'a dyn Store>,
+        opts: IngestOptions,
+    ) -> Self {
         Self {
             graph,
             store,
@@ -201,6 +231,8 @@ impl<'a> Ingester<'a> {
             pending: Vec::new(),
             pending_names: HashMap::new(),
             pending_relations: Vec::new(),
+            pending_updates: Vec::new(),
+            opts,
             schema_dirty: false,
             schema_baseline: None,
         }
@@ -335,7 +367,29 @@ impl<'a> Ingester<'a> {
     /// and the batch is dropped (its ids stay burnt — harmless).
     async fn flush(&mut self) -> Result<(), IngestError> {
         self.settle_concepts().await?;
-        self.flush_relations().await
+        self.flush_relations().await?;
+        self.flush_updates().await
+    }
+
+    /// Journal the relation updates under one barrier, then apply them.
+    async fn flush_updates(&mut self) -> Result<(), IngestError> {
+        if self.pending_updates.is_empty() {
+            return Ok(());
+        }
+        let batch = std::mem::take(&mut self.pending_updates);
+        if let Some(s) = self.store {
+            let records: Vec<LogRecord> = batch
+                .iter()
+                .cloned()
+                .map(LogRecord::update_relation)
+                .collect();
+            s.append_batch(&records).await?;
+        }
+        for r in batch {
+            self.graph.apply_relation_update(r)?;
+            self.stats.updated += 1;
+        }
+        Ok(())
     }
 
     /// Journal pending schema and concepts, then apply the concepts. The
@@ -438,6 +492,29 @@ impl<'a> Ingester<'a> {
         // settles them first, so an interleaved source costs no more barriers
         // than before relations were batched.
         self.flush_relations().await?;
+        self.flush_updates().await?;
+        if self.opts.upsert && c.id.0 == 0 {
+            if let Some(id) = self.graph.find_by_name(&c.concept_type, &c.name) {
+                // The sheet already there, unchanged: nothing to journal.
+                if let Ok(prev) = self.graph.get_concept(id) {
+                    if prev.name == c.name
+                        && prev.description == c.description
+                        && prev.properties == c.properties
+                    {
+                        self.stats.unchanged += 1;
+                        return Ok(());
+                    }
+                }
+                // An explicit id is an upsert for `prepare_concept`.
+                tracing::debug!(
+                    concept_type = %c.concept_type,
+                    name = %c.name,
+                    "upsert: concept changed"
+                );
+                c.id = id;
+                self.stats.updated += 1;
+            }
+        }
         self.check_pending_conflicts(&c)?;
         self.graph.prepare_concept(&mut c)?;
         self.pending_names
@@ -531,6 +608,31 @@ impl<'a> Ingester<'a> {
                 }
                 match (src, tgt) {
                     (Some(s), Some(t)) => {
+                        if self.opts.upsert {
+                            if let Some(rid) = self.graph.relation_between(s, t, relation_type) {
+                                let prev = self.graph.get_relation(rid)?;
+                                if prev.weight == *weight && prev.properties == *properties {
+                                    self.stats.unchanged += 1;
+                                } else {
+                                    tracing::debug!(
+                                        relation_type = %relation_type,
+                                        source = %source_name,
+                                        target = %target_name,
+                                        old_weight = prev.weight,
+                                        new_weight = *weight,
+                                        "upsert: relation changed"
+                                    );
+                                    let mut updated = prev;
+                                    updated.weight = *weight;
+                                    updated.properties = properties.clone();
+                                    self.pending_updates.push(updated);
+                                    if self.pending_updates.len() >= INGEST_BATCH_SIZE {
+                                        self.flush_updates().await?;
+                                    }
+                                }
+                                return Ok(true);
+                            }
+                        }
                         let mut rel =
                             Relation::new(Default::default(), relation_type.clone(), s, t);
                         rel.weight = *weight;
@@ -739,4 +841,54 @@ pub struct IngestStats {
     pub ontology_updates: u64,
     pub rules: u64,
     pub actions: u64,
+    /// Upsert: concepts and relations that existed and changed (concepts
+    /// are counted in `concepts` too; relations only here).
+    pub updated: u64,
+    /// Upsert: records identical to what the graph had, journaled nowhere.
+    pub unchanged: u64,
+}
+
+/// What [`delete_concepts`] removed.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct DeleteReport {
+    pub deleted: usize,
+    pub relations: usize,
+}
+
+/// Delete concepts and every relation incident to them: the cascade is
+/// journaled under one barrier before anything leaves the graph (R8).
+/// Unknown ids are skipped.
+pub async fn delete_concepts(
+    graph: &OntologyGraph,
+    store: Option<&dyn Store>,
+    ids: &[ConceptId],
+) -> Result<DeleteReport, IngestError> {
+    let mut records = Vec::new();
+    let mut seen_relations = std::collections::HashSet::new();
+    let mut targets = Vec::new();
+    for &cid in ids {
+        let Ok(concept) = graph.get_concept(cid) else {
+            continue;
+        };
+        records.push(LogRecord::delete_concept(cid, concept.concept_type));
+        for rid in graph.incident_relation_ids(cid)? {
+            if seen_relations.insert(rid) {
+                let relation_type = graph.get_relation(rid)?.relation_type;
+                records.push(LogRecord::delete_relation(rid, relation_type));
+            }
+        }
+        targets.push(cid);
+    }
+    if let Some(s) = store {
+        if !records.is_empty() {
+            s.append_batch(&records).await?;
+        }
+    }
+    for cid in &targets {
+        graph.remove_concept(*cid)?;
+    }
+    Ok(DeleteReport {
+        deleted: targets.len(),
+        relations: seen_relations.len(),
+    })
 }
