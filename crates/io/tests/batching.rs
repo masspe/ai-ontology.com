@@ -14,77 +14,15 @@
 
 mod hardening_common;
 
-use hardening_common::VecSource;
+use hardening_common::{
+    kinds, named_relation as named, person, person_ontology as ontology, VecSource, UPSERT,
+};
 use ontology_graph::{
     Cardinality, Concept, ConceptId, ConceptType, Ontology, OntologyGraph, Relation, RelationId,
     RelationType,
 };
-use ontology_io::{ingest_records, ingest_records_with, IngestError, IngestOptions, Record};
-use ontology_storage::{FlakyStore, RecordKind, Store};
-
-fn ontology() -> Ontology {
-    let mut o = Ontology::new();
-    o.add_concept_type(ConceptType {
-        name: "Person".into(),
-        ..Default::default()
-    });
-    o.add_relation_type(RelationType {
-        name: "knows".into(),
-        domain: "Person".into(),
-        range: "Person".into(),
-        ..Default::default()
-    })
-    .unwrap();
-    o.add_relation_type(RelationType {
-        name: "spouse".into(),
-        domain: "Person".into(),
-        range: "Person".into(),
-        symmetric: true,
-        functional: true,
-        ..Default::default()
-    })
-    .unwrap();
-    o.add_relation_type(RelationType {
-        name: "twin".into(),
-        domain: "Person".into(),
-        range: "Person".into(),
-        symmetric: true,
-        cardinality: Cardinality::OneToOne,
-        ..Default::default()
-    })
-    .unwrap();
-    o
-}
-
-fn person(name: &str) -> Record {
-    Record::Concept(Concept::new(ConceptId(0), "Person", name))
-}
-
-fn named(rel: &str, a: &str, b: &str, weight: f32) -> Record {
-    Record::NamedRelation {
-        relation_type: rel.into(),
-        source_type: "Person".into(),
-        source_name: a.into(),
-        target_type: "Person".into(),
-        target_name: b.into(),
-        weight,
-        properties: Default::default(),
-    }
-}
-
-fn kinds(store: &FlakyStore) -> Vec<&'static str> {
-    store
-        .records()
-        .into_iter()
-        .map(|r| match r.kind {
-            RecordKind::Ontology(_) => "ontology",
-            RecordKind::Concept(_) => "concept",
-            RecordKind::Relation(_) => "relation",
-            RecordKind::UpdateRelation(_) => "update_relation",
-            _ => "other",
-        })
-        .collect()
-}
+use ontology_io::{ingest_records, ingest_records_with, IngestError, Record};
+use ontology_storage::{FlakyStore, Store};
 
 async fn replays(store: &FlakyStore) -> std::sync::Arc<OntologyGraph> {
     let fresh = OntologyGraph::with_arc(ontology());
@@ -213,7 +151,7 @@ async fn a_type_redeclaration_settles_the_pending_relations_first() {
         "one schema before the relations, none between: {k:?}"
     );
     assert!(
-        !k[last_relation..].contains(&"ontology") || result.is_ok(),
+        !k[last_relation..].iter().any(|x| x == "ontology") || result.is_ok(),
         "a schema after the relations only if the graph accepted it: {k:?} {result:?}"
     );
     // Whatever the graph decided, the journal replays.
@@ -261,10 +199,6 @@ async fn an_explicit_id_used_twice_in_a_batch_is_reassigned() {
 async fn an_upsert_sees_what_is_still_pending() {
     let graph = OntologyGraph::with_arc(ontology());
     let store = FlakyStore::new();
-    let upsert = IngestOptions {
-        upsert: true,
-        ..Default::default()
-    };
     let records = vec![
         person("a"),
         person("b"),
@@ -273,7 +207,7 @@ async fn an_upsert_sees_what_is_still_pending() {
         named("spouse", "a", "b", 1.0),
         named("spouse", "b", "a", 3.0),
     ];
-    let stats = ingest_records_with(&mut VecSource::new(records), &graph, Some(&store), upsert)
+    let stats = ingest_records_with(&mut VecSource::new(records), &graph, Some(&store), UPSERT)
         .await
         .unwrap();
     assert_eq!(stats.relations, 2, "knows once, spouse once");
@@ -302,7 +236,7 @@ async fn an_upsert_sees_what_is_still_pending() {
         &mut VecSource::new(vec![v1, same]),
         &graph,
         Some(&store),
-        upsert,
+        UPSERT,
     )
     .await
     .unwrap();

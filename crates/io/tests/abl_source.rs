@@ -10,32 +10,16 @@
 //! imported after an xref directory so `Table` and `Program` sheets exist
 //! for the joins and screens to attach to.
 
+mod hardening_common;
+
+use hardening_common::{abl_fixtures_dir, xref_fixtures_dir, xref_roots, UPSERT};
 use ontology_graph::{Ontology, OntologyGraph, PropertyValue};
 use ontology_io::{
-    ingest_records_with, scan_abl, scan_dir, AblFile, AblSource, IngestOptions, ProgramKind,
-    Record, Source, TableIndex, XrefFile, XrefSource,
+    ingest_records_with, scan_abl, scan_dir, AblFile, AblSource, ProgramKind, Record, Source,
+    TableIndex, XrefFile, XrefSource,
 };
 use ontology_storage::FlakyStore;
 use std::collections::BTreeSet;
-use std::path::PathBuf;
-
-const UPSERT: IngestOptions = IngestOptions {
-    upsert: true,
-    prune: false,
-    prune_max_fraction: 0.25,
-};
-
-fn abl_fixtures_dir() -> PathBuf {
-    PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/abl"))
-}
-
-fn xref_fixtures_dir() -> PathBuf {
-    PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/xref"))
-}
-
-fn xref_roots() -> Vec<String> {
-    vec!["D:\\Mediasoft\\App\\MS.ERP2".to_string()]
-}
 
 fn core_tables() -> TableIndex {
     TableIndex::new(["msdb.sdva", "msdb.planning"].iter().map(|s| s.to_string()))

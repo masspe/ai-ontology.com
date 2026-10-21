@@ -14,7 +14,7 @@
 
 mod hardening_common;
 
-use hardening_common::VecSource;
+use hardening_common::{kinds, person, VecSource};
 use ontology_graph::{
     Action, ActionId, ActionType, Concept, ConceptId, ConceptType, Ontology, OntologyGraph,
     Relation, RelationId, RelationType, Rule, RuleId, RuleType,
@@ -25,19 +25,11 @@ use ontology_io::{
 };
 use ontology_storage::{FlakyStore, RecordKind, Store};
 
+/// The shared Person/knows ontology (which also carries `near`, `spouse`
+/// and `twin` — unused here, but adding them changes none of this file's
+/// counts or assertions) plus the rule and action types these tests need.
 fn ontology() -> Ontology {
-    let mut o = Ontology::new();
-    o.add_concept_type(ConceptType {
-        name: "Person".into(),
-        ..Default::default()
-    });
-    o.add_relation_type(RelationType {
-        name: "knows".into(),
-        domain: "Person".into(),
-        range: "Person".into(),
-        ..Default::default()
-    })
-    .unwrap();
+    let mut o = hardening_common::person_ontology();
     o.add_rule_type(rule_type("")).unwrap();
     o.add_action_type(action_type("")).unwrap();
     o
@@ -65,39 +57,12 @@ fn action_type(effect: &str) -> ActionType {
     }
 }
 
-fn person(name: &str) -> Record {
-    Record::Concept(Concept::new(ConceptId(0), "Person", name))
-}
-
 fn person_with_id(id: u64, name: &str) -> Record {
     Record::Concept(Concept::new(ConceptId(id), "Person", name))
 }
 
 fn named(rel: &str, src: &str, tgt: &str) -> Record {
-    Record::NamedRelation {
-        relation_type: rel.into(),
-        source_type: "Person".into(),
-        source_name: src.into(),
-        target_type: "Person".into(),
-        target_name: tgt.into(),
-        weight: 1.0,
-        properties: Default::default(),
-    }
-}
-
-fn kinds(store: &FlakyStore) -> Vec<&'static str> {
-    store
-        .records()
-        .iter()
-        .map(|r| match r.kind {
-            RecordKind::Ontology(_) => "ontology",
-            RecordKind::Concept(_) => "concept",
-            RecordKind::Relation(_) => "relation",
-            RecordKind::Rule(_) => "rule",
-            RecordKind::Action(_) => "action",
-            _ => "other",
-        })
-        .collect()
+    hardening_common::named_relation(rel, src, tgt, 1.0)
 }
 
 /// Exactly `INGEST_BATCH_SIZE` consecutive concepts fit under one barrier;
@@ -338,7 +303,7 @@ async fn identical_rule_and_action_redeclarations_are_no_ops_and_changed_ones_jo
         1,
         "no-op declarations keep the batch open"
     );
-    assert!(!kinds(&store).contains(&"ontology"));
+    assert!(!kinds(&store).iter().any(|k| k == "ontology"));
 
     // Changed declarations: both merged into one schema record, before the
     // next instance.
