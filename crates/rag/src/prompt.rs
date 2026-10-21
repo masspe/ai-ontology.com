@@ -318,8 +318,12 @@ impl<'a> PromptBuilder<'a> {
         if nodes.len() + facts.len() > budget {
             let keep = budget.saturating_sub(facts.len()).max(budget / 2);
             let mut cut = keep.min(nodes.len());
-            while cut > 0 && !nodes.is_char_boundary(cut) {
-                cut -= 1;
+            // Whole lines only: half a `#<id>` token reads as another id.
+            if cut < nodes.len() {
+                cut = nodes.as_bytes()[..cut]
+                    .iter()
+                    .rposition(|&b| b == b'\n')
+                    .map_or(0, |i| i + 1);
             }
             dropped = cut < nodes.len();
             nodes.truncate(cut);
@@ -694,6 +698,46 @@ mod tests {
         assert!(!out.contains("# Top concepts"));
         assert!(out.starts_with("\n# Subgraph\n"));
         assert!(out.contains("\n# Facts\n"));
+    }
+
+    /// When the nodes give way to the facts, whole lines go: a `#<id>`
+    /// token is never cut into another, valid-looking id.
+    #[test]
+    fn nodes_are_dropped_by_whole_lines_never_mid_token() {
+        let o = rich_ontology(&["Company", "Person", "Contract"]);
+        let concepts: Vec<Concept> = (1000..1040)
+            .map(|i| Concept::new(ConceptId(i), "Company", format!("Company {i}")))
+            .collect();
+        let relations: Vec<Relation> = (1000..1039)
+            .map(|i| {
+                Relation::new(
+                    Default::default(),
+                    "WorksWith",
+                    ConceptId(i),
+                    ConceptId(i + 1),
+                )
+            })
+            .collect();
+        let subgraph = Subgraph {
+            seeds: vec![],
+            concepts,
+            relations,
+            depth_of: Default::default(),
+        };
+        for max in (400..2400).step_by(97) {
+            let out = PromptBuilder::new(&o)
+                .with_max_chars(max)
+                .render_query_context(&[], &subgraph);
+            let nodes = out.split("\n# Facts\n").next().unwrap();
+            for line in nodes.lines().filter(|l| l.starts_with("- #")) {
+                let id: u64 = line[3..].split(' ').next().unwrap().parse().unwrap();
+                assert!((1000..1040).contains(&id), "max={max}: cut token {line:?}");
+            }
+            assert!(
+                nodes.ends_with('\n'),
+                "max={max}: node section ends on a line"
+            );
+        }
     }
 
     /// Over the budget, the query half is cut on a char boundary (never

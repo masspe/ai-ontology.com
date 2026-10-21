@@ -27,7 +27,7 @@ use quick_xml::Reader;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::Arc;
 
 use crate::ingest::{IngestError, Source};
 use crate::record::Record;
@@ -347,26 +347,6 @@ pub struct ParsedDir {
     pub bytes: u64,
 }
 
-fn collect_xref_files(path: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
-    if path.is_file() {
-        out.push(path.to_path_buf());
-        return Ok(());
-    }
-    for entry in std::fs::read_dir(path)? {
-        let p = entry?.path();
-        if p.is_dir() {
-            collect_xref_files(&p, out)?;
-        } else if p
-            .file_name()
-            .and_then(|n| n.to_str())
-            .is_some_and(|n| n.to_ascii_lowercase().ends_with(".xref.xml"))
-        {
-            out.push(p);
-        }
-    }
-    Ok(())
-}
-
 /// Parse every `*.xref.xml` under `path` (searched recursively; a single
 /// file works too) on `threads` threads (default: the cores). Blocking:
 /// call it from a blocking context. The result is sorted by program path
@@ -376,42 +356,23 @@ pub fn parse_dir(
     roots: &[String],
     threads: Option<usize>,
 ) -> std::io::Result<ParsedDir> {
-    let mut paths = Vec::new();
-    collect_xref_files(path, &mut paths)?;
-    paths.sort();
-    let threads = threads
-        .unwrap_or_else(|| std::thread::available_parallelism().map_or(4, |n| n.get()))
-        .max(1);
+    let paths = crate::scan::walk_files(path, |p| {
+        p.file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.to_ascii_lowercase().ends_with(".xref.xml"))
+    })?;
     let roots: Arc<[String]> = roots.into();
-    let queue = Arc::new(Mutex::new(paths.into_iter()));
-    let (tx, rx) = mpsc::channel::<(PathBuf, u64, Result<XrefFile, String>)>();
-    let workers: Vec<_> = (0..threads)
-        .map(|_| {
-            let queue = Arc::clone(&queue);
-            let tx = tx.clone();
-            let roots = Arc::clone(&roots);
-            std::thread::spawn(move || loop {
-                let next = queue.lock().unwrap_or_else(|e| e.into_inner()).next();
-                let Some(p) = next else { break };
-                let size = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
-                let parsed = parse_xref_file(&p, &roots);
-                if tx.send((p, size, parsed)).is_err() {
-                    break;
-                }
-            })
-        })
-        .collect();
-    drop(tx);
+    let results = crate::scan::map_files(paths, threads, move |p| {
+        let size = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+        (size, parse_xref_file(p, &roots))
+    });
     let mut out = ParsedDir::default();
-    for (p, size, parsed) in rx {
+    for (p, size, parsed) in results {
         out.bytes += size;
         match parsed {
             Ok(f) => out.files.push(f),
             Err(e) => out.errors.push((p, e)),
         }
-    }
-    for w in workers {
-        let _ = w.join();
     }
     out.files.sort_by(|a, b| a.program.cmp(&b.program));
     Ok(out)
