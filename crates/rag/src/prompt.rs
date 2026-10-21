@@ -5,23 +5,65 @@
 // Dual-licensed: AGPL-3.0-or-later OR a commercial license
 // from Mediasoft & Cie S.A. See LICENSE and LICENSE-COMMERCIAL.md.
 
-use ontology_graph::{Concept, Ontology, PropertyValue, Subgraph};
+use ontology_graph::{Concept, Ontology, PropertyValue, Relation, Subgraph};
 use ontology_index::ScoredConcept;
 use std::fmt::Write;
 
 /// A property value as the model should read it: `18000`, not `18000.0`;
 /// lists joined with ` / `.
+/// A property value is cut at this many characters, and a list at this
+/// many items, before it reaches the prompt: one sheet listing a hundred
+/// procedure names must not eat the whole context budget.
+const MAX_PROPERTY_CHARS: usize = 240;
+const MAX_LIST_ITEMS: usize = 16;
+
 fn property_text(v: &PropertyValue) -> String {
-    match v {
+    let full = match v {
         PropertyValue::Text(t) => t.clone(),
-        PropertyValue::Number(n) if n.fract() == 0.0 && n.abs() < 1e15 => format!("{}", *n as i64),
-        PropertyValue::Number(n) => format!("{n}"),
-        PropertyValue::Bool(b) => b.to_string(),
-        PropertyValue::List(items) => items
-            .iter()
-            .map(property_text)
-            .collect::<Vec<_>>()
-            .join(" / "),
+        PropertyValue::Number(n) if n.fract() == 0.0 && n.abs() < 1e15 => {
+            return format!("{}", *n as i64)
+        }
+        PropertyValue::Number(n) => return format!("{n}"),
+        PropertyValue::Bool(b) => return b.to_string(),
+        PropertyValue::List(items) => {
+            let mut text = items
+                .iter()
+                .take(MAX_LIST_ITEMS)
+                .map(property_text)
+                .collect::<Vec<_>>()
+                .join(" / ");
+            if items.len() > MAX_LIST_ITEMS {
+                let _ = write!(text, " / … (+{} more)", items.len() - MAX_LIST_ITEMS);
+            }
+            text
+        }
+    };
+    if full.chars().count() <= MAX_PROPERTY_CHARS {
+        return full;
+    }
+    let cut: String = full.chars().take(MAX_PROPERTY_CHARS).collect();
+    format!("{cut}…")
+}
+
+/// ` {key=value, …}` for a relation's properties and, when it is not the
+/// default 1, its weight — a join's key list, how many programs write it.
+fn render_relation_extras(r: &Relation) -> String {
+    let mut parts: Vec<String> = r
+        .properties
+        .iter()
+        .map(|(k, v)| format!("{k}={}", property_text(v)))
+        .collect();
+    parts.sort();
+    if r.weight != 1.0 {
+        parts.push(format!(
+            "weight={}",
+            property_text(&PropertyValue::Number(f64::from(r.weight)))
+        ));
+    }
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!(" {{{}}}", parts.join(", "))
     }
 }
 
@@ -210,6 +252,8 @@ impl<'a> PromptBuilder<'a> {
             "# Each line: `#<id> [depth] (Type) Name — description {property=value, …}`. \
                       Cite the `#<id>` tokens verbatim in your answer.\n",
         );
+        let header_len = out.len();
+        let mut nodes = String::new();
         for c in &subgraph.concepts {
             let depth = subgraph.depth_of.get(&c.id).copied().unwrap_or(0);
             let desc = if c.description.is_empty() {
@@ -218,7 +262,7 @@ impl<'a> PromptBuilder<'a> {
                 &c.description
             };
             let _ = writeln!(
-                out,
+                nodes,
                 "- #{} [{}] ({}) {}{}{}",
                 c.id.0,
                 depth,
@@ -231,11 +275,11 @@ impl<'a> PromptBuilder<'a> {
                 },
                 render_properties(c),
             );
-            if out.len() >= self.max_context_chars {
+            if header_len + nodes.len() >= self.max_context_chars {
                 break;
             }
         }
-        out.push_str("\n# Facts\n");
+        let mut facts = String::from("\n# Facts\n");
         for r in &subgraph.relations {
             let s = subgraph.concepts.iter().find(|c| c.id == r.source);
             let t = subgraph.concepts.iter().find(|c| c.id == r.target);
@@ -249,14 +293,43 @@ impl<'a> PromptBuilder<'a> {
                     .map(|d| d.to_string())
                     .unwrap_or_else(|| humanize_relation(&r.relation_type));
                 let _ = writeln!(
-                    out,
-                    "- #{} {} — {} {}.   (raw: {} -[{}]-> {})",
-                    s.id.0, s.name, verb, t.name, s.name, r.relation_type, t.name
+                    facts,
+                    "- #{} {} — {} {}{}.   (raw: {} -[{}]-> {})",
+                    s.id.0,
+                    s.name,
+                    verb,
+                    t.name,
+                    render_relation_extras(r),
+                    s.name,
+                    r.relation_type,
+                    t.name
                 );
             }
-            if out.len() >= self.max_context_chars {
+            if header_len + facts.len() >= self.max_context_chars {
                 break;
             }
+        }
+        // The facts are the answer to most questions; when the two halves
+        // do not fit, the nodes give way first, down to half the budget.
+        let budget = self.max_context_chars.saturating_sub(header_len);
+        let mut dropped = false;
+        if nodes.len() + facts.len() > budget {
+            let keep = budget.saturating_sub(facts.len()).max(budget / 2);
+            let mut cut = keep.min(nodes.len());
+            // Whole lines only: half a `#<id>` token reads as another id.
+            if cut < nodes.len() {
+                cut = nodes.as_bytes()[..cut]
+                    .iter()
+                    .rposition(|&b| b == b'\n')
+                    .map_or(0, |i| i + 1);
+            }
+            dropped = cut < nodes.len();
+            nodes.truncate(cut);
+        }
+        out.push_str(&nodes);
+        out.push_str(&facts);
+        if out.len() <= self.max_context_chars && dropped {
+            out.push_str("\n…[truncated]\n");
         }
         if out.len() > self.max_context_chars {
             let mut cut = self.max_context_chars;
@@ -623,6 +696,46 @@ mod tests {
         assert!(!out.contains("# Top concepts"));
         assert!(out.starts_with("\n# Subgraph\n"));
         assert!(out.contains("\n# Facts\n"));
+    }
+
+    /// When the nodes give way to the facts, whole lines go: a `#<id>`
+    /// token is never cut into another, valid-looking id.
+    #[test]
+    fn nodes_are_dropped_by_whole_lines_never_mid_token() {
+        let o = rich_ontology(&["Company", "Person", "Contract"]);
+        let concepts: Vec<Concept> = (1000..1040)
+            .map(|i| Concept::new(ConceptId(i), "Company", format!("Company {i}")))
+            .collect();
+        let relations: Vec<Relation> = (1000..1039)
+            .map(|i| {
+                Relation::new(
+                    Default::default(),
+                    "WorksWith",
+                    ConceptId(i),
+                    ConceptId(i + 1),
+                )
+            })
+            .collect();
+        let subgraph = Subgraph {
+            seeds: vec![],
+            concepts,
+            relations,
+            depth_of: Default::default(),
+        };
+        for max in (400..2400).step_by(97) {
+            let out = PromptBuilder::new(&o)
+                .with_max_chars(max)
+                .render_query_context(&[], &subgraph);
+            let nodes = out.split("\n# Facts\n").next().unwrap();
+            for line in nodes.lines().filter(|l| l.starts_with("- #")) {
+                let id: u64 = line[3..].split(' ').next().unwrap().parse().unwrap();
+                assert!((1000..1040).contains(&id), "max={max}: cut token {line:?}");
+            }
+            assert!(
+                nodes.ends_with('\n'),
+                "max={max}: node section ends on a line"
+            );
+        }
     }
 
     /// Over the budget, the query half is cut on a char boundary (never

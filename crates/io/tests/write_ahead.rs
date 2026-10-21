@@ -210,6 +210,7 @@ async fn type_declarations_produce_one_ontology_record_before_the_first_instance
         target_type: "City".into(),
         target_name: "Geneva".into(),
         weight: 1.0,
+        properties: Default::default(),
     });
 
     let stats = ingest_records(&mut VecSource::new(records), &graph, Some(&store))
@@ -315,6 +316,7 @@ async fn a_failing_store_leaves_the_graph_untouched() {
             target_type: "Person".into(),
             target_name: "b".into(),
             weight: 1.0,
+            properties: Default::default(),
         }]),
         &graph,
         Some(&store),
@@ -339,6 +341,7 @@ async fn the_journal_replays_to_the_same_graph() {
         target_type: "Person".into(),
         target_name: "p299".into(),
         weight: 0.5,
+        properties: Default::default(),
     });
     // A named relation whose endpoints arrive *after* it is deferred, then
     // resolved once the batch holding them is flushed.
@@ -351,6 +354,7 @@ async fn the_journal_replays_to_the_same_graph() {
             target_type: "Person".into(),
             target_name: "p20".into(),
             weight: 1.0,
+            properties: Default::default(),
         },
     );
 

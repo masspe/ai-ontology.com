@@ -220,6 +220,7 @@ pub fn extract_from_text_chunked(
                 target_type: doc_type.to_string(),
                 target_name: doc_name.to_string(),
                 weight: 1.0,
+                properties: Default::default(),
             });
         }
     }
@@ -276,6 +277,7 @@ pub fn extract_from_text_chunked(
                     target_type: tt.clone(),
                     target_name: tn.clone(),
                     weight: 1.0,
+                    properties: Default::default(),
                 });
                 mentions.push((st, sn));
                 mentions.push((tt, tn));
@@ -340,6 +342,7 @@ pub fn extract_from_text_chunked(
             target_type: ty,
             target_name: name,
             weight: 1.0,
+            properties: Default::default(),
         });
     }
 

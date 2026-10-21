@@ -781,3 +781,35 @@ fn backup_and_restore_round_trip_and_refusals() {
     let _ = std::fs::remove_dir_all(&data);
     let _ = std::fs::remove_dir_all(&other);
 }
+
+/// `xref-stats` is the import counted instead of written: it needs no
+/// store, reports the malformed fixtures as failed, and prints the sheets
+/// and links per type.
+#[test]
+fn xref_stats_counts_the_import_without_a_store() {
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("io")
+        .join("tests")
+        .join("fixtures")
+        .join("xref");
+    let out = ok(
+        None,
+        &[
+            "xref-stats",
+            "--root",
+            r"D:\Mediasoft\App\MS.ERP2",
+            "--threads",
+            "2",
+            &p(&fixtures),
+        ],
+    );
+    assert!(out.contains("files parsed:       4 (2 failed)"), "{out}");
+    assert!(out.contains("== sheets the import creates =="), "{out}");
+    assert!(out.contains("Program"), "{out}");
+    assert!(out.contains("Table"), "{out}");
+    assert!(out.contains("== links the import creates"), "{out}");
+    assert!(out.contains("reads_field"), "{out}");
+    assert!(out.contains("programs run but never compiled: "), "{out}");
+    assert!(out.contains("truncated.xref.xml"), "{out}");
+}

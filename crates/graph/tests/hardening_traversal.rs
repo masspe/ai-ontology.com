@@ -212,6 +212,53 @@ fn expand_terminates_on_cycles_and_honours_max_nodes() {
     }
 }
 
+/// Under the node cap the strongest links win, but round-robin across
+/// relation types: thirty heavy `cites` must not crowd out the five light
+/// `authored` a question may be about.
+#[test]
+fn expand_admits_every_relation_type_under_the_cap() {
+    let g = graph();
+    let hub = concept(&g, "Paper", "Hub");
+    for i in 0..30 {
+        let p = concept(&g, "Paper", &format!("P{i}"));
+        let id = relation(&g, "cites", hub, p);
+        g.update_relation(
+            id,
+            ontology_graph::RelationPatch {
+                weight: Some(10.0),
+                properties: None,
+            },
+        )
+        .unwrap();
+    }
+    for i in 0..5 {
+        let a = concept(&g, "Person", &format!("A{i}"));
+        relation(&g, "authored", a, hub);
+    }
+    let sg = g.expand(
+        &[hub],
+        &TraversalSpec {
+            max_depth: 1,
+            max_nodes: 12,
+            direction: Direction::Both,
+            ..Default::default()
+        },
+    );
+    assert_eq!(sg.concepts.len(), 12);
+    let authored = sg
+        .relations
+        .iter()
+        .filter(|r| r.relation_type == "authored")
+        .count();
+    let cites = sg
+        .relations
+        .iter()
+        .filter(|r| r.relation_type == "cites")
+        .count();
+    assert_eq!(authored, 5, "all five light links admitted");
+    assert_eq!(cites, 6, "the rest of the cap goes to the heavy type");
+}
+
 /// Seeds that already fill `max_nodes` (the graph page seeding with a full
 /// page of one type) still come back with the links between them: the cap
 /// stops adding nodes, never collecting edges among the kept ones.

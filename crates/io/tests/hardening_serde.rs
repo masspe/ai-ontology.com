@@ -45,6 +45,7 @@ fn record_json_uses_snake_case_kind_tags() {
         target_type: "Person".into(),
         target_name: "b".into(),
         weight: 0.5,
+        properties: Default::default(),
     })
     .unwrap();
     assert_eq!(v["kind"], "named_relation");

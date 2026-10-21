@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<Cross-reference xmlns="uri:schemas-progress-com:XREFD:0005">
+  <Source File-name="D:\Mediasoft\App\MS.ERP2\Net\sd\Gui\Planning.cls"><Source-guid>g</Source-guid><File-num>1</File-num>
+    <Reference Reference-type="CLASS" Object-identifier="Net.sd.Gui.Planning">
+      <Source-guid>g</Source-guid><File-num>1</File-num><Ref-seq>1</Ref-seq><Line-num>1</Line-num>
+      <Object-context></Object-context><Access-mode/><Detail/>
+    </Reference>
+    <Reference Reference-type="INVOKE" Object-identifier="Net.Class.Config:Get">
+      <Source-guid>g</Source-guid><File-num>1</File-num><Ref-seq>2</Ref-seq><Line-num>5</Line-num>
+      <Object-context></Object-context><Access-mode/><Detail/>
+    </Reference>
+    <Reference Reference-type="INVOKE" Object-identifier="Net.Class.Config:Get">
+      <Source-guid>g</Source-guid><File-num>1</File-num><Ref-seq>3</Ref-seq><Line-num>7</Line-num>
+      <Object-context></Object-context><Access-mode/><Detail/>
+    </Reference>
+    <Reference Reference-type="NEW" Object-identifier="Net.Class.Config">
+      <Source-guid>g</Source-guid><File-num>1</File-num><Ref-seq>4</Ref-seq><Line-num>9</Line-num>
+      <Object-context></Object-context><Access-mode/><Detail/>
+    </Reference>
+    <Reference Reference-type="SEARCH" Object-identifier="Net.sd.Gui.Planning:ttSDBA">
+      <Source-guid>g</Source-guid><File-num>1</File-num><Ref-seq>5</Ref-seq><Line-num>11</Line-num>
+      <Object-context></Object-context><Access-mode/><Detail/>
+    </Reference>
+    <Reference Reference-type="SEARCH" Object-identifier="msdb.planning">
+      <Source-guid>g</Source-guid><File-num>1</File-num><Ref-seq>6</Ref-seq><Line-num>13</Line-num>
+      <Object-context></Object-context><Access-mode/><Detail/>
+    </Reference>
+  </Source>
+</Cross-reference>

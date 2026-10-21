@@ -13,7 +13,11 @@
 #![allow(dead_code)]
 
 use async_trait::async_trait;
-use ontology_io::{IngestError, Record, Source};
+use ontology_graph::{
+    Cardinality, Concept, ConceptId, ConceptType, Ontology, PropertyValue, RelationType,
+};
+use ontology_io::{IngestError, IngestOptions, Record, Source};
+use ontology_storage::{FlakyStore, RecordKind};
 use std::collections::VecDeque;
 use std::io::Write;
 use std::path::PathBuf;
@@ -185,4 +189,127 @@ pub fn xlsx_bytes(sheets: &[(&str, Vec<Vec<Cell>>)]) -> Vec<u8> {
         .map(|(n, b)| (n.as_str(), b.as_slice()))
         .collect();
     zip_bytes(&borrowed)
+}
+
+/// The checked-in `.xref.xml` fixtures.
+pub fn xref_fixtures_dir() -> PathBuf {
+    PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/xref"))
+}
+
+/// One `.xref.xml` fixture, by base name (without the extension).
+pub fn xref_fixture(name: &str) -> PathBuf {
+    xref_fixtures_dir().join(format!("{name}.xref.xml"))
+}
+
+/// The application root the xref fixtures were compiled under, as the
+/// `roots` argument of [`parse_xref_file`](ontology_io::parse_xref_file) /
+/// [`parse_dir`](ontology_io::parse_dir).
+pub fn xref_roots() -> Vec<String> {
+    vec!["D:\\Mediasoft\\App\\MS.ERP2".to_string()]
+}
+
+/// The checked-in ABL (`.p`/`.w`/`.i`) fixtures.
+pub fn abl_fixtures_dir() -> PathBuf {
+    PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/abl"))
+}
+
+/// The Person/knows test ontology shared by the ingest/upsert/batching
+/// hardening tests: `knows` (plain), `near` (symmetric), `spouse`
+/// (symmetric + functional) and `twin` (symmetric + one-to-one). A test that
+/// pins the exact shape of the ontology (a relation-type count, a
+/// `Record::Ontology` payload) keeps its own local copy instead.
+pub fn person_ontology() -> Ontology {
+    let mut o = Ontology::new();
+    o.add_concept_type(ConceptType {
+        name: "Person".into(),
+        ..Default::default()
+    });
+    o.add_relation_type(RelationType {
+        name: "knows".into(),
+        domain: "Person".into(),
+        range: "Person".into(),
+        ..Default::default()
+    })
+    .unwrap();
+    o.add_relation_type(RelationType {
+        name: "near".into(),
+        domain: "Person".into(),
+        range: "Person".into(),
+        symmetric: true,
+        ..Default::default()
+    })
+    .unwrap();
+    o.add_relation_type(RelationType {
+        name: "spouse".into(),
+        domain: "Person".into(),
+        range: "Person".into(),
+        symmetric: true,
+        functional: true,
+        ..Default::default()
+    })
+    .unwrap();
+    o.add_relation_type(RelationType {
+        name: "twin".into(),
+        domain: "Person".into(),
+        range: "Person".into(),
+        symmetric: true,
+        cardinality: Cardinality::OneToOne,
+        ..Default::default()
+    })
+    .unwrap();
+    o
+}
+
+/// A bare `Person` concept.
+pub fn person(name: &str) -> Record {
+    Record::Concept(Concept::new(ConceptId(0), "Person", name))
+}
+
+/// A `Person` concept with a `city` property.
+pub fn person_in(name: &str, city: &str) -> Record {
+    Record::Concept(
+        Concept::new(ConceptId(0), "Person", name)
+            .with_property("city", PropertyValue::Text(city.into())),
+    )
+}
+
+/// A `NamedRelation` record between two `Person` concepts.
+pub fn named_relation(relation_type: &str, source: &str, target: &str, weight: f32) -> Record {
+    Record::NamedRelation {
+        relation_type: relation_type.into(),
+        source_type: "Person".into(),
+        source_name: source.into(),
+        target_type: "Person".into(),
+        target_name: target.into(),
+        weight,
+        properties: Default::default(),
+    }
+}
+
+/// `upsert: true`, otherwise default — the option most ingest/upsert tests
+/// run under.
+pub const UPSERT: IngestOptions = IngestOptions {
+    upsert: true,
+    prune: false,
+    prune_max_fraction: 0.25,
+};
+
+/// The kind label of each record journaled to `store`, in order.
+pub fn kinds(store: &FlakyStore) -> Vec<String> {
+    store
+        .records()
+        .into_iter()
+        .map(|r| match r.kind {
+            RecordKind::Ontology(_) => "ontology",
+            RecordKind::Concept(_) => "concept",
+            RecordKind::Relation(_) => "relation",
+            RecordKind::UpdateRelation(_) => "update_relation",
+            RecordKind::DeleteConcept(_) => "delete_concept",
+            RecordKind::DeleteRelation(_) => "delete_relation",
+            RecordKind::Rule(_) => "rule",
+            RecordKind::Action(_) => "action",
+            _ => "other",
+        })
+        .map(str::to_string)
+        .collect()
 }
