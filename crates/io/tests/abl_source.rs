@@ -19,7 +19,11 @@ use ontology_storage::FlakyStore;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-const UPSERT: IngestOptions = IngestOptions { upsert: true };
+const UPSERT: IngestOptions = IngestOptions {
+    upsert: true,
+    prune: false,
+    prune_max_fraction: 0.25,
+};
 
 fn abl_fixtures_dir() -> PathBuf {
     PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/abl"))

@@ -162,16 +162,21 @@ enum Cmd {
         chunk_chars: usize,
         /// The path holds Progress OpenEdge `*.xref.xml` files: import them
         /// as the `erp` model (programs, tables, fields and their links).
-        #[arg(long)]
+        #[arg(long, conflicts_with = "abl")]
         xref: bool,
         /// With `--xref`: compile root(s) stripped from paths (repeatable).
-        #[arg(long)]
+        #[arg(long, requires = "xref")]
         xref_root: Vec<String>,
-        /// With `--xref`: after the import, delete the programs (and their
-        /// links) whose xref file is gone. Programs that were never
-        /// compiled (`missing`) stay.
+        /// With `--xref` or `--abl`: after the import, delete what the
+        /// files no longer say — the programs (or screens) whose file is
+        /// gone, and the links a recompile dropped. Refused when a file
+        /// failed to parse, or when more than a quarter of a type's sheets
+        /// would go (another `--xref-root`?): see `--sync-force`.
         #[arg(long)]
         sync: bool,
+        /// With `--sync`: delete however many sheets the files no longer say.
+        #[arg(long, requires = "sync")]
+        sync_force: bool,
         /// The path is the root of Progress ABL sources (.p, .w, .i): add
         /// what the cross-reference lacks — table-to-table joins and the
         /// screens' titles and tabs. Run after `--xref`.
@@ -534,9 +539,20 @@ async fn main() -> Result<()> {
             xref,
             xref_root,
             sync,
+            sync_force,
             abl,
             path,
         } => {
+            if sync && !(xref || abl) {
+                anyhow::bail!("--sync goes with --xref or --abl");
+            }
+            // Both importers are idempotent by construction: a recompile is
+            // a re-import. `--sync` also deletes what the files no longer say.
+            let erp_opts = IngestOptions {
+                upsert: true,
+                prune: sync,
+                prune_max_fraction: if sync_force { 1.0 } else { 0.25 },
+            };
             if let Some(p) = ontology {
                 let raw = tokio::fs::read_to_string(&p).await?;
                 let onto: Ontology = serde_json::from_str(&raw)?;
@@ -575,23 +591,13 @@ async fn main() -> Result<()> {
                 for (p, e) in parsed.errors.iter().take(20) {
                     eprintln!("  {}: {e}", p.display());
                 }
-                // Idempotent by construction: a recompile is a re-import.
-                let upsert = IngestOptions { upsert: true };
-                let stats =
-                    ingest_records_with(&mut src, &graph, Some(store.as_ref()), upsert).await?;
-                if sync {
-                    let gone = ontology_io::retire_programs(
-                        &graph,
-                        Some(store.as_ref()),
-                        &parsed.programs,
-                    )
-                    .await?;
-                    eprintln!(
-                        "sync: {} programs no longer compiled removed with {} links",
-                        gone.deleted, gone.relations
+                if sync && !parsed.errors.is_empty() {
+                    anyhow::bail!(
+                        "--sync refused: {} xref files failed to parse; their programs would be deleted",
+                        parsed.errors.len()
                     );
                 }
-                stats
+                ingest_records_with(&mut src, &graph, Some(store.as_ref()), erp_opts).await?
             } else if abl {
                 let tables = ontology_io::TableIndex::new(
                     graph
@@ -623,8 +629,13 @@ async fn main() -> Result<()> {
                     scanned.summarised,
                     scanned.errors.len()
                 );
-                let upsert = IngestOptions { upsert: true };
-                ingest_records_with(&mut src, &graph, Some(store.as_ref()), upsert).await?
+                if sync && !scanned.errors.is_empty() {
+                    anyhow::bail!(
+                        "--sync refused: {} source files could not be read",
+                        scanned.errors.len()
+                    );
+                }
+                ingest_records_with(&mut src, &graph, Some(store.as_ref()), erp_opts).await?
             } else if is_dir {
                 let ty = text_type.context("--text-type required when ingesting a directory")?;
                 let exts: Vec<&str> = text_ext.split(',').map(str::trim).collect();
@@ -659,8 +670,8 @@ async fn main() -> Result<()> {
                 }
             };
             index.reindex_all();
-            // The upsert counters appear only when an upsert ran.
-            let upsert = if stats.updated + stats.unchanged > 0 {
+            // The upsert and prune counters appear only when they ran.
+            let mut upsert = if stats.updated + stats.unchanged > 0 {
                 format!(
                     " ({} updated, {} unchanged)",
                     stats.updated, stats.unchanged
@@ -668,6 +679,12 @@ async fn main() -> Result<()> {
             } else {
                 String::new()
             };
+            if stats.pruned_concepts + stats.pruned_relations > 0 {
+                upsert.push_str(&format!(
+                    "; pruned {} sheets, {} links",
+                    stats.pruned_concepts, stats.pruned_relations
+                ));
+            }
             println!(
                 "ingested: {} concepts, {} relations, {} ontology updates{upsert}",
                 stats.concepts, stats.relations, stats.ontology_updates,

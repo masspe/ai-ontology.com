@@ -261,7 +261,10 @@ async fn an_explicit_id_used_twice_in_a_batch_is_reassigned() {
 async fn an_upsert_sees_what_is_still_pending() {
     let graph = OntologyGraph::with_arc(ontology());
     let store = FlakyStore::new();
-    let upsert = IngestOptions { upsert: true };
+    let upsert = IngestOptions {
+        upsert: true,
+        ..Default::default()
+    };
     let records = vec![
         person("a"),
         person("b"),
