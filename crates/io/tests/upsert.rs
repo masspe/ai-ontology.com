@@ -13,92 +13,24 @@
 
 mod hardening_common;
 
-use hardening_common::VecSource;
-use ontology_graph::{
-    Concept, ConceptId, ConceptType, Ontology, OntologyGraph, PropertyValue, RelationType,
+use hardening_common::{
+    kinds, person_in as person, person_ontology as ontology, xref_fixtures_dir as fixtures_dir,
+    xref_roots as roots, VecSource, UPSERT,
 };
+use ontology_graph::{ConceptId, Ontology, OntologyGraph, PropertyValue};
 use ontology_io::{
     delete_concepts, ingest_records, ingest_records_with, parse_dir, IngestError, IngestOptions,
     Record, XrefFile, XrefSource,
 };
-use ontology_storage::{FlakyStore, RecordKind, Store};
-
-fn ontology() -> Ontology {
-    let mut o = Ontology::new();
-    o.add_concept_type(ConceptType {
-        name: "Person".into(),
-        ..Default::default()
-    });
-    o.add_relation_type(RelationType {
-        name: "knows".into(),
-        domain: "Person".into(),
-        range: "Person".into(),
-        ..Default::default()
-    })
-    .unwrap();
-    o.add_relation_type(RelationType {
-        name: "near".into(),
-        domain: "Person".into(),
-        range: "Person".into(),
-        symmetric: true,
-        ..Default::default()
-    })
-    .unwrap();
-    o
-}
-
-fn person(name: &str, city: &str) -> Record {
-    Record::Concept(
-        Concept::new(ConceptId(0), "Person", name)
-            .with_property("city", PropertyValue::Text(city.into())),
-    )
-}
+use ontology_storage::{FlakyStore, Store};
 
 fn knows(a: &str, b: &str, weight: f32) -> Record {
-    Record::NamedRelation {
-        relation_type: "knows".into(),
-        source_type: "Person".into(),
-        source_name: a.into(),
-        target_type: "Person".into(),
-        target_name: b.into(),
-        weight,
-        properties: Default::default(),
-    }
+    hardening_common::named_relation("knows", a, b, weight)
 }
 
 fn near(a: &str, b: &str, weight: f32) -> Record {
-    Record::NamedRelation {
-        relation_type: "near".into(),
-        source_type: "Person".into(),
-        source_name: a.into(),
-        target_type: "Person".into(),
-        target_name: b.into(),
-        weight,
-        properties: Default::default(),
-    }
+    hardening_common::named_relation("near", a, b, weight)
 }
-
-fn kinds(store: &FlakyStore) -> Vec<String> {
-    store
-        .records()
-        .into_iter()
-        .map(|r| match r.kind {
-            RecordKind::Concept(_) => "concept",
-            RecordKind::Relation(_) => "relation",
-            RecordKind::UpdateRelation(_) => "update_relation",
-            RecordKind::DeleteConcept { .. } => "delete_concept",
-            RecordKind::DeleteRelation { .. } => "delete_relation",
-            _ => "other",
-        })
-        .map(str::to_string)
-        .collect()
-}
-
-const UPSERT: IngestOptions = IngestOptions {
-    upsert: true,
-    prune: false,
-    prune_max_fraction: 0.25,
-};
 
 /// The same records twice: the second pass journals nothing, every id is
 /// kept, and the stats say so.
@@ -284,14 +216,6 @@ async fn delete_concepts_journals_the_cascade_then_removes() {
     let fresh = OntologyGraph::with_arc(ontology());
     store.load_into(&fresh).await.unwrap();
     assert_eq!((fresh.concept_count(), fresh.relation_count()), (2, 0));
-}
-
-fn fixtures_dir() -> std::path::PathBuf {
-    std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/xref"))
-}
-
-fn roots() -> Vec<String> {
-    vec!["D:\\Mediasoft\\App\\MS.ERP2".to_string()]
 }
 
 /// The xref directory imported twice is one graph, not two.

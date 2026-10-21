@@ -9,18 +9,12 @@
 //! `.xref.xml` fixtures end to end through `ingest_records`, and checking
 //! the shape of the resulting graph (types, sheets, links, weights).
 
+mod hardening_common;
+
+use hardening_common::{xref_fixtures_dir as fixtures_dir, xref_roots as roots};
 use ontology_graph::{Ontology, OntologyGraph, PropertyValue};
 use ontology_io::{ingest_records, ProgramKind, XrefFile, XrefSource};
 use ontology_storage::FlakyStore;
-use std::path::PathBuf;
-
-fn fixtures_dir() -> PathBuf {
-    PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/xref"))
-}
-
-fn roots() -> Vec<String> {
-    vec!["D:\\Mediasoft\\App\\MS.ERP2".to_string()]
-}
 
 #[tokio::test]
 async fn imports_the_fixture_directory_into_an_empty_graph() {
