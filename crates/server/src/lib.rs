@@ -2208,38 +2208,25 @@ async fn delete_concepts(
     let mut ids = req.ids;
     ids.sort_unstable();
     ids.dedup();
-    let mut records = Vec::new();
-    let mut seen_relations = std::collections::HashSet::new();
     let mut targets = Vec::new();
     let mut missing = Vec::new();
     for id in ids {
         let cid = ConceptId(id);
-        let Ok(concept) = s.graph.get_concept(cid) else {
+        if s.graph.get_concept(cid).is_ok() {
+            targets.push(cid);
+        } else {
             missing.push(id);
-            continue;
-        };
-        records.push(LogRecord::delete_concept(cid, concept.concept_type));
-        for rid in s.graph.incident_relation_ids(cid)? {
-            if seen_relations.insert(rid) {
-                let relation_type = s.graph.get_relation(rid)?.relation_type;
-                records.push(LogRecord::delete_relation(rid, relation_type));
-            }
         }
-        targets.push(cid);
     }
-    if !records.is_empty() {
-        s.store
-            .append_batch(&records)
-            .await
-            .map_err(|e| ApiError::Store(e.to_string()))?;
-    }
+    let report = ontology_io::delete_concepts(&s.graph, Some(s.store.as_ref()), &targets)
+        .await
+        .map_err(ingest_api_error)?;
     for cid in &targets {
-        s.graph.remove_concept(*cid)?;
         s.index.forget(*cid);
     }
     Ok(Json(DeleteConceptsResponse {
-        deleted: targets.len(),
-        relations: seen_relations.len(),
+        deleted: report.deleted,
+        relations: report.relations,
         missing,
     }))
 }
