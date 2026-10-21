@@ -339,9 +339,6 @@ fn record(out: &mut XrefFile, ty: &str, id: String, context: &str, roots: &[Stri
 #[derive(Debug, Default)]
 pub struct ParsedDir {
     pub files: Vec<XrefFile>,
-    /// Program identities of every parsed file (kept when `files` is moved
-    /// out by [`XrefSource::from_path`]): what a `--sync` keeps.
-    pub programs: BTreeSet<String>,
     /// Files the parser refused, with the reason.
     pub errors: Vec<(PathBuf, String)>,
     pub bytes: u64,
@@ -524,7 +521,6 @@ impl XrefSource {
     ) -> Result<(Self, ParsedDir), IngestError> {
         let mut parsed = parse_dir(path, roots, threads)?;
         let files = std::mem::take(&mut parsed.files);
-        parsed.programs = files.iter().map(|f| f.program.clone()).collect();
         Ok((Self::from_files(files), parsed))
     }
 
@@ -768,25 +764,6 @@ impl XrefSource {
             records: Box::new(sheets.into_iter().chain(schema_links).chain(program_links)),
         }
     }
-}
-
-/// After a re-import: delete the `Program` sheets (and their links) that
-/// the compiled set no longer contains — `keep` is the set of programs
-/// just parsed. Sheets flagged `missing` (never compiled) stay: they are
-/// run targets, not compiled units. Returns (sheets, links) removed.
-pub async fn retire_programs(
-    graph: &ontology_graph::OntologyGraph,
-    store: Option<&dyn ontology_storage::Store>,
-    keep: &BTreeSet<String>,
-) -> Result<crate::ingest::DeleteReport, IngestError> {
-    let gone: Vec<ConceptId> = graph
-        .concepts_of_type("Program", false)
-        .into_iter()
-        .filter(|c| c.properties.get("missing") != Some(&PropertyValue::Bool(true)))
-        .filter(|c| !keep.contains(&c.name))
-        .map(|c| c.id)
-        .collect();
-    crate::ingest::delete_concepts(graph, store, &gone).await
 }
 
 #[async_trait]

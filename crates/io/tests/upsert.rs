@@ -8,8 +8,8 @@
 //! `IngestOptions { upsert: true }`: a re-import updates what changed,
 //! journals nothing for what did not, and keeps every id; `delete_concepts`
 //! journals the cascade before the graph changes; an xref directory
-//! imported twice is the same graph, and `retire_programs` removes only
-//! the compiled programs that disappeared.
+//! imported twice is the same graph, and a prune deletes exactly what the
+//! source no longer says — sheets and links — and refuses a mass delete.
 
 mod hardening_common;
 
@@ -18,11 +18,10 @@ use ontology_graph::{
     Concept, ConceptId, ConceptType, Ontology, OntologyGraph, PropertyValue, RelationType,
 };
 use ontology_io::{
-    delete_concepts, ingest_records, ingest_records_with, retire_programs, IngestError,
-    IngestOptions, Record, XrefSource,
+    delete_concepts, ingest_records, ingest_records_with, parse_dir, IngestError, IngestOptions,
+    Record, XrefFile, XrefSource,
 };
 use ontology_storage::{FlakyStore, RecordKind, Store};
-use std::collections::BTreeSet;
 
 fn ontology() -> Ontology {
     let mut o = Ontology::new();
@@ -95,7 +94,11 @@ fn kinds(store: &FlakyStore) -> Vec<String> {
         .collect()
 }
 
-const UPSERT: IngestOptions = IngestOptions { upsert: true };
+const UPSERT: IngestOptions = IngestOptions {
+    upsert: true,
+    prune: false,
+    prune_max_fraction: 0.25,
+};
 
 /// The same records twice: the second pass journals nothing, every id is
 /// kept, and the stats say so.
@@ -291,14 +294,12 @@ fn roots() -> Vec<String> {
     vec!["D:\\Mediasoft\\App\\MS.ERP2".to_string()]
 }
 
-/// The xref directory imported twice is one graph, not two; a program
-/// that is no longer compiled is retired by `retire_programs`, and the
-/// never-compiled (`missing`) ones stay.
+/// The xref directory imported twice is one graph, not two.
 #[tokio::test]
-async fn an_xref_directory_reimports_idempotently_and_sync_retires_the_gone() {
+async fn an_xref_directory_reimports_idempotently() {
     let graph = OntologyGraph::with_arc(Ontology::new());
     let store = FlakyStore::new();
-    let (mut src, parsed) = XrefSource::from_path(&fixtures_dir(), &roots(), Some(2)).unwrap();
+    let (mut src, _) = XrefSource::from_path(&fixtures_dir(), &roots(), Some(2)).unwrap();
     let first = ingest_records_with(&mut src, &graph, Some(&store), UPSERT)
         .await
         .unwrap();
@@ -320,32 +321,186 @@ async fn an_xref_directory_reimports_idempotently_and_sync_retires_the_gone() {
         written,
         "an identical re-import journals nothing"
     );
+}
 
-    // Pretend one compiled program disappeared from the next compile.
-    let mut keep: BTreeSet<String> = parsed.programs.clone();
-    let gone = keep.pop_first().unwrap();
-    let gone_id = graph.find_by_name("Program", &gone).unwrap();
-    let missing_before = graph
+const PRUNE: IngestOptions = IngestOptions {
+    upsert: true,
+    prune: true,
+    prune_max_fraction: 0.25,
+};
+
+fn parsed_files() -> Vec<XrefFile> {
+    parse_dir(&fixtures_dir(), &roots(), Some(2)).unwrap().files
+}
+
+fn programs_flagged(graph: &OntologyGraph, missing: bool) -> usize {
+    graph
         .concepts_of_type("Program", false)
         .into_iter()
-        .filter(|c| c.properties.get("missing") == Some(&PropertyValue::Bool(true)))
-        .count();
+        .filter(|c| c.properties.get("missing") == Some(&PropertyValue::Bool(missing)))
+        .count()
+}
+
+/// A synthetic compile: `n` programs in module `m`, each reading table
+/// `msdb.t<i % tables>` on field `f`, program 0 also running program 1.
+fn corpus(n: usize, tables: usize) -> Vec<XrefFile> {
+    (0..n)
+        .map(|i| {
+            let mut f = XrefFile {
+                program: format!("m/p{i}.p"),
+                kind: Some(ontology_io::ProgramKind::Procedure),
+                ..Default::default()
+            };
+            let mut use_ = ontology_io::TableUse {
+                reads: 2,
+                ..Default::default()
+            };
+            use_.fields_read.insert("f".into());
+            f.tables.insert(format!("msdb.t{}", i % tables), use_);
+            if i == 0 {
+                f.runs.insert("m/p1.p".into(), 1);
+            }
+            f
+        })
+        .collect()
+}
+
+/// A recompile without one program: a re-import with prune deletes that
+/// program and its links, nothing else; the never-compiled (`missing`)
+/// programs the fixtures run are re-emitted by the source and stay.
+#[tokio::test]
+async fn prune_retires_the_program_whose_file_is_gone() {
+    let graph = OntologyGraph::with_arc(Ontology::new());
+    let store = FlakyStore::new();
+    let files = parsed_files();
+    let mut src = XrefSource::from_files(files.clone());
+    ingest_records_with(&mut src, &graph, Some(&store), PRUNE)
+        .await
+        .unwrap();
+    let (c1, r1) = (graph.concept_count(), graph.relation_count());
+    let missing_before = programs_flagged(&graph, true);
     assert!(
         missing_before > 0,
         "the fixtures run programs they do not define"
     );
 
-    let report = retire_programs(&graph, Some(&store), &keep).await.unwrap();
-    assert_eq!(report.deleted, 1, "{report:?}");
+    // Drop a program that runs nothing: the `missing` run targets are
+    // still emitted by their other callers and must stay.
+    let idx = files.iter().position(|f| f.runs.is_empty()).unwrap();
+    let gone = files[idx].program.clone();
+    let gone_id = graph.find_by_name("Program", &gone).unwrap();
+    let gone_links = graph.incident_relation_ids(gone_id).unwrap().len();
+    assert!(gone_links > 0);
+    let remaining: Vec<XrefFile> = files
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != idx)
+        .map(|(_, f)| f.clone())
+        .collect();
+    let mut src = XrefSource::from_files(remaining);
+    let stats = ingest_records_with(&mut src, &graph, Some(&store), PRUNE)
+        .await
+        .unwrap();
+    assert!(stats.pruned_concepts >= 1, "{stats:?}");
     assert!(graph.get_concept(gone_id).is_err());
-    let missing_after = graph
-        .concepts_of_type("Program", false)
-        .into_iter()
-        .filter(|c| c.properties.get("missing") == Some(&PropertyValue::Bool(true)))
-        .count();
+    assert_eq!(programs_flagged(&graph, true), missing_before);
+    assert!(graph.concept_count() < c1 && graph.relation_count() < r1);
+
+    // The journal says the same.
+    let fresh = OntologyGraph::with_arc(Ontology::new());
+    store.load_into(&fresh).await.unwrap();
     assert_eq!(
-        missing_after, missing_before,
-        "missing programs are not retired"
+        (fresh.concept_count(), fresh.relation_count()),
+        (graph.concept_count(), graph.relation_count())
     );
-    assert_eq!(graph.concept_count(), c1 - 1);
+}
+
+/// A recompile where a program stopped touching a table other programs
+/// still use: its `reads` and `reads_field` links go; the program, the
+/// table and the other programs' links stay.
+#[tokio::test]
+async fn prune_retires_the_links_a_recompile_dropped() {
+    let graph = OntologyGraph::with_arc(Ontology::new());
+    let store = FlakyStore::new();
+    let files = corpus(4, 1);
+    let mut src = XrefSource::from_files(files.clone());
+    ingest_records_with(&mut src, &graph, Some(&store), PRUNE)
+        .await
+        .unwrap();
+    let p = graph.find_by_name("Program", "m/p2.p").unwrap();
+    let t = graph.find_by_name("Table", "msdb.t0").unwrap();
+    let links_before = graph.outgoing(p).len();
+    let (c1, r1) = (graph.concept_count(), graph.relation_count());
+
+    let mut changed = files.clone();
+    changed[2].tables.clear();
+    let mut src = XrefSource::from_files(changed);
+    let stats = ingest_records_with(&mut src, &graph, Some(&store), PRUNE)
+        .await
+        .unwrap();
+    assert_eq!(stats.pruned_concepts, 0, "{stats:?}");
+    assert_eq!(stats.pruned_relations, 2, "reads + reads_field: {stats:?}");
+    assert!(graph.get_concept(p).is_ok() && graph.get_concept(t).is_ok());
+    assert_eq!(graph.outgoing(p).len(), links_before - 2);
+    assert!(graph.relation_between(p, t, "reads").is_none());
+    assert_eq!(graph.concept_count(), c1);
+    assert_eq!(graph.relation_count(), r1 - 2);
+    let other = graph.find_by_name("Program", "m/p3.p").unwrap();
+    assert!(graph.relation_between(other, t, "reads").is_some());
+}
+
+/// A re-import under other identities would delete everything: refused
+/// above the allowed share on a type big enough to judge, nothing
+/// touched; forced through with the share raised.
+#[tokio::test]
+async fn prune_refuses_a_mass_delete_unless_forced() {
+    let graph = OntologyGraph::with_arc(Ontology::new());
+    let store = FlakyStore::new();
+    let files = corpus(ontology_io::PRUNE_GUARD_MIN_SHEETS * 2, 2);
+    let mut src = XrefSource::from_files(files.clone());
+    ingest_records_with(&mut src, &graph, Some(&store), PRUNE)
+        .await
+        .unwrap();
+    let (c1, r1) = (graph.concept_count(), graph.relation_count());
+    let written = store.records_written();
+
+    let mut src = XrefSource::from_files(files[..2].to_vec());
+    let err = ingest_records_with(&mut src, &graph, Some(&store), PRUNE)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, IngestError::PruneRefused { ref concept_type, .. } if concept_type == "Program"),
+        "{err}"
+    );
+    assert_eq!((graph.concept_count(), graph.relation_count()), (c1, r1));
+    // The upserts that preceded the refusal stand (the module's
+    // program_count changed); no delete was journaled.
+    let deletes = kinds(&store)[written as usize..]
+        .iter()
+        .filter(|k| k.starts_with("delete"))
+        .count();
+    assert_eq!(deletes, 0, "{:?}", &kinds(&store)[written as usize..]);
+
+    let forced = IngestOptions {
+        prune_max_fraction: 1.0,
+        ..PRUNE
+    };
+    let mut src = XrefSource::from_files(files[..2].to_vec());
+    let stats = ingest_records_with(&mut src, &graph, Some(&store), forced)
+        .await
+        .unwrap();
+    assert_eq!(stats.pruned_concepts as usize, files.len() - 2);
+    assert_eq!(graph.concepts_of_type("Program", false).len(), 2);
+}
+
+/// The first import with prune into an empty graph prunes nothing.
+#[tokio::test]
+async fn prune_on_a_first_import_deletes_nothing() {
+    let graph = OntologyGraph::with_arc(Ontology::new());
+    let store = FlakyStore::new();
+    let (mut src, _) = XrefSource::from_path(&fixtures_dir(), &roots(), Some(2)).unwrap();
+    let stats = ingest_records_with(&mut src, &graph, Some(&store), PRUNE)
+        .await
+        .unwrap();
+    assert_eq!((stats.pruned_concepts, stats.pruned_relations), (0, 0));
 }

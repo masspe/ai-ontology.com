@@ -47,6 +47,7 @@ pub use extract::{
 pub use ingest::{
     delete_concepts, export_graph, ingest_records, ingest_records_with, DeleteReport, ExportStats,
     IngestError, IngestOptions, IngestStats, Sink, Source, INGEST_BATCH_SIZE,
+    PRUNE_GUARD_MIN_SHEETS,
 };
 pub use jsonl::{JsonlSink, JsonlSource};
 pub use lang::{detect_language, LangTag};
@@ -64,6 +65,6 @@ pub use text::TextDocumentSource;
 pub use triples::TripleSource;
 pub use xlsx::{spreadsheet_to_text, XlsxSource};
 pub use xref::{
-    normalize_path, parse_dir, parse_xref, parse_xref_file, retire_programs, screen_code,
-    xref_ontology_records, ParsedDir, ProgramKind, TableUse, XrefFile, XrefSource, XREF_NS,
+    normalize_path, parse_dir, parse_xref, parse_xref_file, screen_code, xref_ontology_records,
+    ParsedDir, ProgramKind, TableUse, XrefFile, XrefSource, XREF_NS,
 };

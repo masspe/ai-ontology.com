@@ -5,11 +5,13 @@
 // Dual-licensed: AGPL-3.0-or-later OR a commercial license
 // from Mediasoft & Cie S.A. See LICENSE and LICENSE-COMMERCIAL.md.
 
+use ahash::AHashSet;
 use async_trait::async_trait;
 use ontology_graph::{
-    Concept, ConceptId, GraphError, Ontology, OntologyGraph, PropertyValue, Relation,
+    Concept, ConceptId, GraphError, Ontology, OntologyGraph, PropertyValue, Relation, RelationId,
 };
 use ontology_storage::{LogRecord, Store};
+use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::sync::Arc;
 use thiserror::Error;
@@ -98,6 +100,16 @@ pub enum IngestError {
     Source(String),
     #[error("unknown concept name `{name}` of type `{concept_type}`")]
     UnknownNamed { concept_type: String, name: String },
+    #[error(
+        "prune refused: {stale} of {total} `{concept_type}` sheets were not re-emitted — \
+         more than the allowed share; the import may use other identities (another root?); \
+         raise the share to force"
+    )]
+    PruneRefused {
+        concept_type: String,
+        stale: usize,
+        total: usize,
+    },
 }
 
 /// A pull-based async record source. Returns `Ok(None)` to signal end of stream.
@@ -163,7 +175,7 @@ pub async fn ingest_records<S: Source + ?Sized>(
 }
 
 /// How an ingest treats what is already in the graph.
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct IngestOptions {
     /// A concept whose `(type, name)` exists is updated in place (same id,
     /// new description and properties); a `NamedRelation` whose endpoints
@@ -172,6 +184,36 @@ pub struct IngestOptions {
     /// right answer for a CSV loaded twice by mistake, the wrong one for
     /// a re-import after a recompile.
     pub upsert: bool,
+    /// After the run (implies `upsert`): of the concept types the source
+    /// declared, delete the sheets it did not re-emit; of the relation
+    /// types it declared, delete the links leaving a re-emitted sheet that
+    /// it did not re-emit. One rule — a re-emitted sheet's links are
+    /// exactly what the source said — so a recompile that dropped a table
+    /// access drops the link, and a program whose file disappeared goes
+    /// with its links. Sheets the source still emits (a `missing` run
+    /// target, say) stay without a special case.
+    pub prune: bool,
+    /// Prune refuses to delete more than this share of a type's sheets
+    /// (`PruneRefused`): a re-import under other identities (another
+    /// `--xref-root`) would otherwise wipe and recreate everything. Types
+    /// with fewer than [`PRUNE_GUARD_MIN_SHEETS`] sheets are not guarded:
+    /// one of three modules going is a change, not a mismatch. A refused
+    /// prune leaves the upserts that preceded it: nothing is deleted.
+    pub prune_max_fraction: f32,
+}
+
+/// Below this many sheets a type is too small for a share to mean
+/// anything; the prune guard does not apply.
+pub const PRUNE_GUARD_MIN_SHEETS: usize = 20;
+
+impl Default for IngestOptions {
+    fn default() -> Self {
+        Self {
+            upsert: false,
+            prune: false,
+            prune_max_fraction: 0.25,
+        }
+    }
 }
 
 /// [`ingest_records`] with options.
@@ -181,6 +223,10 @@ pub async fn ingest_records_with<S: Source + ?Sized>(
     store: Option<&dyn Store>,
     opts: IngestOptions,
 ) -> Result<IngestStats, IngestError> {
+    let opts = IngestOptions {
+        upsert: opts.upsert || opts.prune,
+        ..opts
+    };
     let mut ing = Ingester::new(graph, store, opts);
     let outcome = ing.run(source).await;
     if outcome.is_err() {
@@ -218,6 +264,13 @@ struct Ingester<'a> {
     /// `(limits_out, limits_in, symmetric)` per relation type, memoised
     /// until the schema changes.
     type_limits: HashMap<String, (bool, bool, bool)>,
+    /// Prune bookkeeping: the types the source declared, the sheets and
+    /// links it emitted (edge types interned).
+    declared_types: BTreeSet<String>,
+    declared_relation_types: BTreeSet<String>,
+    seen_concepts: AHashSet<ConceptId>,
+    seen_edges: AHashSet<(ConceptId, ConceptId, u32)>,
+    edge_type_idx: HashMap<String, u32>,
     opts: IngestOptions,
     /// The in-memory ontology has type declarations not yet journaled.
     schema_dirty: bool,
@@ -242,6 +295,11 @@ impl<'a> Ingester<'a> {
             pending_updates: Vec::new(),
             pending_updated: 0,
             type_limits: HashMap::new(),
+            declared_types: BTreeSet::new(),
+            declared_relation_types: BTreeSet::new(),
+            seen_concepts: AHashSet::new(),
+            seen_edges: AHashSet::new(),
+            edge_type_idx: HashMap::new(),
             opts,
             schema_dirty: false,
             schema_baseline: None,
@@ -271,7 +329,102 @@ impl<'a> Ingester<'a> {
                 // depend on a type that was never registered.
             }
         }
-        self.flush().await
+        self.flush().await?;
+        if self.opts.prune {
+            self.prune().await?;
+        }
+        Ok(())
+    }
+
+    /// Prune bookkeeping: a link the source emitted.
+    fn note_edge(&mut self, s: ConceptId, t: ConceptId, relation_type: &str) {
+        if !self.opts.prune {
+            return;
+        }
+        let next = self.edge_type_idx.len() as u32;
+        let idx = *self
+            .edge_type_idx
+            .entry(relation_type.to_string())
+            .or_insert(next);
+        self.seen_edges.insert((s, t, idx));
+    }
+
+    /// Delete what the source no longer says (see [`IngestOptions::prune`]):
+    /// the cascade is journaled before the graph changes, concepts first.
+    async fn prune(&mut self) -> Result<(), IngestError> {
+        let mut stale_concepts: Vec<ConceptId> = Vec::new();
+        for ty in &self.declared_types {
+            let all = self.graph.concepts_of_type(ty, false);
+            let stale: Vec<ConceptId> = all
+                .iter()
+                .filter(|c| !self.seen_concepts.contains(&c.id))
+                .map(|c| c.id)
+                .collect();
+            if all.len() >= PRUNE_GUARD_MIN_SHEETS
+                && stale.len() as f32 > self.opts.prune_max_fraction * all.len() as f32
+            {
+                return Err(IngestError::PruneRefused {
+                    concept_type: ty.clone(),
+                    stale: stale.len(),
+                    total: all.len(),
+                });
+            }
+            stale_concepts.extend(stale);
+        }
+        let report = delete_concepts(self.graph, self.store, &stale_concepts).await?;
+        self.stats.pruned_concepts += report.deleted as u64;
+        self.stats.pruned_relations += report.relations as u64;
+
+        // Links of the declared types leaving a re-emitted sheet that were
+        // not re-emitted. A symmetric link counts in either orientation,
+        // and goes with its materialised inverse.
+        let types: Vec<String> = self.declared_relation_types.iter().cloned().collect();
+        let seen: Vec<ConceptId> = self.seen_concepts.iter().copied().collect();
+        let mut stale: Vec<(RelationId, String)> = Vec::new();
+        let mut stale_ids: AHashSet<RelationId> = AHashSet::new();
+        for s in seen {
+            for rel in self.graph.outgoing_typed(s, &types) {
+                let (_, _, symmetric) = self.type_limits(&rel.relation_type);
+                let emitted = self
+                    .edge_type_idx
+                    .get(&rel.relation_type)
+                    .is_some_and(|&idx| {
+                        self.seen_edges.contains(&(s, rel.target, idx))
+                            || (symmetric && self.seen_edges.contains(&(rel.target, s, idx)))
+                    });
+                if emitted {
+                    continue;
+                }
+                if stale_ids.insert(rel.id) {
+                    stale.push((rel.id, rel.relation_type.clone()));
+                }
+                if symmetric {
+                    if let Some(inv) =
+                        self.graph
+                            .relation_between(rel.target, s, &rel.relation_type)
+                    {
+                        if stale_ids.insert(inv) {
+                            stale.push((inv, rel.relation_type.clone()));
+                        }
+                    }
+                }
+            }
+        }
+        if stale.is_empty() {
+            return Ok(());
+        }
+        if let Some(store) = self.store {
+            let records: Vec<LogRecord> = stale
+                .iter()
+                .map(|(id, ty)| LogRecord::delete_relation(*id, ty.clone()))
+                .collect();
+            store.append_batch(&records).await?;
+        }
+        for (id, _) in stale {
+            self.graph.remove_relation(id)?;
+            self.stats.pruned_relations += 1;
+        }
+        Ok(())
     }
 
     /// The error for an *instance* record that still cannot be applied after
@@ -541,6 +694,9 @@ impl<'a> Ingester<'a> {
                     && prev.properties == c.properties
                 {
                     self.stats.unchanged += 1;
+                    if self.opts.prune {
+                        self.seen_concepts.insert(id);
+                    }
                     return Ok(());
                 }
             }
@@ -556,6 +712,9 @@ impl<'a> Ingester<'a> {
         }
         self.check_pending_conflicts(&c)?;
         self.graph.prepare_concept(&mut c)?;
+        if self.opts.prune {
+            self.seen_concepts.insert(c.id);
+        }
         self.pending_names
             .insert((c.concept_type.clone(), c.name.to_lowercase()), c.id);
         self.pending.push(c);
@@ -686,6 +845,7 @@ impl<'a> Ingester<'a> {
                 Ok(true)
             }
             Record::Relation(r) => {
+                self.note_edge(r.source, r.target, &r.relation_type);
                 self.add_relation(r.clone()).await?;
                 Ok(true)
             }
@@ -708,6 +868,7 @@ impl<'a> Ingester<'a> {
                 }
                 match (src, tgt) {
                     (Some(s), Some(t)) => {
+                        self.note_edge(s, t, relation_type);
                         if self.opts.upsert
                             && self
                                 .upsert_relation(s, t, relation_type, *weight, properties)
@@ -726,6 +887,9 @@ impl<'a> Ingester<'a> {
                 }
             }
             Record::ConceptTypeDecl(ct) => {
+                if self.opts.prune {
+                    self.declared_types.insert(ct.name.clone());
+                }
                 // A declaration identical to the registered type (after the
                 // merge below) changes nothing: no barrier, no schema record.
                 let unchanged = self.graph.with_ontology(|o| {
@@ -799,6 +963,9 @@ impl<'a> Ingester<'a> {
                 Ok(true)
             }
             Record::RelationTypeDecl(rt) => {
+                if self.opts.prune {
+                    self.declared_relation_types.insert(rt.name.clone());
+                }
                 // Deferred if domain/range aren't known yet — let the retry pass
                 // see the concept types first.
                 let known = self.graph.with_ontology(|o| {
@@ -928,6 +1095,10 @@ pub struct IngestStats {
     pub updated: u64,
     /// Upsert: records identical to what the graph had, journaled nowhere.
     pub unchanged: u64,
+    /// Prune: sheets deleted because the source did not re-emit them.
+    pub pruned_concepts: u64,
+    /// Prune: links deleted (with the sheets' cascade, or on their own).
+    pub pruned_relations: u64,
 }
 
 /// What [`delete_concepts`] removed.
