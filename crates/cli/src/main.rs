@@ -187,7 +187,7 @@ enum Cmd {
         /// Needs `--df-db`. Run after `--xref`.
         #[arg(long, conflicts_with_all = ["xref", "abl"], requires = "df_db")]
         df: bool,
-        /// With `--df`: the database the dump describes (`msdb`, `msec`, …).
+        /// With `--df`: the database the dump describes (`appdb`, `secdb`, …).
         #[arg(long)]
         df_db: Option<String>,
         path: PathBuf,
@@ -284,8 +284,8 @@ enum Cmd {
     XrefStats {
         /// Directory (searched recursively) or a single `.xref.xml` file.
         path: PathBuf,
-        /// Compile root(s) to strip from paths, so `D:\App\ERP\sd\x.p` and
-        /// `sd/x.p` are one program. Repeatable.
+        /// Compile root(s) to strip from paths, so `D:\App\ERP\pr\x.p` and
+        /// `pr/x.p` are one program. Repeatable.
         #[arg(long)]
         root: Vec<String>,
         /// Parser threads. Default: the number of cores.

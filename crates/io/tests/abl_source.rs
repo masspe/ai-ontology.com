@@ -22,7 +22,11 @@ use ontology_storage::FlakyStore;
 use std::collections::BTreeSet;
 
 fn core_tables() -> TableIndex {
-    TableIndex::new(["msdb.sdva", "msdb.planning"].iter().map(|s| s.to_string()))
+    TableIndex::new(
+        ["appdb.payvar", "appdb.schedule"]
+            .iter()
+            .map(|s| s.to_string()),
+    )
 }
 
 fn text(s: &str) -> PropertyValue {
@@ -34,7 +38,7 @@ fn list(items: &[&str]) -> PropertyValue {
 }
 
 /// `scan_dir` walks every `.p`/`.w`/`.i` fixture, drops the files that
-/// carry no join or screen information, and reduces `sd/main.p` to the one
+/// carry no join or screen information, and reduces `pr/main.p` to the one
 /// join pair it encodes (a buffer alias, `EQ` and `=` across lines, and the
 /// implicit `FOR EACH ... OF ...`).
 #[test]
@@ -44,14 +48,14 @@ fn scan_dir_reads_every_source_file() {
 
     assert_eq!(
         scanned.file_count, 5,
-        "sd/main.p, sd/nested.p, sd/local.i, ca/b-ca100.w, ca/w-ca100.w"
+        "pr/main.p, pr/nested.p, pr/local.i, gl/b-gl100.w, gl/w-gl100.w"
     );
     assert!(scanned.errors.is_empty(), "{:?}", scanned.errors);
 
     let names: Vec<&str> = scanned.files.iter().map(|f| f.program.as_str()).collect();
     assert_eq!(
         names,
-        ["ca/b-ca100.w", "ca/w-ca100.w", "sd/main.p"],
+        ["gl/b-gl100.w", "gl/w-gl100.w", "pr/main.p"],
         "nested.p and local.i carry no join or screen info and are dropped"
     );
     for f in &scanned.files {
@@ -69,24 +73,24 @@ fn scan_dir_reads_every_source_file() {
     let main = scanned
         .files
         .iter()
-        .find(|f| f.program == "sd/main.p")
+        .find(|f| f.program == "pr/main.p")
         .unwrap();
-    let pair = ("msdb.planning".to_string(), "msdb.sdva".to_string());
+    let pair = ("appdb.payvar".to_string(), "appdb.schedule".to_string());
     let u = main
         .joins
         .get(&pair)
         .unwrap_or_else(|| panic!("no join for {pair:?}: {:?}", main.joins));
-    assert_eq!(u.count, 2, "nste=nste (EQ) and peri=peri (=)");
-    assert_eq!(u.implicit, 1, "FOR EACH planning OF sdva");
-    assert_eq!(u.keys.get("nste=nste"), Some(&1));
-    assert_eq!(u.keys.get("peri=peri"), Some(&1));
+    assert_eq!(u.count, 2, "cono=cono (EQ) and period=period (=)");
+    assert_eq!(u.implicit, 1, "FOR EACH schedule OF payvar");
+    assert_eq!(u.keys.get("cono=cono"), Some(&1));
+    assert_eq!(u.keys.get("period=period"), Some(&1));
     assert_eq!(main.joins.len(), 1, "{:?}", main.joins);
 }
 
 /// The full pipeline: an xref directory import creates the `Table` and
-/// `Program` sheets, then the ABL import adds the `ca100` screen (folded
+/// `Program` sheets, then the ABL import adds the `gl100` screen (folded
 /// from its browser and window parts) and the `joined_on` link between the
-/// two tables `sd/main.p` joins.
+/// two tables `pr/main.p` joins.
 #[tokio::test]
 async fn abl_import_adds_screens_and_joins_to_an_xref_graph() {
     let graph = OntologyGraph::with_arc(Ontology::new());
@@ -98,11 +102,11 @@ async fn abl_import_adds_screens_and_joins_to_an_xref_graph() {
         .await
         .unwrap();
 
-    // Register `ca/w-ca100.w` as a compiled Program so one half of the
-    // ca100 screen resolves to a real Program sheet while its browser
-    // (`ca/b-ca100.w`, never compiled in this fixture set) does not.
+    // Register `gl/w-gl100.w` as a compiled Program so one half of the
+    // gl100 screen resolves to a real Program sheet while its browser
+    // (`gl/b-gl100.w`, never compiled in this fixture set) does not.
     let mut extra = XrefSource::from_files(vec![XrefFile {
-        program: "ca/w-ca100.w".to_string(),
+        program: "gl/w-gl100.w".to_string(),
         kind: Some(ProgramKind::Window),
         ..Default::default()
     }]);
@@ -120,8 +124,8 @@ async fn abl_import_adds_screens_and_joins_to_an_xref_graph() {
         .into_iter()
         .map(|c| c.name)
         .collect();
-    assert!(programs.contains("ca/w-ca100.w"));
-    assert!(!programs.contains("ca/b-ca100.w"));
+    assert!(programs.contains("gl/w-gl100.w"));
+    assert!(!programs.contains("gl/b-gl100.w"));
     let table_index = TableIndex::new(tables);
 
     let (mut abl_src, scanned) =
@@ -134,12 +138,12 @@ async fn abl_import_adds_screens_and_joins_to_an_xref_graph() {
     assert!(stats.concepts > 0 && stats.relations > 0, "{stats:?}");
 
     let screen_id = graph
-        .find_by_name("Screen", "ca100")
-        .expect("ca100 screen exists");
+        .find_by_name("Screen", "gl100")
+        .expect("gl100 screen exists");
     let screen = graph.get_concept(screen_id).unwrap();
     assert_eq!(
         screen.properties.get("title"),
-        Some(&text("ca100 - Comptabilite analytique"))
+        Some(&text("gl100 - Grand livre"))
     );
     assert_eq!(
         screen.properties.get("tabs"),
@@ -152,10 +156,10 @@ async fn abl_import_adds_screens_and_joins_to_an_xref_graph() {
     );
     assert_eq!(
         screen.properties.get("programs"),
-        Some(&list(&["ca/b-ca100.w", "ca/w-ca100.w"]))
+        Some(&list(&["gl/b-gl100.w", "gl/w-gl100.w"]))
     );
 
-    let w_id = graph.find_by_name("Program", "ca/w-ca100.w").unwrap();
+    let w_id = graph.find_by_name("Program", "gl/w-gl100.w").unwrap();
     assert!(
         graph
             .relation_between(screen_id, w_id, "implemented_by")
@@ -163,20 +167,20 @@ async fn abl_import_adds_screens_and_joins_to_an_xref_graph() {
         "the window program is registered: implemented_by links to it"
     );
     assert!(
-        graph.find_by_name("Program", "ca/b-ca100.w").is_none(),
+        graph.find_by_name("Program", "gl/b-gl100.w").is_none(),
         "the browser was never compiled: no Program sheet, so no edge to it either"
     );
 
-    let sdva = graph.find_by_name("Table", "msdb.sdva").unwrap();
-    let planning = graph.find_by_name("Table", "msdb.planning").unwrap();
+    let payvar = graph.find_by_name("Table", "appdb.payvar").unwrap();
+    let schedule = graph.find_by_name("Table", "appdb.schedule").unwrap();
     let rid = graph
-        .relation_between(planning, sdva, "joined_on")
-        .expect("joined_on planning -> sdva");
+        .relation_between(schedule, payvar, "joined_on")
+        .expect("joined_on schedule -> payvar");
     let rel = graph.get_relation(rid).unwrap();
     assert_eq!(rel.weight, 3.0, "count(2) + implicit(1)");
     assert_eq!(
         rel.properties.get("keys"),
-        Some(&list(&["nste=nste", "peri=peri"])),
+        Some(&list(&["cono=cono", "period=period"])),
         "most-used-first, ties broken alphabetically"
     );
     assert_eq!(
@@ -189,7 +193,7 @@ async fn abl_import_adds_screens_and_joins_to_an_xref_graph() {
     );
 
     let inv_id = graph
-        .relation_between(sdva, planning, "joined_on")
+        .relation_between(payvar, schedule, "joined_on")
         .expect("the symmetric inverse exists");
     let inv = graph.get_relation(inv_id).unwrap();
     assert_eq!(inv.weight, rel.weight);
@@ -272,14 +276,14 @@ async fn screens_without_a_code_keep_their_path() {
         ..Default::default()
     };
     let coded = AblFile {
-        program: "ca/w-ca200.w".into(),
+        program: "gl/w-ca200.w".into(),
         title: Some("ca200 - Autre ecran".into()),
         ..Default::default()
     };
 
     let mut programs = BTreeSet::new();
     programs.insert("ba/w-menu.w".to_string());
-    // "ca/w-ca200.w" is deliberately left out of `programs`.
+    // "gl/w-ca200.w" is deliberately left out of `programs`.
 
     let mut src = AblSource::from_files(vec![no_code, silent, coded], programs);
     let records = drain(&mut src).await;
@@ -341,7 +345,7 @@ fn table_index_resolves_bare_names_by_database_majority() {
     // "x" is ambiguous (both dba and dbz have it); dbz has more tables and
     // wins. "y" exists only in dbz. The join pair proves both bare names
     // resolved through the majority rule rather than being left unknown.
-    let f = scan_abl("FIND a WHERE x.f EQ y.f NO-LOCK.", "sd/bare.p", &idx);
+    let f = scan_abl("FIND a WHERE x.f EQ y.f NO-LOCK.", "pr/bare.p", &idx);
     let pair = ("dbz.x".to_string(), "dbz.y".to_string());
     assert_eq!(f.joins[&pair].keys.get("f=f"), Some(&1), "{:?}", f.joins);
 }
@@ -356,18 +360,18 @@ fn scan_abl_handles_buffer_for_temp_table_reversed_pairs_and_self_joins() {
     let tables = core_tables();
 
     let shadow = scan_abl(
-        "DEFINE BUFFER tt-plan FOR TEMP-TABLE planning NO-UNDO.\n\
+        "DEFINE BUFFER tt-plan FOR TEMP-TABLE schedule NO-UNDO.\n\
          FIND x WHERE x.a EQ tt-plan.a NO-LOCK.",
-        "sd/shadow.p",
+        "pr/shadow.p",
         &tables,
     );
     assert!(shadow.joins.is_empty(), "{:?}", shadow.joins);
 
     let shadow2 = scan_abl(
-        "DEFINE BUFFER b-plan FOR planning.\n\
-         DEFINE TEMP-TABLE planning NO-UNDO FIELD x AS INTEGER.\n\
-         FIND sdva WHERE sdva.a EQ b-plan.a NO-LOCK.",
-        "sd/shadow2.p",
+        "DEFINE BUFFER b-plan FOR schedule.\n\
+         DEFINE TEMP-TABLE schedule NO-UNDO FIELD x AS INTEGER.\n\
+         FIND payvar WHERE payvar.a EQ b-plan.a NO-LOCK.",
+        "pr/shadow2.p",
         &tables,
     );
     assert!(
@@ -377,11 +381,11 @@ fn scan_abl_handles_buffer_for_temp_table_reversed_pairs_and_self_joins() {
     );
 
     let reversed = scan_abl(
-        "FIND x WHERE sdva.a EQ planning.a NO-LOCK.",
-        "sd/reversed.p",
+        "FIND x WHERE schedule.a EQ payvar.a NO-LOCK.",
+        "pr/reversed.p",
         &tables,
     );
-    let pair = ("msdb.planning".to_string(), "msdb.sdva".to_string());
+    let pair = ("appdb.payvar".to_string(), "appdb.schedule".to_string());
     assert_eq!(
         reversed.joins[&pair].keys.get("a=a"),
         Some(&1),
@@ -390,9 +394,9 @@ fn scan_abl_handles_buffer_for_temp_table_reversed_pairs_and_self_joins() {
     );
 
     let self_join = scan_abl(
-        "DEFINE BUFFER b-sdva FOR sdva.\n\
-         FIND x WHERE sdva.a EQ b-sdva.b NO-LOCK.",
-        "sd/self.p",
+        "DEFINE BUFFER b-payvar FOR payvar.\n\
+         FIND x WHERE payvar.a EQ b-payvar.b NO-LOCK.",
+        "pr/self.p",
         &tables,
     );
     assert!(
@@ -409,16 +413,16 @@ fn scan_abl_handles_buffer_for_temp_table_reversed_pairs_and_self_joins() {
 fn unknown_tables_and_shadowed_names_produce_no_joins() {
     let tables = core_tables();
 
-    let nested = std::fs::read_to_string(abl_fixtures_dir().join("sd/nested.p")).unwrap();
-    let f = scan_abl(&nested, "sd/nested.p", &tables);
+    let nested = std::fs::read_to_string(abl_fixtures_dir().join("pr/nested.p")).unwrap();
+    let f = scan_abl(&nested, "pr/nested.p", &tables);
     assert!(
         f.joins.is_empty(),
         "the nested comment hides the join text entirely: {:?}",
         f.joins
     );
 
-    let local = std::fs::read_to_string(abl_fixtures_dir().join("sd/local.i")).unwrap();
-    let f2 = scan_abl(&local, "sd/local.i", &tables);
+    let local = std::fs::read_to_string(abl_fixtures_dir().join("pr/local.i")).unwrap();
+    let f2 = scan_abl(&local, "pr/local.i", &tables);
     assert!(
         f2.joins.is_empty(),
         "a shadowed temp-table and an unknown table both resolve to nothing: {:?}",

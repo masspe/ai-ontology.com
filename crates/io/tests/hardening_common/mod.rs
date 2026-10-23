@@ -205,7 +205,7 @@ pub fn xref_fixture(name: &str) -> PathBuf {
 /// `roots` argument of [`parse_xref_file`](ontology_io::parse_xref_file) /
 /// [`parse_dir`](ontology_io::parse_dir).
 pub fn xref_roots() -> Vec<String> {
-    vec!["D:\\Mediasoft\\App\\MS.ERP2".to_string()]
+    vec!["D:\\Vendor\\App\\ERP2".to_string()]
 }
 
 /// The checked-in ABL (`.p`/`.w`/`.i`) fixtures.

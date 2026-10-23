@@ -411,14 +411,14 @@ impl Source for DfSource {
 mod tests {
     use super::*;
 
-    const DUMP: &str = r#"ADD TABLE "sdba"
+    const DUMP: &str = r#"ADD TABLE "emp"
   AREA "DataArea"
   DESCRIPTION "Salariés"
-  DUMP-NAME "sdba"
-  TABLE-TRIGGER "DELETE" OVERRIDE PROCEDURE "trig\td-sdba.p" CRC "?"
-  TABLE-TRIGGER "WRITE" OVERRIDE PROCEDURE "trig\tw-sdba.p" CRC "?"
+  DUMP-NAME "emp"
+  TABLE-TRIGGER "DELETE" OVERRIDE PROCEDURE "trig\td-emp.p" CRC "?"
+  TABLE-TRIGGER "WRITE" OVERRIDE PROCEDURE "trig\tw-emp.p" CRC "?"
 
-ADD FIELD "nste" OF "sdba" AS integer
+ADD FIELD "cono" OF "emp" AS integer
   FORMAT ">>>>>>"
   INITIAL "0"
   LABEL "Numéro de société"
@@ -427,7 +427,7 @@ ADD FIELD "nste" OF "sdba" AS integer
   COLUMN-LABEL "Sté"
   ORDER 10
 
-ADD FIELD "intc" OF "sdba" AS character
+ADD FIELD "shortname" OF "emp" AS character
   DESCRIPTION "Utilisé pour recherche ""alpha"""
   FORMAT "x(50)"
   LABEL "Intitulé court"
@@ -436,16 +436,16 @@ ADD FIELD "intc" OF "sdba" AS character
   EXTENT 3
   ORDER 20
 
-ADD INDEX "sdbano" ON "sdba"
+ADD INDEX "empno" ON "emp"
   AREA "IndexData"
   UNIQUE
   PRIMARY
-  INDEX-FIELD "nste" ASCENDING
-  INDEX-FIELD "nosa" ASCENDING
+  INDEX-FIELD "cono" ASCENDING
+  INDEX-FIELD "empid" ASCENDING
 
-ADD INDEX "sdbaint" ON "sdba"
+ADD INDEX "empname" ON "emp"
   AREA "IndexData"
-  INDEX-FIELD "intc" ASCENDING
+  INDEX-FIELD "shortname" ASCENDING
 
 ADD SEQUENCE "doc_seq"
   INITIAL 0
@@ -463,32 +463,32 @@ cpstream=ISO8859-15
         let tables = parse_df(DUMP).unwrap();
         assert_eq!(tables.len(), 1);
         let t = &tables[0];
-        assert_eq!(t.name, "sdba");
+        assert_eq!(t.name, "emp");
         assert_eq!(t.description, "Salariés");
         assert_eq!(
             t.triggers,
             vec![
-                ("DELETE".to_string(), "trig/td-sdba.p".to_string()),
-                ("WRITE".to_string(), "trig/tw-sdba.p".to_string())
+                ("DELETE".to_string(), "trig/td-emp.p".to_string()),
+                ("WRITE".to_string(), "trig/tw-emp.p".to_string())
             ]
         );
         assert_eq!(t.fields.len(), 2);
-        let nste = &t.fields[0];
+        let cono = &t.fields[0];
         assert_eq!(
-            (nste.name.as_str(), nste.data_type.as_str()),
-            ("nste", "integer")
+            (cono.name.as_str(), cono.data_type.as_str()),
+            ("cono", "integer")
         );
-        assert_eq!(nste.label, "Numéro de société");
-        assert_eq!(nste.column_label, "Sté");
-        assert_eq!(nste.format, ">>>>>>");
-        assert_eq!(nste.order, Some(10));
-        let intc = &t.fields[1];
-        assert_eq!(intc.description, r#"Utilisé pour recherche "alpha""#);
-        assert_eq!(intc.help, "Saisir le nom");
-        assert_eq!((intc.decimals, intc.extent), (Some(2), Some(3)));
+        assert_eq!(cono.label, "Numéro de société");
+        assert_eq!(cono.column_label, "Sté");
+        assert_eq!(cono.format, ">>>>>>");
+        assert_eq!(cono.order, Some(10));
+        let shortname = &t.fields[1];
+        assert_eq!(shortname.description, r#"Utilisé pour recherche "alpha""#);
+        assert_eq!(shortname.help, "Saisir le nom");
+        assert_eq!((shortname.decimals, shortname.extent), (Some(2), Some(3)));
         assert_eq!(t.indexes.len(), 2);
         assert!(t.indexes[0].unique && t.indexes[0].primary);
-        assert_eq!(t.indexes[0].fields, ["nste", "nosa"]);
+        assert_eq!(t.indexes[0].fields, ["cono", "empid"]);
         assert!(!t.indexes[1].unique);
     }
 

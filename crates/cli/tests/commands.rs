@@ -798,7 +798,7 @@ fn xref_stats_counts_the_import_without_a_store() {
         &[
             "xref-stats",
             "--root",
-            r"D:\Mediasoft\App\MS.ERP2",
+            r"D:\Vendor\App\ERP2",
             "--threads",
             "2",
             &p(&fixtures),

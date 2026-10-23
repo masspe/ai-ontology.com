@@ -27,3 +27,6 @@ lcov.info
 
 # Local assistant settings and worktrees, never shared
 .claude/
+
+# Installation-specific import settings (paths of a customers code base)
+scripts/*.local.ps1

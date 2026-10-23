@@ -274,7 +274,7 @@ Three sources feed it, in this order:
    grammar — for what the cross-reference cannot say: `a.f = b.g` and
    `FOR EACH a OF b` joins between tables the graph already knows, and the
    screens' titles, folder tabs and menu entries, grouped by screen code
-   (`w-ca100.w`, `b-ca100.w` → `ca100`).
+   (`w-gl100.w`, `b-gl100.w` → `gl100`).
 3. **`ontology ingest --df --df-db <database> <dump.df>`** reads the Data
    Dictionary's definition dump line by line: `ADD TABLE` / `ADD FIELD` /
    `ADD INDEX` with their attribute lines. It is the only source that

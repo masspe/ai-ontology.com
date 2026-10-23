@@ -15,7 +15,7 @@ All notable changes to this project are listed here. The format follows
   unique keys as `primary_key` / `unique_keys` on the table, and a
   `fires_on` link from each database trigger program to its table. Labels
   become the sheets' descriptions, so a question asked in the users'
-  language (« salariés ») finds the table (`sdba`).
+  language (« salariés ») finds the table (`emp`).
 - `IngestOptions::merge_properties`: an upsert that keeps the properties
   and description the new record does not set, so the cross-reference,
   the sources and the schema dump can each write their part of one Table
@@ -32,7 +32,7 @@ All notable changes to this project are listed here. The format follows
   includes, invokes, reads, updates, creates, deletes, field-level
   access); `ontology ingest --abl` reads the `.p`/`.w`/`.i` sources for
   what the cross-reference lacks — the joins between tables, with their
-  keys, and the screens with their code (`ca100`), title, tabs and menu.
+  keys, and the screens with their code (`gl100`), title, tabs and menu.
   `ontology xref-stats` is the dry run: the import counted, not written.
 - Re-import in place: `--xref` and `--abl` update what changed and
   journal nothing for what did not; `--sync` deletes what the files no
