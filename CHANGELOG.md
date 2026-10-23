@@ -6,6 +6,21 @@ All notable changes to this project are listed here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `ontology ingest --df <dump> --df-db <name>` reads a Progress
+  data-definition dump (`.df`): every table and field of the database —
+  including the ones no program touches — with the labels, descriptions,
+  help texts, types and formats the Data Dictionary holds, the primary and
+  unique keys as `primary_key` / `unique_keys` on the table, and a
+  `fires_on` link from each database trigger program to its table. Labels
+  become the sheets' descriptions, so a question asked in the users'
+  language (« salariés ») finds the table (`sdba`).
+- `IngestOptions::merge_properties`: an upsert that keeps the properties
+  and description the new record does not set, so the cross-reference,
+  the sources and the schema dump can each write their part of one Table
+  or Field sheet. On for the three `erp` importers.
+
 ## [0.2.0] - 2026-10-21
 
 ### Added

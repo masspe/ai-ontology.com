@@ -182,6 +182,14 @@ enum Cmd {
         /// screens' titles and tabs. Run after `--xref`.
         #[arg(long)]
         abl: bool,
+        /// The path is a Progress data-definition dump (`.df`) of one
+        /// database: table and field labels, types, keys, triggers.
+        /// Needs `--df-db`. Run after `--xref`.
+        #[arg(long, conflicts_with_all = ["xref", "abl"], requires = "df_db")]
+        df: bool,
+        /// With `--df`: the database the dump describes (`msdb`, `msec`, …).
+        #[arg(long)]
+        df_db: Option<String>,
         path: PathBuf,
     },
     /// Print summary statistics.
@@ -541,16 +549,21 @@ async fn main() -> Result<()> {
             sync,
             sync_force,
             abl,
+            df,
+            df_db,
             path,
         } => {
-            if sync && !(xref || abl) {
-                anyhow::bail!("--sync goes with --xref or --abl");
+            if sync && !(xref || abl || df) {
+                anyhow::bail!("--sync goes with --xref, --abl or --df");
             }
-            // Both importers are idempotent by construction: a recompile is
-            // a re-import. `--sync` also deletes what the files no longer say.
+            // The erp importers are idempotent by construction: a recompile
+            // is a re-import. They write the same sheets (a table is in the
+            // cross-reference and in the schema dump), so an upsert merges;
+            // `--sync` also deletes what the files no longer say.
             let erp_opts = IngestOptions {
                 upsert: true,
                 prune: sync,
+                merge_properties: true,
                 prune_max_fraction: if sync_force { 1.0 } else { 0.25 },
             };
             if let Some(p) = ontology {
@@ -597,6 +610,16 @@ async fn main() -> Result<()> {
                         parsed.errors.len()
                     );
                 }
+                ingest_records_with(&mut src, &graph, Some(store.as_ref()), erp_opts).await?
+            } else if df {
+                let db = df_db.expect("clap: --df requires --df-db");
+                let graph_for_df = graph.clone();
+                let (mut src, tables) = tokio::task::spawn_blocking(move || {
+                    ontology_io::DfSource::from_graph(&path, &db, &graph_for_df)
+                        .map_err(anyhow::Error::from)
+                })
+                .await??;
+                eprintln!("schema dump: {tables} tables");
                 ingest_records_with(&mut src, &graph, Some(store.as_ref()), erp_opts).await?
             } else if abl {
                 let started = std::time::Instant::now();

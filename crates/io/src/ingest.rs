@@ -193,6 +193,13 @@ pub struct IngestOptions {
     /// with its links. Sheets the source still emits (a `missing` run
     /// target, say) stay without a special case.
     pub prune: bool,
+    /// Upsert merges instead of replacing: the staged sheet keeps the
+    /// properties it does not name and the description it leaves empty.
+    /// For several sources writing one sheet — the cross-reference and
+    /// the schema dump both describe a table — so neither erases the
+    /// other's part. A property a source stopped emitting then lingers;
+    /// the sources here always re-emit their full set.
+    pub merge_properties: bool,
     /// Prune refuses to delete more than this share of a type's sheets
     /// (`PruneRefused`): a re-import under other identities (another
     /// `--xref-root`) would otherwise wipe and recreate everything. Types
@@ -211,6 +218,7 @@ impl Default for IngestOptions {
         Self {
             upsert: false,
             prune: false,
+            merge_properties: false,
             prune_max_fraction: 0.25,
         }
     }
@@ -687,8 +695,16 @@ impl<'a> Ingester<'a> {
             }
         }
         if let Some(id) = existing {
-            // The sheet already there, unchanged: nothing to journal.
             if let Ok(prev) = self.graph.get_concept(id) {
+                if self.opts.merge_properties {
+                    let mut merged = prev.properties.clone();
+                    merged.extend(std::mem::take(&mut c.properties));
+                    c.properties = merged;
+                    if c.description.is_empty() {
+                        c.description = prev.description.clone();
+                    }
+                }
+                // The sheet already there, unchanged: nothing to journal.
                 if prev.name == c.name
                     && prev.description == c.description
                     && prev.properties == c.properties

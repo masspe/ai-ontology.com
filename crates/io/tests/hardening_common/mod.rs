@@ -291,6 +291,7 @@ pub fn named_relation(relation_type: &str, source: &str, target: &str, weight: f
 pub const UPSERT: IngestOptions = IngestOptions {
     upsert: true,
     prune: false,
+    merge_properties: false,
     prune_max_fraction: 0.25,
 };
 
