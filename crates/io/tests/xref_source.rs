@@ -47,7 +47,7 @@ async fn imports_the_fixture_directory_into_an_empty_graph() {
             .unwrap_or_else(|| panic!("missing concept type {ty}"));
         assert_eq!(ct.ns.as_deref(), Some("erp"), "ns of {ty}");
     }
-    assert_eq!(ontology.relation_types.len(), 12);
+    assert_eq!(ontology.relation_types.len(), 13);
     assert_eq!(ontology.rule_types.len(), 3);
 
     assert!(graph.find_by_name("Table", "msdb.sdva").is_some());

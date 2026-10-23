@@ -250,6 +250,7 @@ async fn an_xref_directory_reimports_idempotently() {
 const PRUNE: IngestOptions = IngestOptions {
     upsert: true,
     prune: true,
+    merge_properties: false,
     prune_max_fraction: 0.25,
 };
 

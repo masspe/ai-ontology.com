@@ -19,6 +19,7 @@
 pub mod abl;
 pub mod charset;
 pub mod csv;
+pub mod df;
 pub mod docx;
 pub mod extract;
 pub mod ingest;
@@ -38,6 +39,7 @@ pub use abl::{
 };
 pub use charset::{decode_to_utf8, looks_binary, DecodedText};
 pub use csv::CsvSource;
+pub use df::{parse_df, parse_df_file, DfField, DfIndex, DfSource, DfTable};
 pub use docx::{extract_docx_text, is_zip};
 pub use extract::{
     chunk_text, extract_from_text, extract_from_text_chunked, fragment_relation_name,
