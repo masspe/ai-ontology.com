@@ -22,3 +22,4 @@
 *.ttf  binary
 *.otf  binary
 *.eot  binary
+crates/io/tests/fixtures/df/*.df -text
