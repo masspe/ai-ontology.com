@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <Cross-reference xmlns="uri:schemas-progress-com:XREFD:0005">
-  <Source File-name="D:\Mediasoft\App\MS.ERP2\Net\sd\Gui\Planning.cls"><Source-guid>g</Source-guid><File-num>1</File-num>
-    <Reference Reference-type="CLASS" Object-identifier="Net.sd.Gui.Planning">
+  <Source File-name="D:\Vendor\App\ERP2\Net\pr\Gui\Schedule.cls"><Source-guid>g</Source-guid><File-num>1</File-num>
+    <Reference Reference-type="CLASS" Object-identifier="Net.pr.Gui.Schedule">
       <Source-guid>g</Source-guid><File-num>1</File-num><Ref-seq>1</Ref-seq><Line-num>1</Line-num>
       <Object-context></Object-context><Access-mode/><Detail/>
     </Reference>
@@ -17,11 +17,11 @@
       <Source-guid>g</Source-guid><File-num>1</File-num><Ref-seq>4</Ref-seq><Line-num>9</Line-num>
       <Object-context></Object-context><Access-mode/><Detail/>
     </Reference>
-    <Reference Reference-type="SEARCH" Object-identifier="Net.sd.Gui.Planning:ttSDBA">
+    <Reference Reference-type="SEARCH" Object-identifier="Net.pr.Gui.Schedule:ttEMP">
       <Source-guid>g</Source-guid><File-num>1</File-num><Ref-seq>5</Ref-seq><Line-num>11</Line-num>
       <Object-context></Object-context><Access-mode/><Detail/>
     </Reference>
-    <Reference Reference-type="SEARCH" Object-identifier="msdb.planning">
+    <Reference Reference-type="SEARCH" Object-identifier="appdb.schedule">
       <Source-guid>g</Source-guid><File-num>1</File-num><Ref-seq>6</Ref-seq><Line-num>13</Line-num>
       <Object-context></Object-context><Access-mode/><Detail/>
     </Reference>

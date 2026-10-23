@@ -1,0 +1,51 @@
+ADD TABLE "payvar"
+  AREA "DataArea"
+  DESCRIPTION "Variables de salaire"
+  DUMP-NAME "payvar"
+  TABLE-TRIGGER "WRITE" OVERRIDE PROCEDURE "trig\tw-payvar.p" CRC "?"
+
+ADD FIELD "cono" OF "payvar" AS integer
+  FORMAT ">>>>>>"
+  INITIAL "0"
+  LABEL "Numéro de société"
+  POSITION 2
+  MAX-WIDTH 4
+  COLUMN-LABEL "Sté"
+  ORDER 10
+
+ADD FIELD "period" OF "payvar" AS integer
+  FORMAT "999999"
+  LABEL "Période"
+  ORDER 20
+
+ADD FIELD "libelle" OF "payvar" AS character
+  DESCRIPTION "Texte libre affiché sur la fiche"
+  FORMAT "x(40)"
+  LABEL "Libellé"
+  HELP "Saisir un libellé"
+  ORDER 30
+
+ADD INDEX "payvarno" ON "payvar"
+  AREA "IndexData"
+  UNIQUE
+  PRIMARY
+  INDEX-FIELD "cono" ASCENDING
+  INDEX-FIELD "period" ASCENDING
+
+ADD TABLE "nouvelle"
+  AREA "DataArea"
+  DESCRIPTION "Table que le code ne touche pas"
+
+ADD FIELD "id" OF "nouvelle" AS int64
+  LABEL "Identifiant"
+  ORDER 10
+
+ADD SEQUENCE "doc_seq"
+  INITIAL 0
+  INCREMENT 1
+
+.
+PSC
+cpstream=ISO8859-15
+.
+0000001234

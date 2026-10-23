@@ -10,8 +10,8 @@
 //!
 //! The compiler's xref says which program touches which table; it never
 //! says how two tables relate. The programs do, thousands of times, in
-//! their `WHERE` clauses (`cali.nste EQ ecri.nste AND cali.exer EQ
-//! ecri.exer …`) and in `FOR EACH cali OF ecri`. The screens' tabs and
+//! their `WHERE` clauses (`acct.cono EQ entry.cono AND acct.year EQ
+//! entry.year …`) and in `FOR EACH acct OF entry`. The screens' tabs and
 //! titles are in the `.w` files too. This module reads them with a few
 //! patterns over the comment-stripped text — no ABL grammar — and reduces
 //! each file to an [`AblFile`] summary.
@@ -392,7 +392,7 @@ pub fn scan_dir(
 }
 
 /// One ERP screen: the window, browser, viewer, … parts of a code folded
-/// together (`w-ca100.w` + `b-ca100.w` → `ca100`).
+/// together (`w-gl100.w` + `b-gl100.w` → `gl100`).
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ScreenAgg {
     pub title: Option<String>,
@@ -489,7 +489,7 @@ impl AblSource {
         let decls = vec![
             Record::ConceptTypeDecl(ConceptType {
                 name: "Screen".into(),
-                description: "A screen of the ERP, named by its code (ca100): its title, folder tabs and menu entries; the window, browser and viewer programs behind it.".into(),
+                description: "A screen of the ERP, named by its code (gl100): its title, folder tabs and menu entries; the window, browser and viewer programs behind it.".into(),
                 properties: Some(["code", "title", "tabs", "menu_items", "programs"].iter().map(|s| s.to_string()).collect()),
                 ns: Some(XREF_NS.into()),
                 ..Default::default()
@@ -610,12 +610,12 @@ mod tests {
     fn tables() -> TableIndex {
         TableIndex::new(
             [
-                "msdb.cali",
-                "msdb.ecri",
-                "msdb.crli",
-                "msdb.util",
-                "msec.util",
-                "msec.ecri2",
+                "appdb.acct",
+                "appdb.entry",
+                "appdb.line",
+                "appdb.util",
+                "secdb.util",
+                "secdb.ecri2",
             ]
             .iter()
             .map(|s| s.to_string()),
@@ -631,51 +631,51 @@ mod tests {
     #[test]
     fn bare_table_names_resolve_to_the_main_database() {
         let t = tables();
-        assert_eq!(t.resolve("util"), Some("msdb.util"));
-        assert_eq!(t.resolve("msec.util"), Some("msec.util"));
+        assert_eq!(t.resolve("util"), Some("appdb.util"));
+        assert_eq!(t.resolve("secdb.util"), Some("secdb.util"));
         assert_eq!(t.resolve("nothing"), None);
     }
 
     #[test]
     fn finds_joins_through_aliases_and_across_lines() {
         let src = r#"
-DEFINE BUFFER b-ecri FOR ecri.
-DEFINE TEMP-TABLE crli NO-UNDO FIELD nste AS INTEGER.
-/* FIND cali WHERE cali.nste = ecri.nste. (commented out) */
-FIND cali USE-INDEX calino WHERE cali.nste EQ b-ecri.nste
-                           AND   cali.exer EQ b-ecri.exer
-                           AND   cali.ecri eq b-ecri.ecri NO-LOCK NO-ERROR.
-FOR EACH crli WHERE crli.nste = ecri.nste: END.   /* crli is a temp-table here */
-FOR EACH cali OF ecri: END.
-ASSIGN ecri.nste = ecri.nste.
+DEFINE BUFFER b-entry FOR entry.
+DEFINE TEMP-TABLE line NO-UNDO FIELD cono AS INTEGER.
+/* FIND acct WHERE acct.cono = entry.cono. (commented out) */
+FIND acct USE-INDEX acctno WHERE acct.cono EQ b-entry.cono
+                           AND   acct.year EQ b-entry.year
+                           AND   acct.entry eq b-entry.entry NO-LOCK NO-ERROR.
+FOR EACH line WHERE line.cono = entry.cono: END.   /* line is a temp-table here */
+FOR EACH acct OF entry: END.
+ASSIGN entry.cono = entry.cono.
 "#;
-        let f = scan_abl(src, "ca/x.p", &tables());
+        let f = scan_abl(src, "gl/x.p", &tables());
         assert_eq!(f.joins.len(), 1, "{:?}", f.joins);
-        let u = &f.joins[&("msdb.cali".to_string(), "msdb.ecri".to_string())];
+        let u = &f.joins[&("appdb.acct".to_string(), "appdb.entry".to_string())];
         assert_eq!(u.count, 3);
         assert_eq!(u.implicit, 1);
-        assert_eq!(u.keys["nste=nste"], 1);
-        assert_eq!(u.keys["ecri=ecri"], 1);
+        assert_eq!(u.keys["cono=cono"], 1);
+        assert_eq!(u.keys["entry=entry"], 1);
         assert!(f.title.is_none(), "a .p has no screen");
     }
 
     #[test]
     fn screens_group_their_parts_by_code() {
         let browser = AblFile {
-            program: "ca/b-ca100.w".into(),
+            program: "gl/b-gl100.w".into(),
             title: Some("Liste".into()),
             tabs: vec!["Liste".into(), "Compte".into()],
             ..Default::default()
         };
         let window = AblFile {
-            program: "ca/w-ca100.w".into(),
-            title: Some("ca100 - Comptabilité analytique".into()),
+            program: "gl/w-gl100.w".into(),
+            title: Some("gl100 - Grand livre".into()),
             tabs: vec!["Compte".into(), "Cumuls".into()],
             menu_items: vec!["Masquer".into()],
             ..Default::default()
         };
         let silent = AblFile {
-            program: "ca/v-ca100.w".into(),
+            program: "gl/v-gl100.w".into(),
             ..Default::default()
         };
         let other = AblFile {
@@ -685,14 +685,11 @@ ASSIGN ecri.nste = ecri.nste.
         };
         let g = group_screens(&[browser, window, silent, other]);
         assert_eq!(g.len(), 2, "{g:?}");
-        let ca100 = &g["ca100"];
-        assert_eq!(
-            ca100.title.as_deref(),
-            Some("ca100 - Comptabilité analytique")
-        );
-        assert_eq!(ca100.tabs, ["Liste", "Compte", "Cumuls"]);
-        assert_eq!(ca100.menu_items, ["Masquer"]);
-        assert_eq!(ca100.programs, ["ca/b-ca100.w", "ca/w-ca100.w"]);
+        let gl100 = &g["gl100"];
+        assert_eq!(gl100.title.as_deref(), Some("gl100 - Grand livre"));
+        assert_eq!(gl100.tabs, ["Liste", "Compte", "Cumuls"]);
+        assert_eq!(gl100.menu_items, ["Masquer"]);
+        assert_eq!(gl100.programs, ["gl/b-gl100.w", "gl/w-gl100.w"]);
         assert!(
             g.contains_key("ba/w-menu.w"),
             "no code: the path is the name"
@@ -701,9 +698,9 @@ ASSIGN ecri.nste = ecri.nste.
 
     #[test]
     fn a_window_ending_on_the_keyword_does_not_panic() {
-        let f = scan_abl("RUN x ('FOLDER-LABELS", "ca/w-x.w", &tables());
+        let f = scan_abl("RUN x ('FOLDER-LABELS", "gl/w-x.w", &tables());
         assert!(f.tabs.is_empty());
-        let f = scan_abl("FOLDER-LABELS", "ca/w-x.w", &tables());
+        let f = scan_abl("FOLDER-LABELS", "gl/w-x.w", &tables());
         assert!(f.tabs.is_empty());
     }
 
@@ -719,10 +716,10 @@ IF x THEN ASSIGN vfolder = vfolder + "|Historique|Cumuls|Ecr. effacées".
 RUN set-attribute-list IN h_folder ('FOLDER-LABELS = ':U + vfolder + ',
                                      FOLDER-TAB-TYPE = 2':U).
 RUN set-attribute-list IN h_other ('FOLDER-LABELS = ':U + 'Base|Page 8|Page 9|Divers' + ',').
-CREATE WINDOW W-Win ASSIGN TITLE = "ca100 - Comptabilité analytique".
+CREATE WINDOW W-Win ASSIGN TITLE = "gl100 - Grand livre".
 "#;
-        let f = scan_abl(src, "ca/w-ca100.w", &tables());
-        assert_eq!(f.title.as_deref(), Some("ca100 - Comptabilité analytique"));
+        let f = scan_abl(src, "gl/w-gl100.w", &tables());
+        assert_eq!(f.title.as_deref(), Some("gl100 - Grand livre"));
         assert_eq!(
             f.tabs,
             [

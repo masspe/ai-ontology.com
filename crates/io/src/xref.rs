@@ -150,7 +150,7 @@ impl XrefFile {
 
 /// Lower-cases, turns `\` into `/`, drops `./`, and strips the first of
 /// `roots` that prefixes the path (compared case-insensitively, `\` or
-/// `/`). Programs compiled from `D:\App\ERP\sd\x.p` and run as `sd/x.p`
+/// `/`). Programs compiled from `D:\App\ERP\pr\x.p` and run as `pr/x.p`
 /// then share one identity.
 pub fn normalize_path(raw: &str, roots: &[String]) -> String {
     let mut p = raw.replace('\\', "/").to_lowercase();
@@ -276,7 +276,7 @@ fn record(out: &mut XrefFile, ty: &str, id: String, context: &str, roots: &[Stri
     match ty {
         // Field-level: identifier is the field, context the table. ABL names
         // are case-insensitive and the xref spells them as the code does
-        // (`msdb.x`, `msDB.x`): one entry per table, lower-case.
+        // (`appdb.x`, `appDB.x`): one entry per table, lower-case.
         "ACCESS" | "UPDATE" => {
             if let Some(t) = table_name(context) {
                 let u = out.tables.entry(t.to_lowercase()).or_default();
@@ -424,10 +424,10 @@ pub fn xref_ontology_records() -> Vec<Record> {
     use Cardinality::{ManyToMany as NN, ManyToOne as N1, OneToMany as ONE_N};
     vec![
         concept_type("Module", "A directory of the ERP source tree: the unit people talk about (payroll, accounting, …).", &["path", "program_count"]),
-        concept_type("Program", "A compiled OpenEdge program (.p procedure, .w window, .cls class). `code` is the ERP screen code users know (ca100); `missing` marks a program other programs run but whose compiled cross-reference is absent. The weight of every link leaving a program is the number of references in its compiled code.", &["path", "code", "kind", "module", "missing", "procedures", "functions", "dynamic_runs", "strings", "references"]),
+        concept_type("Program", "A compiled OpenEdge program (.p procedure, .w window, .cls class). `code` is the ERP screen code users know (gl100); `missing` marks a program other programs run but whose compiled cross-reference is absent. The weight of every link leaving a program is the number of references in its compiled code.", &["path", "code", "kind", "module", "missing", "procedures", "functions", "dynamic_runs", "strings", "references"]),
         concept_type("Include", "An OpenEdge include file (.i), compiled into every program that includes it.", &["path"]),
         concept_type("Class", "An ABL or .NET class used by programs.", &["name"]),
-        concept_type("Database", "An OpenEdge database (msdb, msec, …).", &[]),
+        concept_type("Database", "An OpenEdge database (appdb, secdb, …).", &[]),
         concept_type("Table", "A database table, named db.table. The schema dump adds its label, dump name, primary key and unique keys.", &["db", "table", "label", "dump_name", "primary_key", "unique_keys", "field_count"]),
         concept_type("Field", "A table field, named db.table.field. The schema dump adds its label, type, format and help text.", &["table", "field", "label", "column_label", "help", "data_type", "format", "decimals", "extent", "order"]),
         relation_type("belongs_to", "Program", "Module", N1, "belongs to module"),
@@ -456,7 +456,7 @@ pub fn module_of(path: &str) -> &str {
 
 /// What a `RUN` target names: the compiled program with that exact path,
 /// else the one compiled program with that file name (the PROPATH finds
-/// `pcto.p` in `sd/`), else a program that was never compiled.
+/// `post.p` in `pr/`), else a program that was never compiled.
 pub struct RunResolver {
     known: BTreeSet<String>,
     by_basename: HashMap<String, Vec<String>>,
@@ -490,11 +490,11 @@ impl RunResolver {
 }
 
 /// The ERP's screen code of a program path — what business users and
-/// developers call it: `ca/w-ca100.w` → `ca100`, `db/b6-db100.w` →
-/// `db100`, `net/sd/gui/planning.cls` → `None`. The short ADM prefix
+/// developers call it: `gl/w-gl100.w` → `gl100`, `db/b6-db100.w` →
+/// `db100`, `net/pr/gui/schedule.cls` → `None`. The short ADM prefix
 /// (`w-` window, `b-` browser, `v-` viewer, `d-` dialog, `b6-`, …) names a
 /// part of the screen; the code is what follows: two letters, three
-/// digits, then anything (`sd100dat`).
+/// digits, then anything (`pr100dat`).
 pub fn screen_code(path: &str) -> Option<String> {
     let file = path.rsplit('/').next().unwrap_or(path);
     let stem = file.rsplit_once('.').map_or(file, |(s, _)| s);
@@ -805,10 +805,10 @@ mod tests {
         format!(
             r#"<?xml version="1.0"?>
 <Cross-reference xmlns="uri:schemas-progress-com:XREFD:0005">
-  <Source File-name="D:\Mediasoft\App\MS.ERP2\sd\Pcto.p"><Source-guid>g</Source-guid><File-num>1</File-num>
+  <Source File-name="D:\Vendor\App\ERP2\pr\Post.p"><Source-guid>g</Source-guid><File-num>1</File-num>
   {}
   </Source>
-  <Source File-name=".\sd\inc\tt.i"><Source-guid>g</Source-guid><File-num>2</File-num></Source>
+  <Source File-name=".\pr\inc\tt.i"><Source-guid>g</Source-guid><File-num>2</File-num></Source>
 </Cross-reference>"#,
             refs.join("\n")
         )
@@ -816,23 +816,23 @@ mod tests {
 
     #[test]
     fn summarises_one_program() {
-        let roots = vec!["D:\\Mediasoft\\App\\MS.ERP2".to_string()];
+        let roots = vec!["D:\\Vendor\\App\\ERP2".to_string()];
         let xml = doc(&[
-            reference("COMPILE", "D:\\Mediasoft\\App\\MS.ERP2\\sd\\Pcto.p", ""),
+            reference("COMPILE", "D:\\Vendor\\App\\ERP2\\pr\\Post.p", ""),
             reference("STRING", "Soci&amp;t&#233;", ""),
-            reference("ACCESS", "nste", "msdb.sdva"),
-            reference("ACCESS", "PERI", "msDB.sdva"),
-            reference("UPDATE", "nste", "msdb.sdva"),
+            reference("ACCESS", "cono", "appdb.payvar"),
+            reference("ACCESS", "PERIOD", "appDB.payvar"),
+            reference("UPDATE", "cono", "appdb.payvar"),
             reference("ACCESS", "pAppl", "PUBLIC-PROPERTY"),
-            reference("SEARCH", "msdb.batc", ""),
-            reference("SEARCH", "Net.sd.Gui.Planning:ttSDBA", ""),
-            reference("CREATE", "msdb.planning", ""),
-            reference("DELETE", "msdb.planning", ""),
-            reference("RUN", "sd/pcto2.p", ""),
-            reference("RUN", "Net\\Sd\\Proc\\DrVacanGZ.p", ""),
+            reference("SEARCH", "appdb.batch", ""),
+            reference("SEARCH", "Net.pr.Gui.Schedule:ttEMP", ""),
+            reference("CREATE", "appdb.schedule", ""),
+            reference("DELETE", "appdb.schedule", ""),
+            reference("RUN", "pr/post2.p", ""),
+            reference("RUN", "Net\\Pr\\Proc\\Driver.p", ""),
             reference("RUN", "dispatch", ""),
             reference("RUN", "VALUE(cProg)", ""),
-            reference("INCLUDE", "net/sd/inc/tt/ttsdba.i", ""),
+            reference("INCLUDE", "net/pr/inc/tt/ttemp.i", ""),
             reference("PROCEDURE", "adm-create-controls", ""),
             reference("FUNCTION", "fGetDate", ""),
             reference("INVOKE", "Net.Class.Config:Get", ""),
@@ -845,29 +845,29 @@ mod tests {
         ]);
         let f = parse_xref(xml.as_bytes(), &roots).unwrap();
 
-        assert_eq!(f.program, "sd/pcto.p");
+        assert_eq!(f.program, "pr/post.p");
         assert_eq!(f.kind, Some(ProgramKind::Procedure));
         assert_eq!(f.references, 20);
         assert_eq!(f.strings, 1);
 
-        let sdva = &f.tables["msdb.sdva"];
-        assert_eq!((sdva.reads, sdva.updates), (2, 1));
-        assert_eq!(sdva.fields_read.len(), 2);
-        assert!(sdva.fields_updated.contains("nste"));
-        assert_eq!(f.tables["msdb.batc"].reads, 1);
-        let planning = &f.tables["msdb.planning"];
-        assert_eq!((planning.creates, planning.deletes), (1, 1));
+        let payvar = &f.tables["appdb.payvar"];
+        assert_eq!((payvar.reads, payvar.updates), (2, 1));
+        assert_eq!(payvar.fields_read.len(), 2);
+        assert!(payvar.fields_updated.contains("cono"));
+        assert_eq!(f.tables["appdb.batch"].reads, 1);
+        let schedule = &f.tables["appdb.schedule"];
+        assert_eq!((schedule.creates, schedule.deletes), (1, 1));
         assert_eq!(
             f.tables.len(),
             3,
             "class property and temp-table are not tables"
         );
 
-        assert_eq!(f.runs["sd/pcto2.p"], 1);
-        assert_eq!(f.runs["net/sd/proc/drvacangz.p"], 1);
+        assert_eq!(f.runs["pr/post2.p"], 1);
+        assert_eq!(f.runs["net/pr/proc/driver.p"], 1);
         assert_eq!(f.calls["dispatch"], 1);
         assert_eq!(f.dynamic_runs, 1);
-        assert!(f.includes.contains("net/sd/inc/tt/ttsdba.i"));
+        assert!(f.includes.contains("net/pr/inc/tt/ttemp.i"));
         assert!(f.procedures.contains("adm-create-controls"));
         assert!(f.functions.contains("fgetdate"));
         assert_eq!(f.invokes["Net.Class.Config"], 2);
@@ -877,41 +877,41 @@ mod tests {
     #[test]
     fn normalises_paths() {
         let roots = vec![
-            "d:/mediasoft/app/ms.erp/".to_string(),
-            "D:\\Mediasoft\\App\\MS.ERP2".to_string(),
+            "d:/vendor/app/erp/".to_string(),
+            "D:\\Vendor\\App\\ERP2".to_string(),
         ];
         assert_eq!(
-            normalize_path("D:\\Mediasoft\\App\\MS.ERP2\\Sd\\X.P", &roots),
-            "sd/x.p"
+            normalize_path("D:\\Vendor\\App\\ERP2\\Pr\\X.P", &roots),
+            "pr/x.p"
         );
         assert_eq!(
-            normalize_path("D:\\Mediasoft\\App\\MS.ERP\\sd\\x.p", &roots),
-            "sd/x.p"
+            normalize_path("D:\\Vendor\\App\\ERP\\pr\\x.p", &roots),
+            "pr/x.p"
         );
         assert_eq!(
-            normalize_path(".\\net\\web\\inc\\WebConfig.i", &roots),
-            "net/web/inc/webconfig.i"
+            normalize_path(".\\net\\web\\inc\\Appconfig.i", &roots),
+            "net/web/inc/appconfig.i"
         );
-        assert_eq!(normalize_path("sd/x.p", &roots), "sd/x.p");
+        assert_eq!(normalize_path("pr/x.p", &roots), "pr/x.p");
         // A root that is only a prefix of a segment does not match.
         assert_eq!(
-            normalize_path("D:\\Mediasoft\\App\\MS.ERP2x\\y.p", &roots),
-            "d:/mediasoft/app/ms.erp2x/y.p"
+            normalize_path("D:\\Vendor\\App\\ERP2x\\y.p", &roots),
+            "d:/vendor/app/erp2x/y.p"
         );
     }
 
     #[test]
     fn run_targets_resolve_exactly_then_by_unique_file_name() {
         let r = RunResolver::new(
-            ["sd/pcto.p", "ba/user.p", "spec/x/ba/user.p"]
+            ["pr/post.p", "ba/user.p", "spec/x/ba/user.p"]
                 .iter()
                 .map(|s| s.to_string())
                 .collect(),
         );
-        assert_eq!(r.resolve("sd/pcto.p"), ("sd/pcto.p".into(), true));
+        assert_eq!(r.resolve("pr/post.p"), ("pr/post.p".into(), true));
         assert_eq!(
-            r.resolve("pcto.p"),
-            ("sd/pcto.p".into(), true),
+            r.resolve("post.p"),
+            ("pr/post.p".into(), true),
             "the PROPATH"
         );
         assert_eq!(
@@ -924,13 +924,13 @@ mod tests {
 
     #[test]
     fn screen_codes_come_from_the_file_name() {
-        assert_eq!(screen_code("ca/w-ca100.w").as_deref(), Some("ca100"));
-        assert_eq!(screen_code("ca/b-ca100.w").as_deref(), Some("ca100"));
+        assert_eq!(screen_code("gl/w-gl100.w").as_deref(), Some("gl100"));
+        assert_eq!(screen_code("gl/b-gl100.w").as_deref(), Some("gl100"));
         assert_eq!(screen_code("db/b6-db100.w").as_deref(), Some("db100"));
-        assert_eq!(screen_code("sd/d-sd100dat.p").as_deref(), Some("sd100dat"));
-        assert_eq!(screen_code("ca/ca600tot.p").as_deref(), Some("ca600tot"));
-        assert_eq!(screen_code("net/sd/gui/planning.cls"), None);
-        assert_eq!(screen_code("scripts/#8663 - purge sdva.p"), None);
+        assert_eq!(screen_code("pr/d-pr100dat.p").as_deref(), Some("pr100dat"));
+        assert_eq!(screen_code("gl/ca600tot.p").as_deref(), Some("ca600tot"));
+        assert_eq!(screen_code("net/pr/gui/schedule.cls"), None);
+        assert_eq!(screen_code("scripts/#8663 - purge payvar.p"), None);
         assert_eq!(screen_code("ba/w-menu.w"), None);
     }
 

@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <Cross-reference xmlns="uri:schemas-progress-com:XREFD:0005">
-  <Source File-name="D:\Mediasoft\App\MS.ERP2\gd\w-items.w"><Source-guid>g</Source-guid><File-num>1</File-num>
+  <Source File-name="D:\Vendor\App\ERP2\ui\w-items.w"><Source-guid>g</Source-guid><File-num>1</File-num>
     <Reference Reference-type="RUN" Object-identifier="dispatch">
       <Source-guid>g</Source-guid><File-num>1</File-num><Ref-seq>1</Ref-seq><Line-num>1</Line-num>
       <Object-context></Object-context><Access-mode/><Detail/>
@@ -13,7 +13,7 @@
       <Source-guid>g</Source-guid><File-num>1</File-num><Ref-seq>3</Ref-seq><Line-num>5</Line-num>
       <Object-context></Object-context><Access-mode/><Detail/>
     </Reference>
-    <Reference Reference-type="RUN" Object-identifier="gd/d-versions.w">
+    <Reference Reference-type="RUN" Object-identifier="ui/d-versions.w">
       <Source-guid>g</Source-guid><File-num>1</File-num><Ref-seq>4</Ref-seq><Line-num>7</Line-num>
       <Object-context></Object-context><Access-mode/><Detail/>
     </Reference>

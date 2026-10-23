@@ -1,27 +1,34 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later OR LicenseRef-Mediasoft-Commercial
 # Copyright (C) 2026 Mediasoft & Cie S.A.
 #
-# (Re)importe le modele logiciel MS.ERP dans un store, dans l'ordre :
+# (Re)importe un logiciel Progress OpenEdge comme modele dans un store, dans l'ordre :
 #   1. (re)construit le binaire `ontology` en release,
 #   2. `--xref --sync`  : la reference croisee du compilateur (programmes, tables, champs, liens),
 #   3. `--abl --sync`   : les sources ABL (jointures, ecrans, onglets),
-#   4. `--df`           : les dumps de schema (.df) de chaque base — libelles, types, cles.
+#   4. `--df`           : le dump de schema (.df) de chaque base — libelles, types, cles.
 # Idempotent : relancer apres une recompilation ou un nouveau .df met a jour ce qui a change.
 #
+# Les chemins propres a une installation ne sont pas dans ce script : ils viennent
+# des parametres, ou de `scripts/import-erp.local.ps1` (non versionne, voir
+# `import-erp.local.ps1.example`), qui est charge s'il existe.
+#
 # Exemples :
-#   ./scripts/import-erp.ps1                      # store .\data, chemins par defaut
-#   ./scripts/import-erp.ps1 -DataDir .\data-test
+#   ./scripts/import-erp.ps1                      # tout, avec import-erp.local.ps1
 #   ./scripts/import-erp.ps1 -SkipXref -SkipAbl   # seulement les .df
+#   ./scripts/import-erp.ps1 -DataDir .\data-test -XrefDir D:\xref -XrefRoots 'D:\App\ERP\' `
+#       -SourceDir D:\src -Dumps @{ 'D:\dumps\appdb.df' = 'appdb' }
 
 [CmdletBinding()]
 param(
     [string]$DataDir = ".\data",
-    [string]$ErpRoot = "$env:USERPROFILE\Desktop\MS.ERP",
-    [string]$DfDir = "$env:USERPROFILE\Desktop\ai-ontology\erp-data",
+    # Repertoire des `*.xref.xml` du compilateur.
+    [string]$XrefDir,
     # Racines de compilation retirees des chemins des xref.
-    [string[]]$XrefRoots = @('D:\Mediasoft\App\MS.ERP\', 'D:\Mediasoft\App\MS.ERP2\'),
+    [string[]]$XrefRoots,
+    # Racine des sources ABL (.p, .w, .i).
+    [string]$SourceDir,
     # Fichier .df -> nom de la base qu'il decrit.
-    [hashtable]$Dumps = @{ 'msdb201026.df' = 'msdb'; 'msecdefinition.df' = 'msec'; 'testwkdb.df' = 'wkdb' },
+    [hashtable]$Dumps,
     [switch]$SkipXref,
     [switch]$SkipAbl,
     [switch]$SkipDf,
@@ -30,6 +37,14 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
+
+$local = Join-Path $PSScriptRoot 'import-erp.local.ps1'
+if (Test-Path $local) { . $local }
+foreach ($need in @(@('XrefDir', $SkipXref), @('XrefRoots', $SkipXref), @('SourceDir', $SkipAbl), @('Dumps', $SkipDf))) {
+    if (-not $need[1] -and -not (Get-Variable -Name $need[0] -ValueOnly)) {
+        throw "-$($need[0]) manque : le passer en parametre ou le definir dans $local"
+    }
+}
 
 # Un serveur qui tient le store (`npm run dev`, `ontology serve`) fait echouer
 # la premiere etape avec « store is locked by another process » : l'arreter d'abord.
@@ -51,14 +66,14 @@ function Step([string]$label, [string[]]$argv) {
 
 if (-not $SkipXref) {
     $roots = $XrefRoots | ForEach-Object { '--xref-root', $_ }
-    Step 'xref' (@('--xref', '--sync') + $roots + (Join-Path $ErpRoot 'MS.ERP_xref_compiled'))
+    Step 'xref' (@('--xref', '--sync') + $roots + $XrefDir)
 }
 if (-not $SkipAbl) {
-    Step 'abl' @('--abl', '--sync', (Join-Path $ErpRoot 'MS.ERP_sources\MS.ERP2'))
+    Step 'abl' @('--abl', '--sync', $SourceDir)
 }
 if (-not $SkipDf) {
     foreach ($file in $Dumps.Keys | Sort-Object) {
-        Step "df $($Dumps[$file])" @('--df', '--df-db', $Dumps[$file], (Join-Path $DfDir $file))
+        Step "df $($Dumps[$file])" @('--df', '--df-db', $Dumps[$file], $file)
     }
 }
 Write-Host "Termine." -ForegroundColor Green

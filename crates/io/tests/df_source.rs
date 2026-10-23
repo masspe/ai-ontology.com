@@ -22,7 +22,7 @@ use std::path::PathBuf;
 fn df_fixture() -> PathBuf {
     PathBuf::from(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/df/msdb.df"
+        "/tests/fixtures/df/appdb.df"
     ))
 }
 
@@ -51,22 +51,22 @@ fn text(c: &ontology_graph::Concept, key: &str) -> String {
 #[tokio::test]
 async fn the_dump_describes_the_tables_and_fields_the_code_touches() {
     let (graph, store) = graph_with_xref().await;
-    let sdva = graph
-        .find_by_name("Table", "msdb.sdva")
+    let payvar = graph
+        .find_by_name("Table", "appdb.payvar")
         .expect("from the xref");
-    assert_eq!(graph.get_concept(sdva).unwrap().description, "");
-    let nste = graph
-        .find_by_name("Field", "msdb.sdva.nste")
+    assert_eq!(graph.get_concept(payvar).unwrap().description, "");
+    let cono = graph
+        .find_by_name("Field", "appdb.payvar.cono")
         .expect("from the xref");
 
-    let (mut src, tables) = DfSource::from_graph(&df_fixture(), "msdb", &graph).unwrap();
+    let (mut src, tables) = DfSource::from_graph(&df_fixture(), "appdb", &graph).unwrap();
     assert_eq!(tables, 2);
     let stats = ingest_records_with(&mut src, &graph, Some(&store), MERGE)
         .await
         .unwrap();
     assert!(stats.updated >= 2, "{stats:?}");
 
-    let t = graph.get_concept(sdva).unwrap();
+    let t = graph.get_concept(payvar).unwrap();
     assert_eq!(
         t.description, "Variables de salaire",
         "label → description, French retrieval"
@@ -74,70 +74,74 @@ async fn the_dump_describes_the_tables_and_fields_the_code_touches() {
     assert_eq!(text(&t, "label"), "Variables de salaire");
     assert_eq!(
         text(&t, "db"),
-        "msdb",
+        "appdb",
         "the cross-reference's properties survive the merge"
     );
     assert_eq!(
         t.properties["primary_key"],
-        PropertyValue::list(["nste", "peri"])
+        PropertyValue::list(["cono", "period"])
     );
     assert_eq!(
         t.properties["unique_keys"],
-        PropertyValue::list(["nste,peri"])
+        PropertyValue::list(["cono,period"])
     );
 
-    let f = graph.get_concept(nste).unwrap();
+    let f = graph.get_concept(cono).unwrap();
     assert_eq!(f.description, "Numéro de société");
     assert_eq!(text(&f, "data_type"), "integer");
     assert_eq!(text(&f, "column_label"), "Sté");
     assert_eq!(
         text(&f, "table"),
-        "msdb.sdva",
+        "appdb.payvar",
         "kept from the cross-reference"
     );
     let libelle = graph
-        .find_by_name("Field", "msdb.sdva.libelle")
+        .find_by_name("Field", "appdb.payvar.libelle")
         .expect("new field");
     let l = graph.get_concept(libelle).unwrap();
     assert_eq!(l.description, "Libellé — Texte libre affiché sur la fiche");
     assert_eq!(text(&l, "help"), "Saisir un libellé");
-    assert!(graph.relation_between(sdva, libelle, "has_field").is_some());
+    assert!(graph
+        .relation_between(payvar, libelle, "has_field")
+        .is_some());
 }
 
 #[tokio::test]
 async fn a_table_the_code_never_touches_still_exists_and_the_trigger_links_when_its_program_does() {
     let (graph, store) = graph_with_xref().await;
     // A program for the trigger, as the cross-reference would have created it.
-    let mut pre = DfSource::from_tables("msdb", vec![], BTreeSet::new());
+    let mut pre = DfSource::from_tables("appdb", vec![], BTreeSet::new());
     ingest_records_with(&mut pre, &graph, Some(&store), MERGE)
         .await
         .unwrap();
     let before = graph.concept_count();
 
-    let (mut src, _) = DfSource::from_graph(&df_fixture(), "msdb", &graph).unwrap();
+    let (mut src, _) = DfSource::from_graph(&df_fixture(), "appdb", &graph).unwrap();
     ingest_records_with(&mut src, &graph, Some(&store), MERGE)
         .await
         .unwrap();
     let nouvelle = graph
-        .find_by_name("Table", "msdb.nouvelle")
+        .find_by_name("Table", "appdb.nouvelle")
         .expect("schema-only table");
     assert_eq!(
         graph.get_concept(nouvelle).unwrap().description,
         "Table que le code ne touche pas"
     );
-    assert!(graph.find_by_name("Field", "msdb.nouvelle.id").is_some());
+    assert!(graph.find_by_name("Field", "appdb.nouvelle.id").is_some());
     assert!(graph.concept_count() > before);
-    // No `trig/tw-sdva.p` program in the fixtures: no dangling trigger link,
+    // No `trig/tw-payvar.p` program in the fixtures: no dangling trigger link,
     // and no error either.
-    let sdva = graph.find_by_name("Table", "msdb.sdva").unwrap();
-    assert!(graph.incoming_typed(sdva, &["fires_on".into()]).is_empty());
+    let payvar = graph.find_by_name("Table", "appdb.payvar").unwrap();
+    assert!(graph
+        .incoming_typed(payvar, &["fires_on".into()])
+        .is_empty());
 
     // With the program present, the trigger is linked.
     let graph2 = OntologyGraph::with_arc(Ontology::new());
     let store2 = FlakyStore::new();
-    let programs: BTreeSet<String> = ["trig/tw-sdva.p".to_string()].into_iter().collect();
+    let programs: BTreeSet<String> = ["trig/tw-payvar.p".to_string()].into_iter().collect();
     let mut decl = XrefSource::from_files(vec![ontology_io::XrefFile {
-        program: "trig/tw-sdva.p".into(),
+        program: "trig/tw-payvar.p".into(),
         kind: Some(ontology_io::ProgramKind::Procedure),
         ..Default::default()
     }]);
@@ -145,12 +149,12 @@ async fn a_table_the_code_never_touches_still_exists_and_the_trigger_links_when_
         .await
         .unwrap();
     let tables = ontology_io::parse_df_file(&df_fixture()).unwrap();
-    let mut src = DfSource::from_tables("msdb", tables, programs);
+    let mut src = DfSource::from_tables("appdb", tables, programs);
     ingest_records_with(&mut src, &graph2, Some(&store2), MERGE)
         .await
         .unwrap();
-    let p = graph2.find_by_name("Program", "trig/tw-sdva.p").unwrap();
-    let t = graph2.find_by_name("Table", "msdb.sdva").unwrap();
+    let p = graph2.find_by_name("Program", "trig/tw-payvar.p").unwrap();
+    let t = graph2.find_by_name("Table", "appdb.payvar").unwrap();
     let rid = graph2
         .relation_between(p, t, "fires_on")
         .expect("trigger link");
@@ -163,28 +167,28 @@ async fn a_table_the_code_never_touches_still_exists_and_the_trigger_links_when_
 #[tokio::test]
 async fn a_cross_reference_reimport_after_the_dump_keeps_the_labels() {
     let (graph, store) = graph_with_xref().await;
-    let (mut src, _) = DfSource::from_graph(&df_fixture(), "msdb", &graph).unwrap();
+    let (mut src, _) = DfSource::from_graph(&df_fixture(), "appdb", &graph).unwrap();
     ingest_records_with(&mut src, &graph, Some(&store), MERGE)
         .await
         .unwrap();
-    let sdva = graph.find_by_name("Table", "msdb.sdva").unwrap();
+    let payvar = graph.find_by_name("Table", "appdb.payvar").unwrap();
 
     let (mut again, _) =
         XrefSource::from_path(&xref_fixtures_dir(), &xref_roots(), Some(2)).unwrap();
     let stats = ingest_records_with(&mut again, &graph, Some(&store), MERGE)
         .await
         .unwrap();
-    let t = graph.get_concept(sdva).unwrap();
+    let t = graph.get_concept(payvar).unwrap();
     assert_eq!(t.description, "Variables de salaire", "{stats:?}");
     assert_eq!(text(&t, "label"), "Variables de salaire");
     assert_eq!(
         t.properties["primary_key"],
-        PropertyValue::list(["nste", "peri"])
+        PropertyValue::list(["cono", "period"])
     );
 
     // And the dump itself re-imports as a no-op.
     let written = store.records_written();
-    let (mut src, _) = DfSource::from_graph(&df_fixture(), "msdb", &graph).unwrap();
+    let (mut src, _) = DfSource::from_graph(&df_fixture(), "appdb", &graph).unwrap();
     let stats = ingest_records_with(&mut src, &graph, Some(&store), MERGE)
         .await
         .unwrap();
@@ -201,7 +205,7 @@ async fn a_cross_reference_reimport_after_the_dump_keeps_the_labels() {
 #[tokio::test]
 async fn without_merge_an_upsert_replaces_the_properties() {
     let (graph, store) = graph_with_xref().await;
-    let (mut src, _) = DfSource::from_graph(&df_fixture(), "msdb", &graph).unwrap();
+    let (mut src, _) = DfSource::from_graph(&df_fixture(), "appdb", &graph).unwrap();
     ingest_records_with(&mut src, &graph, Some(&store), MERGE)
         .await
         .unwrap();
@@ -210,8 +214,8 @@ async fn without_merge_an_upsert_replaces_the_properties() {
     ingest_records_with(&mut again, &graph, Some(&store), UPSERT)
         .await
         .unwrap();
-    let sdva = graph.find_by_name("Table", "msdb.sdva").unwrap();
-    let t = graph.get_concept(sdva).unwrap();
+    let payvar = graph.find_by_name("Table", "appdb.payvar").unwrap();
+    let t = graph.get_concept(payvar).unwrap();
     assert!(!t.properties.contains_key("label"), "replaced, not merged");
     assert_eq!(t.description, "");
 }

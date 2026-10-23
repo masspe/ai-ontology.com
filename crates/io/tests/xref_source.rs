@@ -50,11 +50,11 @@ async fn imports_the_fixture_directory_into_an_empty_graph() {
     assert_eq!(ontology.relation_types.len(), 13);
     assert_eq!(ontology.rule_types.len(), 3);
 
-    assert!(graph.find_by_name("Table", "msdb.sdva").is_some());
-    assert!(graph.find_by_name("Table", "msdb.planning").is_some());
-    assert!(graph.find_by_name("Field", "msdb.sdva.nste").is_some());
+    assert!(graph.find_by_name("Table", "appdb.payvar").is_some());
+    assert!(graph.find_by_name("Table", "appdb.schedule").is_some());
+    assert!(graph.find_by_name("Field", "appdb.payvar.cono").is_some());
     assert!(graph
-        .find_by_name("Program", "net/sd/gui/planning.cls")
+        .find_by_name("Program", "net/pr/gui/schedule.cls")
         .is_some());
 }
 
@@ -75,10 +75,10 @@ async fn a_run_target_without_a_compiled_xref_becomes_a_missing_program() {
         .unwrap();
 
     let window_id = graph
-        .find_by_name("Program", "gd/w-items.w")
+        .find_by_name("Program", "ui/w-items.w")
         .expect("the window program exists");
     let missing_id = graph
-        .find_by_name("Program", "gd/d-versions.w")
+        .find_by_name("Program", "ui/d-versions.w")
         .expect("the uncompiled RUN target becomes a missing program");
 
     let window = graph.get_concept(window_id).unwrap();
@@ -118,10 +118,10 @@ async fn link_weight_is_the_reference_count() {
         .unwrap();
 
     let program_id = graph
-        .find_by_name("Program", "sd/main.p")
+        .find_by_name("Program", "pr/main.p")
         .expect("the program sheet exists");
     let table_id = graph
-        .find_by_name("Table", "msdb.sdva")
+        .find_by_name("Table", "appdb.payvar")
         .expect("the table sheet exists");
 
     let reads: Vec<_> = graph
@@ -130,7 +130,7 @@ async fn link_weight_is_the_reference_count() {
         .filter(|r| r.target == table_id)
         .collect();
     assert_eq!(reads.len(), 1);
-    assert_eq!(reads[0].weight, 3.0, "2x ACCESS nste + 1x ACCESS peri");
+    assert_eq!(reads[0].weight, 3.0, "2x ACCESS cono + 1x ACCESS period");
 
     let updates: Vec<_> = graph
         .outgoing_typed(program_id, &["updates".to_string()])
@@ -140,7 +140,7 @@ async fn link_weight_is_the_reference_count() {
     assert_eq!(updates.len(), 1);
     assert_eq!(updates[0].weight, 1.0, "1x UPDATE montant");
 
-    for field in ["msdb.sdva.nste", "msdb.sdva.peri"] {
+    for field in ["appdb.payvar.cono", "appdb.payvar.period"] {
         let field_id = graph
             .find_by_name("Field", field)
             .unwrap_or_else(|| panic!("missing field {field}"));
@@ -153,27 +153,27 @@ async fn link_weight_is_the_reference_count() {
     }
 
     let montant_id = graph
-        .find_by_name("Field", "msdb.sdva.montant")
-        .expect("missing field msdb.sdva.montant");
+        .find_by_name("Field", "appdb.payvar.montant")
+        .expect("missing field appdb.payvar.montant");
     let edges: Vec<_> = graph
         .outgoing_typed(program_id, &["updates_field".to_string()])
         .into_iter()
         .filter(|r| r.target == montant_id)
         .collect();
-    assert_eq!(edges.len(), 1, "updates_field edge to msdb.sdva.montant");
+    assert_eq!(edges.len(), 1, "updates_field edge to appdb.payvar.montant");
 }
 
 #[tokio::test]
 async fn class_names_differing_only_by_case_are_one_sheet() {
     let mut a = XrefFile {
-        program: "sd/a.p".to_string(),
+        program: "pr/a.p".to_string(),
         kind: Some(ProgramKind::Procedure),
         ..Default::default()
     };
     a.invokes.insert("System.Object".to_string(), 2);
 
     let mut b = XrefFile {
-        program: "sd/b.p".to_string(),
+        program: "pr/b.p".to_string(),
         kind: Some(ProgramKind::Procedure),
         ..Default::default()
     };
@@ -198,8 +198,8 @@ async fn class_names_differing_only_by_case_are_one_sheet() {
     let (_, classes) = graph.list_concepts_page(Some("Class"), None, 0, 100, true, false);
     assert_eq!(classes.len(), 1, "exactly one Class concept");
 
-    let a_id = graph.find_by_name("Program", "sd/a.p").unwrap();
-    let b_id = graph.find_by_name("Program", "sd/b.p").unwrap();
+    let a_id = graph.find_by_name("Program", "pr/a.p").unwrap();
+    let b_id = graph.find_by_name("Program", "pr/b.p").unwrap();
 
     let a_invokes = graph.outgoing_typed(a_id, &["invokes".to_string()]);
     assert_eq!(a_invokes.len(), 1);

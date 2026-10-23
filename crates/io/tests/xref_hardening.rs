@@ -24,7 +24,7 @@ use ontology_io::{parse_xref_file, ProgramKind};
 fn cls_unit_aggregates_class_and_skips_temp_table_search() {
     let f = parse_xref_file(&fixture("class_planning"), &[]).unwrap();
     assert_eq!(f.kind, Some(ProgramKind::Class));
-    assert_eq!(f.class.as_deref(), Some("Net.sd.Gui.Planning"));
+    assert_eq!(f.class.as_deref(), Some("Net.pr.Gui.Schedule"));
     assert_eq!(f.invokes["Net.Class.Config"], 3);
     assert_eq!(
         f.tables.len(),
@@ -32,7 +32,7 @@ fn cls_unit_aggregates_class_and_skips_temp_table_search() {
         "the temp-table SEARCH must not become a table: {:?}",
         f.tables
     );
-    assert!(f.tables.contains_key("msdb.planning"));
+    assert!(f.tables.contains_key("appdb.schedule"));
 }
 
 /// A `.w` unit driven by the ADM: bare `RUN` targets (internal procedures /
@@ -46,7 +46,7 @@ fn w_unit_splits_adm_calls_file_runs_and_dynamic_runs() {
     assert!(f.calls.contains_key("dispatch"));
     assert!(f.calls.contains_key("get-attribute"));
     assert!(f.calls.contains_key("get-link-handle"));
-    assert!(f.runs.contains_key("gd/d-versions.w"));
+    assert!(f.runs.contains_key("ui/d-versions.w"));
     assert_eq!(f.dynamic_runs, 1);
 }
 
@@ -55,14 +55,14 @@ fn w_unit_splits_adm_calls_file_runs_and_dynamic_runs() {
 /// matching `INCLUDE` references are normalised regardless of path style.
 #[test]
 fn program_is_the_first_source_and_includes_are_normalised() {
-    let roots = vec!["D:\\Mediasoft\\App\\MS.ERP2".to_string()];
+    let roots = vec!["D:\\Vendor\\App\\ERP2".to_string()];
     let f = parse_xref_file(&fixture("includes"), &roots).unwrap();
-    assert_eq!(f.program, "sd/main.p");
+    assert_eq!(f.program, "pr/main.p");
     assert_eq!(
         f.includes,
         [
-            "net/web/inc/webconfig.i",
-            "net/sd/inc/ds/salselect.i",
+            "net/web/inc/appconfig.i",
+            "net/pr/inc/ds/salselect.i",
             "ba/connect.i",
         ]
         .into_iter()
@@ -81,12 +81,12 @@ fn program_is_the_first_source_and_includes_are_normalised() {
 fn field_aggregation_ignores_non_table_contexts() {
     let f = parse_xref_file(&fixture("fields"), &[]).unwrap();
     assert_eq!(f.tables.len(), 1, "{:?}", f.tables);
-    let t = &f.tables["msdb.sdva"];
+    let t = &f.tables["appdb.payvar"];
     assert_eq!(t.reads, 3);
     assert_eq!(t.updates, 1);
     assert_eq!(
         t.fields_read,
-        ["nste", "peri"].into_iter().map(String::from).collect()
+        ["cono", "period"].into_iter().map(String::from).collect()
     );
     assert_eq!(
         t.fields_updated,
@@ -122,13 +122,10 @@ fn parsing_is_deterministic() {
 /// kept instead.
 #[test]
 fn roots_control_how_the_program_path_is_normalised() {
-    let roots = vec!["D:\\Mediasoft\\App\\MS.ERP2".to_string()];
+    let roots = vec!["D:\\Vendor\\App\\ERP2".to_string()];
     let f = parse_xref_file(&fixture("class_planning"), &roots).unwrap();
-    assert_eq!(f.program, "net/sd/gui/planning.cls");
+    assert_eq!(f.program, "net/pr/gui/schedule.cls");
 
     let f = parse_xref_file(&fixture("class_planning"), &[]).unwrap();
-    assert_eq!(
-        f.program,
-        "d:/mediasoft/app/ms.erp2/net/sd/gui/planning.cls"
-    );
+    assert_eq!(f.program, "d:/vendor/app/erp2/net/pr/gui/schedule.cls");
 }

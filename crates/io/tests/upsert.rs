@@ -267,7 +267,7 @@ fn programs_flagged(graph: &OntologyGraph, missing: bool) -> usize {
 }
 
 /// A synthetic compile: `n` programs in module `m`, each reading table
-/// `msdb.t<i % tables>` on field `f`, program 0 also running program 1.
+/// `appdb.t<i % tables>` on field `f`, program 0 also running program 1.
 fn corpus(n: usize, tables: usize) -> Vec<XrefFile> {
     (0..n)
         .map(|i| {
@@ -281,7 +281,7 @@ fn corpus(n: usize, tables: usize) -> Vec<XrefFile> {
                 ..Default::default()
             };
             use_.fields_read.insert("f".into());
-            f.tables.insert(format!("msdb.t{}", i % tables), use_);
+            f.tables.insert(format!("appdb.t{}", i % tables), use_);
             if i == 0 {
                 f.runs.insert("m/p1.p".into(), 1);
             }
@@ -353,7 +353,7 @@ async fn prune_retires_the_links_a_recompile_dropped() {
         .await
         .unwrap();
     let p = graph.find_by_name("Program", "m/p2.p").unwrap();
-    let t = graph.find_by_name("Table", "msdb.t0").unwrap();
+    let t = graph.find_by_name("Table", "appdb.t0").unwrap();
     let links_before = graph.outgoing(p).len();
     let (c1, r1) = (graph.concept_count(), graph.relation_count());
 
