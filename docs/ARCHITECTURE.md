@@ -285,6 +285,9 @@ Three sources feed it, in this order:
    program touches exist too. `TABLE-TRIGGER` lines become `fires_on`
    links when the trigger's program is in the graph.
 
+`scripts/import-erp.ps1` runs the three in this order against one store
+(build, `--xref --sync`, `--abl --sync`, one `--df` per database).
+
 All three run through the regular ingester with `IngestOptions { upsert,
 merge_properties }`: a re-import updates what changed and journals nothing
 for what did not, and a sheet several sources describe (a Table is in the
