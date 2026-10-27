@@ -20,6 +20,10 @@ All notable changes to this project are listed here. The format follows
   the sheet it points to (`Table · appdb.emp`, linked), and the `Cited:`
   line becomes the row of sheets the answer rests on, cited ones first —
   on the home page as the answer streams and on the Questions page.
+- The interface reads as a card index: IBM Plex Sans (self-hosted; Plex
+  Mono for identifiers), one petrol accent kept for what is interactive
+  or cited, hairline cards without drop shadows, sentence-case table
+  headers, a visible keyboard focus ring, reduced motion respected.
 - `docs/SOFTWARE-MODEL.md`: how a code base becomes a graph and why
   answers are what they are.
 - `IngestOptions::merge_properties`: an upsert that keeps the properties
