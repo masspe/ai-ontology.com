@@ -10,7 +10,9 @@ export default function Layout() {
     <div className="app-shell">
       <TopBar />
       <main className="content">
-        <Outlet />
+        <div className="content-inner">
+          <Outlet />
+        </div>
       </main>
       <Tour />
     </div>
