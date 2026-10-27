@@ -303,6 +303,10 @@ Three sources feed it, in this order:
    source (see SOFTWARE-MODEL.md §6). Generic: READMEs to modules, any
    folder of pages to any type.
 
+5. **`ontology link-mentions --from Document,Screen --to Screen,Program,Table`**
+   (`crates/io/src/mentions.rs`) links any text to the sheets it names,
+   so a page or a ticket is one hop from the programs it talks about.
+
 The field-level links (`reads_field`, `updates_field`) are declared
 `detail`: in the graph and in the prompt, off the graph page unless asked —
 they are most of a software model's links.

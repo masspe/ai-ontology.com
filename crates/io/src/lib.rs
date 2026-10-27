@@ -26,6 +26,7 @@ pub mod extract;
 pub mod ingest;
 pub mod jsonl;
 pub mod lang;
+pub mod mentions;
 pub mod proposal;
 pub mod record;
 pub mod scan;
@@ -55,6 +56,7 @@ pub use ingest::{
 };
 pub use jsonl::{JsonlSink, JsonlSource};
 pub use lang::{detect_language, LangTag};
+pub use mentions::{MentionIndex, MentionReport, MentionSource};
 pub use proposal::{
     ApplyDecision, ApplyOutcome, ApplyReport, ConflictInfo, ConflictKind, DecisionAction,
     OntologyProposal, ProposalAction, ProposalConcept, ProposalConceptType, ProposalRelation,
