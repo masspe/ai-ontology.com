@@ -338,6 +338,9 @@ export interface LlmSettings {
   infomaniak_base_url: string;
   infomaniak_model: string;
   temperature: number;
+  /** `none` (built-in hashing embedder), `openai`, `infomaniak`; applied at the next start. */
+  embedding_provider?: string;
+  embedding_model?: string;
   max_tokens: number;
 }
 
@@ -354,6 +357,8 @@ export interface LlmSettingsPatch {
   infomaniak_base_url?: string;
   infomaniak_model?: string;
   temperature?: number;
+  embedding_provider?: string;
+  embedding_model?: string;
   max_tokens?: number;
 }
 

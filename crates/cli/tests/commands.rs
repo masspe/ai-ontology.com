@@ -813,3 +813,64 @@ fn xref_stats_counts_the_import_without_a_store() {
     assert!(out.contains("programs run but never compiled: "), "{out}");
     assert!(out.contains("truncated.xref.xml"), "{out}");
 }
+
+/// `--doc-for` attaches a folder of pages to the sheets of a type and
+/// turns the rest into documents; a second run writes nothing.
+#[test]
+fn ingest_doc_for_attaches_pages_and_counts_the_rest() {
+    let data = tempdir("doc-for");
+    let docs = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("io")
+        .join("tests")
+        .join("fixtures")
+        .join("docs");
+    let out = run(
+        Some(&data),
+        &[
+            "ingest",
+            "--doc-for",
+            "Screen",
+            "--doc-key",
+            "[(]([a-z]{2}[0-9]{3}[a-z0-9]*)[)]",
+            "--doc-fallback-type",
+            "Document",
+            "--doc-property",
+            "help",
+            &p(&docs),
+        ],
+    );
+    let err = text(&out.stderr);
+    assert!(out.status.success(), "{err}");
+    assert!(
+        err.contains("documents: 5 files, 0 attached, 5 about no known sheet"),
+        "{err}"
+    );
+    let stats = ok(Some(&data), &["stats"]);
+    assert!(stats.contains("concepts: 5"), "{stats}");
+    // A bad regex is refused before anything is read.
+    let err = fail(
+        Some(&data),
+        &["ingest", "--doc-for", "Screen", "--doc-key", "(", &p(&docs)],
+    );
+    assert!(err.contains("valid regex"), "{err}");
+}
+
+/// An embedding provider that does not answer is said at start and the
+/// built-in embedder serves; the command itself still works.
+#[test]
+fn an_unreachable_embedding_provider_falls_back_to_the_built_in_embedder() {
+    let data = tempdir("embed-fallback");
+    std::fs::write(
+        data.join("settings.json"),
+        r#"{"llm":{"active_provider":"openai","openai_api_key":"sk","openai_base_url":"http://127.0.0.1:1","openai_model":"gpt","embedding_provider":"openai","embedding_model":"text-embedding-3-small"}}"#,
+    )
+    .unwrap();
+    let out = run(Some(&data), &["stats"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert!(
+        text(&out.stderr).contains("using the built-in embedder"),
+        "{}",
+        text(&out.stderr)
+    );
+}

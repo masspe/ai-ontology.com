@@ -84,6 +84,36 @@ ontology --data $DATA ask --model gpt-4o     "Who wrote about RAG?"
 ontology --settings ./staging/settings.json ask "Who wrote about RAG?"
 ```
 
+## Embeddings (retrieval vectors)
+
+Retrieval scores every sheet twice: lexically (exact words) and by vector.
+By default the vector comes from a built-in hashing embedder — fast,
+offline, deterministic, but without meaning: « salaire » and « paie » are
+not neighbours. A provider's embedding model makes them so, in any
+language.
+
+In Settings → LLM, *Vecteurs de recherche*: choose `OpenAI` or
+`Infomaniak` and a model (`text-embedding-3-small`, or the embedding
+model your Infomaniak product offers); the provider's key and base URL
+above are reused. Equivalent `settings.json` keys:
+`llm.embedding_provider`, `llm.embedding_model`.
+
+What happens then:
+
+- The setting is read at the next start of `ontology serve` (or any
+  `ontology` command), which connects to the provider, probes the vector
+  dimension and reindexes every sheet — one request per 64 texts, on
+  every core. A bad key or model is reported at that start and the
+  built-in embedder is used instead; nothing is half-indexed.
+- Vectors are cached under `<data>/embeddings/<model>.bin`, so the next
+  start re-embeds nothing and an import pays only for new or changed
+  sheets. A new model is a new cache.
+- A request that fails leaves its sheets without a vector score (never a
+  wrong one) and is retried at the next reindex.
+- Cost: one embedding per sheet text. On a 530 000-sheet software model
+  that is about 30 M tokens once (≈ $0.60 with `text-embedding-3-small`),
+  then only what changes.
+
 ## Prompt caching
 
 The Anthropic client routes the ontology (stable per knowledge base) into a

@@ -106,6 +106,11 @@ impl HybridIndex {
         &self.graph
     }
 
+    /// Let the embedder persist its cache (after an import, before exit).
+    pub fn flush(&self) {
+        self.vector.flush();
+    }
+
     pub fn index_concept(&self, id: ConceptId) -> ontology_graph::GraphResult<()> {
         let c = self.graph.get_concept(id)?;
         let text = c.indexable_text();
@@ -154,12 +159,22 @@ impl HybridIndex {
 
         let t = std::time::Instant::now();
         self.vector.reserve(texts.len());
+        // Groups of texts go to the embedder together — a remote one sends
+        // one request per group, a local one maps them — on every core.
+        const GROUP: usize = 64;
         for batch in texts.chunks(BATCH) {
-            let vectors = parallel_map(batch, |(_, text)| self.vector.embed(text));
-            for ((id, _), v) in batch.iter().zip(vectors) {
-                self.vector.insert_vector(*id, &v);
+            let groups: Vec<&[(ConceptId, String)]> = batch.chunks(GROUP).collect();
+            let vectors = parallel_map_min(&groups, 1, |group| {
+                let refs: Vec<&str> = group.iter().map(|(_, t)| t.as_str()).collect();
+                self.vector.embed_batch(&refs)
+            });
+            for (group, vs) in groups.iter().zip(vectors) {
+                for ((id, _), v) in group.iter().zip(vs) {
+                    self.vector.insert_vector(*id, &v);
+                }
             }
         }
+        self.vector.flush();
         let vector_ms = t.elapsed().as_secs_f64() * 1e3;
         ReindexReport {
             concepts: texts.len(),
@@ -277,11 +292,20 @@ impl HybridIndex {
 /// threads: no pool, no dependency; below one chunk per core it is a plain
 /// map.
 fn parallel_map<T: Sync, U: Send>(items: &[T], f: impl Fn(&T) -> U + Sync) -> Vec<U> {
-    const CHUNK_MIN: usize = 4_096;
+    parallel_map_min(items, 4_096, f)
+}
+
+/// `parallel_map` with the smallest share of items worth a thread: 1 when
+/// each item is a request to a remote embedder.
+fn parallel_map_min<T: Sync, U: Send>(
+    items: &[T],
+    chunk_min: usize,
+    f: impl Fn(&T) -> U + Sync,
+) -> Vec<U> {
     let cores = std::thread::available_parallelism()
         .map(|c| c.get())
         .unwrap_or(1);
-    let threads = (items.len() / CHUNK_MIN).clamp(1, cores);
+    let threads = (items.len() / chunk_min.max(1)).clamp(1, cores);
     if threads == 1 {
         return items.iter().map(&f).collect();
     }

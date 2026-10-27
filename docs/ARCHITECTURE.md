@@ -112,6 +112,13 @@ The `Store` trait is pluggable; the segment store is the default.
 
 ## Retrieval and ranking
 
+The vector side of the index comes from an `Embedder`: the built-in
+hashing one (`HashEmbedder`, offline, no meaning) or a provider's
+embedding model (`RemoteEmbedder` in `ontology-rag`, OpenAI-compatible
+`/v1/embeddings`, batched, blocking on its own runtime), wrapped in a
+disk cache keyed by text (`CachedEmbedder`, `<data>/embeddings/`). See
+LLM-PROVIDERS.md → Embeddings.
+
 Implemented in `crates/index`.
 
 * **Inverted-index lexical search** (`lexical.rs`): a TF-IDF / BM25-style

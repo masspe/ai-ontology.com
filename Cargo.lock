@@ -1414,7 +1414,9 @@ dependencies = [
  "ontology-graph",
  "parking_lot",
  "serde",
+ "tempfile",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

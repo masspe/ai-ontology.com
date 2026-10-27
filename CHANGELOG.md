@@ -20,6 +20,15 @@ All notable changes to this project are listed here. The format follows
   the sheet it points to (`Table · appdb.emp`, linked), and the `Cited:`
   line becomes the row of sheets the answer rests on, cited ones first —
   on the home page as the answer streams and on the Questions page.
+- Retrieval vectors from a provider's embedding model (OpenAI,
+  Infomaniak, any OpenAI-compatible `/v1/embeddings`): Settings → LLM →
+  *Vecteurs de recherche*, or `llm.embedding_provider` /
+  `llm.embedding_model`. Multilingual meaning in place of the hashing
+  embedder; vectors cached on disk under `<data>/embeddings/` so a
+  restart re-embeds nothing; a provider that does not answer is reported
+  at start and the built-in embedder keeps serving. `Embedder` gains
+  `name`, `embed_batch`, `flush`; the reindex embeds in groups of 64 on
+  every core.
 - Documents attached to sheets by key: `ontology ingest --doc-for <Type>
   [--doc-key <regex>] [--doc-fallback-type <Type>] [--doc-property <name>]
   <folder>` reads HTML, text and Markdown files; each file's text becomes

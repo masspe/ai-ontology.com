@@ -15,7 +15,8 @@ use ontology_io::{
 };
 use ontology_rag::{EchoModel, LanguageModel, RagPipeline};
 use ontology_server::{
-    configured_model, AppState, ConfiguredModel, LlmOverrides, Settings, SettingsRoutedModel,
+    configured_embedder, configured_model, AppState, ConfiguredModel, LlmOverrides, Settings,
+    SettingsRoutedModel,
 };
 use ontology_storage::{
     legacy_present, migrate_legacy, store_dir_for, MemoryStore, SegmentStore, Store,
@@ -548,11 +549,25 @@ async fn main() -> Result<()> {
             .context("loading existing data")?,
     }
 
-    let index = Arc::new(HybridIndex::with_default_embedder(graph.clone()));
-    index.reindex_all();
-
     // Resolved before the match, which moves the subcommand out of `cli`.
     let settings_file = settings_path(&cli);
+
+    // The embedder the settings choose; the built-in one when none is, or
+    // when the chosen provider does not answer (said, not hidden).
+    let embedder: Arc<dyn ontology_index::Embedder> = match configured_embedder(
+        &Settings::load_or_default(&settings_file),
+        cli.data.as_deref(),
+    ) {
+        Ok(Some(e)) => e,
+        Ok(None) => Arc::new(ontology_index::HashEmbedder::default()),
+        Err(e) => {
+            tracing::warn!(error = %e, "falling back to the built-in embedder");
+            eprintln!("warning: {e}; using the built-in embedder");
+            Arc::new(ontology_index::HashEmbedder::default())
+        }
+    };
+    let index = Arc::new(HybridIndex::new(graph.clone(), embedder));
+    index.reindex_all();
 
     match cli.cmd {
         Cmd::Ingest {
