@@ -615,6 +615,20 @@ async fn main() -> Result<()> {
                 prune: sync,
                 merge_properties: true,
                 prune_max_fraction: if sync_force { 1.0 } else { 0.25 },
+                // The schema dump owns the tables and fields the code never
+                // touches: a cross-reference sync must not take them away.
+                prune_keep: if xref {
+                    &[
+                        "Database",
+                        "Table",
+                        "Field",
+                        "has_field",
+                        "in_database",
+                        "fires_on",
+                    ]
+                } else {
+                    &[]
+                },
             };
             if let Some(p) = ontology {
                 let raw = tokio::fs::read_to_string(&p).await?;

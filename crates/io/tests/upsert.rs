@@ -252,6 +252,7 @@ const PRUNE: IngestOptions = IngestOptions {
     prune: true,
     merge_properties: false,
     prune_max_fraction: 0.25,
+    prune_keep: &[],
 };
 
 fn parsed_files() -> Vec<XrefFile> {

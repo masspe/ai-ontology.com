@@ -219,3 +219,60 @@ async fn without_merge_an_upsert_replaces_the_properties() {
     assert!(!t.properties.contains_key("label"), "replaced, not merged");
     assert_eq!(t.description, "");
 }
+
+/// A cross-reference sync after the dump: the tables and fields no
+/// program touches are the dump's, so the sync keeps them when told the
+/// schema types are shared — and would take them away otherwise.
+#[tokio::test]
+async fn a_cross_reference_sync_keeps_the_dumps_fields_when_the_types_are_shared() {
+    let keep = IngestOptions {
+        prune: true,
+        prune_max_fraction: 1.0,
+        prune_keep: &[
+            "Database",
+            "Table",
+            "Field",
+            "has_field",
+            "in_database",
+            "fires_on",
+        ],
+        ..MERGE
+    };
+    let (graph, store) = graph_with_xref().await;
+    let (mut src, _) = DfSource::from_graph(&df_fixture(), "appdb", &graph).unwrap();
+    ingest_records_with(&mut src, &graph, Some(&store), MERGE)
+        .await
+        .unwrap();
+    let nouvelle = graph.find_by_name("Table", "appdb.nouvelle").unwrap();
+    let id_field = graph.find_by_name("Field", "appdb.nouvelle.id").unwrap();
+    let (sheets, links) = (graph.concept_count(), graph.relation_count());
+
+    let (mut again, _) =
+        XrefSource::from_path(&xref_fixtures_dir(), &xref_roots(), Some(2)).unwrap();
+    let stats = ingest_records_with(&mut again, &graph, Some(&store), keep)
+        .await
+        .unwrap();
+    assert_eq!(
+        (stats.pruned_concepts, stats.pruned_relations),
+        (0, 0),
+        "{stats:?}"
+    );
+    assert!(graph.get_concept(nouvelle).is_ok() && graph.get_concept(id_field).is_ok());
+    assert_eq!(
+        (graph.concept_count(), graph.relation_count()),
+        (sheets, links)
+    );
+
+    // Without the keep list the same sync removes what the dump added.
+    let blunt = IngestOptions {
+        prune_keep: &[],
+        ..keep
+    };
+    let (mut again, _) =
+        XrefSource::from_path(&xref_fixtures_dir(), &xref_roots(), Some(2)).unwrap();
+    let stats = ingest_records_with(&mut again, &graph, Some(&store), blunt)
+        .await
+        .unwrap();
+    assert!(stats.pruned_concepts > 0, "{stats:?}");
+    assert!(graph.get_concept(nouvelle).is_err());
+}

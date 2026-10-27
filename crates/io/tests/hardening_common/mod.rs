@@ -293,6 +293,7 @@ pub const UPSERT: IngestOptions = IngestOptions {
     prune: false,
     merge_properties: false,
     prune_max_fraction: 0.25,
+    prune_keep: &[],
 };
 
 /// The kind label of each record journaled to `store`, in order.
