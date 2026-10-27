@@ -211,6 +211,8 @@ export interface RelationTypeDef {
   cardinality: string;
   symmetric: boolean;
   description?: string;
+  /** Below the grain people ask about: hidden from the graph page unless asked. */
+  detail?: boolean;
 }
 
 export interface RuleTypeDef {
@@ -738,6 +740,9 @@ export const getSubgraph = (req: {
   seed_concept_types?: string[];
   limit?: number;
   expansion_depth?: number;
+  relation_types?: string[];
+  exclude_relation_types?: string[];
+  max_edges?: number;
 }) =>
   http<{ subgraph: Subgraph }>("/subgraph", {
     method: "POST",

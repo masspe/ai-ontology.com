@@ -389,6 +389,20 @@ fn concept_type(name: &str, description: &str, properties: &[&str]) -> Record {
     })
 }
 
+/// A many-to-many link below the grain people ask about: in the graph,
+/// off the graph page by default.
+fn detail_relation_type(name: &str, domain: &str, range: &str, description: &str) -> Record {
+    Record::RelationTypeDecl(RelationType {
+        name: name.into(),
+        domain: domain.into(),
+        range: range.into(),
+        cardinality: Cardinality::ManyToMany,
+        description: description.into(),
+        detail: true,
+        ..Default::default()
+    })
+}
+
 fn relation_type(
     name: &str,
     domain: &str,
@@ -440,8 +454,8 @@ pub fn xref_ontology_records() -> Vec<Record> {
         relation_type("updates", "Program", "Table", NN, "updates"),
         relation_type("creates", "Program", "Table", NN, "creates rows in"),
         relation_type("deletes", "Program", "Table", NN, "deletes rows in"),
-        relation_type("reads_field", "Program", "Field", NN, "reads field"),
-        relation_type("updates_field", "Program", "Field", NN, "updates field"),
+        detail_relation_type("reads_field", "Program", "Field", "reads field"),
+        detail_relation_type("updates_field", "Program", "Field", "updates field"),
         relation_type("fires_on", "Program", "Table", NN, "is the database trigger of"),
         rule("table_change_impacts_writers", "a Table or Field changes (type, format, meaning)", "every Program that updates, creates, deletes or reads it is impacted; writers first", &["Table", "Field"]),
         rule("include_change_impacts_all", "an Include changes", "every Program that includes it must be recompiled and is impacted", &["Include"]),

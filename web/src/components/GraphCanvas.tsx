@@ -46,6 +46,8 @@ interface Props {
 
 const NODE_W = 160;
 const NODE_H = 40;
+/** Past this many links the labels are noise and cost a text box each. */
+export const EDGE_LABEL_MAX = 300;
 const DEFAULT_PALETTE = ["#2563eb", "#7c3aed", "#16a34a", "#dc2626", "#d97706", "#0891b2", "#db2777", "#0d9488"];
 
 /** Node styling inputs that do not move nodes around. */
@@ -173,6 +175,7 @@ function CanvasInner({
     [layoutNodes, metaById, selectedNodeId, hoveredId, focusId, neighbors, highlightPaths, showLabels]
   );
 
+  const edgeLabels = showLabels && baseEdges.length <= EDGE_LABEL_MAX;
   const styledEdges = useMemo<Edge[]>(
     () =>
       baseEdges.map((e) => {
@@ -183,7 +186,7 @@ function CanvasInner({
           ...e,
           type: "smoothstep",
           animated: touchesFocus && selectedNodeId != null,
-          label: showLabels ? e.label : undefined,
+          label: edgeLabels ? e.label : undefined,
           labelStyle: { fontSize: 10, fill: touchesFocus ? accent : "#7c3aed", fontWeight: 600 },
           labelBgStyle: { fill: "#fff", fillOpacity: dim ? 0.3 : 0.95 },
           labelBgPadding: [4, 2] as [number, number],
@@ -197,7 +200,7 @@ function CanvasInner({
           },
         };
       }),
-    [baseEdges, focusId, selectedNodeId, metaById, highlightPaths, showLabels]
+    [baseEdges, focusId, selectedNodeId, metaById, highlightPaths, edgeLabels]
   );
 
   const [nodes, setNodes, onNodesChange] = useNodesState(styledNodes);
@@ -260,6 +263,7 @@ function CanvasInner({
       onPaneClick={() => onPaneClick?.()}
       nodesConnectable={false}
       elementsSelectable
+      onlyRenderVisibleElements
       fitView
       minZoom={0.1}
       maxZoom={2.5}

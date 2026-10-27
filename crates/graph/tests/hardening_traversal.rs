@@ -399,3 +399,55 @@ fn closure_is_bounded_and_cycle_safe() {
         Err(GraphError::UnknownConcept(_))
     ));
 }
+
+/// `max_edges` caps the links of the result, strongest first and
+/// round-robin across types, so a hub's many weak `cites` do not crowd
+/// out its few `authored`; `exclude_relation_types` drops a type even
+/// when no whitelist is given.
+#[test]
+fn expand_caps_the_edges_and_excludes_the_named_types() {
+    let g = graph();
+    let hub = concept(&g, "Paper", "Hub");
+    for i in 0..10 {
+        let p = concept(&g, "Paper", &format!("P{i}"));
+        relation(&g, "cites", hub, p);
+    }
+    for i in 0..3 {
+        let a = concept(&g, "Person", &format!("A{i}"));
+        relation(&g, "authored", a, hub);
+    }
+    let capped = g.expand(
+        &[hub],
+        &TraversalSpec {
+            max_depth: 2,
+            max_edges: 4,
+            ..Default::default()
+        },
+    );
+    assert_eq!(capped.relations.len(), 4, "{:?}", capped.relations);
+    assert!(capped.concepts.len() <= 5);
+    let types: std::collections::BTreeSet<&str> = capped
+        .relations
+        .iter()
+        .map(|r| r.relation_type.as_str())
+        .collect();
+    assert_eq!(types.len(), 2, "round-robin keeps both types: {types:?}");
+
+    let without = g.expand(
+        &[hub],
+        &TraversalSpec {
+            max_depth: 1,
+            exclude_relation_types: vec!["cites".into()],
+            ..Default::default()
+        },
+    );
+    assert_eq!(without.relations.len(), 3);
+    assert!(without
+        .relations
+        .iter()
+        .all(|r| r.relation_type == "authored"));
+
+    // 0 = no cap: everything comes back.
+    let all = g.expand(&[hub], &TraversalSpec::default());
+    assert_eq!(all.relations.len(), 13);
+}

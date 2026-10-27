@@ -223,6 +223,9 @@ describe("GraphView page", () => {
       seed_concept_types: [],
       expansion_depth: 3,
       limit: 300,
+      relation_types: undefined,
+      exclude_relation_types: [],
+      max_edges: 1000,
     });
     expect(kpiValue("Fiches")).toBe("4");
     expect(kpiValue("Liens")).toBe("3");
@@ -745,5 +748,30 @@ describe("GraphView — a large graph loads by selection only", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("keeps the model's detail links out of the request until the toggle asks for them", async () => {
+    mocked.getOntology.mockResolvedValue({
+      ...ontology,
+      relation_types: {
+        ...ontology.relation_types,
+        readsField: { name: "readsField", domain: "Person", range: "Company", cardinality: "n:n", symmetric: false, detail: true },
+      },
+    });
+    const { user } = await mount();
+    await waitFor(() =>
+      expect(mocked.getSubgraph).toHaveBeenLastCalledWith(expect.objectContaining({ exclude_relation_types: ["readsField"] }))
+    );
+    const sw = (label: string) => screen.getByText(label).closest("label")!.querySelector("[role=switch]")!;
+    await user.click(sw("Liens de détail (readsField)"));
+    await waitFor(() =>
+      expect(mocked.getSubgraph).toHaveBeenLastCalledWith(expect.objectContaining({ exclude_relation_types: undefined }))
+    );
+    expect(sw("Liens de détail (readsField)")).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("offers no detail toggle when the model declares no detail link", async () => {
+    await mount();
+    expect(screen.queryByText(/Liens de détail/)).toBeNull();
   });
 });

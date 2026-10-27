@@ -388,6 +388,7 @@ export const pagesA: Record<string, string> = {
   "{n} niveaux": "{n} levels",
   "{n} niveau": "{n} level",
   "Afficher les libellés": "Show labels",
+  "Liens de détail ({list})": "Detail links ({list})",
   "Vue groupée": "Grouped view",
   "Surligner les chemins": "Highlight paths",
   "Afficher les contraintes": "Show constraints",

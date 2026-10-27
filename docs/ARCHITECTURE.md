@@ -289,6 +289,10 @@ Three sources feed it, in this order:
    program touches exist too. `TABLE-TRIGGER` lines become `fires_on`
    links when the trigger's program is in the graph.
 
+The field-level links (`reads_field`, `updates_field`) are declared
+`detail`: in the graph and in the prompt, off the graph page unless asked —
+they are most of a software model's links.
+
 `scripts/import-erp.ps1` runs the three in this order against one store
 (build, `--xref --sync`, `--abl --sync`, one `--df` per database).
 
