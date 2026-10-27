@@ -234,9 +234,9 @@ describe("GraphView page", () => {
     expect(kpiValue("Santé du graphe")).toBe("38%");
     // The canvas gets a colour per concept type, in ontology order.
     expect(JSON.parse(screen.getByTestId("canvas-colors").textContent!)).toEqual({
-      Person: "#2563eb",
-      Company: "#7c3aed",
-      City: "#16a34a",
+      Person: "#0A9FAE",
+      Company: "#C83F38",
+      City: "#3470CC",
     });
     // Ontology types populate the two filters; nothing chosen reads as all.
     expect(filterButton("Types de fiche")).toHaveTextContent("Tous les types");

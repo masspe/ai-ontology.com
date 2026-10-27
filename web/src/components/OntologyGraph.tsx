@@ -12,11 +12,11 @@ import { t } from "../lib/i18n";
 
 // --- palette ---------------------------------------------------------------
 const PALETTE: { fill: string; stroke: string; text: string }[] = [
-  { fill: "#dbeafe", stroke: "#2563eb", text: "#1d4ed8" }, // blue
-  { fill: "#dcfce7", stroke: "#16a34a", text: "#15803d" }, // green
-  { fill: "#fef3c7", stroke: "#d97706", text: "#b45309" }, // amber
-  { fill: "#fee2e2", stroke: "#dc2626", text: "#b91c1c" }, // red
-  { fill: "#ede9fe", stroke: "#7c3aed", text: "#6d28d9" }, // violet
+  { fill: "#dff3f5", stroke: "#0A9FAE", text: "#087c88" }, // teal
+  { fill: "#f8e2e0", stroke: "#C83F38", text: "#9c312c" }, // rust
+  { fill: "#e1eaf8", stroke: "#3470CC", text: "#28579f" }, // blue
+  { fill: "#f7ecd9", stroke: "#C97C0E", text: "#9d610b" }, // ochre
+  { fill: "#eee0f3", stroke: "#8C3DA3", text: "#6d2f7f" }, // plum
   { fill: "#cffafe", stroke: "#0891b2", text: "#0e7490" }, // cyan
   { fill: "#fce7f3", stroke: "#db2777", text: "#be185d" }, // pink
   { fill: "#e5e7eb", stroke: "#475569", text: "#334155" }, // slate
@@ -263,7 +263,7 @@ export default function OntologyGraph({
                     y1={a.y}
                     x2={b.x}
                     y2={b.y}
-                    stroke={isProposed ? "#7c3aed" : "#cbd5e1"}
+                    stroke={isProposed ? "#0b6b72" : "#b9c0c9"}
                     strokeWidth={1.2}
                     strokeDasharray={isProposed ? "4 3" : undefined}
                     opacity={isProposed ? 0.85 : 1}
@@ -277,7 +277,7 @@ export default function OntologyGraph({
                         height={18}
                         rx={9}
                         fill="#ede9fe"
-                        stroke={isProposed ? "#7c3aed" : "#c4b5fd"}
+                        stroke={isProposed ? "#0b6b72" : "#8fc9ce"}
                         strokeDasharray={isProposed ? "3 2" : undefined}
                       />
                       <text

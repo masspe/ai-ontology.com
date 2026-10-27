@@ -20,6 +20,13 @@ All notable changes to this project are listed here. The format follows
   the sheet it points to (`Table · appdb.emp`, linked), and the `Cited:`
   line becomes the row of sheets the answer rests on, cited ones first —
   on the home page as the answer streams and on the Questions page.
+- The interface, continued: the home page opens on the question (the
+  pinned ones as chips under it, the counts as a quiet strip); a wordmark
+  in the top bar; the sheet page as a card-index entry (type, name in
+  mono, links grouped by type with counts, properties as a list); empty
+  states as an invitation; graph node colours from a categorical palette
+  validated for colour-vision deficiency on light and dark; and a dark
+  theme — the toggle in the top bar, "system" by default.
 - Entity linking: `ontology link-mentions --from <types> --to <types>`
   links the sheets of some types to the sheets their text names — a help
   page or a ticket that says `gl100` or `gl/w-gl100.w` gets a

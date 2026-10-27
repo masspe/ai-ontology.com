@@ -9,6 +9,7 @@ import TopNav from "./TopNav";
 // @ts-expect-error JS module without types (shared with the auth pages)
 import { msBE } from "../lib/msBE";
 import { getLang, setLang, t } from "../lib/i18n";
+import { effectiveTheme, toggleTheme } from "../lib/theme";
 
 function initials(name: string | undefined, email: string | undefined): string {
   const src = (name || email || "").trim();
@@ -23,6 +24,7 @@ export default function TopBar() {
   const [q, setQ] = useState("");
   const [feedbackOpen, setFeedbackOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [dark, setDark] = useState(() => effectiveTheme() === "dark");
   const menuRef = useRef<HTMLDivElement>(null);
   const user = msBE.auth.currentUser() as { name?: string; email?: string } | null;
 
@@ -75,6 +77,15 @@ export default function TopBar() {
           style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
         >
           💬 Feedback
+        </button>
+        <button
+          className="icon-btn"
+          title={dark ? t("Thème clair") : t("Thème sombre")}
+          aria-label={dark ? t("Thème clair") : t("Thème sombre")}
+          aria-pressed={dark}
+          onClick={() => setDark(toggleTheme() === "dark")}
+        >
+          {dark ? "☀" : "☾"}
         </button>
         <button
           className="btn-ghost lang-toggle"

@@ -79,7 +79,7 @@ describe("OntologyGraph", () => {
     expect(texts).toEqual(expect.arrayContaining(["employs", "hosts", "Hub", "A", "B", "D"]));
     // Nothing is dashed in a plain subgraph.
     for (const line of Array.from(container.querySelectorAll("svg line"))) {
-      expect(line.getAttribute("stroke")).toBe("#cbd5e1");
+      expect(line.getAttribute("stroke")).toBe("#b9c0c9");
       expect(line.hasAttribute("stroke-dasharray")).toBe(false);
     }
 
@@ -87,8 +87,8 @@ describe("OntologyGraph", () => {
     const legend = Array.from(container.querySelectorAll(".og-legend li")).map((li) => li.textContent?.trim());
     expect(legend).toEqual(["Person", "Org", "Place"]);
     const dots = container.querySelectorAll(".og-legend .og-dot");
-    expect((dots[0] as HTMLElement).style.background).toBe("rgb(37, 99, 235)"); // blue
-    expect((dots[1] as HTMLElement).style.background).toBe("rgb(22, 163, 74)"); // green
+    expect((dots[0] as HTMLElement).style.background).toBe("rgb(10, 159, 174)"); // teal
+    expect((dots[1] as HTMLElement).style.background).toBe("rgb(200, 63, 56)"); // rust
   });
 
   it("ellipsizes long labels, caps the pill width and hides the legend on request", () => {
@@ -180,7 +180,7 @@ describe("OntologyGraph", () => {
     expect(lines).toHaveLength(3);
     const dashed = lines.filter((l) => l.getAttribute("stroke-dasharray") === "4 3");
     expect(dashed).toHaveLength(2);
-    expect(dashed[0].getAttribute("stroke")).toBe("#7c3aed");
+    expect(dashed[0].getAttribute("stroke")).toBe("#0b6b72");
 
     const proposedRect = nodeRects(container).find((r) => r.getAttribute("stroke-dasharray") === "5 3")!;
     expect(proposedRect).toBeDefined();

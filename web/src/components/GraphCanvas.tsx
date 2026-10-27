@@ -19,6 +19,7 @@ import dagre from "dagre";
 import "reactflow/dist/style.css";
 import type { Subgraph } from "../api";
 import { t } from "../lib/i18n";
+import { cssVar } from "../lib/theme";
 
 export type LayoutDir = "LR" | "TB" | "RL" | "BT";
 
@@ -48,7 +49,7 @@ const NODE_W = 160;
 const NODE_H = 40;
 /** Past this many links the labels are noise and cost a text box each. */
 export const EDGE_LABEL_MAX = 300;
-const DEFAULT_PALETTE = ["#2563eb", "#7c3aed", "#16a34a", "#dc2626", "#d97706", "#0891b2", "#db2777", "#0d9488"];
+const DEFAULT_PALETTE = ["#0A9FAE", "#C83F38", "#3470CC", "#C97C0E", "#8C3DA3", "#4C8C27", "#B8408C", "#B05A1C"];
 
 /** Node styling inputs that do not move nodes around. */
 interface NodeMeta {
@@ -181,19 +182,21 @@ function CanvasInner({
       baseEdges.map((e) => {
         const touchesFocus = focusId != null && (e.source === focusId || e.target === focusId);
         const dim = highlightPaths && focusId != null && !touchesFocus;
-        const accent = touchesFocus ? metaById.get(focusId!)?.stroke ?? "#7c3aed" : "#94a3b8";
+        const quiet = cssVar("--border-strong", "#b9c0c9");
+        const dimmed = cssVar("--border", "#d8dce2");
+        const accent = touchesFocus ? metaById.get(focusId!)?.stroke ?? quiet : quiet;
         return {
           ...e,
           type: "smoothstep",
           animated: touchesFocus && selectedNodeId != null,
           label: edgeLabels ? e.label : undefined,
-          labelStyle: { fontSize: 10, fill: touchesFocus ? accent : "#7c3aed", fontWeight: 600 },
-          labelBgStyle: { fill: "#fff", fillOpacity: dim ? 0.3 : 0.95 },
+          labelStyle: { fontSize: 10, fill: touchesFocus ? accent : cssVar("--muted", "#5b6470"), fontWeight: 600 },
+          labelBgStyle: { fill: cssVar("--panel", "#ffffff"), fillOpacity: dim ? 0.3 : 0.95 },
           labelBgPadding: [4, 2] as [number, number],
           labelBgBorderRadius: 4,
-          markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: dim ? "#cbd5e1" : accent },
+          markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14, color: dim ? dimmed : accent },
           style: {
-            stroke: dim ? "#cbd5e1" : accent,
+            stroke: dim ? dimmed : accent,
             strokeWidth: touchesFocus ? 2.2 : 1.4,
             opacity: dim ? 0.35 : 1,
             transition: "opacity 0.15s, stroke 0.15s",
@@ -269,15 +272,15 @@ function CanvasInner({
       maxZoom={2.5}
       proOptions={{ hideAttribution: true }}
     >
-      <Background gap={20} color="#e5e7eb" />
+      <Background gap={20} color={cssVar("--border", "#d8dce2")} />
       <Controls showInteractive={false} position="bottom-left" />
       <MiniMap
         pannable
         zoomable
         position="bottom-right"
-        nodeColor={(n) => metaById.get(n.id)?.stroke ?? "#94a3b8"}
+        nodeColor={(n) => metaById.get(n.id)?.stroke ?? cssVar("--border-strong", "#b9c0c9")}
         nodeStrokeWidth={2}
-        maskColor="rgba(241, 245, 249, 0.7)"
+        maskColor={cssVar("--mask", "rgba(238, 240, 243, 0.7)")}
         style={{ width: 140, height: 90 }}
       />
     </ReactFlow>

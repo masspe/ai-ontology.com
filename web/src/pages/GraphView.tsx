@@ -54,7 +54,8 @@ function xsdFor(value: unknown): string {
   return "xsd:any";
 }
 
-const TYPE_PALETTE = ["#2563eb", "#7c3aed", "#16a34a", "#dc2626", "#d97706", "#0891b2", "#db2777", "#0d9488"];
+// Categorical, in fixed order, validated for colour-vision deficiency on light and dark (dataviz palette check).
+const TYPE_PALETTE = ["#0A9FAE", "#C83F38", "#3470CC", "#C97C0E", "#8C3DA3", "#4C8C27", "#B8408C", "#B05A1C"];
 
 // ---------------------------------------------------------------------------
 // Icons
@@ -589,7 +590,7 @@ export default function GraphView() {
           icon={Icon.layers}
           tone="blue"
           spark={headerSampleConcepts}
-          sparkColor="#2563eb"
+          sparkColor="#0A9FAE"
         />
         <Kpi
           label={t("Liens")}
@@ -597,7 +598,7 @@ export default function GraphView() {
           icon={Icon.share}
           tone="violet"
           spark={headerSampleRelations}
-          sparkColor="#7c3aed"
+          sparkColor="#8C3DA3"
         />
         <Kpi
           label={t("Filtres actifs")}
@@ -605,7 +606,7 @@ export default function GraphView() {
           icon={Icon.funnel}
           tone="amber"
           spark={[]}
-          sparkColor="#d97706"
+          sparkColor="#C97C0E"
         />
         <Kpi
           label={t("Santé du graphe")}
@@ -613,7 +614,7 @@ export default function GraphView() {
           icon={Icon.shield}
           tone="green"
           spark={[]}
-          sparkColor="#16a34a"
+          sparkColor="#4C8C27"
         />
       </div>
 
@@ -749,11 +750,11 @@ export default function GraphView() {
             />
           </div>
           <div className="gv-legend">
-            <span className="gv-legend-item"><span className="dot" style={{ background: "#2563eb" }} /> {t("Classe")}</span>
-            <span className="gv-legend-item"><span className="dot" style={{ background: "#16a34a" }} /> {t("Entité")}</span>
-            <span className="gv-legend-item"><span className="dot" style={{ background: "#7c3aed" }} /> {t("Lien")}</span>
-            <span className="gv-legend-item"><span className="dot" style={{ background: "#d97706" }} /> {t("Type de donnée")}</span>
-            <span className="gv-legend-item"><span className="dot" style={{ background: "#dc2626" }} /> {t("Contrainte")}</span>
+            <span className="gv-legend-item"><span className="dot" style={{ background: "#3470CC" }} /> {t("Classe")}</span>
+            <span className="gv-legend-item"><span className="dot" style={{ background: "#4C8C27" }} /> {t("Entité")}</span>
+            <span className="gv-legend-item"><span className="dot" style={{ background: "#8C3DA3" }} /> {t("Lien")}</span>
+            <span className="gv-legend-item"><span className="dot" style={{ background: "#C97C0E" }} /> {t("Type de donnée")}</span>
+            <span className="gv-legend-item"><span className="dot" style={{ background: "#C83F38" }} /> {t("Contrainte")}</span>
           </div>
         </Card>
 

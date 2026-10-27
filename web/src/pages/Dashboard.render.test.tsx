@@ -172,7 +172,11 @@ describe("Accueil", () => {
     await loaded();
     const items = card("Dernières questions").querySelectorAll("li");
     expect(items[0]).toHaveTextContent("★ Never run rejouer");
-    expect(screen.getByRole("link", { name: "Never run" })).toHaveAttribute("href", "/queries?run=2");
+    // Pinned: once as a chip under the question, once in the card, both replaying it.
+    const links = screen.getAllByRole("link", { name: "Never run" });
+    expect(links).toHaveLength(2);
+    for (const l of links) expect(l).toHaveAttribute("href", "/queries?run=2");
+    expect(links[0]!.closest(".hero-chips")).not.toBeNull();
     expect(items[1]).toHaveTextContent("Renewals");
   });
 

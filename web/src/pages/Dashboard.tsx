@@ -276,43 +276,49 @@ export default function Dashboard() {
 
   return (
     <>
-      <div className="page-header">
-        <div>
-          <h1 className="page-title">{t("Accueil")}</h1>
-          <p className="page-subtitle">
-            {stats
-              ? t("{n} fiches et {m} liens, {k} types de fiches.", { n: fmtNum(stats.concepts), m: fmtNum(stats.relations), k: fmtNum(stats.concept_types) })
-              : t("En attente du serveur.")}
-          </p>
-        </div>
-      </div>
-
       {error && <div className="error-banner">{error}</div>}
 
-      <form
-        className="home-search"
-        data-tour="home-search"
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (q.trim()) nav(`/queries?q=${encodeURIComponent(q.trim())}`);
-        }}
-      >
-        <input
-          aria-label={t("Question")}
-          placeholder={t("Posez une question à vos données : « Quels contrats arrivent à échéance ce mois-ci ? »")}
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-        />
-        <button className="btn-primary" type="submit" disabled={!q.trim()}>
-          {t("Demander")}
-        </button>
-      </form>
+      {/* The question is what the product is for: it opens the page. */}
+      <section className="hero" data-tour="home-search">
+        <h1 className="hero-title">{t("Que voulez-vous savoir ?")}</h1>
+        <p className="hero-sub">
+          {stats
+            ? t("{n} fiches et {m} liens, {k} types de fiches.", { n: fmtNum(stats.concepts), m: fmtNum(stats.relations), k: fmtNum(stats.concept_types) })
+            : t("En attente du serveur.")}
+        </p>
+        <form
+          className="home-search"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (q.trim()) nav(`/queries?q=${encodeURIComponent(q.trim())}`);
+          }}
+        >
+          <input
+            aria-label={t("Question")}
+            placeholder={t("Posez une question à vos données : « Quels contrats arrivent à échéance ce mois-ci ? »")}
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+          />
+          <button className="btn-primary" type="submit" disabled={!q.trim()}>
+            {t("Demander")}
+          </button>
+        </form>
+        {pinnedQueries.length > 0 && (
+          <div className="hero-chips" aria-label={t("Questions épinglées")}>
+            {pinnedQueries.slice(0, 4).map((sq) => (
+              <Link key={sq.id} className="sheet-chip" to={`/queries?run=${sq.id}`}>
+                {sq.name}
+              </Link>
+            ))}
+          </div>
+        )}
+      </section>
 
       <div className="dash-row dash-row-stats">
-        <RichStat label={t("Fiches")} value={stats?.concepts ?? 0} deltaPct={stats?.deltas.concepts_pct} icon={Icon.users} tone="violet" spark={samples.map((s) => s.concepts)} sparkColor="#7c3aed" />
-        <RichStat label={t("Liens")} value={stats?.relations ?? 0} deltaPct={stats?.deltas.relations_pct} icon={Icon.share} tone="amber" spark={samples.map((s) => s.relations)} sparkColor="#d97706" />
-        <RichStat label={t("Types de fiches")} value={stats?.concept_types ?? 0} deltaPct={stats?.deltas.concept_types_pct} icon={Icon.layers} tone="blue" spark={samples.map((s) => s.concept_types)} sparkColor="#2563eb" />
-        <RichStat label={t("Règles")} value={stats?.rules ?? 0} icon={Icon.shield} tone="green" spark={[]} sparkColor="#16a34a" />
+        <RichStat label={t("Fiches")} value={stats?.concepts ?? 0} deltaPct={stats?.deltas.concepts_pct} icon={Icon.users} tone="violet" spark={samples.map((s) => s.concepts)} sparkColor="#8C3DA3" />
+        <RichStat label={t("Liens")} value={stats?.relations ?? 0} deltaPct={stats?.deltas.relations_pct} icon={Icon.share} tone="amber" spark={samples.map((s) => s.relations)} sparkColor="#C97C0E" />
+        <RichStat label={t("Types de fiches")} value={stats?.concept_types ?? 0} deltaPct={stats?.deltas.concept_types_pct} icon={Icon.layers} tone="blue" spark={samples.map((s) => s.concept_types)} sparkColor="#3470CC" />
+        <RichStat label={t("Règles")} value={stats?.rules ?? 0} icon={Icon.shield} tone="green" spark={[]} sparkColor="#4C8C27" />
       </div>
 
       <div className="dash-row home-row">
