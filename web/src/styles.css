@@ -413,6 +413,13 @@ label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px
 .sheet-chip.cited .sheet-type { color: var(--accent-hover); }
 .answer-box .sheet-chip { vertical-align: baseline; margin: 0 1px; }
 
+/* A conversation: the question as a line above its answer. */
+.turn { margin-bottom: 16px; }
+.turn-question { margin: 0 0 6px; font-weight: 500; }
+.turn-question::before { content: "› "; color: var(--muted); }
+.related { font-size: 13px; margin: 4px 0 12px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.related-link { padding: 2px 8px; color: var(--accent); }
+
 /* Graph canvas wrapper */
 .graph-canvas {
   height: calc(100vh - var(--topbar-h) - 180px);

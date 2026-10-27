@@ -195,7 +195,7 @@ const CASES: Case[] = [
     run: (a) => a.ask({ query: "who?" }),
     url: "/ask",
     method: "POST",
-    body: { query: "who?", top_k: 8, lexical_weight: 0.5, concept_types: [], expansion: { max_depth: 2, max_nodes: 64 } },
+    body: { history: [], query: "who?", top_k: 8, lexical_weight: 0.5, concept_types: [], expansion: { max_depth: 2, max_nodes: 64 } },
     reply: { answer: "them" },
   },
   {
@@ -203,7 +203,7 @@ const CASES: Case[] = [
     run: (a) => a.ask({ query: "q", top_k: 0, lexical_weight: 0, concept_types: ["A"], expansion: { max_depth: 0, max_nodes: 5 } }),
     url: "/ask",
     method: "POST",
-    body: { query: "q", top_k: 0, lexical_weight: 0, concept_types: ["A"], expansion: { max_depth: 0, max_nodes: 5 } },
+    body: { history: [], query: "q", top_k: 0, lexical_weight: 0, concept_types: ["A"], expansion: { max_depth: 0, max_nodes: 5 } },
     reply: { answer: "a" },
   },
   {
@@ -211,7 +211,7 @@ const CASES: Case[] = [
     run: (a) => a.ask({ query: "q", expansion: { max_nodes: 9 } }),
     url: "/ask",
     method: "POST",
-    body: { query: "q", top_k: 8, lexical_weight: 0.5, concept_types: [], expansion: { max_depth: 2, max_nodes: 9 } },
+    body: { history: [], query: "q", top_k: 8, lexical_weight: 0.5, concept_types: [], expansion: { max_depth: 2, max_nodes: 9 } },
   },
   {
     name: "getSubgraph",
@@ -444,6 +444,7 @@ describe("askStream", () => {
     expect(got.headers.get("content-type")).toBe("application/json");
     expect(got.headers.get("authorization")).toBe(`Bearer ${TOKEN}`);
     expect(got.body).toEqual({
+      history: [],
       query: "hello",
       top_k: 8,
       lexical_weight: 0.5,

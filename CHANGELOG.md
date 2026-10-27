@@ -20,6 +20,13 @@ All notable changes to this project are listed here. The format follows
   the sheet it points to (`Table · appdb.emp`, linked), and the `Cited:`
   line becomes the row of sheets the answer rests on, cited ones first —
   on the home page as the answer streams and on the Questions page.
+- Conversations: the Questions page keeps each answer as a turn and sends
+  the turns before with the next question (`history` on `/ask` and
+  `/ask/stream`: question, answer, cited ids), so a follow-up means what
+  the last answer named — the sheets cited earlier join the subgraph at
+  depth 0 and the prompt carries the last four exchanges. Threads are
+  kept in the browser; an earlier question that cited the same sheets is
+  offered as « déjà demandé » and can be resumed.
 - Retrieval vectors from a provider's embedding model (OpenAI,
   Infomaniak, any OpenAI-compatible `/v1/embeddings`): Settings → LLM →
   *Vecteurs de recherche*, or `llm.embedding_provider` /

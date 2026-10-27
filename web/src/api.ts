@@ -411,6 +411,13 @@ export interface SettingsPatch {
   ocr?: OcrSettingsPatch;
 }
 
+/** One earlier exchange of a conversation, sent back with the next question. */
+export interface Turn {
+  question: string;
+  answer: string;
+  cited: number[];
+}
+
 export interface RagAnswer {
   answer: string;
   citations?: Array<{ id: number; name: string; concept_type: string }>;
@@ -639,11 +646,13 @@ export const ask = (req: {
   lexical_weight?: number;
   concept_types?: string[];
   expansion?: { max_depth?: number; max_nodes?: number };
+  history?: Turn[];
 }) =>
   http<RagAnswer>("/ask", {
     method: "POST",
     headers: headers(true),
     body: JSON.stringify({
+      history: req.history ?? [],
       query: req.query,
       top_k: req.top_k ?? 8,
       lexical_weight: req.lexical_weight ?? 0.5,
@@ -660,7 +669,7 @@ export interface AskStreamHandlers {
 }
 
 export async function askStream(
-  req: { query: string; top_k?: number; lexical_weight?: number; concept_types?: string[] },
+  req: { query: string; top_k?: number; lexical_weight?: number; concept_types?: string[]; history?: Turn[] },
   handlers: AskStreamHandlers,
   signal?: AbortSignal,
 ): Promise<void> {
@@ -669,6 +678,7 @@ export async function askStream(
     method: "POST",
     headers: { ...headers(true), accept: "text/event-stream" },
     body: JSON.stringify({
+      history: req.history ?? [],
       query: req.query,
       top_k: req.top_k ?? 8,
       lexical_weight: req.lexical_weight ?? 0.5,
