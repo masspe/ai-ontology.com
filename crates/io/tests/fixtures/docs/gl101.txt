@@ -1,0 +1,3 @@
+Paramétrage des genres de frais.
+
+Un genre de frais regroupe les dépenses d'une même nature pour la comptabilité analytique.

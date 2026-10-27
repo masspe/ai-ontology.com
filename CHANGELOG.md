@@ -20,6 +20,14 @@ All notable changes to this project are listed here. The format follows
   the sheet it points to (`Table · appdb.emp`, linked), and the `Cited:`
   line becomes the row of sheets the answer rests on, cited ones first —
   on the home page as the answer streams and on the Questions page.
+- Documents attached to sheets by key: `ontology ingest --doc-for <Type>
+  [--doc-key <regex>] [--doc-fallback-type <Type>] [--doc-property <name>]
+  <folder>` reads HTML, text and Markdown files; each file's text becomes
+  a property of the sheet its title or file name names, its title and
+  first lines the sheet's description; a file about no known sheet
+  becomes a document sheet (fragmented like any text document) or is
+  counted. First use: an ERP's user help pages attached to its screens,
+  so a question in the users' words finds the screen.
 - The graph page on a large model: `POST /subgraph` caps the links it
   returns (`max_edges`, strongest first, round-robin across types — a
   250-sheet neighbourhood of a hub no longer ships thousands of links),

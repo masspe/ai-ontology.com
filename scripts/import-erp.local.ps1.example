@@ -3,3 +3,4 @@ $XrefDir   = 'D:\build\xref'                                  # les *.xref.xml d
 $XrefRoots = @('D:\App\ERP\', 'D:\App\ERP2\')                 # racines de compilation a retirer des chemins
 $SourceDir = 'D:\src\ERP2'                                    # racine des sources .p/.w/.i
 $Dumps     = @{ 'D:\dumps\appdb.df' = 'appdb'; 'D:\dumps\secdb.df' = 'secdb' }   # fichier .df -> base
+$HelpDir   = 'D:\src\ERP2\help\Doc\F'                               # pages d'aide HTML (facultatif)

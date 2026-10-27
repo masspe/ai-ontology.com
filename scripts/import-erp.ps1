@@ -5,7 +5,8 @@
 #   1. (re)construit le binaire `ontology` en release,
 #   2. `--xref --sync`  : la reference croisee du compilateur (programmes, tables, champs, liens),
 #   3. `--abl --sync`   : les sources ABL (jointures, ecrans, onglets),
-#   4. `--df`           : le dump de schema (.df) de chaque base — libelles, types, cles.
+#   4. `--df`           : le dump de schema (.df) de chaque base — libelles, types, cles,
+#   5. `--doc-for Screen`: l'aide utilisateur (pages HTML) attachee aux ecrans, si $HelpDir est defini.
 # Idempotent : relancer apres une recompilation ou un nouveau .df met a jour ce qui a change.
 #
 # Les chemins propres a une installation ne sont pas dans ce script : ils viennent
@@ -29,6 +30,10 @@ param(
     [string]$SourceDir,
     # Fichier .df -> nom de la base qu'il decrit.
     [hashtable]$Dumps,
+    # Dossier des pages d'aide (HTML) ; vide = etape sautee.
+    [string]$HelpDir,
+    # Regex dont le premier groupe, dans le titre de la page ou son nom de fichier, est le code de l'ecran.
+    [string]$HelpKey = '\(([a-z]{2}[0-9]{3}[a-z0-9]*)\)',
     [switch]$SkipXref,
     [switch]$SkipAbl,
     [switch]$SkipDf,
@@ -75,5 +80,8 @@ if (-not $SkipDf) {
     foreach ($file in $Dumps.Keys | Sort-Object) {
         Step "df $($Dumps[$file])" @('--df', '--df-db', $Dumps[$file], $file)
     }
+}
+if (-not $SkipDf -and $HelpDir) {
+    Step 'docs' @('--doc-for', 'Screen', '--doc-key', $HelpKey, '--doc-fallback-type', 'Document', '--doc-property', 'help', $HelpDir)
 }
 Write-Host "Termine." -ForegroundColor Green
