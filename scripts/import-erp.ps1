@@ -6,7 +6,8 @@
 #   2. `--xref --sync`  : la reference croisee du compilateur (programmes, tables, champs, liens),
 #   3. `--abl --sync`   : les sources ABL (jointures, ecrans, onglets),
 #   4. `--df`           : le dump de schema (.df) de chaque base — libelles, types, cles,
-#   5. `--doc-for Screen`: l'aide utilisateur (pages HTML) attachee aux ecrans, si $HelpDir est defini.
+#   5. `--doc-for Screen`: l'aide utilisateur (pages HTML) attachee aux ecrans, si $HelpDir est defini,
+#   6. `link-mentions`  : les pages et ecrans lies aux ecrans/programmes/tables qu'ils nomment.
 # Idempotent : relancer apres une recompilation ou un nouveau .df met a jour ce qui a change.
 #
 # Les chemins propres a une installation ne sont pas dans ce script : ils viennent
@@ -83,5 +84,10 @@ if (-not $SkipDf) {
 }
 if (-not $SkipDf -and $HelpDir) {
     Step 'docs' @('--doc-for', 'Screen', '--doc-key', $HelpKey, '--doc-fallback-type', 'Document', '--doc-property', 'help', $HelpDir)
+}
+if (-not $SkipDf -and $HelpDir) {
+    Write-Host "== mentions" -ForegroundColor Cyan
+    & $bin link-mentions --data $DataDir --from Document,DocumentFragment,Screen --to Screen,Program,Table
+    if ($LASTEXITCODE -ne 0) { throw "link-mentions a echoue (exit $LASTEXITCODE)" }
 }
 Write-Host "Termine." -ForegroundColor Green

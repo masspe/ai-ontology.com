@@ -314,6 +314,19 @@ enum Cmd {
         #[arg(long, default_value_t = 30)]
         top: usize,
     },
+    /// Link the sheets of some types to the sheets their text names: a
+    /// ticket or a help page that says `gl100` or `gl/w-gl100.w` gets a
+    /// `mentions_<from>_<to>` link to that screen or program, weighted by
+    /// how often. Reads the description and text properties; runs again
+    /// without writing what is already there.
+    LinkMentions {
+        /// Types whose text is read (comma-separated).
+        #[arg(long, value_delimiter = ',', required = true)]
+        from: Vec<String>,
+        /// Types whose names are looked for (comma-separated).
+        #[arg(long, value_delimiter = ',', required = true)]
+        to: Vec<String>,
+    },
     /// Container health probe: GET `url`, exit 0 on a 2xx, 1 otherwise. The
     /// runtime image has no curl; this needs no dependency either.
     Healthcheck {
@@ -754,6 +767,27 @@ async fn main() -> Result<()> {
             println!(
                 "ingested: {} concepts, {} relations, {} ontology updates{upsert}",
                 stats.concepts, stats.relations, stats.ontology_updates,
+            );
+        }
+        Cmd::LinkMentions { from, to } => {
+            let (mut src, report) = ontology_io::MentionSource::from_graph(&graph, &from, &to);
+            eprintln!(
+                "mentions: {} sheets read, {} links to {} sheets",
+                report.scanned, report.links, report.targets
+            );
+            let stats = ingest_records_with(
+                &mut src,
+                &graph,
+                Some(store.as_ref()),
+                IngestOptions {
+                    upsert: true,
+                    ..Default::default()
+                },
+            )
+            .await?;
+            println!(
+                "linked: {} new links, {} updated, {} unchanged",
+                stats.relations, stats.updated, stats.unchanged
             );
         }
         Cmd::Stats => {

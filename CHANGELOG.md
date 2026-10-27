@@ -20,6 +20,12 @@ All notable changes to this project are listed here. The format follows
   the sheet it points to (`Table · appdb.emp`, linked), and the `Cited:`
   line becomes the row of sheets the answer rests on, cited ones first —
   on the home page as the answer streams and on the Questions page.
+- Entity linking: `ontology link-mentions --from <types> --to <types>`
+  links the sheets of some types to the sheets their text names — a help
+  page or a ticket that says `gl100` or `gl/w-gl100.w` gets a
+  `mentions_<from>_<to>` link to that screen or program, weighted by how
+  often; program paths match by their file name too, an alias that could
+  mean two sheets means none. Runs again without rewriting.
 - Conversations: the Questions page keeps each answer as a turn and sends
   the turns before with the next question (`history` on `/ask` and
   `/ask/stream`: question, answer, cited ids), so a follow-up means what

@@ -874,3 +874,59 @@ fn an_unreachable_embedding_provider_falls_back_to_the_built_in_embedder() {
         text(&out.stderr)
     );
 }
+
+/// `link-mentions` links the sheets of some types to the sheets their
+/// text names, and says what it found; a second run writes nothing new.
+#[test]
+fn link_mentions_links_documents_to_what_they_name() {
+    let data = tempdir("link-mentions");
+    let docs = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("io")
+        .join("tests")
+        .join("fixtures")
+        .join("docs");
+    // The pages become documents (no screen to attach to), then the
+    // screen they name exists, then the linker finds it.
+    ok(
+        Some(&data),
+        &[
+            "ingest",
+            "--doc-for",
+            "Screen",
+            "--doc-fallback-type",
+            "Document",
+            "--chunk-chars",
+            "0",
+            &p(&docs),
+        ],
+    );
+    let sheet = data.join("screens.jsonl");
+    std::fs::write(
+        &sheet,
+        r#"{"kind":"concept","id":0,"concept_type":"Screen","name":"gl100","description":"Grand livre","properties":{}}"#,
+    )
+    .unwrap();
+    ok(Some(&data), &["ingest", &p(&sheet)]);
+    let out = run(
+        Some(&data),
+        &["link-mentions", "--from", "Document", "--to", "Screen"],
+    );
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let err = text(&out.stderr);
+    assert!(
+        err.contains("mentions:") && err.contains("sheets read"),
+        "{err}"
+    );
+    let stdout = text(&out.stdout);
+    assert!(stdout.starts_with("linked: "), "{stdout}");
+    assert!(!stdout.starts_with("linked: 0 new"), "{stdout}");
+    let again = ok(
+        Some(&data),
+        &["link-mentions", "--from", "Document", "--to", "Screen"],
+    );
+    assert!(
+        again.starts_with("linked: 0 new links, 0 updated"),
+        "{again}"
+    );
+}
