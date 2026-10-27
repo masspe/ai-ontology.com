@@ -6,6 +6,15 @@ All notable changes to this project are listed here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- A cross-reference `--sync` after the schema dump refused (or, forced,
+  would have deleted) the tables and fields no program touches and their
+  `has_field` links — the dump's, not the cross-reference's.
+  `IngestOptions::prune_keep` names the types an import declares but
+  shares; the xref sync keeps `Database`, `Table`, `Field`, `has_field`,
+  `in_database`, `fires_on`.
+
 ### Added
 
 - `ontology ingest --df <dump> --df-db <name>` reads a Progress

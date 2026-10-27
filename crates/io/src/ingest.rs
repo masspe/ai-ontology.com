@@ -207,6 +207,11 @@ pub struct IngestOptions {
     /// one of three modules going is a change, not a mismatch. A refused
     /// prune leaves the upserts that preceded it: nothing is deleted.
     pub prune_max_fraction: f32,
+    /// Concept and relation types this import declares but shares with
+    /// another source, so it never prunes them: the cross-reference and
+    /// the schema dump both declare `Table` and `Field`, and a field no
+    /// program touches is the dump's to keep. Names of either kind.
+    pub prune_keep: &'static [&'static str],
 }
 
 /// Below this many sheets a type is too small for a share to mean
@@ -220,6 +225,7 @@ impl Default for IngestOptions {
             prune: false,
             merge_properties: false,
             prune_max_fraction: 0.25,
+            prune_keep: &[],
         }
     }
 }
@@ -903,7 +909,7 @@ impl<'a> Ingester<'a> {
                 }
             }
             Record::ConceptTypeDecl(ct) => {
-                if self.opts.prune {
+                if self.opts.prune && !self.opts.prune_keep.contains(&ct.name.as_str()) {
                     self.declared_types.insert(ct.name.clone());
                 }
                 // A declaration identical to the registered type (after the
@@ -979,7 +985,7 @@ impl<'a> Ingester<'a> {
                 Ok(true)
             }
             Record::RelationTypeDecl(rt) => {
-                if self.opts.prune {
+                if self.opts.prune && !self.opts.prune_keep.contains(&rt.name.as_str()) {
                     self.declared_relation_types.insert(rt.name.clone());
                 }
                 // Deferred if domain/range aren't known yet — let the retry pass
