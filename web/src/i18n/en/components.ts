@@ -151,6 +151,8 @@ export const components: Record<string, string> = {
   "{n} liens": "{n} links",
   "{n} lien": "{n} link",
   "Réponse fondée sur {sheets} et {links}": "Answer based on {sheets} and {links}",
+  "Citée dans la réponse": "Cited in the answer",
+  "Fiches consultées": "Sheets consulted",
   "Posez votre question…": "Ask your question…",
   "Réponse en cours…": "Answering…",
   "Poser la question": "Ask the question",

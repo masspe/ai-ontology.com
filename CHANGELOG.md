@@ -16,6 +16,12 @@ All notable changes to this project are listed here. The format follows
   `fires_on` link from each database trigger program to its table. Labels
   become the sheets' descriptions, so a question asked in the users'
   language (« salariés ») finds the table (`emp`).
+- Answers name their sources: every `#id` the model cites is rendered as
+  the sheet it points to (`Table · appdb.emp`, linked), and the `Cited:`
+  line becomes the row of sheets the answer rests on, cited ones first —
+  on the home page as the answer streams and on the Questions page.
+- `docs/SOFTWARE-MODEL.md`: how a code base becomes a graph and why
+  answers are what they are.
 - `IngestOptions::merge_properties`: an upsert that keeps the properties
   and description the new record does not set, so the cross-reference,
   the sources and the schema dump can each write their part of one Table
