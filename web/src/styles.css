@@ -387,6 +387,19 @@ label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px
   display: flex; flex-wrap: wrap; gap: 6px;
   margin-top: 10px;
 }
+/* A sheet named in an answer: its type, then its name, as one link. */
+.sheet-chip {
+  display: inline-flex; align-items: baseline; gap: 4px;
+  padding: 1px 8px; border-radius: 999px;
+  font-size: 12px; line-height: 1.5;
+  background: var(--panel); border: 1px solid var(--border-strong);
+  color: var(--text); text-decoration: none; white-space: nowrap;
+}
+.sheet-chip:hover { border-color: var(--accent); color: var(--accent); text-decoration: none; }
+.sheet-chip .sheet-type { color: var(--muted); }
+.sheet-chip.cited { background: var(--accent-soft); border-color: var(--accent); }
+.sheet-chip.cited .sheet-type { color: var(--accent-hover); }
+.answer-box .sheet-chip { vertical-align: baseline; margin: 0 1px; }
 
 /* Graph canvas wrapper */
 .graph-canvas {

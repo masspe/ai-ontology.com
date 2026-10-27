@@ -3,6 +3,7 @@
 
 import { useState } from "react";
 import { askStream, type Subgraph } from "../api";
+import Answer from "./Answer";
 import { t } from "../lib/i18n";
 
 const sheets = (n: number) => (n > 1 ? t("{n} fiches", { n }) : t("{n} fiche", { n }));
@@ -67,21 +68,7 @@ export default function StreamingAnswer({ defaultQuery = "" }: Props) {
         </span>
       </div>
       {error && <div className="error-banner">{error}</div>}
-      {(answer || streaming) && (
-        <div className="answer-box">
-          {answer}
-          {streaming && <span style={{ opacity: 0.5 }}>▍</span>}
-        </div>
-      )}
-      {retrieved && retrieved.concepts.length > 0 && (
-        <div className="citations">
-          {retrieved.concepts.slice(0, 12).map((c) => (
-            <span key={c.id} className="badge badge-accent">
-              {c.concept_type} · {c.name}
-            </span>
-          ))}
-        </div>
-      )}
+      {(answer || streaming || retrieved) && <Answer text={answer} concepts={retrieved?.concepts} cursor={streaming} />}
     </div>
   );
 }

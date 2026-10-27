@@ -76,9 +76,10 @@ describe("StreamingAnswer", () => {
 
     act(() => stream.handlers().onRetrieved?.(subgraph));
     expect(screen.getByText("Réponse fondée sur 14 fiches et 1 lien")).toBeInTheDocument();
-    expect(screen.getAllByText(/Contract · C\d+/)).toHaveLength(12);
-    expect(screen.getByText("Contract · C12")).toBeInTheDocument();
-    expect(screen.queryByText("Contract · C13")).not.toBeInTheDocument();
+    const chips = Array.from(document.querySelectorAll(".citations .sheet-chip"), (el) => el.textContent);
+    expect(chips).toHaveLength(12);
+    expect(chips).toContain("Contract · C12");
+    expect(chips).not.toContain("Contract · C13");
 
     act(() => {
       stream.handlers().onToken?.("Two ");

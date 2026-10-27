@@ -105,7 +105,7 @@ describe("Queries page", () => {
     await user.click(screen.getAllByRole("button", { name: "Exécuter" })[0]);
     expect(await screen.findByText("Réponse · Renewals")).toBeInTheDocument();
     expect(screen.getByText("Two contracts renew in Q4.")).toBeInTheDocument();
-    expect(screen.getByText("Contract · ACME master")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Contract · ACME master" })).toHaveAttribute("href", "/concepts/10");
     expect(mocked.runQuery).toHaveBeenCalledWith(1);
   });
 

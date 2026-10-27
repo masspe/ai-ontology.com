@@ -9,6 +9,7 @@ import Card from "../components/Card";
 import StreamingAnswer from "../components/StreamingAnswer";
 // @ts-expect-error JSX module
 import { useConfirm } from "../components/ConfirmDialog.jsx";
+import Answer from "../components/Answer";
 import {
   createQuery,
   deleteQuery,
@@ -178,14 +179,11 @@ export default function Queries() {
 
       {lastResult && (
         <Card title={t("Réponse · {name}", { name: lastResult.name })} style={{ marginTop: 16 }}>
-          <div className="answer-box">{lastResult.answer.answer}</div>
-          {lastResult.answer.subgraph && lastResult.answer.subgraph.concepts.length > 0 && (
-            <div className="citations">
-              {lastResult.answer.subgraph.concepts.slice(0, 12).map((c) => (
-                <span key={c.id} className="badge badge-accent">{c.concept_type} · {c.name}</span>
-              ))}
-            </div>
-          )}
+          <Answer
+            text={lastResult.answer.answer}
+            concepts={lastResult.answer.subgraph?.concepts}
+            cited={lastResult.answer.citations?.map((c) => c.id)}
+          />
         </Card>
       )}
     </>
