@@ -10,6 +10,18 @@
 pub trait Embedder: Send + Sync + 'static {
     fn dim(&self) -> usize;
     fn embed(&self, text: &str) -> Vec<f32>;
+    /// What tells this embedder's vectors from another's (model, host);
+    /// a cache file is keyed by it.
+    fn name(&self) -> String {
+        format!("hash-{}", self.dim())
+    }
+    /// Many texts at once, in order: a remote embedder sends one request
+    /// per batch instead of one per text.
+    fn embed_batch(&self, texts: &[&str]) -> Vec<Vec<f32>> {
+        texts.iter().map(|t| self.embed(t)).collect()
+    }
+    /// Persist whatever is worth persisting (a cache); a no-op by default.
+    fn flush(&self) {}
 }
 
 /// Deterministic, dependency-free embedder: hashed bag-of-words with L2

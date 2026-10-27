@@ -852,6 +852,8 @@ function LlmServerSection({ settings, onPatch }: LlmServerSectionProps) {
   const [products, setProducts] = useState<InfomaniakProduct[]>([]);
   const [temperature, setTemperature] = useState<number>(llm.temperature);
   const [maxTokens, setMaxTokens] = useState<number>(llm.max_tokens);
+  const [embeddingProvider, setEmbeddingProvider] = useState<string>(llm.embedding_provider ?? "none");
+  const [embeddingModel, setEmbeddingModel] = useState<string>(llm.embedding_model ?? "");
   const [busy, setBusy] = useState<null | "save" | "test" | "models" | "detect">(null);
   const [msg, setMsg] = useState<LlmFeedback | null>(null);
 
@@ -869,6 +871,8 @@ function LlmServerSection({ settings, onPatch }: LlmServerSectionProps) {
     setProducts([]);
     setTemperature(llm.temperature);
     setMaxTokens(llm.max_tokens);
+    setEmbeddingProvider(llm.embedding_provider ?? "none");
+    setEmbeddingModel(llm.embedding_model ?? "");
   }, [provider, llm]);
 
   const hint =
@@ -931,6 +935,8 @@ function LlmServerSection({ settings, onPatch }: LlmServerSectionProps) {
         active_provider: provider,
         temperature,
         max_tokens: maxTokens,
+        embedding_provider: embeddingProvider,
+        embedding_model: embeddingProvider === "none" ? "" : embeddingModel,
       };
       const key = apiKey.trim() || undefined;
       if (provider === "openai") {
@@ -1254,6 +1260,30 @@ function LlmServerSection({ settings, onPatch }: LlmServerSectionProps) {
             onChange={(e) => setMaxTokens(Number(e.target.value))}
           />
         </label>
+      </div>
+
+      <div className="grid grid-2" style={{ gap: 16, marginTop: 16 }}>
+        <label className="field">
+          <span>{t("Vecteurs de recherche")}</span>
+          <select value={embeddingProvider} onChange={(e) => setEmbeddingProvider(e.target.value)}>
+            <option value="none">{t("Intégrés (sans réseau, pas de sens)")}</option>
+            <option value="openai">OpenAI</option>
+            <option value="infomaniak">Infomaniak</option>
+          </select>
+          <span className="field-hint">
+            {t("Un modèle d'embeddings rapproche « salaire » et « paie » ; la clé du fournisseur ci-dessus est réutilisée. Pris en compte au prochain démarrage, qui réindexe tout.")}
+          </span>
+        </label>
+        {embeddingProvider !== "none" && (
+          <label className="field">
+            <span>{t("Modèle d'embeddings")}</span>
+            <input
+              value={embeddingModel}
+              placeholder={embeddingProvider === "openai" ? "text-embedding-3-small" : "bge-m3"}
+              onChange={(e) => setEmbeddingModel(e.target.value)}
+            />
+          </label>
+        )}
       </div>
 
       <div style={{ marginTop: 16 }}>

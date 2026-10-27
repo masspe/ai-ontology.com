@@ -133,6 +133,16 @@ impl VectorIndex {
         self.embedder.embed(text)
     }
 
+    /// Embed many texts, in order, the way the embedder prefers.
+    pub fn embed_batch(&self, texts: &[&str]) -> Vec<Vec<f32>> {
+        self.embedder.embed_batch(texts)
+    }
+
+    /// Let the embedder persist what it caches.
+    pub fn flush(&self) {
+        self.embedder.flush();
+    }
+
     pub fn remove(&self, id: ConceptId) {
         self.rows.write().remove(id);
     }

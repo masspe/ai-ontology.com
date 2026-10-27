@@ -18,11 +18,13 @@
 //! Retrieval is a two-stage process: rank concepts → expand the top-k into
 //! a bounded subgraph that's ready to ship to a language model.
 
+pub mod cache;
 pub mod embed;
 pub mod hybrid;
 pub mod lexical;
 pub mod vector;
 
+pub use cache::CachedEmbedder;
 pub use embed::{Embedder, HashEmbedder};
 pub use hybrid::{HybridIndex, ReindexReport, RetrievalRequest, ScoredConcept};
 pub use lexical::LexicalIndex;

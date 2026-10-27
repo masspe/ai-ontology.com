@@ -18,11 +18,13 @@
 //! Two LLM clients are bundled: an in-memory [`EchoModel`] for tests, and an
 //! HTTP [`AnthropicModel`] for production use against the Claude Messages API.
 
+pub mod embed;
 pub mod extract;
 pub mod model;
 pub mod pipeline;
 pub mod prompt;
 
+pub use embed::{EmbedError, RemoteEmbedder, BATCH as EMBED_BATCH};
 pub use extract::{attach_conflicts, extract_proposal, ExtractError};
 pub use model::{
     infomaniak_base_url, v1_api_url, AnthropicModel, EchoModel, LanguageModel, LlmError,

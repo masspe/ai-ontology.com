@@ -539,6 +539,12 @@ pub struct LlmSettings {
 
     pub temperature: f32,
     pub max_tokens: u32,
+
+    /// Provider of the retrieval embeddings: `"none"` (the built-in hashing
+    /// embedder), `"openai"`, `"infomaniak"` — its key and base URL above
+    /// are reused. Applied at the next start, with a full reindex.
+    pub embedding_provider: String,
+    pub embedding_model: String,
 }
 
 impl Default for LlmSettings {
@@ -560,6 +566,8 @@ impl Default for LlmSettings {
             infomaniak_model: String::new(),
             temperature: 0.3,
             max_tokens: 1000,
+            embedding_provider: "none".into(),
+            embedding_model: String::new(),
         }
     }
 }
@@ -688,6 +696,8 @@ pub struct LlmSettingsPatch {
     pub infomaniak_model: Option<String>,
     pub temperature: Option<f32>,
     pub max_tokens: Option<u32>,
+    pub embedding_provider: Option<String>,
+    pub embedding_model: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -3364,6 +3374,12 @@ async fn patch_settings(
         if let Some(v) = l.temperature {
             llm.temperature = v;
         }
+        if let Some(v) = l.embedding_provider {
+            llm.embedding_provider = v.trim().to_string();
+        }
+        if let Some(v) = l.embedding_model {
+            llm.embedding_model = v.trim().to_string();
+        }
         if let Some(v) = l.max_tokens {
             llm.max_tokens = v;
         }
@@ -3762,6 +3778,54 @@ pub enum ConfiguredModel {
     /// A provider is selected but its configuration is incomplete. The
     /// payload is a message meant for the user.
     Invalid(String),
+}
+
+/// The embedder the settings select: `None` for the built-in one, a
+/// provider's `/v1/embeddings` otherwise — connected and probed now, so a
+/// bad key or model is this error and not a silent zero-vector index. With
+/// `data_dir`, the vectors are cached under `<data>/embeddings/`, so the
+/// next start re-embeds nothing.
+pub fn configured_embedder(
+    settings: &Settings,
+    data_dir: Option<&std::path::Path>,
+) -> Result<Option<Arc<dyn ontology_index::Embedder>>, String> {
+    let llm = &settings.llm;
+    let provider = llm.embedding_provider.trim();
+    if provider.is_empty() || provider == "none" {
+        return Ok(None);
+    }
+    if llm.embedding_model.trim().is_empty() {
+        return Err(format!("embeddings: no model chosen for {provider}"));
+    }
+    let ov = LlmOverrides {
+        provider: Some(provider.to_string()),
+        model: Some(llm.embedding_model.trim().to_string()),
+        ..Default::default()
+    };
+    let creds = resolve_provider_creds(llm, &ov).map_err(|e| format!("embeddings: {e}"))?;
+    if !matches!(creds.kind, ProviderKind::OpenAiCompatible) {
+        return Err(format!(
+            "embeddings: {} has no embeddings API",
+            creds.provider
+        ));
+    }
+    let remote = ontology_rag::RemoteEmbedder::connect(creds.api_key, creds.base_url, creds.model)
+        .map_err(|e| e.to_string())?;
+    let remote: Arc<dyn ontology_index::Embedder> = Arc::new(remote);
+    Ok(Some(match data_dir {
+        Some(dir) => {
+            let file: String = remote
+                .name()
+                .chars()
+                .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+                .collect();
+            Arc::new(ontology_index::CachedEmbedder::open(
+                remote,
+                dir.join("embeddings").join(format!("{file}.bin")),
+            ))
+        }
+        None => remote,
+    }))
 }
 
 /// Resolve the LLM the given settings select, for callers outside the HTTP
@@ -4454,6 +4518,37 @@ mod provider_tests {
             Ok(_) => panic!("expected a missing-model error, got a client"),
         };
         assert!(err.contains("Aucun modèle"), "got: {err}");
+    }
+
+    #[test]
+    fn configured_embedder_is_none_by_default_and_names_what_is_missing() {
+        let settings = Settings::default();
+        assert!(configured_embedder(&settings, None).unwrap().is_none());
+
+        let mut s = Settings {
+            llm: infomaniak_settings(),
+            ..Settings::default()
+        };
+        s.llm.embedding_provider = "infomaniak".into();
+        let err = configured_embedder(&s, None)
+            .err()
+            .expect("no model chosen");
+        assert!(err.contains("no model"), "{err}");
+
+        s.llm.embedding_model = "bge-m3".into();
+        s.llm.embedding_provider = "anthropic".into();
+        s.llm.anthropic_api_key = "sk-ant".into();
+        let err = configured_embedder(&s, None)
+            .err()
+            .expect("no embeddings API");
+        assert!(err.contains("no embeddings API"), "{err}");
+
+        // A provider nobody answers for is this error, not a silent index.
+        s.llm.embedding_provider = "openai".into();
+        s.llm.openai_api_key = "sk".into();
+        s.llm.openai_base_url = "http://127.0.0.1:1".into();
+        let err = configured_embedder(&s, None).err().expect("unreachable");
+        assert!(err.starts_with("embeddings:"), "{err}");
     }
 
     #[test]

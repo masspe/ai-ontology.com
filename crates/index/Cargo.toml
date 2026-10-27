@@ -12,3 +12,7 @@ parking_lot = { workspace = true }
 ahash = { workspace = true }
 async-trait = { workspace = true }
 tokio = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

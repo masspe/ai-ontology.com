@@ -470,6 +470,8 @@ describe("LLM card — apply", () => {
         active_provider: "openai",
         temperature: 0.3,
         max_tokens: 4096,
+        embedding_provider: "none",
+        embedding_model: "",
         openai_api_key: "sk-new",
         openai_base_url: "",
         openai_model: "gpt-4o",
@@ -497,6 +499,8 @@ describe("LLM card — apply", () => {
         active_provider: "anthropic",
         temperature: 0.7,
         max_tokens: 2048,
+        embedding_provider: "none",
+        embedding_model: "",
         anthropic_api_key: "sk-ant-new",
         anthropic_base_url: "",
         anthropic_model: "",
@@ -524,6 +528,8 @@ describe("LLM card — apply", () => {
         active_provider: "infomaniak",
         temperature: 0.7,
         max_tokens: 2048,
+        embedding_provider: "none",
+        embedding_model: "",
         infomaniak_api_key: "ik-new",
         infomaniak_product_id: "42",
         infomaniak_base_url: "",
@@ -540,7 +546,7 @@ describe("LLM card — apply", () => {
     expect(await screen.findByText("settings store locked")).toBeInTheDocument();
     expect(screen.getByText("settings store locked")).toHaveClass("error-banner");
     expect(mocked.patchSettings).toHaveBeenCalledWith({
-      llm: { active_provider: "openai", temperature: 0.7, max_tokens: 2048, openai_base_url: "", openai_model: "" },
+      llm: { active_provider: "openai", temperature: 0.7, max_tokens: 2048, embedding_provider: "none", embedding_model: "", openai_base_url: "", openai_model: "" },
     });
   });
 });
@@ -639,5 +645,38 @@ describe("OCR card", () => {
     await user.click(card.getByRole("button", { name: /Sauvegarder/ }));
     expect(await card.findByText("⊘ Configuré")).toBeInTheDocument();
     expect(mocked.getOcrStatus).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("LLM card — retrieval vectors", () => {
+  it("asks for a model once a provider is chosen and writes both with the configuration", async () => {
+    const { user } = renderPage(<Settings />);
+    const card = await llmCard();
+    expect(card.queryByPlaceholderText("text-embedding-3-small")).toBeNull();
+    await user.selectOptions(card.getByLabelText(/Vecteurs de recherche/), "openai");
+    await user.type(card.getByPlaceholderText("text-embedding-3-small"), "text-embedding-3-small");
+    await user.click(card.getByRole("button", { name: /Appliquer/ }));
+    await waitFor(() =>
+      expect(mocked.patchSettings).toHaveBeenCalledWith(
+        expect.objectContaining({
+          llm: expect.objectContaining({ embedding_provider: "openai", embedding_model: "text-embedding-3-small" }),
+        })
+      )
+    );
+  });
+
+  it("sends an empty model when the built-in vectors are chosen again", async () => {
+    serve(makeSettings({ embedding_provider: "infomaniak", embedding_model: "bge-m3" }));
+    const { user } = renderPage(<Settings />);
+    const card = await llmCard();
+    expect(card.getByPlaceholderText("bge-m3")).toHaveValue("bge-m3");
+    await user.selectOptions(card.getByLabelText(/Vecteurs de recherche/), "none");
+    expect(card.queryByPlaceholderText("bge-m3")).toBeNull();
+    await user.click(card.getByRole("button", { name: /Appliquer/ }));
+    await waitFor(() =>
+      expect(mocked.patchSettings).toHaveBeenCalledWith(
+        expect.objectContaining({ llm: expect.objectContaining({ embedding_provider: "none", embedding_model: "" }) })
+      )
+    );
   });
 });
