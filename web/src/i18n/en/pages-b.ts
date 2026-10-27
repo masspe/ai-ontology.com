@@ -65,6 +65,8 @@ export const pagesB: Record<string, string> = {
   "En attente du serveur.": "Waiting for the server.",
   "Posez une question à vos données : « Quels contrats arrivent à échéance ce mois-ci ? »": "Ask your data a question: \"Which contracts expire this month?\"",
   "Demander": "Ask",
+  "Que voulez-vous savoir ?": "What do you want to know?",
+  "Questions épinglées": "Pinned questions",
   "Liens": "Links",
   "Types de fiches": "Sheet types",
   "Règles": "Rules",

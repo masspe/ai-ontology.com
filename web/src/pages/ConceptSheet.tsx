@@ -29,6 +29,19 @@ function text(v: unknown): string {
   return String(v);
 }
 
+/** Relations grouped by type, in first-seen order, each with the sheet at its other end. */
+function groups<R extends { id: number; relation_type: string }>(
+  rs: R[],
+  other: (r: R) => number,
+): Array<[string, Array<[R, number]>]> {
+  const out = new Map<string, Array<[R, number]>>();
+  for (const r of rs) {
+    if (!out.has(r.relation_type)) out.set(r.relation_type, []);
+    out.get(r.relation_type)!.push([r, other(r)]);
+  }
+  return Array.from(out.entries());
+}
+
 export default function ConceptSheet() {
   const raw = useParams().id ?? "";
   const id = Number(raw);
@@ -126,8 +139,8 @@ export default function ConceptSheet() {
     <>
       <div className="page-header">
         <div>
-          <p className="muted" style={{ margin: 0 }}>
-            <Link to="/concepts">{t("Fiches")}</Link> › {concept.concept_type}
+          <p className="muted sheet-crumb" style={{ margin: 0 }}>
+            <Link to="/concepts">{t("Fiches")}</Link> › <span className="badge badge-accent">{concept.concept_type}</span>
           </p>
           {editing ? (
             <form
@@ -160,8 +173,8 @@ export default function ConceptSheet() {
             </form>
           ) : (
             <>
-              <h1 className="page-title">{concept.name}</h1>
-              <p className="page-subtitle">{concept.description || t("Pas de description.")}</p>
+              <h1 className="page-title sheet-name">{concept.name}</h1>
+              <p className="page-subtitle sheet-desc">{concept.description || t("Pas de description.")}</p>
             </>
           )}
         </div>
@@ -186,18 +199,32 @@ export default function ConceptSheet() {
               <Link to="/graph">{t("graphe")}</Link>.
             </p>
           ) : (
-            <ul className="sheet-list">
-              {outgoing.map((r) => (
-                <li key={r.id}>
-                  <span className="badge">{r.relation_type}</span> {link(r.target)}
-                </li>
+            <div className="link-groups">
+              {groups(outgoing, (r) => r.target).map(([type, rs]) => (
+                <div key={`out-${type}`} className="link-group">
+                  <h3 className="link-group-title">
+                    <span className="badge">{type}</span> <span className="muted">({rs.length})</span>
+                  </h3>
+                  <ul className="sheet-list">
+                    {rs.map(([r, other]) => (
+                      <li key={r.id}>{link(other)}</li>
+                    ))}
+                  </ul>
+                </div>
               ))}
-              {incoming.map((r) => (
-                <li key={r.id}>
-                  {link(r.source)} <span className="badge">{r.relation_type}</span> <span className="muted">{t("→ cette fiche")}</span>
-                </li>
+              {groups(incoming, (r) => r.source).map(([type, rs]) => (
+                <div key={`in-${type}`} className="link-group">
+                  <h3 className="link-group-title">
+                    <span className="badge">{type}</span> <span className="muted">{t("→ cette fiche")} ({rs.length})</span>
+                  </h3>
+                  <ul className="sheet-list">
+                    {rs.map(([r, other]) => (
+                      <li key={r.id}>{link(other)}</li>
+                    ))}
+                  </ul>
+                </div>
               ))}
-            </ul>
+            </div>
           )}
         </Card>
 
@@ -205,16 +232,14 @@ export default function ConceptSheet() {
           {props.length === 0 ? (
             <p className="muted">{t("Aucune information structurée.")}</p>
           ) : (
-            <table className="compact-table">
-              <tbody>
-                {props.map(([k, v]) => (
-                  <tr key={k}>
-                    <td className="muted">{k}</td>
-                    <td>{text(v)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <dl className="props">
+              {props.map(([k, v]) => (
+                <div key={k} className="prop">
+                  <dt>{k}</dt>
+                  <dd>{text(v)}</dd>
+                </div>
+              ))}
+            </dl>
           )}
         </Card>
       </div>

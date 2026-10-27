@@ -65,7 +65,15 @@ export default function TopNav() {
   return (
     <nav className="topnav" aria-label={t("Navigation")}>
       <NavLink to="/" className="topnav-brand" aria-label="AI Ontology Studio">
-        <span className="sidebar-logo">A</span>
+        <span className="brand-mark" aria-hidden>
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="6" cy="12" r="2.5" />
+            <circle cx="18" cy="6" r="2.5" />
+            <circle cx="18" cy="18" r="2.5" />
+            <path d="m8.2 10.8 7.6-3.6M8.2 13.2l7.6 3.6" />
+          </svg>
+        </span>
+        <span className="brand-word">AI Ontology</span>
       </NavLink>
       {NAV_GROUPS.map((g) => (
         <Group key={g.key} group={g} />

@@ -33,12 +33,12 @@ const edgePath = (id: number) => edge(id).querySelector("path") as SVGPathElemen
 const pane = () => document.querySelector(".react-flow__pane") as HTMLElement;
 
 // The palette colours as jsdom serialises them in inline styles.
-const BLUE = "rgb(37, 99, 235)"; // #2563eb
-const VIOLET = "rgb(124, 58, 237)"; // #7c3aed
-const GREEN = "rgb(22, 163, 74)"; // #16a34a
+const BLUE = "rgb(10, 159, 174)"; // #0A9FAE, first of the palette
+const VIOLET = "rgb(200, 63, 56)"; // #C83F38, second
+const GREEN = "rgb(52, 112, 204)"; // #3470CC, third
 const RED = "rgb(255, 0, 0)"; // #ff0000
-const GREY = "rgb(148, 163, 184)"; // #94a3b8, unfocused edge
-const DIM = "rgb(203, 213, 225)"; // #cbd5e1, dimmed edge
+const GREY = "rgb(185, 192, 201)"; // --border-strong fallback, unfocused edge
+const DIM = "rgb(216, 220, 226)"; // --border fallback, dimmed edge
 
 /**
  * React Flow only sizes a node (and therefore draws its edges) when its

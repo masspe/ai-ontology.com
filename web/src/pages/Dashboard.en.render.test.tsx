@@ -51,7 +51,7 @@ describe("Dashboard, English", () => {
   it("words the subtitle, the cards and the empty states in English", async () => {
     renderPage(<Dashboard />);
     expect(await screen.findByText("1,234 sheets and 567 links, 12 sheet types.")).toBeInTheDocument();
-    expect(screen.getByText("Home")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "What do you want to know?" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Ask" })).toBeInTheDocument();
     expect(screen.getByText("Nothing pending. Drop a document or ask a question.")).toBeInTheDocument();
     expect(screen.getByText("No saved question. Ask the first one above.")).toBeInTheDocument();

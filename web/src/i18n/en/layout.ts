@@ -6,6 +6,8 @@
 export const layout: Record<string, string> = {
   "Rechercher une fiche, poser une question…": "Search a sheet, ask a question…",
   "Envoyer un feedback": "Send feedback",
+  "Thème clair": "Light theme",
+  "Thème sombre": "Dark theme",
   "Changer de langue": "Switch language",
   "Changer de langue recharge la page : ce qui n'est pas enregistré sera perdu. Continuer ?":
     "Switching the language reloads the page: unsaved changes will be lost. Continue?",
