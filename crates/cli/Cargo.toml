@@ -10,6 +10,7 @@ name = "ontology"
 path = "src/main.rs"
 
 [dependencies]
+regex = { workspace = true }
 ontology-graph = { workspace = true }
 ontology-storage = { workspace = true }
 ontology-index = { workspace = true }

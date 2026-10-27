@@ -190,6 +190,24 @@ enum Cmd {
         /// With `--df`: the database the dump describes (`appdb`, `secdb`, …).
         #[arg(long)]
         df_db: Option<String>,
+        /// The path is a folder of documents (HTML, text, Markdown) about
+        /// the sheets of this type — user help pages about screens, READMEs
+        /// about modules. Each file's text becomes the sheet's
+        /// `--doc-property`, its title and first lines the description.
+        #[arg(long, value_name = "TYPE", conflicts_with_all = ["xref", "abl", "df", "text_type"])]
+        doc_for: Option<String>,
+        /// With `--doc-for`: a regex whose first group, found in the
+        /// document's title or else its file name, is the sheet's name
+        /// (default: the file name is).
+        #[arg(long, requires = "doc_for")]
+        doc_key: Option<String>,
+        /// With `--doc-for`: the type a document about no known sheet
+        /// becomes (default: counted and skipped).
+        #[arg(long, requires = "doc_for")]
+        doc_fallback_type: Option<String>,
+        /// With `--doc-for`: the property that holds the document's text.
+        #[arg(long, default_value = "doc", requires = "doc_for")]
+        doc_property: String,
         path: PathBuf,
     },
     /// Print summary statistics.
@@ -551,6 +569,10 @@ async fn main() -> Result<()> {
             abl,
             df,
             df_db,
+            doc_for,
+            doc_key,
+            doc_fallback_type,
+            doc_property,
             path,
         } => {
             if sync && !(xref || abl || df) {
@@ -643,6 +665,27 @@ async fn main() -> Result<()> {
                         scanned.errors.len()
                     );
                 }
+                ingest_records_with(&mut src, &graph, Some(store.as_ref()), erp_opts).await?
+            } else if let Some(ty) = doc_for {
+                let mut opts = ontology_io::DocOptions::new(ty);
+                opts.key = doc_key
+                    .map(|k| regex::Regex::new(&k).context("--doc-key is not a valid regex"))
+                    .transpose()?;
+                opts.fallback_type = doc_fallback_type;
+                opts.property = doc_property;
+                opts.chunk_chars = chunk_chars;
+                let (mut src, report) = ontology_io::DocSource::from_graph(&path, &opts, &graph)?;
+                eprintln!(
+                    "documents: {} files, {} attached, {} about no known sheet{}",
+                    report.files,
+                    report.attached,
+                    report.unmatched,
+                    if report.errors.is_empty() {
+                        String::new()
+                    } else {
+                        format!(", {} unreadable", report.errors.len())
+                    }
+                );
                 ingest_records_with(&mut src, &graph, Some(store.as_ref()), erp_opts).await?
             } else if is_dir {
                 let ty = text_type.context("--text-type required when ingesting a directory")?;

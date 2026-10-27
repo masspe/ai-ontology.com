@@ -289,6 +289,13 @@ Three sources feed it, in this order:
    program touches exist too. `TABLE-TRIGGER` lines become `fires_on`
    links when the trigger's program is in the graph.
 
+4. **`ontology ingest --doc-for Screen --doc-key '<regex>' <help folder>`**
+   attaches documents to sheets by key (`crates/io/src/docs.rs`): the
+   user help pages, keyed by the screen code in their title, become each
+   screen's `help` text and description — the meaning layer's first
+   source (see SOFTWARE-MODEL.md §6). Generic: READMEs to modules, any
+   folder of pages to any type.
+
 The field-level links (`reads_field`, `updates_field`) are declared
 `detail`: in the graph and in the prompt, off the graph page unless asked —
 they are most of a software model's links.
