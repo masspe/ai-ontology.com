@@ -86,7 +86,7 @@ export default function TopBar() {
             }
           }}
         >
-          {getLang() === "fr" ? "EN" : "FR"}
+          {getLang() === "fr" ? "FR" : "EN"}
         </button>
         <button className="icon-btn" title={t("Guide")} aria-label={t("Guide")} data-tour="help" onClick={openTour}>
           ?

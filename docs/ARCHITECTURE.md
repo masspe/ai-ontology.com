@@ -251,6 +251,10 @@ header it's honored verbatim.
 
 ## Software model import
 
+The logic — what becomes a sheet or a link, where each piece comes from,
+how a question is answered and what the model cannot answer yet — is in
+[SOFTWARE-MODEL.md](SOFTWARE-MODEL.md). In short:
+
 A code base can be imported as a graph of its own structure — the first
 reader is for Progress OpenEdge (`crates/io/src/xref.rs`, `abl.rs`, `df.rs`), the
 model it produces is technology-neutral:

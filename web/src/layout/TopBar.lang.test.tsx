@@ -17,13 +17,13 @@ function mount() {
 }
 
 describe("language toggle", () => {
-  it("shows the other language and switches after confirmation", async () => {
+  it("shows the current language and switches after confirmation", async () => {
     const reload = vi.fn();
     vi.stubGlobal("location", { ...window.location, reload });
     vi.spyOn(window, "confirm").mockReturnValue(true);
     mount();
     const button = screen.getByRole("button", { name: "Changer de langue" });
-    expect(button).toHaveTextContent("EN");
+    expect(button).toHaveTextContent("FR");
     await userEvent.click(button);
     expect(getLang()).toBe("en");
     expect(localStorage.getItem("lang")).toBe("en");
@@ -40,9 +40,9 @@ describe("language toggle", () => {
     expect(reload).not.toHaveBeenCalled();
   });
 
-  it("offers French when the interface is in English", () => {
+  it("shows EN when the interface is in English", () => {
     setLang("en", false);
     mount();
-    expect(screen.getByRole("button", { name: "Switch language" })).toHaveTextContent("FR");
+    expect(screen.getByRole("button", { name: "Switch language" })).toHaveTextContent("EN");
   });
 });
