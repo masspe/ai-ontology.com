@@ -2974,10 +2974,23 @@ struct SubgraphRequest {
     limit: usize,
     #[serde(default = "default_query_depth")]
     expansion_depth: u32,
+    /// Link types to follow; empty = all but the excluded ones.
+    #[serde(default)]
+    relation_types: Vec<String>,
+    /// Link types never followed (the page's "detail" links, by default).
+    #[serde(default)]
+    exclude_relation_types: Vec<String>,
+    /// Cap on links, strongest first: what a page can draw.
+    #[serde(default = "default_subgraph_max_edges")]
+    max_edges: usize,
 }
 
 fn default_subgraph_limit() -> usize {
     200
+}
+
+fn default_subgraph_max_edges() -> usize {
+    1_000
 }
 
 #[derive(Serialize)]
@@ -3058,7 +3071,10 @@ async fn subgraph_handler(
     let spec = TraversalSpec {
         max_depth: req.expansion_depth,
         concept_types: req.seed_concept_types,
+        relation_types: req.relation_types,
+        exclude_relation_types: req.exclude_relation_types,
         max_nodes: limit,
+        max_edges: req.max_edges.clamp(1, 10_000),
         ..Default::default()
     };
     let subgraph = s.graph.expand(&seeds, &spec);

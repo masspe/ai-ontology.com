@@ -1034,3 +1034,51 @@ async fn provider_control_plane_probes_and_lists_models_against_a_loopback_serve
     assert!(v["error"].as_str().unwrap().contains("Infomaniak"), "{v}");
     assert!(v["products"].as_array().unwrap().is_empty());
 }
+
+/// `/subgraph` caps the links it returns and leaves out the excluded
+/// types, so the graph page never receives more than it can draw.
+#[tokio::test]
+async fn subgraph_caps_edges_and_excludes_link_types() {
+    let (app, _graph, _store) = flaky_app();
+    let acme = create_topic(&app, "Acme").await;
+    for i in 0..5 {
+        let other = create_topic(&app, &format!("T{i}")).await;
+        relate(&app, "related_to", acme, other).await;
+    }
+    let (st, v) = call(
+        &app,
+        "POST",
+        "/subgraph",
+        Some(json!({ "seed_concept_ids": [acme], "expansion_depth": 1, "max_edges": 2 })),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert_eq!(
+        v["subgraph"]["relations"].as_array().unwrap().len(),
+        2,
+        "{v}"
+    );
+
+    let (st, v) = call(
+        &app,
+        "POST",
+        "/subgraph",
+        Some(json!({
+            "seed_concept_ids": [acme],
+            "expansion_depth": 1,
+            "exclude_relation_types": ["related_to"]
+        })),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert_eq!(
+        v["subgraph"]["relations"].as_array().unwrap().len(),
+        0,
+        "{v}"
+    );
+    assert_eq!(
+        v["subgraph"]["concepts"].as_array().unwrap().len(),
+        1,
+        "{v}"
+    );
+}

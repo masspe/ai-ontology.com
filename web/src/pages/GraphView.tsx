@@ -251,6 +251,8 @@ type InspectorTab = "inspector" | "rules" | "actions";
 const FULL_GRAPH_MAX = 300;
 /** Sheets fetched around a selection on a large graph. */
 const SUBGRAPH_LIMIT = 250;
+/** Links fetched at most, strongest first: what the canvas can draw. */
+const EDGE_LIMIT = 1000;
 
 export default function GraphView() {
   const navigate = useNavigate();
@@ -273,6 +275,9 @@ export default function GraphView() {
   const [total, setTotal] = useState<number | null>(null);
   const [depth, setDepth] = useState(3);
   const [showLabels, setShowLabels] = useState(true);
+  // Link types the model marks as detail (field-level access) stay out
+  // of the graph unless asked: they are most of a software model's links.
+  const [showDetail, setShowDetail] = useState(false);
   const [clusterView, setClusterView] = useState(false);
   const [highlightPaths, setHighlightPaths] = useState(true);
   const [showConstraints, setShowConstraints] = useState(false);
@@ -319,6 +324,9 @@ export default function GraphView() {
         seed_concept_types: nodeTypes,
         expansion_depth: d,
         limit: large ? SUBGRAPH_LIMIT : FULL_GRAPH_MAX,
+        relation_types: relTypes.length > 0 ? relTypes : undefined,
+        exclude_relation_types: showDetail ? undefined : detailTypes,
+        max_edges: EDGE_LIMIT,
       });
       if (mine !== seq.current) return;
       setSubgraph(res.subgraph);
@@ -357,11 +365,15 @@ export default function GraphView() {
     const t = window.setInterval(() => loadSubgraph(depth), 30_000);
     return () => window.clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [total, depth, nodeTypes]);
+  }, [total, depth, nodeTypes, relTypes, showDetail]);
 
   // ---------- Derived ----------
 
   const conceptTypes = useMemo(() => (ontology ? Object.keys(ontology.concept_types) : []), [ontology]);
+  const detailTypes = useMemo(
+    () => (ontology ? Object.values(ontology.relation_types).filter((r) => r.detail).map((r) => r.name) : []),
+    [ontology]
+  );
   const nodeOptions = useMemo<MultiSelectOption[]>(() => conceptTypes.map((t) => ({ value: t, label: t })), [conceptTypes]);
   // Cross-filter, as in Power BI: with sheet types chosen, only the link
   // types whose both ends are among them; none such = all, with a note.
@@ -418,10 +430,11 @@ export default function GraphView() {
     const keepIds = new Set(concepts.map((c) => c.id));
     const relations: Relation[] = subgraph.relations.filter((r) => {
       if (relTypes.length > 0 && !relTypes.includes(r.relation_type)) return false;
+      if (relTypes.length === 0 && !showDetail && detailTypes.includes(r.relation_type)) return false;
       return keepIds.has(r.source) && keepIds.has(r.target);
     });
     return { concepts, relations };
-  }, [subgraph, search, nodeTypes, relTypes]);
+  }, [subgraph, search, nodeTypes, relTypes, showDetail, detailTypes]);
 
   // Active filters count for KPI
   const activeFiltersCount = useMemo(() => {
@@ -690,6 +703,9 @@ export default function GraphView() {
             </label>
             <div className="gv-toggles">
               <Toggle checked={showLabels} onChange={setShowLabels} label={t("Afficher les libellés")} icon={Icon.funnel} />
+              {detailTypes.length > 0 && (
+                <Toggle checked={showDetail} onChange={setShowDetail} label={t("Liens de détail ({list})", { list: detailTypes.join(", ") })} icon={Icon.share} />
+              )}
               <Toggle checked={clusterView} onChange={setClusterView} label={t("Vue groupée")} icon={Icon.layers} />
               <Toggle checked={highlightPaths} onChange={setHighlightPaths} label={t("Surligner les chemins")} icon={Icon.share} />
               <Toggle checked={showConstraints} onChange={setShowConstraints} label={t("Afficher les contraintes")} icon={Icon.shield} />

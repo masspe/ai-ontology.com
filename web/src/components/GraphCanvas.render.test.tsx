@@ -10,7 +10,7 @@ import { createRef } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { renderPage } from "../test/render";
-import GraphCanvas, { type GraphCanvasHandle } from "./GraphCanvas";
+import GraphCanvas, { EDGE_LABEL_MAX, type GraphCanvasHandle } from "./GraphCanvas";
 import type { Subgraph } from "../api";
 
 const subgraph: Subgraph = {
@@ -112,6 +112,20 @@ describe("GraphCanvas", () => {
     await screen.findByTestId("rf__edge-r10");
     expect(screen.queryByText("Alice")).toBeNull();
     expect(screen.queryByText("worksAt")).toBeNull();
+  });
+
+  it("drops the edge labels past EDGE_LABEL_MAX links, keeping the node labels", async () => {
+    const concepts = Array.from({ length: EDGE_LABEL_MAX + 2 }, (_, i) => ({ id: i + 1, concept_type: "T", name: `n${i + 1}` }));
+    const relations = Array.from({ length: EDGE_LABEL_MAX + 1 }, (_, i) => ({
+      id: i + 1,
+      relation_type: "linked",
+      source: 1,
+      target: i + 2,
+    }));
+    render(<GraphCanvas subgraph={{ concepts, relations }} />);
+    await screen.findByTestId("rf__edge-r1");
+    expect(screen.getByText("n1")).toBeInTheDocument();
+    expect(screen.queryByText("linked")).toBeNull();
   });
 
   it("colours nodes by concept type: explicit colours first, then a stable fallback palette", async () => {

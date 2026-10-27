@@ -30,6 +30,11 @@ pub struct TraversalSpec {
     /// Optional whitelist of relation type names to follow. Empty = all.
     #[serde(default)]
     pub relation_types: Vec<String>,
+    /// Relation type names never followed, whatever the whitelist says.
+    /// For the link types below the grain a page draws (field-level
+    /// access in a software model) without listing every other type.
+    #[serde(default)]
+    pub exclude_relation_types: Vec<String>,
     /// Optional concept-type filter applied to expanded nodes.
     #[serde(default)]
     pub concept_types: Vec<String>,
@@ -38,6 +43,12 @@ pub struct TraversalSpec {
     /// Cap on the number of concepts in the resulting subgraph.
     #[serde(default = "default_max_nodes")]
     pub max_nodes: usize,
+    /// Cap on the number of relations in the resulting subgraph; 0 = none.
+    /// A 250-sheet neighbourhood of a hub can carry thousands of links —
+    /// more than a page can draw. The strongest come first, round-robin
+    /// across types, so the cap keeps the links that matter.
+    #[serde(default)]
+    pub max_edges: usize,
     #[serde(default = "default_true")]
     pub subsume_concept_types: bool,
 }
@@ -55,9 +66,11 @@ impl Default for TraversalSpec {
         Self {
             max_depth: 2,
             relation_types: vec![],
+            exclude_relation_types: vec![],
             concept_types: vec![],
             direction: Direction::Both,
             max_nodes: 64,
+            max_edges: 0,
             subsume_concept_types: true,
         }
     }
@@ -212,8 +225,10 @@ impl OntologyGraph {
         }
 
         let want_rel = |name: &str| -> bool {
-            spec.relation_types.is_empty() || spec.relation_types.iter().any(|r| r == name)
+            (spec.relation_types.is_empty() || spec.relation_types.iter().any(|r| r == name))
+                && !spec.exclude_relation_types.iter().any(|r| r == name)
         };
+        let edges_capped = |n: usize| spec.max_edges > 0 && n >= spec.max_edges;
         // Expand the concept_type filter through the subtype lattice once.
         let concept_filter: Option<AHashSet<String>> = if spec.concept_types.is_empty() {
             None
@@ -241,7 +256,7 @@ impl OntologyGraph {
         // nodes are gathered at all, so a hub costs its id list only.
         let mut ids: Vec<RelationId> = Vec::new();
         for depth in 0..spec.max_depth {
-            if frontier.is_empty() {
+            if frontier.is_empty() || edges_capped(relations.len()) {
                 break;
             }
             let capped = concepts.len() >= spec.max_nodes;
@@ -292,6 +307,10 @@ impl OntologyGraph {
 
             let mut next: Vec<ConceptId> = Vec::new();
             for (_, _, rid, neighbor, _) in edges {
+                // Every admitted candidate is an edge: at the cap, stop.
+                if edges_capped(relations.len()) {
+                    break;
+                }
                 let known = visited.contains(&neighbor);
                 // At the cap an unknown neighbour is never kept: skip it before
                 // reading (and cloning) it.

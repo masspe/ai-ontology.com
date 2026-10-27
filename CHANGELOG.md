@@ -20,6 +20,14 @@ All notable changes to this project are listed here. The format follows
   the sheet it points to (`Table · appdb.emp`, linked), and the `Cited:`
   line becomes the row of sheets the answer rests on, cited ones first —
   on the home page as the answer streams and on the Questions page.
+- The graph page on a large model: `POST /subgraph` caps the links it
+  returns (`max_edges`, strongest first, round-robin across types — a
+  250-sheet neighbourhood of a hub no longer ships thousands of links),
+  takes `relation_types` / `exclude_relation_types`, and relation types
+  can be declared `detail` (below the grain people ask about: the
+  software model's field-level access) — hidden from the graph page
+  unless its new toggle asks. Edge labels switch off past 300 links;
+  only the visible elements are rendered.
 - The interface reads as a card index: IBM Plex Sans (self-hosted; Plex
   Mono for identifiers), one petrol accent kept for what is interactive
   or cited, hairline cards without drop shadows, sentence-case table

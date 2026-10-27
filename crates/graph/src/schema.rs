@@ -92,6 +92,11 @@ pub struct RelationType {
     /// Hard ≤1 outgoing of this type per source, independent of cardinality.
     #[serde(default)]
     pub functional: bool,
+    /// A link below the grain people ask about (a program reading one
+    /// field, when the question is about tables): kept in the graph,
+    /// hidden from the graph page unless asked for.
+    #[serde(default)]
+    pub detail: bool,
 }
 
 impl RelationType {
