@@ -70,7 +70,7 @@ describe("StreamingAnswer", () => {
     await user.click(screen.getByRole("button", { name: "Poser la question" }));
 
     expect(askStream).toHaveBeenCalledTimes(1);
-    expect(askStream.mock.calls[0][0]).toEqual({ query: "which contracts?" });
+    expect(askStream.mock.calls[0][0]).toEqual({ query: "which contracts?", history: [] });
     expect(screen.getByRole("button", { name: "Réponse en cours…" })).toBeDisabled();
     expect(screen.getByText("▍")).toBeInTheDocument();
 
@@ -88,13 +88,16 @@ describe("StreamingAnswer", () => {
     expect(screen.getByText(/Two contracts\./)).toBeInTheDocument();
 
     act(() => stream.handlers().onEnd?.({ usage: {} }));
-    expect(screen.getByRole("button", { name: "Poser la question" })).toBeEnabled();
     expect(screen.queryByText("▍")).not.toBeInTheDocument();
-    // The answer stays visible after the stream ends.
+    // The answer stays, as the first turn of the conversation; the box
+    // waits for the next question, so the ask button is idle.
     expect(screen.getByText(/Two contracts\./)).toBeInTheDocument();
+    expect(screen.getByText("which contracts?")).toHaveClass("turn-question");
+    expect(screen.getByRole("button", { name: "Poser la question" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Nouvelle conversation" })).toBeInTheDocument();
 
     act(() => stream.finish());
-    await waitFor(() => expect(screen.getByRole("button", { name: "Poser la question" })).toBeEnabled());
+    await waitFor(() => expect(screen.getByPlaceholderText("Posez la question suivante…")).toBeInTheDocument());
   });
 
   it("shows the grounding line but no citations when the subgraph has no concepts", async () => {
@@ -105,7 +108,9 @@ describe("StreamingAnswer", () => {
     expect(screen.getByText("Réponse fondée sur 0 fiche et 0 lien")).toBeInTheDocument();
     expect(document.querySelector(".citations")).toBeNull();
     act(() => stream.finish());
-    await waitFor(() => expect(screen.getByRole("button", { name: "Poser la question" })).toBeEnabled());
+    // Nothing was answered: no turn, the first-question placeholder stays.
+    await waitFor(() => expect(screen.queryByText("▍")).toBeNull());
+    expect(screen.getByPlaceholderText("Posez votre question…")).toBeInTheDocument();
   });
 
   it("surfaces a stream 'error' event and stops streaming", async () => {
@@ -150,5 +155,78 @@ describe("StreamingAnswer", () => {
     await waitFor(() => expect(screen.getByText("ok")).toBeInTheDocument());
     expect(screen.queryByText("first failure")).not.toBeInTheDocument();
     expect(stream2.current).not.toBeNull();
+  });
+
+  it("keeps each answer as a turn and sends the turns before as history, with what they cited", async () => {
+    window.localStorage.clear();
+    const stream = captureHandlers();
+    const { user } = renderPage(<StreamingAnswer defaultQuery="first?" />);
+    await user.click(screen.getByRole("button", { name: "Poser la question" }));
+    act(() => stream.handlers().onRetrieved?.(subgraph));
+    act(() => stream.handlers().onToken?.("One.\nCited: [#2, #99]"));
+    act(() => stream.handlers().onEnd?.({}));
+    act(() => stream.finish());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Nouvelle conversation" })).toBeInTheDocument());
+    // The turn stays, question above its answer; the unknown id is not kept.
+    expect(screen.getByText("first?")).toHaveClass("turn-question");
+    expect(screen.getByText("One.")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Posez la question suivante…")).toHaveValue("");
+
+    await user.type(screen.getByPlaceholderText("Posez la question suivante…"), "and then?{Enter}");
+    await waitFor(() => expect(askStream).toHaveBeenCalledTimes(2));
+    expect(askStream.mock.calls[1][0]).toEqual({
+      query: "and then?",
+      history: [{ question: "first?", answer: "One.", cited: [2] }],
+    });
+    // The thread is in the browser.
+    const stored = JSON.parse(window.localStorage.getItem("conversations.v1")!);
+    expect(stored).toHaveLength(1);
+    expect(stored[0].turns[0]).toMatchObject({ question: "first?", cited: [2] });
+
+    act(() => stream.handlers().onEnd?.({}));
+    act(() => stream.finish());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Nouvelle conversation" })).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: "Nouvelle conversation" }));
+    expect(screen.queryByText("first?")).not.toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Posez votre question…")).toBeInTheDocument();
+  });
+
+  it("offers an earlier thread that cited the same sheets, and resumes it", async () => {
+    window.localStorage.setItem(
+      "conversations.v1",
+      JSON.stringify([
+        {
+          id: "old-1",
+          started: 1,
+          turns: [{ question: "earlier about C2", answer: "Yes.", cited: [2], concepts: [{ id: 2, concept_type: "Contract", name: "C2" }] }],
+        },
+      ]),
+    );
+    const stream = captureHandlers();
+    const { user } = renderPage(<StreamingAnswer defaultQuery="now?" />);
+    expect(screen.getByRole("button", { name: "Reprendre la dernière conversation" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Poser la question" }));
+    act(() => stream.handlers().onRetrieved?.(subgraph));
+    act(() => stream.handlers().onToken?.("Also.\nCited: [#2]"));
+    act(() => stream.handlers().onEnd?.({}));
+    act(() => stream.finish());
+    const link = await screen.findByRole("button", { name: "earlier about C2" });
+    expect(link.closest(".related")).toHaveAttribute("aria-label", "Déjà demandé");
+    await user.click(link);
+    const questions = Array.from(document.querySelectorAll(".turn-question"), (el) => el.textContent);
+    expect(questions).toEqual(["earlier about C2"]);
+    // The thread just left is now the related one.
+    expect(screen.getByRole("button", { name: "now?" }).closest(".related")).not.toBeNull();
+    window.localStorage.clear();
+  });
+
+  it("gives the question back after a failed stream", async () => {
+    const stream = captureHandlers();
+    const { user } = renderPage(<StreamingAnswer defaultQuery="retry me" />);
+    await user.click(screen.getByRole("button", { name: "Poser la question" }));
+    expect(screen.getByPlaceholderText("Posez votre question…")).toHaveValue("");
+    act(() => stream.handlers().onError?.("down"));
+    expect(screen.getByPlaceholderText("Posez votre question…")).toHaveValue("retry me");
+    act(() => stream.finish());
   });
 });

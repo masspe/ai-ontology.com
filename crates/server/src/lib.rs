@@ -2564,11 +2564,11 @@ async fn retrieve(
 
 async fn ask(
     State(s): State<AppState>,
-    Json(req): Json<RetrievalRequest>,
+    Json(req): Json<ontology_rag::AskRequest>,
 ) -> Result<Json<RagAnswer>, ApiError> {
     let ans = s
         .pipeline
-        .answer_with(req)
+        .answer_in_conversation(req.retrieval, &req.history)
         .await
         .map_err(|e| ApiError::Llm(e.to_string()))?;
     Ok(Json(ans))
@@ -2583,11 +2583,11 @@ async fn ask(
 /// 4. `event: error`     — any LLM error; stream closes after.
 async fn ask_stream(
     State(s): State<AppState>,
-    Json(req): Json<RetrievalRequest>,
+    Json(req): Json<ontology_rag::AskRequest>,
 ) -> Result<Sse<futures::stream::BoxStream<'static, Result<Event, Infallible>>>, ApiError> {
     let inner = s
         .pipeline
-        .answer_stream(req)
+        .answer_stream_in_conversation(req.retrieval, &req.history)
         .await
         .map_err(|e| ApiError::Llm(e.to_string()))?;
 

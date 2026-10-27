@@ -9,6 +9,7 @@ use futures::stream::{BoxStream, StreamExt};
 use ontology_graph::{ConceptId, OntologyGraph, Subgraph};
 use ontology_index::{HybridIndex, RetrievalRequest, ScoredConcept};
 use serde::{Deserialize, Serialize};
+use std::fmt::Write as _;
 use std::sync::Arc;
 use tracing::debug;
 
@@ -16,6 +17,55 @@ use crate::model::{
     LanguageModel, LlmError, LlmRequest, LlmResponse, Message, StreamChunk, TokenUsage,
 };
 use crate::prompt::PromptBuilder;
+
+/// One earlier exchange of a conversation, as the client keeps it: the
+/// question, the answer's prose, the sheets the answer cited.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Turn {
+    pub question: String,
+    pub answer: String,
+    #[serde(default)]
+    pub cited: Vec<ConceptId>,
+}
+
+/// A question with the conversation before it: the retrieval request as
+/// before, plus `history`. Flattened, so a bare retrieval request is
+/// still a valid ask.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct AskRequest {
+    #[serde(flatten)]
+    pub retrieval: RetrievalRequest,
+    #[serde(default)]
+    pub history: Vec<Turn>,
+}
+
+/// Earlier turns the prompt carries, and how much of each answer.
+const HISTORY_TURNS: usize = 4;
+const HISTORY_ANSWER_CHARS: usize = 600;
+
+/// The conversation block of the user message: the last turns, oldest
+/// first, each answer cut to its first lines, its citations as `#id`.
+pub fn render_history(history: &[Turn]) -> String {
+    if history.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("---CONVERSATION SO FAR---\n");
+    let skip = history.len().saturating_sub(HISTORY_TURNS);
+    for t in history.iter().skip(skip) {
+        let mut answer: String = t.answer.chars().take(HISTORY_ANSWER_CHARS).collect();
+        if answer.len() < t.answer.len() {
+            answer.push('…');
+        }
+        let cited: Vec<String> = t.cited.iter().map(|id| format!("#{}", id.0)).collect();
+        let _ = writeln!(out, "Q: {}", t.question.trim());
+        let _ = writeln!(out, "A: {}", answer.trim());
+        if !cited.is_empty() {
+            let _ = writeln!(out, "(cited: {})", cited.join(", "));
+        }
+    }
+    out.push_str("---END CONVERSATION---\n\n");
+    out
+}
 
 /// End-to-end answer returned by the pipeline. Includes the retrieved
 /// context so callers can render citations / "show your work" UIs.
@@ -123,29 +173,93 @@ impl RagPipeline {
         &self,
         req: RetrievalRequest,
     ) -> Result<RagAnswer, crate::model::LlmError> {
-        let (scored, mut subgraph) = self.index.retrieve(&req);
-        enrich_with_transitive_closures(self.index.graph(), &mut subgraph, 16);
+        self.answer_in_conversation(req, &[]).await
+    }
+
+    /// Retrieval for a question asked after `history`: the sheets cited
+    /// earlier in the conversation are expanded too and join the subgraph
+    /// at depth 0, so « et quels programmes la modifient ? » resolves
+    /// « la » to what the previous answer named. Returns the grounding and
+    /// the user message that carries it.
+    fn ground(
+        &self,
+        req: &RetrievalRequest,
+        history: &[Turn],
+    ) -> (Vec<ScoredConcept>, Subgraph, String) {
+        let (scored, mut subgraph) = self.index.retrieve(req);
+        let graph = self.index.graph();
+        let known: std::collections::HashSet<ConceptId> =
+            subgraph.concepts.iter().map(|c| c.id).collect();
+        let earlier: Vec<ConceptId> = history
+            .iter()
+            .rev()
+            .take(HISTORY_TURNS)
+            .flat_map(|t| t.cited.iter().copied())
+            .filter(|id| !known.contains(id) && graph.get_concept(*id).is_ok())
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        if !earlier.is_empty() {
+            let extra = graph.expand(
+                &earlier,
+                &ontology_graph::TraversalSpec {
+                    max_depth: 1,
+                    max_nodes: 24,
+                    ..Default::default()
+                },
+            );
+            let mut ids = known;
+            for c in extra.concepts {
+                if ids.insert(c.id) {
+                    let depth = if earlier.contains(&c.id) { 0 } else { 1 };
+                    subgraph.depth_of.insert(c.id, depth);
+                    subgraph.concepts.push(c);
+                }
+            }
+            let rids: std::collections::HashSet<_> =
+                subgraph.relations.iter().map(|r| r.id).collect();
+            subgraph.relations.extend(
+                extra
+                    .relations
+                    .into_iter()
+                    .filter(|r| !rids.contains(&r.id)),
+            );
+            subgraph.seeds.extend(earlier);
+        }
+        enrich_with_transitive_closures(graph, &mut subgraph, 16);
         debug!(
             seeds = scored.len(),
             context_concepts = subgraph.concepts.len(),
+            history = history.len(),
             "retrieved"
         );
 
-        let onto = self.index.graph().ontology();
+        let onto = graph.ontology();
         let builder = PromptBuilder::new(&onto).with_max_chars(self.max_context_chars);
-
-        // Split context: ontology is stable per-KB → cached system block.
-        // Retrieved subgraph is volatile per-query → user message.
-        let cached_ontology = builder.render_static_context();
         let query_context = builder.render_query_context(&scored, &subgraph);
-
+        let conversation = render_history(history);
         let user_message = format!(
             "Use the context below to answer the question.\n\n\
+             {conversation}\
              ---RETRIEVED---\n{ctx}\n---END RETRIEVED---\n\n\
              Question: {q}",
             ctx = query_context,
             q = req.query,
         );
+        (scored, subgraph, user_message)
+    }
+
+    pub async fn answer_in_conversation(
+        &self,
+        req: RetrievalRequest,
+        history: &[Turn],
+    ) -> Result<RagAnswer, crate::model::LlmError> {
+        let (scored, subgraph, user_message) = self.ground(&req, history);
+        let onto = self.index.graph().ontology();
+        let builder = PromptBuilder::new(&onto).with_max_chars(self.max_context_chars);
+        // Split context: ontology is stable per-KB → cached system block.
+        // Retrieved subgraph is volatile per-query → user message.
+        let cached_ontology = builder.render_static_context();
 
         let llm_req = LlmRequest {
             system: Some(PromptBuilder::system_message().to_string()),
@@ -239,26 +353,18 @@ impl RagPipeline {
     /// with the grounding subgraph, then text deltas as the model produces
     /// them, then a final `End` frame with usage totals.
     pub async fn answer_stream(&self, req: RetrievalRequest) -> Result<RagStream, LlmError> {
-        let (scored, mut subgraph) = self.index.retrieve(&req);
-        enrich_with_transitive_closures(self.index.graph(), &mut subgraph, 16);
-        debug!(
-            seeds = scored.len(),
-            context_concepts = subgraph.concepts.len(),
-            "retrieved (stream)",
-        );
+        self.answer_stream_in_conversation(req, &[]).await
+    }
 
+    pub async fn answer_stream_in_conversation(
+        &self,
+        req: RetrievalRequest,
+        history: &[Turn],
+    ) -> Result<RagStream, LlmError> {
+        let (scored, subgraph, user_message) = self.ground(&req, history);
         let onto = self.index.graph().ontology();
         let builder = PromptBuilder::new(&onto).with_max_chars(self.max_context_chars);
         let cached_ontology = builder.render_static_context();
-        let query_context = builder.render_query_context(&scored, &subgraph);
-
-        let user_message = format!(
-            "Use the context below to answer the question.\n\n\
-             ---RETRIEVED---\n{ctx}\n---END RETRIEVED---\n\n\
-             Question: {q}",
-            ctx = query_context,
-            q = req.query,
-        );
 
         let llm_req = LlmRequest {
             system: Some(PromptBuilder::system_message().to_string()),
@@ -845,6 +951,76 @@ mod tests {
         assert_eq!(ans.retrieved.len(), 1);
         assert_eq!(ans.subgraph.concepts.len(), 3, "two hops reach Gamma");
         assert_eq!(ans.subgraph.relations.len(), 2);
+    }
+
+    /// A follow-up carries the conversation: the sheets cited earlier join
+    /// the subgraph at depth 0 even when the new question retrieves none
+    /// of them, and the prompt holds the earlier turns.
+    #[tokio::test]
+    async fn a_follow_up_grounds_on_what_the_conversation_cited() {
+        let g = chained_graph();
+        let pipe = pipeline_over(g.clone(), Arc::new(EchoModel));
+        let gamma = g.find_by_name("Topic", "Gamma").unwrap();
+        let mut req = RetrievalRequest {
+            query: "alpha first topic".into(),
+            top_k: 1,
+            ..Default::default()
+        };
+        req.expansion.max_depth = 0;
+        let history = vec![Turn {
+            question: "what is gamma?".into(),
+            answer: "Gamma is the third topic.".into(),
+            cited: vec![gamma, ConceptId(999_999)],
+        }];
+        let ans = pipe
+            .answer_in_conversation(req.clone(), &history)
+            .await
+            .unwrap();
+        assert!(
+            ans.subgraph.concepts.iter().any(|c| c.id == gamma),
+            "cited earlier, so in the subgraph"
+        );
+        assert_eq!(ans.subgraph.depth_of[&gamma], 0);
+        assert!(ans.subgraph.seeds.contains(&gamma));
+        assert!(
+            ans.answer.contains("---CONVERSATION SO FAR---"),
+            "{}",
+            ans.answer
+        );
+        assert!(ans.answer.contains("Q: what is gamma?"));
+        assert!(ans
+            .answer
+            .contains(&format!("(cited: #{}, #999999)", gamma.0)));
+        // Without history: Gamma is not reached at depth 0.
+        let alone = pipe.answer_with(req).await.unwrap();
+        assert!(!alone.subgraph.concepts.iter().any(|c| c.id == gamma));
+        assert!(!alone.answer.contains("CONVERSATION"));
+    }
+
+    #[test]
+    fn render_history_keeps_the_last_turns_and_cuts_long_answers() {
+        assert_eq!(render_history(&[]), "");
+        let turns: Vec<Turn> = (0..6)
+            .map(|i| Turn {
+                question: format!("q{i}"),
+                answer: if i == 5 {
+                    "x".repeat(700)
+                } else {
+                    format!("a{i}")
+                },
+                cited: if i == 5 { vec![ConceptId(7)] } else { vec![] },
+            })
+            .collect();
+        let out = render_history(&turns);
+        assert!(!out.contains("Q: q1"), "only the last four turns: {out}");
+        assert!(out.contains("Q: q2") && out.contains("Q: q5"));
+        assert!(out.contains(&format!("A: {}…", "x".repeat(600))));
+        assert!(out.contains("(cited: #7)"));
+        assert!(out.ends_with(
+            "---END CONVERSATION---
+
+"
+        ));
     }
 
     /// The prompt carries the cached ontology as `cached_context`, the

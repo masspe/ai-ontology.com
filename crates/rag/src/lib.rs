@@ -31,6 +31,7 @@ pub use model::{
     LlmRequest, LlmResponse, LlmStream, Message, OpenAiModel, Role, StreamChunk, TokenUsage,
 };
 pub use pipeline::{
-    GeneratedRule, OntologyGenError, RagAnswer, RagPipeline, RagStream, RagStreamEvent,
+    render_history, AskRequest, GeneratedRule, OntologyGenError, RagAnswer, RagPipeline, RagStream,
+    RagStreamEvent, Turn,
 };
 pub use prompt::PromptBuilder;

@@ -1082,3 +1082,35 @@ async fn subgraph_caps_edges_and_excludes_link_types() {
         "{v}"
     );
 }
+
+/// `/ask` with the conversation so far: the earlier turns reach the
+/// prompt and the sheets they cited join the subgraph.
+#[tokio::test]
+async fn ask_carries_the_conversation_history() {
+    let (app, _graph, _store) = flaky_app();
+    let acme = create_topic(&app, "Acme").await;
+    let beta = create_topic(&app, "Beta").await;
+    let (st, ans) = call(
+        &app,
+        "POST",
+        "/ask",
+        Some(json!({
+            "query": "and Acme?",
+            "top_k": 1,
+            "expansion": { "max_depth": 0 },
+            "history": [{ "question": "who is Beta?", "answer": "Beta is a topic.", "cited": [beta] }]
+        })),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{ans}");
+    let answer = ans["answer"].as_str().unwrap();
+    assert!(answer.contains("---CONVERSATION SO FAR---"), "{answer}");
+    assert!(answer.contains("Q: who is Beta?"), "{answer}");
+    let ids: Vec<u64> = ans["subgraph"]["concepts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["id"].as_u64().unwrap())
+        .collect();
+    assert!(ids.contains(&beta) && ids.contains(&acme), "{ids:?}");
+}
