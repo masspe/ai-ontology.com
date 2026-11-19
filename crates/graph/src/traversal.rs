@@ -13,6 +13,40 @@ use crate::error::GraphResult;
 use crate::graph::OntologyGraph;
 use crate::id::{ConceptId, RelationId};
 use crate::model::{Concept, Relation};
+use std::sync::Arc;
+
+/// Who may see a concept: a predicate on its id, and the key of the
+/// clearance set it stands for (so a cache can be kept per reader).
+/// Traversals never cross a hidden concept, listings never count one.
+#[derive(Clone)]
+pub struct Visibility {
+    pub key: u64,
+    pub allows: Arc<dyn Fn(ConceptId) -> bool + Send + Sync>,
+}
+
+impl Visibility {
+    pub fn new(key: u64, allows: impl Fn(ConceptId) -> bool + Send + Sync + 'static) -> Self {
+        Self {
+            key,
+            allows: Arc::new(allows),
+        }
+    }
+
+    pub fn allows(&self, id: ConceptId) -> bool {
+        (self.allows)(id)
+    }
+}
+
+impl std::fmt::Debug for Visibility {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Visibility({})", self.key)
+    }
+}
+
+/// `true` when `v` is absent or allows `id`.
+pub(crate) fn visible(v: Option<&Visibility>, id: ConceptId) -> bool {
+    v.is_none_or(|v| v.allows(id))
+}
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Direction {
@@ -51,6 +85,11 @@ pub struct TraversalSpec {
     pub max_edges: usize,
     #[serde(default = "default_true")]
     pub subsume_concept_types: bool,
+    /// The reader's visibility: a hidden concept is neither a seed nor
+    /// reached, so nothing about it is inferable from a path through it.
+    /// Set by the server from the caller's clearances, never by a client.
+    #[serde(skip)]
+    pub visible: Option<Visibility>,
 }
 
 fn default_max_nodes() -> usize {
@@ -72,6 +111,7 @@ impl Default for TraversalSpec {
             max_nodes: 64,
             max_edges: 0,
             subsume_concept_types: true,
+            visible: None,
         }
     }
 }
@@ -128,8 +168,23 @@ impl OntologyGraph {
         target: ConceptId,
         max_depth: u32,
     ) -> GraphResult<Option<Path>> {
+        self.shortest_path_where(source, target, max_depth, None)
+    }
+
+    /// `shortest_path` for one reader: a hidden concept is never crossed;
+    /// a hidden end is "no path", not an error (no existence leak).
+    pub fn shortest_path_where(
+        &self,
+        source: ConceptId,
+        target: ConceptId,
+        max_depth: u32,
+        who: Option<&Visibility>,
+    ) -> GraphResult<Option<Path>> {
         let start = self.get_concept(source)?;
         let _ = self.get_concept(target)?;
+        if !visible(who, source) || !visible(who, target) {
+            return Ok(None);
+        }
         if source == target {
             return Ok(Some(Path {
                 source,
@@ -157,7 +212,7 @@ impl OntologyGraph {
             // Relation struct; we only need (neighbor, relation_id) during
             // BFS, then look up the full relations at reconstruction time.
             self.for_each_neighbor(node, Direction::Both, |neighbor, rid| {
-                if !visited.insert(neighbor) {
+                if !visible(who, neighbor) || !visited.insert(neighbor) {
                     return true;
                 }
                 parent.insert(neighbor, (node, rid));
@@ -214,8 +269,9 @@ impl OntologyGraph {
         let mut relations: Vec<Relation> = Vec::new();
         let mut frontier: Vec<ConceptId> = Vec::new();
 
+        let who = spec.visible.as_ref();
         for &s in seeds {
-            if visited.insert(s) {
+            if visible(who, s) && visited.insert(s) {
                 if let Ok(c) = self.get_concept(s) {
                     concepts.push(c);
                     depth_of.insert(s, 0);
@@ -313,8 +369,8 @@ impl OntologyGraph {
                 }
                 let known = visited.contains(&neighbor);
                 // At the cap an unknown neighbour is never kept: skip it before
-                // reading (and cloning) it.
-                if !known && concepts.len() >= spec.max_nodes {
+                // reading (and cloning) it. A hidden one is never kept at all.
+                if (!known && concepts.len() >= spec.max_nodes) || !visible(who, neighbor) {
                     continue;
                 }
                 let nc = match self.get_concept(neighbor) {
@@ -357,6 +413,18 @@ impl OntologyGraph {
         rel_type: &str,
         max_depth: u32,
     ) -> GraphResult<Vec<ConceptId>> {
+        self.closure_where(seed, rel_type, max_depth, None)
+    }
+
+    /// `closure` for one reader: hidden concepts are neither reached nor
+    /// crossed.
+    pub fn closure_where(
+        &self,
+        seed: ConceptId,
+        rel_type: &str,
+        max_depth: u32,
+        who: Option<&Visibility>,
+    ) -> GraphResult<Vec<ConceptId>> {
         let _ = self.get_concept(seed)?;
         let mut visited: AHashSet<ConceptId> = AHashSet::new();
         visited.insert(seed);
@@ -370,14 +438,14 @@ impl OntologyGraph {
             }
             for r in self.outgoing_typed(node, std::slice::from_ref(&rt)) {
                 let nxt = r.target;
-                if visited.insert(nxt) {
+                if visible(who, nxt) && visited.insert(nxt) {
                     out.push(nxt);
                     queue.push_back((nxt, depth + 1));
                 }
             }
             for r in self.incoming_typed(node, std::slice::from_ref(&rt)) {
                 let nxt = r.source;
-                if visited.insert(nxt) {
+                if visible(who, nxt) && visited.insert(nxt) {
                     out.push(nxt);
                     queue.push_back((nxt, depth + 1));
                 }

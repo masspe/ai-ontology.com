@@ -205,6 +205,7 @@ impl RagPipeline {
                 &ontology_graph::TraversalSpec {
                     max_depth: 1,
                     max_nodes: 24,
+                    visible: req.visible.clone(),
                     ..Default::default()
                 },
             );
@@ -226,7 +227,7 @@ impl RagPipeline {
             );
             subgraph.seeds.extend(earlier);
         }
-        enrich_with_transitive_closures(graph, &mut subgraph, 16);
+        enrich_with_transitive_closures(graph, &mut subgraph, 16, req.visible.as_ref());
         debug!(
             seeds = scored.len(),
             context_concepts = subgraph.concepts.len(),
@@ -622,6 +623,7 @@ fn enrich_with_transitive_closures(
     graph: &OntologyGraph,
     subgraph: &mut Subgraph,
     max_extra: usize,
+    who: Option<&ontology_graph::Visibility>,
 ) {
     if std::env::var("ONTOLOGY_DISABLE_TRANSITIVE_CLOSURE").as_deref() == Ok("1") {
         debug!("transitive closure disabled via env");
@@ -646,7 +648,7 @@ fn enrich_with_transitive_closures(
             if added >= max_extra {
                 return;
             }
-            let extras = graph.closure(seed, t, 3).unwrap_or_default();
+            let extras = graph.closure_where(seed, t, 3, who).unwrap_or_default();
             for id in extras {
                 if !existing.insert(id) {
                     continue;

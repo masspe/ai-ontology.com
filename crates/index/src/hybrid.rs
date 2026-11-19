@@ -43,6 +43,11 @@ pub struct RetrievalRequest {
     /// Subgraph expansion spec applied to top-k seeds.
     #[serde(default)]
     pub expansion: TraversalSpec,
+    /// The reader's visibility: a hidden concept is never a candidate.
+    /// Set by the server from the caller's clearances, never by a client;
+    /// `retrieve` hands it to the expansion when that has none.
+    #[serde(skip)]
+    pub visible: Option<ontology_graph::Visibility>,
 }
 
 fn default_top_k() -> usize {
@@ -114,6 +119,7 @@ impl Default for RetrievalRequest {
             lexical_weight: default_lex_w(),
             concept_types: Vec::new(),
             expansion: TraversalSpec::default(),
+            visible: None,
         }
     }
 }
@@ -251,6 +257,9 @@ impl HybridIndex {
         // Who may be a seed: the requested types (subtypes included), and
         // among them the detail sheets only when the query names them.
         let keep = |id: ConceptId| -> bool {
+            if req.visible.as_ref().is_some_and(|v| !v.allows(id)) {
+                return false;
+            }
             let Some((ty, _)) = self.graph.concept_header(id) else {
                 return false;
             };
@@ -321,7 +330,16 @@ impl HybridIndex {
     pub fn retrieve(&self, req: &RetrievalRequest) -> (Vec<ScoredConcept>, Subgraph) {
         let scored = self.rank(req);
         let seeds: Vec<ConceptId> = scored.iter().map(|s| s.id).collect();
-        let subgraph = self.graph.expand(&seeds, &req.expansion);
+        let subgraph = match (&req.expansion.visible, &req.visible) {
+            (None, Some(v)) => {
+                let spec = TraversalSpec {
+                    visible: Some(v.clone()),
+                    ..req.expansion.clone()
+                };
+                self.graph.expand(&seeds, &spec)
+            }
+            _ => self.graph.expand(&seeds, &req.expansion),
+        };
         (scored, subgraph)
     }
 }

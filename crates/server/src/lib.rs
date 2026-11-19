@@ -3102,6 +3102,7 @@ async fn subgraph_handler(
 
     if let Some(q) = req.seed_query.as_ref().filter(|q| !q.trim().is_empty()) {
         let req = RetrievalRequest {
+            visible: None,
             query: q.clone(),
             top_k: 8,
             lexical_weight: 0.5,
@@ -3358,6 +3359,7 @@ async fn run_query(
         .get(id)
         .ok_or_else(|| ApiError::NotFound(format!("query {id}")))?;
     let req = RetrievalRequest {
+        visible: None,
         query: q.query.clone(),
         top_k: q.top_k,
         lexical_weight: q.lexical_weight,

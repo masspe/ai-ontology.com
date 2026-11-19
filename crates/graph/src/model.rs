@@ -107,6 +107,10 @@ pub struct Concept {
     pub description: String,
     #[serde(default)]
     pub properties: AHashMap<String, PropertyValue>,
+    /// Security labels: a reader sees the sheet only when their
+    /// clearances include every label (none: visible to every reader).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<String>,
 }
 
 impl Concept {
@@ -117,7 +121,12 @@ impl Concept {
             name: name.into(),
             description: String::new(),
             properties: AHashMap::new(),
+            labels: Vec::new(),
         }
+    }
+    pub fn with_labels(mut self, labels: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        self.labels = labels.into_iter().map(Into::into).collect();
+        self
     }
     pub fn with_description(mut self, d: impl Into<String>) -> Self {
         self.description = d.into();
@@ -161,6 +170,9 @@ pub struct ConceptPatch {
     /// fetch the concept, modify the map, and pass the merged result.
     #[serde(default)]
     pub properties: Option<AHashMap<String, PropertyValue>>,
+    /// When `Some`, replaces the security labels wholesale.
+    #[serde(default)]
+    pub labels: Option<Vec<String>>,
 }
 
 /// A directed, typed edge between two concepts.

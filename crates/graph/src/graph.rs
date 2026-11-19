@@ -23,6 +23,7 @@ use crate::model::{
     RulePatch,
 };
 use crate::schema::Ontology;
+use crate::traversal::Visibility;
 
 type AdjList = SmallVec<[RelationId; 4]>;
 
@@ -85,6 +86,9 @@ struct Slot {
     name: String,
     loc: Option<Loc>,
     payload: Option<Payload>,
+    /// Security labels stay resident: visibility is computed from them
+    /// without reading a payload.
+    labels: Vec<String>,
 }
 
 impl Slot {
@@ -97,6 +101,7 @@ impl Slot {
                 description: c.description,
                 properties: c.properties,
             }),
+            labels: c.labels,
         }
     }
 
@@ -114,6 +119,7 @@ impl Slot {
             name: self.name.clone(),
             description,
             properties,
+            labels: self.labels.clone(),
         }
     }
 }
@@ -213,6 +219,7 @@ type ListConceptsCacheKey = (
     usize,          // limit
     bool,           // track_total
     bool,           // include_subtypes
+    Option<u64>,    // the reader's visibility key, None for everyone
 );
 
 const LIST_CONCEPTS_CACHE_CAP: usize = 256;
@@ -923,8 +930,22 @@ impl OntologyGraph {
             return Ok(slot.concept(id));
         }
         let loc = slot.loc;
+        let labels = slot.labels.clone();
         drop(slot);
-        self.read_payload(id, loc)
+        let mut c = self.read_payload(id, loc)?;
+        // The slot's labels are the live ones (a payload on disk may be older).
+        c.labels = labels;
+        Ok(c)
+    }
+
+    /// Every concept that carries security labels, with them: what a
+    /// reader's visibility is computed from. Resident, no payload read.
+    pub fn labelled_concepts(&self) -> Vec<(ConceptId, Vec<String>)> {
+        self.concepts
+            .iter()
+            .filter(|e| !e.labels.is_empty())
+            .map(|e| (*e.key(), e.labels.clone()))
+            .collect()
     }
 
     /// Read the payload of `id` through the source. Called with no slot
@@ -1503,6 +1524,9 @@ impl OntologyGraph {
         if let Some(props) = &patch.properties {
             c.properties = props.clone();
         }
+        if let Some(labels) = &patch.labels {
+            c.labels = labels.clone();
+        }
         self.validate_concept_schema(&c)?;
         Ok(c)
     }
@@ -1555,6 +1579,7 @@ impl OntologyGraph {
             }
         }
         entry.name = updated.name;
+        entry.labels = updated.labels;
         entry.payload = Some(Payload {
             description: updated.description,
             properties: updated.properties,
@@ -2101,6 +2126,31 @@ impl OntologyGraph {
         track_total: bool,
         include_subtypes: bool,
     ) -> GraphResult<(usize, Vec<Concept>)> {
+        self.try_list_concepts_page_for(
+            concept_type,
+            name_substring_lowercase,
+            offset,
+            limit,
+            track_total,
+            include_subtypes,
+            None,
+        )
+    }
+
+    /// `try_list_concepts_page` for one reader: hidden concepts are neither
+    /// listed nor counted. The page cache is keyed by the reader's
+    /// visibility key too.
+    #[allow(clippy::too_many_arguments)]
+    pub fn try_list_concepts_page_for(
+        &self,
+        concept_type: Option<&str>,
+        name_substring_lowercase: Option<&str>,
+        offset: usize,
+        limit: usize,
+        track_total: bool,
+        include_subtypes: bool,
+        who: Option<&Visibility>,
+    ) -> GraphResult<(usize, Vec<Concept>)> {
         let gen = self.concepts_gen.load(Ordering::Acquire);
         let cache_key: ListConceptsCacheKey = (
             concept_type.map(|s| s.to_string()),
@@ -2109,6 +2159,7 @@ impl OntologyGraph {
             limit,
             track_total,
             include_subtypes,
+            who.map(|v| v.key),
         );
         if let Some(entry) = self.list_concepts_cache.lock().get(&cache_key) {
             if entry.gen == gen {
@@ -2124,6 +2175,7 @@ impl OntologyGraph {
             track_total,
             include_subtypes,
             None,
+            who,
         )?;
 
         let mut cache = self.list_concepts_cache.lock();
@@ -2175,6 +2227,26 @@ impl OntologyGraph {
         limit: usize,
         include_subtypes: bool,
     ) -> GraphResult<(Vec<Concept>, Option<ConceptKey>)> {
+        self.try_list_concepts_after_for(
+            concept_type,
+            name_substring_lowercase,
+            after,
+            limit,
+            include_subtypes,
+            None,
+        )
+    }
+
+    /// `try_list_concepts_after` for one reader.
+    pub fn try_list_concepts_after_for(
+        &self,
+        concept_type: Option<&str>,
+        name_substring_lowercase: Option<&str>,
+        after: Option<&ConceptKey>,
+        limit: usize,
+        include_subtypes: bool,
+        who: Option<&Visibility>,
+    ) -> GraphResult<(Vec<Concept>, Option<ConceptKey>)> {
         let (_, page) = self.list_concepts_page_uncached(
             concept_type,
             name_substring_lowercase,
@@ -2183,6 +2255,7 @@ impl OntologyGraph {
             false,
             include_subtypes,
             after,
+            who,
         )?;
         let next = page
             .last()
@@ -2201,7 +2274,9 @@ impl OntologyGraph {
         track_total: bool,
         include_subtypes: bool,
         after: Option<&ConceptKey>,
+        who: Option<&Visibility>,
     ) -> GraphResult<(usize, Vec<Concept>)> {
+        let visible = |id: ConceptId| who.is_none_or(|v| v.allows(id));
         // Evicted rows (P1) are collected as payload-less shells under the
         // index locks and completed by `fill` once every lock is released.
         let mut evicted: AHashMap<ConceptId, Option<Loc>> = AHashMap::new();
@@ -2243,6 +2318,9 @@ impl OntologyGraph {
                 let mut survivors: Vec<(String, String, ConceptId, Concept)> =
                     Vec::with_capacity(candidates.len());
                 for id in candidates.drain(..) {
+                    if !visible(id) {
+                        continue;
+                    }
                     let Some(c) = self.concepts.get(&id) else {
                         continue;
                     };
@@ -2297,6 +2375,9 @@ impl OntologyGraph {
         let mut page: Vec<Concept> = Vec::with_capacity(limit.min(LIST_PREALLOC_CAP));
 
         let mut consume = |name: &str, id: &ConceptId| -> bool {
+            if !visible(*id) {
+                return true;
+            }
             if let Some(n) = name_substring_lowercase {
                 if !name.to_lowercase().contains(n) {
                     return true;
@@ -2825,6 +2906,7 @@ mod tests {
             .update_concept(
                 alice,
                 ConceptPatch {
+                    labels: None,
                     name: Some("Alicia".into()),
                     description: Some("renamed".into()),
                     properties: Some(props),

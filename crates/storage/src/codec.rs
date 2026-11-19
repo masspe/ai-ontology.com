@@ -265,7 +265,35 @@ impl From<StoredConcept> for Concept {
             name: c.name,
             description: c.description,
             properties: props_in(c.properties),
+            labels: Vec::new(),
         }
+    }
+}
+
+/// A concept with security labels (codec 1, appended 0.3): a concept
+/// without labels is still written as [`StoredConcept`], so a store a
+/// build before 0.3 wrote, or that never labelled anything, has no record
+/// that build cannot read.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct StoredConceptV2 {
+    pub base: StoredConcept,
+    pub labels: Vec<String>,
+}
+
+impl From<&Concept> for StoredConceptV2 {
+    fn from(c: &Concept) -> Self {
+        Self {
+            base: c.into(),
+            labels: c.labels.clone(),
+        }
+    }
+}
+
+impl From<StoredConceptV2> for Concept {
+    fn from(c: StoredConceptV2) -> Self {
+        let mut out: Concept = c.base.into();
+        out.labels = c.labels;
+        out
     }
 }
 
@@ -409,16 +437,22 @@ pub enum StoredRecord {
     DeleteRule(u64),
     DeleteAction(u64),
     RelationExact(StoredRelation),
+    ConceptV2(StoredConceptV2),
+    UpdateConceptV2(StoredConceptV2),
 }
 
 impl From<&RecordKind> for StoredRecord {
     fn from(k: &RecordKind) -> Self {
         match k {
             RecordKind::Ontology(o) => StoredRecord::Ontology(o.clone()),
-            RecordKind::Concept(c) => StoredRecord::Concept(c.into()),
+            RecordKind::Concept(c) if c.labels.is_empty() => StoredRecord::Concept(c.into()),
+            RecordKind::Concept(c) => StoredRecord::ConceptV2(c.into()),
             RecordKind::Relation(r) => StoredRecord::Relation(r.into()),
             RecordKind::UpdateRelation(r) => StoredRecord::UpdateRelation(r.into()),
-            RecordKind::UpdateConcept(c) => StoredRecord::UpdateConcept(c.into()),
+            RecordKind::UpdateConcept(c) if c.labels.is_empty() => {
+                StoredRecord::UpdateConcept(c.into())
+            }
+            RecordKind::UpdateConcept(c) => StoredRecord::UpdateConceptV2(c.into()),
             RecordKind::DeleteConcept(id) => StoredRecord::DeleteConcept(id.0),
             RecordKind::DeleteRelation(id) => StoredRecord::DeleteRelation(id.0),
             RecordKind::Rule(r) => StoredRecord::Rule(r.into()),
@@ -445,6 +479,8 @@ impl From<StoredRecord> for RecordKind {
             StoredRecord::DeleteRule(id) => RecordKind::DeleteRule(RuleId(id)),
             StoredRecord::DeleteAction(id) => RecordKind::DeleteAction(ActionId(id)),
             StoredRecord::RelationExact(r) => RecordKind::RelationExact(r.into()),
+            StoredRecord::ConceptV2(c) => RecordKind::Concept(c.into()),
+            StoredRecord::UpdateConceptV2(c) => RecordKind::UpdateConcept(c.into()),
         }
     }
 }
@@ -468,6 +504,49 @@ mod tests {
             ]),
         );
         c
+    }
+
+    #[test]
+    fn labels_round_trip_and_a_labelless_concept_keeps_the_first_shape() {
+        let mut labelled = concept();
+        labelled.labels = vec!["payroll".into(), "ch".into()];
+        for codec in [CODEC_JSON, CODEC_POSTCARD] {
+            for kind in [
+                RecordKind::Concept(labelled.clone()),
+                RecordKind::UpdateConcept(labelled.clone()),
+            ] {
+                let bytes = encode(codec, &kind).unwrap();
+                let back = decode(codec, &bytes).unwrap();
+                match (&kind, &back) {
+                    (RecordKind::Concept(a), RecordKind::Concept(b))
+                    | (RecordKind::UpdateConcept(a), RecordKind::UpdateConcept(b)) => {
+                        assert_eq!(a.labels, b.labels, "codec {codec}");
+                        assert_eq!(a.name, b.name);
+                    }
+                    other => panic!("{other:?}"),
+                }
+            }
+        }
+        // Without labels the record is the shape every build reads.
+        let plain = RecordKind::Concept(concept());
+        assert!(matches!(
+            StoredRecord::from(&plain),
+            StoredRecord::Concept(_)
+        ));
+        assert!(matches!(
+            StoredRecord::from(&RecordKind::UpdateConcept(concept())),
+            StoredRecord::UpdateConcept(_)
+        ));
+        assert!(matches!(
+            StoredRecord::from(&RecordKind::Concept(labelled.clone())),
+            StoredRecord::ConceptV2(_)
+        ));
+        assert!(matches!(
+            StoredRecord::from(&RecordKind::UpdateConcept(labelled)),
+            StoredRecord::UpdateConceptV2(_)
+        ));
+        let json = encode(CODEC_JSON, &plain).unwrap();
+        assert!(!String::from_utf8_lossy(&json).contains("labels"));
     }
 
     #[test]

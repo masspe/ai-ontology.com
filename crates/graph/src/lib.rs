@@ -31,4 +31,4 @@ pub use schema::{
     is_valid_ns, ActionType, Cardinality, ConceptType, Ontology, RelationType, RuleType,
     DEFAULT_NS, MAX_NS_LEN,
 };
-pub use traversal::{Direction, Path, PathStep, Subgraph, TraversalSpec};
+pub use traversal::{Direction, Path, PathStep, Subgraph, TraversalSpec, Visibility};

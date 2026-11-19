@@ -384,6 +384,7 @@ pub(crate) async fn apply(
             match (action, existing_id) {
                 (DecisionAction::Merge, Some(id)) => {
                     let patch = ontology_graph::ConceptPatch {
+                        labels: None,
                         name: Some(c.name.clone()),
                         description: if c.description.is_empty() {
                             None

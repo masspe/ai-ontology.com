@@ -35,6 +35,15 @@ All notable changes to this project are listed here. The format follows
 
 ### Added
 
+- Security labels on sheets (`Concept.labels`, `ConceptPatch.labels`):
+  a reader sees a sheet when their clearances include every label of it.
+  The graph takes a reader's `Visibility` on traversals (`TraversalSpec`),
+  paths, closures and listings — a hidden sheet is never crossed, listed
+  or counted — and the index takes it on `RetrievalRequest`, so a hidden
+  sheet is never a candidate and the expansion inherits the reader. In
+  the store, a labelled concept is written as an appended record shape
+  (`ConceptV2`, `UpdateConceptV2`); a concept without labels keeps the
+  shape every build reads.
 - Sessions: an access token lives 15 minutes; a rotating refresh secret
   in an HttpOnly cookie (`/auth` only) renews it for 30 days after the
   last use (`POST /auth/refresh`; the web UI renews on a 401 by itself).

@@ -806,3 +806,68 @@ fn detail_sheets_are_seeds_only_by_full_name_or_by_type() {
     assert!(by_type.contains(&field), "{by_type:?}");
     assert!(!by_type.contains(&doc), "{by_type:?}");
 }
+
+/// A reader's visibility on the request: a hidden sheet is never a
+/// candidate, whatever it scored, and the expansion inherits it.
+#[test]
+fn a_hidden_sheet_is_never_a_candidate_and_the_expansion_inherits_the_reader() {
+    let (g, rag, knit, bread) = corpus();
+    g.add_relation(Relation {
+        id: RelationId(0),
+        relation_type: "related_to".into(),
+        source: rag,
+        target: knit,
+        weight: 1.0,
+        properties: Default::default(),
+    })
+    .unwrap();
+    let idx = HybridIndex::with_default_embedder(g.clone());
+    idx.reindex_all();
+    let outsider = ontology_graph::Visibility::new(1, move |id| id != rag);
+
+    let open = RetrievalRequest {
+        lexical_weight: 1.0,
+        top_k: 5,
+        expansion: TraversalSpec {
+            max_depth: 1,
+            ..Default::default()
+        },
+        ..req("retrieval augmented generation")
+    };
+    let (scored, sub) = idx.retrieve(&open);
+    assert_eq!(scored.first().map(|s| s.id), Some(rag));
+    assert!(
+        sub.concepts.iter().any(|c| c.id == knit),
+        "expanded to the neighbour"
+    );
+
+    let limited = RetrievalRequest {
+        visible: Some(outsider.clone()),
+        ..open.clone()
+    };
+    let (scored, sub) = idx.retrieve(&limited);
+    assert!(scored.iter().all(|s| s.id != rag), "{scored:?}");
+    assert!(sub.concepts.iter().all(|c| c.id != rag));
+
+    // Seeds the reader may see still expand, but never into a hidden sheet.
+    let from_knit = RetrievalRequest {
+        visible: Some(ontology_graph::Visibility::new(2, move |id| id != rag)),
+        ..RetrievalRequest {
+            lexical_weight: 1.0,
+            top_k: 5,
+            expansion: TraversalSpec {
+                max_depth: 1,
+                ..Default::default()
+            },
+            ..req("knitting yarn needles")
+        }
+    };
+    let (scored, sub) = idx.retrieve(&from_knit);
+    assert_eq!(scored.first().map(|s| s.id), Some(knit));
+    assert!(
+        sub.concepts.iter().all(|c| c.id != rag),
+        "{:?}",
+        sub.concepts
+    );
+    let _ = bread;
+}
