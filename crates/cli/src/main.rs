@@ -314,6 +314,18 @@ enum Cmd {
         #[arg(long, default_value_t = 30)]
         top: usize,
     },
+    /// Measure retrieval against real questions: a JSONL file of
+    /// `{"question": "…", "expect": [{"type": "Screen", "name": "gl100"}]}`
+    /// lines; a question passes when one expected sheet is in the top-k.
+    /// Prints each rank or miss and the pass count; exits 1 below `--min`.
+    Eval {
+        questions: PathBuf,
+        #[arg(long, default_value_t = 5)]
+        top_k: usize,
+        /// Minimum share of questions that must pass (0 = report only).
+        #[arg(long, default_value_t = 0.0)]
+        min: f32,
+    },
     /// Link the sheets of some types to the sheets their text names: a
     /// ticket or a help page that says `gl100` or `gl/w-gl100.w` gets a
     /// `mentions_<from>_<to>` link to that screen or program, weighted by
@@ -782,6 +794,77 @@ async fn main() -> Result<()> {
                 "ingested: {} concepts, {} relations, {} ontology updates{upsert}",
                 stats.concepts, stats.relations, stats.ontology_updates,
             );
+        }
+        Cmd::Eval {
+            questions,
+            top_k,
+            min,
+        } => {
+            #[derive(serde::Deserialize)]
+            struct Expected {
+                #[serde(rename = "type")]
+                ty: String,
+                name: String,
+            }
+            #[derive(serde::Deserialize)]
+            struct Question {
+                question: String,
+                expect: Vec<Expected>,
+            }
+            let raw = tokio::fs::read_to_string(&questions).await?;
+            let mut passed = 0usize;
+            let mut total = 0usize;
+            for (i, line) in raw.lines().enumerate() {
+                if line.trim().is_empty() {
+                    continue;
+                }
+                let q: Question = serde_json::from_str(line)
+                    .with_context(|| format!("{}:{}", questions.display(), i + 1))?;
+                total += 1;
+                let (scored, _) = index.retrieve(&RetrievalRequest {
+                    query: q.question.clone(),
+                    top_k,
+                    expansion: ontology_graph::TraversalSpec {
+                        max_depth: 0,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                });
+                let hit = scored.iter().enumerate().find_map(|(rank, s)| {
+                    let c = graph.get_concept(s.id).ok()?;
+                    q.expect
+                        .iter()
+                        .any(|e| e.ty == c.concept_type && e.name.eq_ignore_ascii_case(&c.name))
+                        .then_some((rank + 1, c.concept_type, c.name))
+                });
+                match hit {
+                    Some((rank, ty, name)) => {
+                        passed += 1;
+                        println!("ok   #{rank}  {}  → {ty} · {name}", q.question);
+                    }
+                    None => {
+                        let top: Vec<String> = scored
+                            .iter()
+                            .take(3)
+                            .filter_map(|s| graph.get_concept(s.id).ok())
+                            .map(|c| format!("{} · {}", c.concept_type, c.name))
+                            .collect();
+                        println!("MISS     {}  (top: {})", q.question, top.join(" | "));
+                    }
+                }
+            }
+            let share = if total == 0 {
+                0.0
+            } else {
+                passed as f32 / total as f32
+            };
+            println!(
+                "passed: {passed}/{total} in top-{top_k} ({:.0}%)",
+                share * 100.0
+            );
+            if share < min {
+                anyhow::bail!("below the minimum of {:.0}%", min * 100.0);
+            }
         }
         Cmd::LinkMentions { from, to } => {
             let (mut src, report) = ontology_io::MentionSource::from_graph(&graph, &from, &to);

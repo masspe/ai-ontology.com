@@ -1386,6 +1386,7 @@ dependencies = [
  "ontology-storage",
  "rand 0.9.4",
  "regex",
+ "serde",
  "serde_json",
  "tokio",
  "tracing",

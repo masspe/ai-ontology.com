@@ -930,3 +930,65 @@ fn link_mentions_links_documents_to_what_they_name() {
         "{again}"
     );
 }
+
+/// `eval` scores a question file against the store: rank or miss per
+/// question, the pass count, and a non-zero exit below `--min`.
+#[test]
+fn eval_reports_ranks_misses_and_the_pass_share() {
+    let data = tempdir("eval");
+    // The type must exist before a bare sheet record: the help-page
+    // import declares `Screen`.
+    let docs = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("io")
+        .join("tests")
+        .join("fixtures")
+        .join("docs");
+    ok(Some(&data), &["ingest", "--doc-for", "Screen", &p(&docs)]);
+    let sheets = data.join("sheets.jsonl");
+    std::fs::write(
+        &sheets,
+        concat!(
+            r#"{"kind":"concept","id":0,"concept_type":"Screen","name":"gl100","description":"Grand livre","properties":{}}"#,
+            "
+",
+            r#"{"kind":"concept","id":0,"concept_type":"Screen","name":"pr100","description":"Bulletins de salaire","properties":{}}"#,
+            "
+",
+        ),
+    )
+    .unwrap();
+    ok(Some(&data), &["ingest", &p(&sheets)]);
+    let questions = data.join("q.jsonl");
+    std::fs::write(
+        &questions,
+        concat!(
+            r#"{"question":"bulletins de salaire","expect":[{"type":"Screen","name":"PR100"}]}"#,
+            "
+
+",
+            r#"{"question":"zebra","expect":[{"type":"Screen","name":"nope"}]}"#,
+            "
+",
+        ),
+    )
+    .unwrap();
+    let out = ok(Some(&data), &["eval", &p(&questions)]);
+    assert!(
+        out.contains("ok   #1  bulletins de salaire  → Screen · pr100"),
+        "{out}"
+    );
+    assert!(out.contains("MISS     zebra"), "{out}");
+    assert!(out.contains("passed: 1/2 in top-5 (50%)"), "{out}");
+    let err = fail(Some(&data), &["eval", "--min", "0.9", &p(&questions)]);
+    assert!(err.contains("below the minimum of 90%"), "{err}");
+    let bad = data.join("bad.jsonl");
+    std::fs::write(
+        &bad,
+        "not json
+",
+    )
+    .unwrap();
+    let err = fail(Some(&data), &["eval", &p(&bad)]);
+    assert!(err.contains("bad.jsonl:1"), "{err}");
+}

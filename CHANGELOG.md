@@ -8,6 +8,11 @@ All notable changes to this project are listed here. The format follows
 
 ### Fixed
 
+- A type declared by several sources kept only the last source's
+  property list: the source scanner's `Screen` declaration erased the
+  `help` property the help-page import had added, and the next import
+  refused every screen. A declaration now adds its properties to the
+  registered type's; nothing is taken away.
 - A cross-reference `--sync` after the schema dump refused (or, forced,
   would have deleted) the tables and fields no program touches and their
   `has_field` links — the dump's, not the cross-reference's.
@@ -36,6 +41,12 @@ All notable changes to this project are listed here. The format follows
   states as an invitation; graph node colours from a categorical palette
   validated for colour-vision deficiency on light and dark; and a dark
   theme — the toggle in the top bar, "system" by default.
+- `ontology eval <questions.jsonl> [--top-k 5] [--min 0.8]`: retrieval
+  measured against real questions — each line `{"question", "expect":
+  [{"type", "name"}]}`, a pass when an expected sheet is in the top-k;
+  rank or miss per question, the pass share, a non-zero exit below
+  `--min` so CI can gate on it. The question file stays outside the
+  repository (it holds the customer's vocabulary).
 - Entity linking: `ontology link-mentions --from <types> --to <types>`
   links the sheets of some types to the sheets their text names — a help
   page or a ticket that says `gl100` or `gl/w-gl100.w` gets a

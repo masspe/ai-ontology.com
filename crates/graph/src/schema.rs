@@ -241,8 +241,20 @@ impl Ontology {
             if decl.parent.is_none() {
                 decl.parent = existing.parent.clone();
             }
-            if decl.properties.is_none() {
-                decl.properties = existing.properties.clone();
+            // Properties add up: several sources declare one type (the
+            // cross-reference, the schema dump and the help pages all
+            // declare `Screen` or `Table`), and a declaration that named
+            // its own list must not take another source's away.
+            match (&mut decl.properties, &existing.properties) {
+                (None, _) => decl.properties = existing.properties.clone(),
+                (Some(mine), Some(theirs)) => {
+                    for p in theirs {
+                        if !mine.contains(p) {
+                            mine.push(p.clone());
+                        }
+                    }
+                }
+                (Some(_), None) => {}
             }
             if decl.description.is_empty() {
                 decl.description = existing.description.clone();
