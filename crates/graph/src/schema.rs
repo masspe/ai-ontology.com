@@ -49,6 +49,12 @@ pub struct ConceptType {
     /// constraint (`STORAGE.md` §10.3).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ns: Option<String>,
+    /// A sheet below the grain people ask about (a field, when questions
+    /// are about tables and screens): never a seed of retrieval unless the
+    /// query names it exactly or asks for its type. Reached through its
+    /// links otherwise.
+    #[serde(default)]
+    pub detail: bool,
 }
 
 /// Domain of every concept type that declares none (and has no parent).
@@ -265,6 +271,7 @@ impl Ontology {
             if decl.disjoint_with.is_empty() {
                 decl.disjoint_with = existing.disjoint_with.clone();
             }
+            decl.detail |= existing.detail;
         }
         decl
     }

@@ -325,6 +325,9 @@ enum Cmd {
         /// Minimum share of questions that must pass (0 = report only).
         #[arg(long, default_value_t = 0.0)]
         min: f32,
+        /// Weight of the lexical score against the vector score (0..=1).
+        #[arg(long, default_value_t = 0.5)]
+        lexical_weight: f32,
     },
     /// Link the sheets of some types to the sheets their text names: a
     /// ticket or a help page that says `gl100` or `gl/w-gl100.w` gets a
@@ -799,6 +802,7 @@ async fn main() -> Result<()> {
             questions,
             top_k,
             min,
+            lexical_weight,
         } => {
             #[derive(serde::Deserialize)]
             struct Expected {
@@ -824,6 +828,7 @@ async fn main() -> Result<()> {
                 let (scored, _) = index.retrieve(&RetrievalRequest {
                     query: q.question.clone(),
                     top_k,
+                    lexical_weight,
                     expansion: ontology_graph::TraversalSpec {
                         max_depth: 0,
                         ..Default::default()

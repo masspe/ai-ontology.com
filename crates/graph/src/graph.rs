@@ -907,6 +907,13 @@ impl OntologyGraph {
         self.apply_prepared_concept(concept)
     }
 
+    /// Type and name of `id` from the in-memory slot, no payload read:
+    /// for a ranker that looks at thousands of candidates.
+    pub fn concept_header(&self, id: ConceptId) -> Option<(String, String)> {
+        let slot = self.concepts.get(&id)?;
+        Some((slot.concept_type.clone(), slot.name.clone()))
+    }
+
     pub fn get_concept(&self, id: ConceptId) -> GraphResult<Concept> {
         let slot = self
             .concepts

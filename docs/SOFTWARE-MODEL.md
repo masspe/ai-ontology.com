@@ -103,9 +103,22 @@ question ──► retrieval (top-k seeds) ──► expansion (subgraph) ──
 ```
 
 1. **Retrieval** scores every sheet on its name and description, twice:
-   a lexical index (BM25-style, exact words after normalisation) and a
+   a lexical index (BM25: exact words after normalisation, repeats
+   saturate, a long help text is not penalised for its length) and a
    vector index. The two scores are fused 50/50 and the best 8 become the
-   seeds. Today the vector side is a **hashing embedder** — characters
+   seeds, with two rules about *grain*:
+   - a sheet the question **names** (« db660 », « sdba » for `appdb.sdba`)
+     comes first whatever its text scored — the boost is weighted by how
+     identifying the word is, so « gestion » barely counts and a screen
+     code counts fully;
+   - a type declared **`detail`** (fields: 20 000 of them, named by short
+     codes that collide with ordinary words — `comment`, `km`) is never a
+     seed unless the question gives the full name (`sdba.nogf`) or asks
+     for that type. Fields are reached through their table's links.
+     Without this rule a question about « les salariés » returned twenty
+     fields whose label says « salarié » and never the table.
+
+   Today the vector side is a **hashing embedder** — characters
    hashed into a fixed vector, no language model behind it. It makes
    near-identical strings close; it does **not** know that « salaire » and
    « paie » mean the same thing, nor that « saisir » relates to a screen.
@@ -164,10 +177,10 @@ In order of leverage:
 3. **Real embeddings** for the vector index, multilingual, behind the
    existing `Embedder` trait; the hashing embedder stays for tests and
    offline use.
-4. **Answer-level sheets and links.** Roll program → table up to
-   screen → table (`uses`), module → table; make Screen/Module/Table the
-   default seed types and hide field-level links from expansion unless
-   the question is about a field.
+4. **Answer-level sheets and links.** Done in part (2026-11-19): field
+   sheets are `detail`, out of the seeds unless named in full; the sheet
+   a question names comes first. Still to do: roll program → table up to
+   screen → table (`uses`), module → table.
 5. **The question set** (owner): 10–15 real questions with the expected
    screen/table/program. It becomes a test; the pass count is the gauge
    for every change above.

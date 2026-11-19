@@ -20,6 +20,19 @@ All notable changes to this project are listed here. The format follows
   shares; the xref sync keeps `Database`, `Table`, `Field`, `has_field`,
   `in_database`, `fires_on`.
 
+### Changed
+
+- Retrieval ranks by grain. The lexical index scores with BM25 (repeats
+  saturate, a screen with a long help page is no longer ranked under a
+  five-word label). A sheet the question names exactly — a screen code,
+  a table — comes first, the boost weighted by how identifying the word
+  is. A concept type can be declared `detail` (the `Field` type is):
+  its sheets are never seeds unless the question gives their full name
+  (`sdba.nogf`) or asks for the type, so tables and screens are not
+  crowded out by their twenty thousand fields. On the draft question set
+  the pass rate went from 7/12 to 11/12.
+- `ontology eval --lexical-weight <0..1>` measures one signal alone.
+
 ### Added
 
 - `ontology ingest --df <dump> --df-db <name>` reads a Progress

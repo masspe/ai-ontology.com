@@ -389,6 +389,18 @@ fn concept_type(name: &str, description: &str, properties: &[&str]) -> Record {
     })
 }
 
+/// A sheet below the grain people ask about: never a retrieval seed
+/// unless named exactly or asked for by type.
+fn detail_concept_type(name: &str, description: &str, properties: &[&str]) -> Record {
+    match concept_type(name, description, properties) {
+        Record::ConceptTypeDecl(mut ct) => {
+            ct.detail = true;
+            Record::ConceptTypeDecl(ct)
+        }
+        other => other,
+    }
+}
+
 /// A many-to-many link below the grain people ask about: in the graph,
 /// off the graph page by default.
 fn detail_relation_type(name: &str, domain: &str, range: &str, description: &str) -> Record {
@@ -443,7 +455,7 @@ pub fn xref_ontology_records() -> Vec<Record> {
         concept_type("Class", "An ABL or .NET class used by programs.", &["name"]),
         concept_type("Database", "An OpenEdge database (appdb, secdb, …).", &[]),
         concept_type("Table", "A database table, named db.table. The schema dump adds its label, dump name, primary key and unique keys.", &["db", "table", "label", "dump_name", "primary_key", "unique_keys", "field_count"]),
-        concept_type("Field", "A table field, named db.table.field. The schema dump adds its label, type, format and help text.", &["table", "field", "label", "column_label", "help", "data_type", "format", "decimals", "extent", "order"]),
+        detail_concept_type("Field", "A table field, named db.table.field. The schema dump adds its label, type, format and help text.", &["table", "field", "label", "column_label", "help", "data_type", "format", "decimals", "extent", "order"]),
         relation_type("belongs_to", "Program", "Module", N1, "belongs to module"),
         relation_type("runs", "Program", "Program", NN, "runs"),
         relation_type("includes", "Program", "Include", NN, "includes"),

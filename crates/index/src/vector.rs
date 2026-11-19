@@ -88,8 +88,16 @@ impl Rows {
     }
 
     /// Best `limit` rows of `[from, to)` by cosine with `q`.
-    fn scan(&self, q: &[f32], from: usize, to: usize, limit: usize) -> Vec<(ConceptId, f32)> {
+    fn scan(
+        &self,
+        q: &[f32],
+        from: usize,
+        to: usize,
+        limit: usize,
+        keep: &(dyn Fn(ConceptId) -> bool + Sync),
+    ) -> Vec<(ConceptId, f32)> {
         let scored: Vec<(ConceptId, f32)> = (from..to)
+            .filter(|&i| keep(self.ids[i]))
             .map(|i| (self.ids[i], cosine(q, self.row(i))))
             .collect();
         top_k(scored, limit)
@@ -156,6 +164,17 @@ impl VectorIndex {
     // ANN index is the upgrade when the
     // measured p95 (STORAGE.md §7.8) leaves the interactive budget.
     pub fn search(&self, query: &str, limit: usize) -> Vec<(ConceptId, f32)> {
+        self.search_where(query, limit, &|_| true)
+    }
+
+    /// `search` over the concepts `keep` accepts, filtered before the cut
+    /// to `limit`.
+    pub fn search_where(
+        &self,
+        query: &str,
+        limit: usize,
+        keep: &(dyn Fn(ConceptId) -> bool + Sync),
+    ) -> Vec<(ConceptId, f32)> {
         let q = self.embedder.embed(query);
         let r = self.rows.read();
         let n = r.ids.len();
@@ -167,7 +186,7 @@ impl VectorIndex {
             .unwrap_or(1);
         let threads = (n / ROWS_PER_THREAD_MIN).clamp(1, cores);
         if threads == 1 {
-            return r.scan(&q, 0, n, limit);
+            return r.scan(&q, 0, n, limit, keep);
         }
         let chunk = n.div_ceil(threads);
         let heads: Vec<Vec<(ConceptId, f32)>> = std::thread::scope(|s| {
@@ -176,7 +195,7 @@ impl VectorIndex {
                     let (r, q) = (&*r, &q);
                     let from = t * chunk;
                     let to = ((t + 1) * chunk).min(n);
-                    s.spawn(move || r.scan(q, from, to, limit))
+                    s.spawn(move || r.scan(q, from, to, limit, keep))
                 })
                 .collect();
             handles

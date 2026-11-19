@@ -12,7 +12,7 @@
 mod hardening_common;
 use hardening_common::*;
 
-use ontology_graph::{PropertyValue, RelationPatch};
+use ontology_graph::{ConceptId, PropertyValue, RelationPatch};
 
 #[test]
 fn relation_between_finds_the_edge_by_endpoints_and_type_only() {
@@ -73,4 +73,17 @@ fn updating_an_asymmetric_relation_touches_nothing_else() {
     )
     .unwrap();
     assert_eq!(g.get_relation(ba).unwrap().weight, 1.0);
+}
+
+/// `concept_header` is the slot's type and name, payload or not; an
+/// unknown id is `None`.
+#[test]
+fn concept_header_reads_the_slot_only() {
+    let g = graph();
+    let a = concept(&g, "Person", "Alpha");
+    assert_eq!(
+        g.concept_header(a),
+        Some(("Person".to_string(), "Alpha".to_string()))
+    );
+    assert_eq!(g.concept_header(ConceptId(999_999)), None);
 }

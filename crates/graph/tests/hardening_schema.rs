@@ -272,6 +272,7 @@ fn full_type() -> ConceptType {
         required_properties: vec!["amount".into()],
         disjoint_with: vec![],
         ns: Some("contrats".into()),
+        detail: false,
     }
 }
 
@@ -364,6 +365,28 @@ fn merged_concept_type_never_overwrites_set_fields_with_unset_ones() {
     let fresh = ct("Invoice", None, None);
     assert_eq!(o.merged_concept_type(fresh.clone()), fresh);
     assert!(o.concept_type("Invoice").is_err());
+}
+
+/// A type once declared `detail` stays so when another source declares
+/// it plain: the flag adds up like the property list does.
+#[test]
+fn merged_concept_type_keeps_detail() {
+    let mut o = Ontology::new();
+    o.add_concept_type(ConceptType {
+        name: "Field".into(),
+        detail: true,
+        ..Default::default()
+    });
+    let plain = ConceptType {
+        name: "Field".into(),
+        ..Default::default()
+    };
+    assert!(o.merged_concept_type(plain).detail);
+    let fresh = ConceptType {
+        name: "Table".into(),
+        ..Default::default()
+    };
+    assert!(!o.merged_concept_type(fresh).detail);
 }
 
 // ---------------------------------------------------------------------------

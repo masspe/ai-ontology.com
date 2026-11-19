@@ -609,3 +609,200 @@ fn parallel_reindex_matches_incremental_indexing() {
     lex.remove(ConceptId(2));
     assert_eq!(lex.search("gamma", 5).len(), 1);
 }
+
+// ---------------------------------------------------------------------------
+// Grain and names (A.14): BM25, the naming boost, detail types
+
+/// An ERP-shaped ontology: `Screen` and `Table` are the grain people ask
+/// about, `Field` is below it (`detail`), `Column` is a detail subtype.
+fn erp_ontology() -> Ontology {
+    let mut o = Ontology::new();
+    for name in ["Screen", "Table", "Document"] {
+        o.add_concept_type(ConceptType {
+            name: name.into(),
+            ..Default::default()
+        });
+    }
+    o.add_concept_type(ConceptType {
+        name: "Field".into(),
+        detail: true,
+        ..Default::default()
+    });
+    o.add_concept_type(ConceptType {
+        name: "Column".into(),
+        parent: Some("Field".into()),
+        ..Default::default()
+    });
+    o
+}
+
+fn sheet(g: &OntologyGraph, ty: &str, name: &str, description: &str) -> ConceptId {
+    g.upsert_concept(Concept::new(ConceptId(0), ty, name).with_description(description))
+        .unwrap()
+}
+
+/// Enough unrelated sheets for a word in a few of them to be rare.
+fn filler(g: &OntologyGraph) {
+    for i in 0..40 {
+        sheet(
+            g,
+            "Document",
+            &format!("Page {i}"),
+            &format!("texte{i} page{i}"),
+        );
+    }
+}
+
+/// BM25: repeats of a term saturate and a long sheet is not ranked under
+/// a short one for its length alone — a screen with its help page, which
+/// says the word eight times in two hundred, outranks a five-word label
+/// that says it once (the old tf/length score put the label 2.5× ahead).
+#[test]
+fn a_long_sheet_that_says_the_word_more_outranks_a_short_one_that_says_it_once() {
+    let lex = LexicalIndex::new();
+    let filler: Vec<String> = (0..192).map(|i| format!("w{i}")).collect();
+    let long = format!(
+        "{} comptes comptes comptes comptes comptes comptes comptes comptes",
+        filler.join(" ")
+    );
+    lex.insert(ConceptId(1), &long);
+    lex.insert(ConceptId(2), "libelle du plan des comptes");
+    let hits = lex.search("comptes", 10);
+    assert_eq!(hits[0].0, ConceptId(1), "{hits:?}");
+    assert!(hits[1].1 > 0.0);
+    // Updating a sheet's text moves the corpus average with it.
+    lex.insert(ConceptId(1), "comptes");
+    let again = lex.search("comptes", 10);
+    assert!(again.iter().all(|(_, s)| *s > 0.0));
+}
+
+/// `rarity`: 0 for a word the index never saw, near 0 for one it sees
+/// everywhere, 1 for a word in one sheet of many, in between otherwise.
+#[test]
+fn rarity_grades_how_identifying_a_word_is() {
+    let lex = LexicalIndex::new();
+    for i in 0..50u64 {
+        lex.insert(ConceptId(i), "alpha");
+    }
+    lex.insert(ConceptId(50), "alpha zeta");
+    lex.insert(ConceptId(51), "alpha beta");
+    lex.insert(ConceptId(52), "alpha beta");
+    assert_eq!(lex.rarity("omega"), 0.0);
+    let alpha = lex.rarity("alpha");
+    let beta = lex.rarity("beta");
+    let zeta = lex.rarity("zeta");
+    assert!(alpha < 0.05, "everywhere: {alpha}");
+    assert!(alpha < beta && beta < zeta, "{alpha} {beta} {zeta}");
+    assert!((zeta - 1.0).abs() < 1e-6, "one sheet: {zeta}");
+    let one = LexicalIndex::new();
+    one.insert(ConceptId(1), "solo");
+    assert!(one.rarity("solo") <= 1.0);
+}
+
+/// `search_where` filters before the cut to `limit`: the best kept sheet
+/// is returned even when a dropped one scored higher.
+#[test]
+fn filtered_search_cuts_after_filtering() {
+    let lex = LexicalIndex::new();
+    lex.insert(ConceptId(1), "gamma gamma gamma");
+    lex.insert(ConceptId(2), "gamma delta epsilon");
+    let keep = |id: ConceptId| id != ConceptId(1);
+    assert_eq!(lex.search("gamma", 1)[0].0, ConceptId(1));
+    assert_eq!(lex.search_where("gamma", 1, keep)[0].0, ConceptId(2));
+
+    let vec = VectorIndex::new(Arc::new(HashEmbedder::new(32)));
+    vec.insert(ConceptId(1), "gamma");
+    vec.insert(ConceptId(2), "gamma delta");
+    assert_eq!(vec.search("gamma", 1)[0].0, ConceptId(1));
+    assert_eq!(vec.search_where("gamma", 1, &keep)[0].0, ConceptId(2));
+}
+
+/// A sheet the query names (`gl100`, `sdba` for `appdb.sdba`) comes
+/// first, whatever its text scored and even under the relevance floor a
+/// long help text would have put it; a one-character segment (`w` of
+/// `gl/w-gl100.w`) never names.
+#[test]
+fn a_sheet_the_query_names_comes_first() {
+    let g = OntologyGraph::with_arc(erp_ontology());
+    let help: Vec<String> = (0..300).map(|i| format!("mot{i}")).collect();
+    let screen = sheet(&g, "Screen", "gl100", &help.join(" "));
+    let _doc = sheet(
+        &g,
+        "Document",
+        "Saisie des ecritures (gl100)",
+        "gl100 gl100 gl100 gl100 ouvre la saisie gl100",
+    );
+    let table = sheet(&g, "Table", "appdb.sdba", "Salaries");
+    let _other = sheet(&g, "Table", "appdb.sdba_cs", "Salaries, sdba sdba sdba");
+    let w = sheet(&g, "Screen", "gl/w-gl100.w", "w w w");
+    filler(&g);
+    let idx = HybridIndex::with_default_embedder(g.clone());
+    idx.reindex_all();
+
+    let r = |q: &str| {
+        idx.rank(&RetrievalRequest {
+            lexical_weight: 1.0,
+            top_k: 3,
+            ..req(q)
+        })
+    };
+    assert_eq!(r("gl100").first().map(|s| s.id), Some(screen));
+    assert_eq!(r("ou est gl100").first().map(|s| s.id), Some(screen));
+    assert_eq!(r("sdba").first().map(|s| s.id), Some(table));
+    assert_eq!(
+        r("quels programmes modifient la table appdb.sdba")
+            .first()
+            .map(|s| s.id),
+        Some(table)
+    );
+    let top_w = r("w").into_iter().next().unwrap();
+    assert_eq!(top_w.id, w, "the only sheet saying w");
+    assert!(top_w.score <= 1.0 + 1e-6, "not named by w: {}", top_w.score);
+    // The boost sits on top of the fused score: a named sheet's score is
+    // more than its best signal.
+    let top = r("gl100").into_iter().next().unwrap();
+    assert!(top.score > top.lexical.max(top.vector));
+}
+
+/// Detail sheets (fields) are seeds only by their full name
+/// (`sdba.comment`, `appdb.sdba.comment`) or when their type is asked
+/// for: a bare `comment` is a French word, not a field. A subtype of a
+/// detail type is detail too.
+#[test]
+fn detail_sheets_are_seeds_only_by_full_name_or_by_type() {
+    let g = OntologyGraph::with_arc(erp_ontology());
+    let table = sheet(&g, "Table", "appdb.sdba", "Salarie");
+    let field = sheet(&g, "Field", "appdb.sdba.comment", "Commentaire du salarie");
+    let column = sheet(&g, "Column", "appdb.sdba.km", "km du salarie");
+    let doc = sheet(&g, "Document", "Comment creer un salarie", "comment creer");
+    filler(&g);
+    let idx = HybridIndex::with_default_embedder(g.clone());
+    idx.reindex_all();
+    let ids = |r: RetrievalRequest| ranked_ids(&idx, &r);
+    let lex = |q: &str| RetrievalRequest {
+        lexical_weight: 1.0,
+        top_k: 5,
+        ..req(q)
+    };
+
+    let plain = ids(lex("salarie km comment"));
+    assert!(plain.contains(&doc) && plain.contains(&table), "{plain:?}");
+    assert!(
+        !plain.contains(&field) && !plain.contains(&column),
+        "{plain:?}"
+    );
+
+    assert_eq!(ids(lex("sdba.comment")).first(), Some(&field));
+    assert_eq!(
+        ids(lex("que contient appdb.sdba.comment ?")).first(),
+        Some(&field)
+    );
+    assert_eq!(ids(lex("appdb.sdba.km")).first(), Some(&column));
+
+    let by_type = ids(RetrievalRequest {
+        concept_types: vec!["Field".into()],
+        ..lex("comment")
+    });
+    assert!(by_type.contains(&field), "{by_type:?}");
+    assert!(!by_type.contains(&doc), "{by_type:?}");
+}

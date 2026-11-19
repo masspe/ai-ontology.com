@@ -309,7 +309,12 @@ Three sources feed it, in this order:
 
 The field-level links (`reads_field`, `updates_field`) are declared
 `detail`: in the graph and in the prompt, off the graph page unless asked —
-they are most of a software model's links.
+they are most of a software model's links. The `Field` type is `detail`
+too: never a retrieval seed unless the question names a field in full
+(`sdba.nogf`) or asks for the type (`concept_types`), so the table and
+screen sheets people ask about are not crowded out by their fields. A
+sheet the question names exactly (a screen code, a table) ranks first,
+the boost weighted by how rare the naming word is (`HybridIndex::rank`).
 
 `scripts/import-erp.ps1` runs the three in this order against one store
 (build, `--xref --sync`, `--abl --sync`, one `--df` per database).

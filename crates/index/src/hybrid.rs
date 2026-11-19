@@ -10,7 +10,7 @@ use ontology_graph::{ConceptId, OntologyGraph, Subgraph, TraversalSpec};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::embed::{Embedder, HashEmbedder};
+use crate::embed::{tokens, Embedder, HashEmbedder};
 use crate::lexical::LexicalIndex;
 use crate::vector::VectorIndex;
 
@@ -57,6 +57,54 @@ fn default_lex_w() -> f32 {
 /// treated as noise from the vector index and dropped before truncation. See
 /// the filtering step in [`HybridIndex::rank`].
 const RELEVANCE_RATIO: f32 = 0.4;
+
+/// Added to the fused score (≤ 1) of a sheet the query names exactly,
+/// scaled by how identifying the naming word is (`db660`: most of it;
+/// `gestion`, a word in thousands of sheets: little). Twice the top
+/// fused score, so a screen code names its screen over the programs and
+/// pages that merely mention it, even when its help text is long.
+const NAME_BOOST: f32 = 2.0;
+
+/// The query term that names the sheet, if one does. A sheet is named by
+/// its whole name or its last dotted segment (`sdba` names `appdb.sdba`);
+/// a one-character segment (`w` of `gl/w-gl100.w`) never counts. A detail
+/// sheet is named only by its full name or the name without its first
+/// segment (`appdb.sdba.nogf`, `sdba.nogf`): its bare last segment is a
+/// short code that collides with ordinary words (`comment`, `km`).
+fn naming_term(query_terms: &[String], query_lc: &str, name: &str, detail: bool) -> Option<String> {
+    let name = name.to_lowercase();
+    let last = name.rsplit('.').next().unwrap_or(&name).to_string();
+    if detail {
+        let tail = name.split_once('.').map_or(name.as_str(), |(_, t)| t);
+        let asked = if tail.contains('.') {
+            query_lc.contains(tail)
+        } else {
+            query_terms.iter().any(|t| t == tail)
+        };
+        return asked.then_some(last);
+    }
+    query_terms
+        .iter()
+        .find(|t| **t == name || (last.len() >= 2 && **t == last))
+        .cloned()
+}
+
+/// `true` when `ty` or one of its ancestors is declared `detail`.
+fn is_detail(onto: &ontology_graph::Ontology, ty: &str) -> bool {
+    let mut cursor = onto.concept_types.get(ty);
+    let mut hops = 0;
+    while let Some(ct) = cursor {
+        if ct.detail {
+            return true;
+        }
+        hops += 1;
+        if hops > 64 {
+            return false;
+        }
+        cursor = ct.parent.as_deref().and_then(|p| onto.concept_types.get(p));
+    }
+    false
+}
 
 impl Default for RetrievalRequest {
     fn default() -> Self {
@@ -187,62 +235,49 @@ impl HybridIndex {
     pub fn rank(&self, req: &RetrievalRequest) -> Vec<ScoredConcept> {
         let lex_w = req.lexical_weight.clamp(0.0, 1.0);
         let vec_w = 1.0 - lex_w;
-        // Pull a wider pool when type-filtering so we have candidates left
-        // after the filter trims rejects.
-        let pool_mult = if req.concept_types.is_empty() { 4 } else { 16 };
-        let pool = req.top_k.max(1) * pool_mult;
+        // The pool is a cut after full scoring, so a wide one is free; it
+        // must hold the sheet a question names when its text scored low
+        // (`sdba` among six other words).
+        let pool = req.top_k.max(1) * 16;
+        let onto = self.graph.ontology();
+        let query_terms: Vec<String> = tokens(&req.query).collect();
+        let query_lc = req.query.to_lowercase();
 
-        let lex = self.lexical.search(&req.query, pool);
-        let vec = self.vector.search(&req.query, pool);
+        // The term naming this sheet, if the query has one.
+        let named = |id: ConceptId| -> Option<String> {
+            let (ty, name) = self.graph.concept_header(id)?;
+            naming_term(&query_terms, &query_lc, &name, is_detail(&onto, &ty))
+        };
+        // Who may be a seed: the requested types (subtypes included), and
+        // among them the detail sheets only when the query names them.
+        let keep = |id: ConceptId| -> bool {
+            let Some((ty, _)) = self.graph.concept_header(id) else {
+                return false;
+            };
+            if !req.concept_types.is_empty() {
+                return req.concept_types.iter().any(|w| onto.is_subtype(&ty, w));
+            }
+            !is_detail(&onto, &ty) || named(id).is_some()
+        };
+
+        let lex = self.lexical.search_where(&req.query, pool, keep);
+        let vec = self.vector.search_where(&req.query, pool, &keep);
 
         let lex_max = lex.iter().map(|(_, s)| *s).fold(0f32, f32::max).max(1e-6);
         let vec_max = vec.iter().map(|(_, s)| *s).fold(0f32, f32::max).max(1e-6);
 
-        // Build the type whitelist closure once, honoring subtype inheritance.
-        let onto = self.graph.ontology();
-        let allow_id = |id: ConceptId| -> bool {
-            if req.concept_types.is_empty() {
-                return true;
-            }
-            match self.graph.get_concept(id) {
-                Ok(c) => req
-                    .concept_types
-                    .iter()
-                    .any(|wanted| onto.is_subtype(&c.concept_type, wanted)),
-                Err(_) => false,
-            }
-        };
-
         let mut combined: AHashMap<ConceptId, ScoredConcept> = AHashMap::new();
+        let blank = |id| ScoredConcept {
+            id,
+            score: 0.0,
+            lexical: 0.0,
+            vector: 0.0,
+        };
         for (id, s) in &lex {
-            if !allow_id(*id) {
-                continue;
-            }
-            let n = s / lex_max;
-            combined
-                .entry(*id)
-                .or_insert(ScoredConcept {
-                    id: *id,
-                    score: 0.0,
-                    lexical: 0.0,
-                    vector: 0.0,
-                })
-                .lexical = n;
+            combined.entry(*id).or_insert_with(|| blank(*id)).lexical = s / lex_max;
         }
         for (id, s) in &vec {
-            if !allow_id(*id) {
-                continue;
-            }
-            let n = s / vec_max;
-            combined
-                .entry(*id)
-                .or_insert(ScoredConcept {
-                    id: *id,
-                    score: 0.0,
-                    lexical: 0.0,
-                    vector: 0.0,
-                })
-                .vector = n;
+            combined.entry(*id).or_insert_with(|| blank(*id)).vector = s / vec_max;
         }
         let mut out: Vec<ScoredConcept> = combined
             .into_values()
@@ -251,11 +286,6 @@ impl HybridIndex {
                 sc
             })
             .collect();
-        out.sort_by(|a, b| {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
 
         // Drop the weakly-scored long tail. The vector index assigns a small
         // nonzero score to *every* concept (the hash embedder never returns a
@@ -265,16 +295,24 @@ impl HybridIndex {
         // grounded answer. Keep only concepts scoring within
         // `RELEVANCE_RATIO` of the best hit; this trims the noise floor while
         // preserving every concept that is competitive with the top match.
-        if let Some(best) = out.first().map(|s| s.score) {
-            if best > 0.0 {
-                let floor = best * RELEVANCE_RATIO;
-                out.retain(|s| s.score >= floor);
-            }
-        }
         // No positive evidence is no hit: an empty query embeds to the zero
         // vector and matches no term, which must not surface the whole
         // corpus at score 0 (and a negative cosine is noise, not a match).
-        out.retain(|s| s.score > 0.0);
+        let floor = out.iter().map(|s| s.score).fold(0f32, f32::max) * RELEVANCE_RATIO;
+        // A sheet the query names exactly (`db660`, `sdba`, `msdb.sdba`)
+        // is the answer whatever its text scored: above everything, and
+        // above the floor a long help text would have put it under.
+        out.retain(|s| s.score > 0.0 && (s.score >= floor || named(s.id).is_some()));
+        for s in &mut out {
+            if let Some(term) = named(s.id) {
+                s.score += NAME_BOOST * self.lexical.rarity(&term);
+            }
+        }
+        out.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         out.truncate(req.top_k);
         out
     }

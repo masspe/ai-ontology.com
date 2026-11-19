@@ -21,6 +21,10 @@ pub(crate) struct DocTerms {
     pub total: u32,
 }
 
+/// BM25 term saturation and length normalisation, the textbook values.
+const BM25_K1: f32 = 1.2;
+const BM25_B: f32 = 0.75;
+
 #[derive(Debug, Default)]
 pub struct LexicalIndex {
     inner: RwLock<Inner>,
@@ -38,6 +42,8 @@ struct Inner {
     postings: Vec<Vec<(ConceptId, u32)>>,
     /// concept_id -> total tokens (for length normalization)
     doc_len: AHashMap<ConceptId, u32>,
+    /// Sum of every `doc_len`, for the average length BM25 normalises by.
+    total_len: u64,
     /// concept_id -> its term ids, so an update or a removal touches only
     /// its own postings instead of every posting list of the vocabulary.
     doc_terms: AHashMap<ConceptId, Vec<u32>>,
@@ -69,10 +75,13 @@ impl Inner {
     }
 
     fn insert(&mut self, id: ConceptId, doc: DocTerms) {
-        if self.doc_len.insert(id, doc.total).is_none() {
-            self.n_docs += 1;
-        } else {
-            self.unpost(id);
+        self.total_len += u64::from(doc.total);
+        match self.doc_len.insert(id, doc.total) {
+            None => self.n_docs += 1,
+            Some(old) => {
+                self.total_len -= u64::from(old);
+                self.unpost(id);
+            }
         }
         let mut terms = Vec::with_capacity(doc.tf.len());
         for (term, count) in doc.tf {
@@ -115,20 +124,50 @@ impl LexicalIndex {
 
     pub fn remove(&self, id: ConceptId) {
         let mut g = self.inner.write();
-        if g.doc_len.remove(&id).is_some() {
+        if let Some(old) = g.doc_len.remove(&id) {
             g.n_docs = g.n_docs.saturating_sub(1);
+            g.total_len -= u64::from(old);
         }
         g.unpost(id);
     }
 
-    /// Returns concept ids ranked by tf-idf score.
+    /// How identifying one `term` is, 0 (absent, or in most sheets) to 1
+    /// (in one sheet): its idf against the largest possible.
+    pub fn rarity(&self, term: &str) -> f32 {
+        let g = self.inner.read();
+        let n = g.n_docs as f32;
+        let df = match g.terms.get(term) {
+            Some(&t) => g.postings[t as usize].len() as f32,
+            None => return 0.0,
+        };
+        if df == 0.0 {
+            return 0.0;
+        }
+        let idf = ((n - df + 0.5) / (df + 0.5) + 1.0).ln();
+        let max = ((n - 0.5) / 1.5 + 1.0).ln().max(f32::EPSILON);
+        (idf / max).clamp(0.0, 1.0)
+    }
+
+    /// Returns concept ids ranked by BM25 score.
     pub fn search(&self, query: &str, limit: usize) -> Vec<(ConceptId, f32)> {
+        self.search_where(query, limit, |_| true)
+    }
+
+    /// `search` over the concepts `keep` accepts: the filter runs before
+    /// the cut to `limit`, so the kept ones are the best kept ones.
+    pub fn search_where(
+        &self,
+        query: &str,
+        limit: usize,
+        keep: impl Fn(ConceptId) -> bool,
+    ) -> Vec<(ConceptId, f32)> {
         let g = self.inner.read();
         if g.n_docs == 0 {
             return Vec::new();
         }
         let mut scores: AHashMap<ConceptId, f32> = AHashMap::new();
         let n = g.n_docs as f32;
+        let avg_len = (g.total_len as f32 / n).max(1.0);
         for term in tokens(query) {
             let postings = match g.terms.get(&term) {
                 Some(&t) => &g.postings[t as usize],
@@ -149,10 +188,17 @@ impl LexicalIndex {
             let idf = ((n - df + 0.5) / (df + 0.5) + 1.0).ln();
             for (id, tf) in postings {
                 let dl = *g.doc_len.get(id).unwrap_or(&1) as f32;
-                let weight = (*tf as f32 / dl).sqrt() * idf;
+                let tf = *tf as f32;
+                // BM25: repeats saturate, a long sheet (a screen with its
+                // help page) is not ranked under a short one for that.
+                let weight = idf * tf * (BM25_K1 + 1.0)
+                    / (tf + BM25_K1 * (1.0 - BM25_B + BM25_B * dl / avg_len));
                 *scores.entry(*id).or_insert(0.0) += weight;
             }
         }
-        top_k(scores.into_iter().collect(), limit)
+        top_k(
+            scores.into_iter().filter(|(id, _)| keep(*id)).collect(),
+            limit,
+        )
     }
 }

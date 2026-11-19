@@ -46,6 +46,8 @@ async fn imports_the_fixture_directory_into_an_empty_graph() {
             .get(ty)
             .unwrap_or_else(|| panic!("missing concept type {ty}"));
         assert_eq!(ct.ns.as_deref(), Some("erp"), "ns of {ty}");
+        // Fields are below the grain people ask about; everything else is the grain.
+        assert_eq!(ct.detail, ty == "Field", "detail of {ty}");
     }
     assert_eq!(ontology.relation_types.len(), 13);
     assert_eq!(ontology.rule_types.len(), 3);

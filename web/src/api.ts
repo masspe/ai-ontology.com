@@ -202,6 +202,8 @@ export interface ConceptTypeDef {
   parent?: string | null;
   properties?: Record<string, any> | null;
   disjoint_with?: string[];
+  /** Below the grain people ask about: never a retrieval seed unless named in full. */
+  detail?: boolean;
 }
 
 export interface RelationTypeDef {
