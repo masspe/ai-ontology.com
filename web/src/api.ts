@@ -404,6 +404,38 @@ export interface Settings {
   };
   llm: LlmSettings;
   ocr: OcrSettings;
+  signin?: SigninSettings;
+}
+
+/** Settings → Sign-in: the OpenID Connect providers (secrets never served). */
+export interface SigninSettings {
+  public_url: string;
+  providers: SigninProvider[];
+}
+
+export interface SigninProvider {
+  id: string;
+  label: string;
+  issuer: string;
+  client_id: string;
+  client_secret_hint: string;
+  scopes?: string;
+  allowed_domains: string[];
+  admin_groups: string[];
+  enabled: boolean;
+}
+
+export interface SigninProviderPatch {
+  id: string;
+  label?: string;
+  issuer?: string;
+  client_id?: string;
+  /** Write-only; absent or empty keeps the stored secret. */
+  client_secret?: string;
+  scopes?: string;
+  allowed_domains?: string[];
+  admin_groups?: string[];
+  enabled?: boolean;
 }
 
 export interface SettingsPatch {
@@ -411,6 +443,7 @@ export interface SettingsPatch {
   ui?: Partial<Settings["ui"]>;
   llm?: LlmSettingsPatch;
   ocr?: OcrSettingsPatch;
+  signin?: { public_url?: string; providers?: SigninProviderPatch[] };
 }
 
 /** One earlier exchange of a conversation, sent back with the next question. */

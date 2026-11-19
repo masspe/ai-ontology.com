@@ -21,7 +21,7 @@
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::response::{IntoResponse, Redirect, Response};
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Extension, Json, Router};
 use parking_lot::Mutex;
@@ -30,7 +30,8 @@ use std::path::{Path as FsPath, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::{AuthContext, JwtAuth};
+use crate::{oidc, AuthContext, JwtAuth, Settings};
+use parking_lot::RwLock as PlRwLock;
 
 /// Bcrypt cost: what bcryptjs used in the Node server (12).
 const BCRYPT_COST: u32 = 12;
@@ -66,9 +67,9 @@ struct Provider {
 /// (`role` is new; absent means `user`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct User {
-    id: String,
-    email: String,
+pub(crate) struct User {
+    pub(crate) id: String,
+    pub(crate) email: String,
     name: String,
     #[serde(default)]
     picture: Option<String>,
@@ -82,8 +83,13 @@ struct User {
 }
 
 impl User {
-    fn is_admin(&self) -> bool {
+    pub(crate) fn is_admin(&self) -> bool {
         self.role.as_deref() == Some("admin")
+    }
+
+    /// An account with a password: created here, not by a provider.
+    pub(crate) fn is_local(&self) -> bool {
+        self.password_hash.is_some()
     }
 
     /// What the API returns: never the hash.
@@ -250,9 +256,94 @@ impl UserStore {
         std::fs::rename(&tmp, &self.path).map_err(io)
     }
 
-    fn find_by_email(&self, email: &str) -> Option<User> {
+    pub(crate) fn find_by_email(&self, email: &str) -> Option<User> {
         let lc = email.trim().to_lowercase();
         self.db.lock().users.iter().find(|u| u.email == lc).cloned()
+    }
+
+    /// The account an identity provider's subject is attached to.
+    pub(crate) fn find_by_provider(&self, provider: &str, sub: &str) -> Option<User> {
+        self.db
+            .lock()
+            .users
+            .iter()
+            .find(|u| {
+                u.providers
+                    .iter()
+                    .any(|p| p.provider == provider && p.sub == sub)
+            })
+            .cloned()
+    }
+
+    /// Attach a provider's subject to an existing account.
+    pub(crate) fn link_provider(
+        &self,
+        id: &str,
+        provider: &str,
+        sub: &str,
+    ) -> Result<User, UserStoreError> {
+        self.update(id, |u| {
+            u.providers.push(Provider {
+                provider: provider.to_string(),
+                sub: sub.to_string(),
+            })
+        })
+    }
+
+    /// Give or take the administrator role.
+    pub(crate) fn set_admin(&self, id: &str, admin: bool) -> Result<User, UserStoreError> {
+        self.update(id, |u| u.role = admin.then(|| "admin".to_string()))
+    }
+
+    fn update(&self, id: &str, f: impl FnOnce(&mut User)) -> Result<User, UserStoreError> {
+        let mut db = self.db.lock();
+        let mut next = db.clone();
+        let user = next.users.iter_mut().find(|u| u.id == id).ok_or_else(|| {
+            UserStoreError::Io(self.path.clone(), std::io::Error::other("no such user"))
+        })?;
+        f(user);
+        let user = user.clone();
+        self.persist(&next)?;
+        *db = next;
+        Ok(user)
+    }
+
+    /// An account created by an identity provider's sign-in: no password,
+    /// the provider's subject attached. The first account is the
+    /// administrator, as with sign-up.
+    pub(crate) fn create_external(
+        &self,
+        email: &str,
+        name: &str,
+        picture: Option<String>,
+        provider: &str,
+        sub: &str,
+    ) -> Result<User, UserStoreError> {
+        let lc = email.trim().to_lowercase();
+        let mut db = self.db.lock();
+        let name = name.trim();
+        let user = User {
+            id: new_id(),
+            email: lc.clone(),
+            name: if name.is_empty() {
+                lc.split('@').next().unwrap_or("").to_string()
+            } else {
+                name.to_string()
+            },
+            picture,
+            password_hash: None,
+            providers: vec![Provider {
+                provider: provider.to_string(),
+                sub: sub.to_string(),
+            }],
+            created_at: now_rfc3339(),
+            role: db.users.is_empty().then(|| "admin".to_string()),
+        };
+        let mut next = db.clone();
+        next.users.push(user.clone());
+        self.persist(&next)?;
+        *db = next;
+        Ok(user)
     }
 
     fn find_by_id(&self, id: &str) -> Option<User> {
@@ -509,7 +600,7 @@ impl Signer {
         }
     }
 
-    fn sign(&self, user: &User) -> String {
+    pub(crate) fn sign(&self, user: &User) -> String {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
@@ -539,6 +630,9 @@ pub struct AuthState {
     pub store: Arc<UserStore>,
     pub signer: Arc<Signer>,
     pub allow_signup: bool,
+    /// The sign-in providers live in the settings.
+    pub settings: Arc<PlRwLock<Settings>>,
+    pub oidc: Arc<oidc::Oidc>,
 }
 
 /// `/auth/signup`, `/auth/login`, `/auth/logout` and the OAuth bounces:
@@ -548,8 +642,9 @@ pub fn public_routes(state: AuthState) -> Router {
         .route("/auth/signup", post(signup))
         .route("/auth/login", post(login))
         .route("/auth/logout", post(logout))
-        .route("/auth/oauth/:provider/start", get(oauth_not_configured))
-        .route("/auth/oauth/:provider/callback", get(oauth_not_configured))
+        .route("/auth/providers", get(oidc::providers))
+        .route("/auth/oauth/:provider/start", get(oidc::start))
+        .route("/auth/oauth/:provider/callback", get(oidc::callback))
         .with_state(state)
 }
 
@@ -727,15 +822,6 @@ async fn login(State(s): State<AuthState>, Json(c): Json<Credentials>) -> Respon
 async fn logout() -> Json<serde_json::Value> {
     // Tokens are stateless; the client drops its copy.
     Json(serde_json::json!({ "ok": true }))
-}
-
-async fn oauth_not_configured(Path(provider): Path<String>) -> Redirect {
-    let provider: String = provider
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric())
-        .take(32)
-        .collect();
-    Redirect::to(&format!("/login?error={provider}_not_configured"))
 }
 
 fn current(s: &AuthState, ctx: &AuthContext) -> Result<User, Refused> {

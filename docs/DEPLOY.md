@@ -78,9 +78,31 @@ container, add `"role": "admin"` to an account in the file, restart. Deleting
 an account revokes its tokens immediately. Accounts are created by the
 administrator through the API, as above.
 
-Google and Microsoft sign-in (OAuth) are not served by the binary: the buttons
-send the user back to the login page with `error=…_not_configured`. The Node
-`auth-server/` is optional and only needed for Google/Microsoft OAuth.
+### Sign-in with a company identity (OpenID Connect)
+
+The binary signs users in through any OpenID Connect provider — Microsoft
+Entra ID and Google first — so identity, MFA and leavers stay with the
+client's IT. The administrator configures it in **Settings → Sign-in** (or
+`PATCH /settings {"signin": …}`): the public URL of the server, then one
+provider per button with its issuer (`https://login.microsoftonline.com/<tenant-id>/v2.0`,
+`https://accounts.google.com`, …), client id and secret (sealed at rest with
+the master key, §1), the **e-mail domains** whose users get an account on
+their first sign-in (empty: only existing accounts may sign in), and the
+**groups** whose members are administrators (empty: the provider does not
+decide roles; a local administrator is never demoted by the groups). At the
+provider, register the redirect URI the page shows:
+`<public URL>/auth/oauth/<id>/callback`, and ask for the `groups` claim when
+you use it (Entra: *Token configuration → Add groups claim*).
+
+The flow is the authorization code with PKCE; `state` and `nonce` live in a
+signed, HttpOnly cookie; the `id_token` is verified RS256 against the
+provider's published keys (issuer, audience, expiry, nonce). A user is
+found by provider subject, else attached to the account with the same
+verified e-mail, else created. The login page shows one button per
+configured provider (`GET /auth/providers`); a refused sign-in comes back
+to the UI with `?error=<code>` (`domain_not_allowed`, `id_token_invalid`,
+`invalid_state`, …) and the detail in the server log. The Node
+`auth-server/` is deprecated: nothing needs it any more.
 
 ### API keys and audit log
 

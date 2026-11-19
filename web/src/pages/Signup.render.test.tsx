@@ -16,13 +16,20 @@ import { renderPage, screen, waitFor } from "../test/render";
 
 vi.mock("../lib/msBE", async () => {
   const actual = await vi.importActual<{ msBE: { auth: Record<string, unknown> } }>("../lib/msBE");
-  const auth = { ...actual.msBE.auth, signup: vi.fn() };
+  const auth = { ...actual.msBE.auth, signup: vi.fn(), providers: vi.fn() };
   const mocked = { ...actual.msBE, auth };
   return { ...actual, msBE: mocked, default: mocked };
 });
 
 const Signup = SignupPage as ComponentType;
 const signupMock = (msBE as { auth: { signup: ReturnType<typeof vi.fn> } }).auth.signup;
+const providersMock = (msBE as { auth: { providers: ReturnType<typeof vi.fn> } }).auth.providers;
+beforeEach(() => {
+  providersMock.mockResolvedValue([
+    { id: "google", label: "Google" },
+    { id: "microsoft", label: "Microsoft" },
+  ]);
+});
 
 function ShowLocation() {
   const loc = useLocation();
@@ -64,13 +71,13 @@ beforeEach(() => {
 });
 
 describe("Signup page", () => {
-  it("renders the form, the OAuth links and the login link with next=/", () => {
+  it("renders the form, the OAuth links and the login link with next=/", async () => {
     mount();
     expect(screen.getByRole("heading", { name: "Créer un compte" })).toBeInTheDocument();
     expect(nameBox()).toHaveAttribute("autocomplete", "name");
     expect(passwordBox()).toHaveAttribute("type", "password");
     expect(confirmBox()).toHaveAttribute("type", "password");
-    expect(screen.getByRole("link", { name: "S'inscrire avec Google" })).toHaveAttribute(
+    expect(await screen.findByRole("link", { name: "S'inscrire avec Google" })).toHaveAttribute(
       "href",
       "/auth/oauth/google/start?next=%2F",
     );
@@ -81,10 +88,10 @@ describe("Signup page", () => {
     expect(screen.getByRole("link", { name: "Se connecter" })).toHaveAttribute("href", "/login?next=%2F");
   });
 
-  it("threads a relative ?next= through the links and rejects unsafe ones", () => {
+  it("threads a relative ?next= through the links and rejects unsafe ones", async () => {
     const first = mount("/signup?next=%2Ffiles%3Ftab%3D2");
     expect(screen.getByRole("link", { name: "Se connecter" })).toHaveAttribute("href", "/login?next=%2Ffiles%3Ftab%3D2");
-    expect(screen.getByRole("link", { name: "S'inscrire avec Microsoft" })).toHaveAttribute(
+    expect(await screen.findByRole("link", { name: "S'inscrire avec Microsoft" })).toHaveAttribute(
       "href",
       "/auth/oauth/microsoft/start?next=%2Ffiles%3Ftab%3D2",
     );

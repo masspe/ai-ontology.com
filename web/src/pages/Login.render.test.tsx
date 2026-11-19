@@ -16,13 +16,14 @@ import { renderPage, screen, waitFor } from "../test/render";
 
 vi.mock("../lib/msBE", async () => {
   const actual = await vi.importActual<{ msBE: { auth: Record<string, unknown> } }>("../lib/msBE");
-  const auth = { ...actual.msBE.auth, login: vi.fn() };
+  const auth = { ...actual.msBE.auth, login: vi.fn(), providers: vi.fn() };
   const mocked = { ...actual.msBE, auth };
   return { ...actual, msBE: mocked, default: mocked };
 });
 
 const Login = LoginPage as ComponentType;
 const loginMock = (msBE as { auth: { login: ReturnType<typeof vi.fn> } }).auth.login;
+const providersMock = (msBE as { auth: { providers: ReturnType<typeof vi.fn> } }).auth.providers;
 
 function ShowLocation() {
   const loc = useLocation();
@@ -45,15 +46,19 @@ const submit = () => screen.getByRole("button", { name: "Se connecter" });
 
 beforeEach(() => {
   loginMock.mockResolvedValue({ token: "jwt", user: { id: 1 } });
+  providersMock.mockResolvedValue([
+    { id: "google", label: "Google" },
+    { id: "microsoft", label: "Microsoft" },
+  ]);
 });
 
 describe("Login page", () => {
-  it("renders the form, the OAuth links and the signup link with a sanitised next=/", () => {
+  it("renders the form, the OAuth links and the signup link with a sanitised next=/", async () => {
     mount();
     expect(screen.getByRole("heading", { name: "Se connecter" })).toBeInTheDocument();
     expect(emailBox()).toHaveAttribute("type", "email");
     expect(passwordBox()).toHaveAttribute("type", "password");
-    expect(screen.getByRole("link", { name: "Continuer avec Google" })).toHaveAttribute(
+    expect(await screen.findByRole("link", { name: "Continuer avec Google" })).toHaveAttribute(
       "href",
       "/auth/oauth/google/start?next=%2F",
     );
@@ -64,9 +69,9 @@ describe("Login page", () => {
     expect(screen.getByRole("link", { name: "Créer un compte" })).toHaveAttribute("href", "/signup?next=%2F");
   });
 
-  it("threads a relative ?next= through the OAuth and signup links", () => {
+  it("threads a relative ?next= through the OAuth and signup links", async () => {
     mount("/login?next=%2Ffiles%3Ftab%3D2");
-    expect(screen.getByRole("link", { name: "Continuer avec Google" })).toHaveAttribute(
+    expect(await screen.findByRole("link", { name: "Continuer avec Google" })).toHaveAttribute(
       "href",
       "/auth/oauth/google/start?next=%2Ffiles%3Ftab%3D2",
     );

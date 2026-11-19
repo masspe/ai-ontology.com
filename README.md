@@ -203,7 +203,7 @@ ontology --data ./data serve --bind 0.0.0.0:5000 --web web/dist --login
 | [docs/LLM-PROVIDERS.md](docs/LLM-PROVIDERS.md) | Configuring a provider, Infomaniak AI Tools, prompt caching. |
 | [docs/STORAGE.md](docs/STORAGE.md), [docs/PERFORMANCE.md](docs/PERFORMANCE.md) | The store format and the read-path rules, in French. |
 | [examples/finance](examples/finance/README.md), [examples/models](examples/models/README.md) | The demo data set and the ready-made models (the models' README is in French). |
-| [auth-server/README.md](auth-server/README.md) | The optional Node server, only needed for Google / Microsoft sign-in. |
+| [auth-server/README.md](auth-server/README.md) | The former Node sign-in server, deprecated: the binary signs users in through OpenID Connect (docs/DEPLOY.md §3). |
 
 ## Security
 

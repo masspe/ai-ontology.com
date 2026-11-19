@@ -25,6 +25,7 @@
 pub mod audit;
 pub mod auth;
 mod ingest_review;
+pub mod oidc;
 mod openapi;
 pub mod secrets;
 
@@ -511,6 +512,7 @@ pub struct Settings {
     pub ui: UiPrefs,
     pub llm: LlmSettings,
     pub ocr: OcrSettings,
+    pub signin: oidc::SigninSettings,
 }
 
 /// OCR engine configuration. The Google Cloud Vision API key is write-only
@@ -665,6 +667,7 @@ impl Settings {
         }
         self.llm.refresh_key_hints();
         self.ocr.refresh_key_hints();
+        self.signin.refresh_hints();
     }
 
     /// Read a settings file, falling back to defaults when it is absent or
@@ -675,7 +678,7 @@ impl Settings {
     }
 }
 
-fn key_hint(key: &str) -> String {
+pub(crate) fn key_hint(key: &str) -> String {
     let k = key.trim();
     if k.is_empty() {
         return String::new();
@@ -734,6 +737,7 @@ pub struct SettingsPatch {
     pub ui: Option<UiPrefsPatch>,
     pub llm: Option<LlmSettingsPatch>,
     pub ocr: Option<OcrSettingsPatch>,
+    pub signin: Option<oidc::SigninPatch>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1087,6 +1091,8 @@ fn build_router_inner(state: AppState, cfg: RouterConfig) -> Router {
             store: u.store.clone(),
             signer: StdArc::new(auth::Signer::new(j)),
             allow_signup: u.allow_signup,
+            settings: state.settings.clone(),
+            oidc: StdArc::new(oidc::Oidc::new(&j.secret)),
         }),
         (Some(_), None) => panic!("built-in auth needs a JWT secret to sign tokens"),
         _ => None,
@@ -3364,11 +3370,17 @@ async fn get_settings(State(s): State<AppState>) -> Json<serde_json::Value> {
     Json(settings_view(&s.settings.read()))
 }
 
-async fn patch_settings(
-    State(s): State<AppState>,
-    Json(patch): Json<SettingsPatch>,
-) -> Json<serde_json::Value> {
+async fn patch_settings(State(s): State<AppState>, Json(patch): Json<SettingsPatch>) -> Response {
     let mut current = s.settings.write();
+    if let Some(sg) = patch.signin {
+        if let Err(message) = current.signin.apply(sg) {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": message })),
+            )
+                .into_response();
+        }
+    }
     if let Some(r) = patch.retrieval {
         if let Some(v) = r.top_k {
             current.retrieval.top_k = v;
@@ -3465,7 +3477,7 @@ async fn patch_settings(
             tracing::warn!(error = %e, path = %path.display(), "failed to persist settings");
         }
     }
-    Json(settings_view(&snapshot))
+    Json(settings_view(&snapshot)).into_response()
 }
 
 // ---- OCR engine status ----------------------------------------------------

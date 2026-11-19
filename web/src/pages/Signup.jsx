@@ -3,6 +3,7 @@ import { useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { msBE } from "../lib/msBE";
 import { useToast } from "../components/Toast.jsx";
+import ProviderButtons from "../components/ProviderButtons.jsx";
 import { t } from "../lib/i18n";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -105,14 +106,7 @@ export default function Signup() {
           {loading ? t("Création…") : t("Créer mon compte")}
         </button>
 
-        <div style={divider}><span>{t("ou")}</span></div>
-
-        <a href={msBE.auth.googleLoginUrl(next)} style={oauthBtn("#fff", "#111", "#ddd")}>
-          {t("S'inscrire avec Google")}
-        </a>
-        <a href={msBE.auth.microsoftLoginUrl(next)} style={oauthBtn("#2f2f2f", "#fff", "#2f2f2f")}>
-          {t("S'inscrire avec Microsoft")}
-        </a>
+        <ProviderButtons next={next} verb={(label) => t("S'inscrire avec {provider}", { provider: label })} />
 
         <p style={{ marginTop: 16 }}>
           {t("Déjà inscrit ?")} <Link to={`/login?next=${encodeURIComponent(next)}`}>{t("Se connecter")}</Link>
@@ -128,5 +122,3 @@ const label = { display: "flex", flexDirection: "column", gap: 4, fontSize: 14 }
 const input = { padding: "10px 12px", border: "1px solid #d4d4d8", borderRadius: 8, fontSize: 14 };
 const errStyle = { color: "#b91c1c", fontSize: 12 };
 const primaryBtn = { padding: "10px 14px", background: "#111", color: "#fff", border: 0, borderRadius: 8, cursor: "pointer", fontWeight: 600 };
-const divider = { textAlign: "center", color: "#6b7280", fontSize: 12, margin: "8px 0" };
-const oauthBtn = (bg, fg, bd) => ({ display: "block", textAlign: "center", padding: "10px 14px", background: bg, color: fg, border: `1px solid ${bd}`, borderRadius: 8, textDecoration: "none", fontWeight: 600 });

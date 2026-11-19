@@ -104,11 +104,19 @@ const auth = {
   isAuthenticated: () => Boolean(tokenStore.get()),
   currentUser: () => userStore.get(),
 
-  // OAuth: redirect to backend which initiates the provider flow.
-  googleLoginUrl: (next = "/") =>
-    `${API_BASE}/auth/oauth/google/start?next=${encodeURIComponent(next)}`,
-  microsoftLoginUrl: (next = "/") =>
-    `${API_BASE}/auth/oauth/microsoft/start?next=${encodeURIComponent(next)}`,
+  // The sign-in providers the server has configured: [{ id, label }];
+  // none when the server cannot be asked.
+  async providers() {
+    try {
+      const list = await request("GET", "/auth/providers");
+      return Array.isArray(list) ? list : [];
+    } catch { return []; }
+  },
+  // OpenID Connect: redirect to the backend, which starts the provider's flow.
+  providerLoginUrl: (id, next = "/") =>
+    `${API_BASE}/auth/oauth/${encodeURIComponent(id)}/start?next=${encodeURIComponent(next)}`,
+  googleLoginUrl: (next = "/") => auth.providerLoginUrl("google", next),
+  microsoftLoginUrl: (next = "/") => auth.providerLoginUrl("microsoft", next),
 
   // Used by the OAuth callback page to consume `?token=...`.
   consumeOAuthToken(token) {

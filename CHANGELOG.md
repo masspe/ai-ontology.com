@@ -35,6 +35,17 @@ All notable changes to this project are listed here. The format follows
 
 ### Added
 
+- Sign-in through OpenID Connect, in the binary: Microsoft Entra ID,
+  Google or any provider with a discovery document, configured by the
+  administrator in Settings → Sign-in (public URL, issuer, client id and
+  secret, allowed e-mail domains, administrator groups). Authorization
+  code with PKCE, `state` and `nonce` in a signed HttpOnly cookie, the
+  `id_token` verified RS256 against the provider's keys; an account is
+  found by provider subject, attached by verified e-mail, or created when
+  the e-mail's domain is allowed; group claims grant the administrator
+  role (and take it from provider-owned accounts). The login and sign-up
+  pages show one button per configured provider (`GET /auth/providers`).
+  The Node `auth-server/` is deprecated.
 - Secrets at rest: every secret field of the settings file (the provider
   API keys) is sealed with a tenant master key, AES-256-GCM, before it is
   written — `master.key` beside the settings, generated owner-only on

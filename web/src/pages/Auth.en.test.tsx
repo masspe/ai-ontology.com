@@ -16,7 +16,12 @@ import { renderPage, screen } from "../test/render";
 
 vi.mock("../lib/msBE", async () => {
   const actual = await vi.importActual<{ msBE: { auth: Record<string, unknown> } }>("../lib/msBE");
-  const auth = { ...actual.msBE.auth, me: vi.fn(() => new Promise(() => {})), consumeOAuthToken: vi.fn(() => true) };
+  const auth = {
+    ...actual.msBE.auth,
+    me: vi.fn(() => new Promise(() => {})),
+    consumeOAuthToken: vi.fn(() => true),
+    providers: () => Promise.resolve([{ id: "google", label: "Google" }, { id: "microsoft", label: "Microsoft" }]),
+  };
   const mocked = { ...actual.msBE, auth };
   return { ...actual, msBE: mocked, default: mocked };
 });
@@ -31,7 +36,7 @@ describe("authentication pages in English", () => {
     const { user } = renderPage(<Login />, { route: "/login", path: "/login" });
     expect(screen.getByRole("heading", { name: "Sign in" })).toBeInTheDocument();
     expect(screen.getByLabelText(/^Password/)).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Continue with Google" })).toBeInTheDocument();
+    expect(await screen.findByRole("link", { name: "Continue with Google" })).toBeInTheDocument();
     expect(screen.getByText(/No account yet\?/)).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Sign in" }));
     expect(screen.getByText("Invalid email")).toBeInTheDocument();
@@ -43,7 +48,7 @@ describe("authentication pages in English", () => {
     const { user } = renderPage(<Signup />, { route: "/signup", path: "/signup" });
     expect(screen.getByRole("heading", { name: "Create an account" })).toBeInTheDocument();
     expect(screen.getByLabelText(/^Confirm/)).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Sign up with Microsoft" })).toBeInTheDocument();
+    expect(await screen.findByRole("link", { name: "Sign up with Microsoft" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Create my account" }));
     expect(screen.getByText("Name required")).toBeInTheDocument();
   });

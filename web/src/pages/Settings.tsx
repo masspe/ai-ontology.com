@@ -3,6 +3,7 @@
 
 import { useEffect, useState } from "react";
 import Card from "../components/Card";
+import SigninSection from "../components/SigninSection";
 // @ts-expect-error JSX module
 import { useConfirm } from "../components/ConfirmDialog.jsx";
 import {
@@ -283,6 +284,13 @@ function GeneralSettings({
         <OcrSection
           settings={s}
           onPatch={(patch) => apply({ ocr: patch })}
+        />
+      )}
+
+      {s && (
+        <SigninSection
+          signin={s.signin}
+          onPatch={(patch) => apply({ signin: patch })}
         />
       )}
 

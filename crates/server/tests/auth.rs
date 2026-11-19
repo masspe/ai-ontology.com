@@ -504,25 +504,25 @@ async fn open_signup_keeps_creating_plain_users() {
 }
 
 #[tokio::test]
-async fn oauth_routes_bounce_to_the_login_page_until_configured() {
+async fn oauth_routes_bounce_to_the_callback_page_until_configured() {
     let dir = tempdir("oauth");
     let app = app(dir.join("users.json"), false, None);
+    let (st, v, _) = call(&app, "GET", "/auth/providers", None, None).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(v, json!([]), "no provider configured");
     for uri in [
         "/auth/oauth/google/start?next=%2F",
         "/auth/oauth/microsoft/callback?code=x",
+        "/auth/oauth/ev%22il/start",
     ] {
         let (st, _, headers) = call(&app, "GET", uri, None, None).await;
         assert_eq!(st, StatusCode::SEE_OTHER, "{uri}");
         let loc = headers.get("location").unwrap().to_str().unwrap();
-        assert!(loc.starts_with("/login?error="), "{loc}");
-        assert!(loc.ends_with("_not_configured"), "{loc}");
+        assert_eq!(
+            loc, "http://localhost/oauth/callback?error=provider_not_configured",
+            "{uri}"
+        );
     }
-    let (_, _, headers) = call(&app, "GET", "/auth/oauth/ev%22il/start", None, None).await;
-    let loc = headers.get("location").unwrap().to_str().unwrap();
-    assert_eq!(
-        loc, "/login?error=evil_not_configured",
-        "provider name sanitised"
-    );
 }
 
 #[tokio::test]
