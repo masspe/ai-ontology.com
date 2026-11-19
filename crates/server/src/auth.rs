@@ -36,7 +36,13 @@ use parking_lot::RwLock as PlRwLock;
 /// Bcrypt cost: what bcryptjs used in the Node server (12).
 const BCRYPT_COST: u32 = 12;
 /// Token lifetime, as the Node server's `JWT_EXPIRES_IN` default (7 days).
-const TOKEN_TTL_SECS: u64 = 7 * 24 * 3600;
+/// An access token is short: revocation (logout, a deleted account, a
+/// session ended) takes effect within this.
+const TOKEN_TTL_SECS: u64 = 15 * 60;
+/// A session lives this long after its last refresh.
+const SESSION_TTL_SECS: u64 = 30 * 24 * 3600;
+/// The refresh cookie: only sent to `/auth/*`.
+pub(crate) const REFRESH_COOKIE: &str = "ontology_refresh";
 
 /// Configuration of the built-in auth: the users store (opened by the
 /// caller, so a corrupt file is an error before anything listens) and
@@ -169,6 +175,31 @@ struct Db {
     users: Vec<User>,
     #[serde(default)]
     keys: Vec<ApiKey>,
+    #[serde(default)]
+    sessions: Vec<SessionRec>,
+}
+
+/// One signed-in browser: the access tokens carry its id (`sid`), the
+/// refresh cookie its rotating secret (kept hashed). Ended at logout, at
+/// "sign out everywhere", when the account is deleted, or after
+/// `SESSION_TTL_SECS` without a refresh.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionRec {
+    id: String,
+    user_id: String,
+    /// SHA-256 of the current refresh secret, hex.
+    refresh_hash: String,
+    created_at: String,
+    /// Unix seconds; past it the session is gone.
+    expires_at: u64,
+}
+
+fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 /// The users file, loaded once, written whole on every change (a few
@@ -229,6 +260,98 @@ impl UserStore {
     /// deleted user's token stops working at once, not at its expiry.
     pub fn exists(&self, id: &str) -> bool {
         self.db.lock().users.iter().any(|u| u.id == id)
+    }
+
+    /// `true` while the session an access token names is open: what
+    /// `require_auth` asks so a logout takes effect at once.
+    pub fn session_alive(&self, sid: &str) -> bool {
+        let now = unix_now();
+        self.db
+            .lock()
+            .sessions
+            .iter()
+            .any(|s| s.id == sid && s.expires_at > now)
+    }
+
+    /// Open a session for `user_id`: its id and the refresh secret, shown
+    /// once (the file keeps a hash). Expired sessions are swept here.
+    fn create_session(&self, user_id: &str) -> Result<(String, String), UserStoreError> {
+        use rand::RngCore;
+        let mut raw = [0u8; 32];
+        rand::rng().fill_bytes(&mut raw);
+        let secret: String = raw.iter().map(|b| format!("{b:02x}")).collect();
+        let rec = SessionRec {
+            id: new_id(),
+            user_id: user_id.to_string(),
+            refresh_hash: sha256_hex(&secret),
+            created_at: now_rfc3339(),
+            expires_at: unix_now() + SESSION_TTL_SECS,
+        };
+        let mut db = self.db.lock();
+        let mut next = db.clone();
+        let now = unix_now();
+        next.sessions.retain(|s| s.expires_at > now);
+        next.sessions.push(rec.clone());
+        self.persist(&next)?;
+        *db = next;
+        Ok((rec.id, secret))
+    }
+
+    /// Exchange a refresh secret for a new one (the old one is dead at
+    /// once); `None` when it names no open session.
+    fn rotate_session(&self, secret: &str) -> Result<Option<(String, User)>, UserStoreError> {
+        use rand::RngCore;
+        let h = sha256_hex(secret);
+        let now = unix_now();
+        let mut db = self.db.lock();
+        let Some(pos) = db
+            .sessions
+            .iter()
+            .position(|s| s.refresh_hash == h && s.expires_at > now)
+        else {
+            return Ok(None);
+        };
+        let Some(user) = db
+            .users
+            .iter()
+            .find(|u| u.id == db.sessions[pos].user_id)
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        let mut raw = [0u8; 32];
+        rand::rng().fill_bytes(&mut raw);
+        let fresh: String = raw.iter().map(|b| format!("{b:02x}")).collect();
+        let mut next = db.clone();
+        next.sessions[pos].refresh_hash = sha256_hex(&fresh);
+        next.sessions[pos].expires_at = now + SESSION_TTL_SECS;
+        self.persist(&next)?;
+        *db = next;
+        Ok(Some((fresh, user)))
+    }
+
+    /// The session id a refresh secret names, if any.
+    fn session_of_secret(&self, secret: &str) -> Option<String> {
+        let h = sha256_hex(secret);
+        self.db
+            .lock()
+            .sessions
+            .iter()
+            .find(|s| s.refresh_hash == h)
+            .map(|s| s.id.clone())
+    }
+
+    /// End the sessions `keep` rejects.
+    fn end_sessions(&self, keep: impl Fn(&SessionRec) -> bool) -> Result<usize, UserStoreError> {
+        let mut db = self.db.lock();
+        let mut next = db.clone();
+        next.sessions.retain(|s| keep(s));
+        let ended = db.sessions.len() - next.sessions.len();
+        if ended > 0 {
+            self.persist(&next)?;
+            *db = next;
+        }
+        Ok(ended)
     }
 
     /// Write the whole file through a temporary neighbour and a rename, so
@@ -401,6 +524,7 @@ impl UserStore {
         if next.users.len() == db.users.len() {
             return Ok(false);
         }
+        next.sessions.retain(|s| s.user_id != id);
         self.persist(&next)?;
         *db = next;
         Ok(true)
@@ -576,6 +700,8 @@ async fn verify_password(password: String, hash: Option<String>) -> bool {
 #[derive(Debug, Serialize)]
 struct Claims<'a> {
     sub: &'a str,
+    /// The session: `require_auth` refuses the token once it is ended.
+    sid: &'a str,
     email: &'a str,
     name: &'a str,
     iss: &'a str,
@@ -600,13 +726,11 @@ impl Signer {
         }
     }
 
-    pub(crate) fn sign(&self, user: &User) -> String {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
+    pub(crate) fn sign(&self, user: &User, sid: &str) -> String {
+        let now = unix_now();
         let claims = Claims {
             sub: &user.id,
+            sid,
             email: &user.email,
             name: &user.name,
             iss: &self.issuer,
@@ -642,6 +766,7 @@ pub fn public_routes(state: AuthState) -> Router {
         .route("/auth/signup", post(signup))
         .route("/auth/login", post(login))
         .route("/auth/logout", post(logout))
+        .route("/auth/refresh", post(refresh))
         .route("/auth/providers", get(oidc::providers))
         .route("/auth/oauth/:provider/start", get(oidc::start))
         .route("/auth/oauth/:provider/callback", get(oidc::callback))
@@ -653,6 +778,7 @@ pub fn public_routes(state: AuthState) -> Router {
 pub fn protected_routes(state: AuthState) -> Router {
     Router::new()
         .route("/auth/me", get(me))
+        .route("/auth/sessions", axum::routing::delete(sign_out_everywhere))
         .route("/auth/users", get(list_users).post(create_user))
         .route("/auth/users/:id", axum::routing::delete(delete_user))
         .route("/auth/keys", get(list_keys).post(create_key))
@@ -737,15 +863,131 @@ fn error(status: StatusCode, msg: &str) -> Response {
     (status, Json(serde_json::json!({ "error": msg }))).into_response()
 }
 
+/// A signed-in response: the access token in the body, the refresh
+/// secret in an HttpOnly cookie scoped to `/auth`.
 fn session(s: &AuthState, user: &User, status: StatusCode) -> Response {
-    (
+    let (sid, secret) = match s.store.create_session(&user.id) {
+        Ok(v) => v,
+        Err(e) => return store_error(e),
+    };
+    let mut resp = (
         status,
         Json(Session {
-            token: s.signer.sign(user),
+            token: s.signer.sign(user, &sid),
             user: user.public(),
         }),
     )
-        .into_response()
+        .into_response();
+    resp.headers_mut().append(
+        axum::http::header::SET_COOKIE,
+        refresh_cookie(&secret, SESSION_TTL_SECS, s.secure_cookies()),
+    );
+    resp
+}
+
+/// Open a session for `user` and sign its first access token; the
+/// cookie to set comes back with it (the OIDC bounce sets it itself).
+pub(crate) fn open_session(
+    s: &AuthState,
+    user: &User,
+) -> Result<(String, axum::http::HeaderValue), UserStoreError> {
+    let (sid, secret) = s.store.create_session(&user.id)?;
+    Ok((
+        s.signer.sign(user, &sid),
+        refresh_cookie(&secret, SESSION_TTL_SECS, s.secure_cookies()),
+    ))
+}
+
+pub(crate) fn refresh_cookie(value: &str, max_age: u64, secure: bool) -> axum::http::HeaderValue {
+    let secure = if secure { "; Secure" } else { "" };
+    axum::http::HeaderValue::from_str(&format!(
+        "{REFRESH_COOKIE}={value}; Path=/auth; HttpOnly; SameSite=Lax; Max-Age={max_age}{secure}"
+    ))
+    .expect("ascii cookie")
+}
+
+fn refresh_secret(headers: &axum::http::HeaderMap) -> Option<String> {
+    headers
+        .get_all(axum::http::header::COOKIE)
+        .iter()
+        .filter_map(|h| h.to_str().ok())
+        .flat_map(|h| h.split(';'))
+        .map(str::trim)
+        .find_map(|kv| {
+            kv.strip_prefix(REFRESH_COOKIE)?
+                .strip_prefix('=')
+                .map(str::to_string)
+        })
+        .filter(|v| !v.is_empty())
+}
+
+impl AuthState {
+    /// `Secure` on the cookies when the server is reached over HTTPS
+    /// (the configured public URL says so).
+    fn secure_cookies(&self) -> bool {
+        self.settings
+            .read()
+            .signin
+            .public_url
+            .starts_with("https://")
+    }
+}
+
+/// `POST /auth/refresh`: the refresh cookie for a new access token and a
+/// new cookie; the old secret is dead at once.
+async fn refresh(State(s): State<AuthState>, headers: axum::http::HeaderMap) -> Response {
+    let Some(secret) = refresh_secret(&headers) else {
+        return error(StatusCode::UNAUTHORIZED, "No session");
+    };
+    match s.store.rotate_session(&secret) {
+        Ok(Some((fresh, user))) => {
+            let sid = s.store.session_of_secret(&fresh).unwrap_or_default();
+            let mut resp = (
+                StatusCode::OK,
+                Json(Session {
+                    token: s.signer.sign(&user, &sid),
+                    user: user.public(),
+                }),
+            )
+                .into_response();
+            resp.headers_mut().append(
+                axum::http::header::SET_COOKIE,
+                refresh_cookie(&fresh, SESSION_TTL_SECS, s.secure_cookies()),
+            );
+            resp
+        }
+        Ok(None) => {
+            let mut resp = error(StatusCode::UNAUTHORIZED, "Session ended");
+            resp.headers_mut().append(
+                axum::http::header::SET_COOKIE,
+                refresh_cookie("", 0, s.secure_cookies()),
+            );
+            resp
+        }
+        Err(e) => store_error(e),
+    }
+}
+
+/// `DELETE /auth/sessions`: sign the current user out everywhere.
+async fn sign_out_everywhere(
+    State(s): State<AuthState>,
+    Extension(ctx): Extension<AuthContext>,
+) -> Response {
+    let user = match current(&s, &ctx) {
+        Ok(u) => u,
+        Err((st, m)) => return error(st, m),
+    };
+    match s.store.end_sessions(|rec| rec.user_id != user.id) {
+        Ok(ended) => {
+            let mut resp = Json(serde_json::json!({ "ok": true, "ended": ended })).into_response();
+            resp.headers_mut().append(
+                axum::http::header::SET_COOKIE,
+                refresh_cookie("", 0, s.secure_cookies()),
+            );
+            resp
+        }
+        Err(e) => store_error(e),
+    }
 }
 
 fn validate(c: &Credentials, need_name: bool) -> Result<(), Refused> {
@@ -819,9 +1061,21 @@ async fn login(State(s): State<AuthState>, Json(c): Json<Credentials>) -> Respon
     }
 }
 
-async fn logout() -> Json<serde_json::Value> {
-    // Tokens are stateless; the client drops its copy.
-    Json(serde_json::json!({ "ok": true }))
+/// `POST /auth/logout`: ends the session of the refresh cookie (the
+/// access tokens of that session are refused from now on) and clears it.
+/// Without a cookie there is nothing to end; still `ok`.
+async fn logout(State(s): State<AuthState>, headers: axum::http::HeaderMap) -> Response {
+    if let Some(sid) = refresh_secret(&headers).and_then(|v| s.store.session_of_secret(&v)) {
+        if let Err(e) = s.store.end_sessions(|rec| rec.id != sid) {
+            return store_error(e);
+        }
+    }
+    let mut resp = Json(serde_json::json!({ "ok": true })).into_response();
+    resp.headers_mut().append(
+        axum::http::header::SET_COOKIE,
+        refresh_cookie("", 0, s.secure_cookies()),
+    );
+    resp
 }
 
 fn current(s: &AuthState, ctx: &AuthContext) -> Result<User, Refused> {

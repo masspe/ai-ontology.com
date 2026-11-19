@@ -35,6 +35,13 @@ All notable changes to this project are listed here. The format follows
 
 ### Added
 
+- Sessions: an access token lives 15 minutes; a rotating refresh secret
+  in an HttpOnly cookie (`/auth` only) renews it for 30 days after the
+  last use (`POST /auth/refresh`; the web UI renews on a 401 by itself).
+  Logout ends the session, so its tokens are refused at once;
+  `DELETE /auth/sessions` — "sign out everywhere" in the account menu —
+  ends every session of the account; deleting an account ends its
+  sessions. Sessions live in `users.json`, secret hashed.
 - Sign-in through OpenID Connect, in the binary: Microsoft Entra ID,
   Google or any provider with a discovery document, configured by the
   administrator in Settings → Sign-in (public URL, issuer, client id and

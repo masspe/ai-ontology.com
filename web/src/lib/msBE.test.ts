@@ -18,6 +18,8 @@ interface AuthApi {
   login(args: { email: string; password: string }): Promise<unknown>;
   me(): Promise<AuthUser | null>;
   logout(): Promise<void>;
+  logoutEverywhere(): Promise<void>;
+  refresh(): Promise<boolean>;
   isAuthenticated(): boolean;
   currentUser(): AuthUser | null;
   googleLoginUrl(next?: string): string;
@@ -223,6 +225,40 @@ describe("401 handling", () => {
     expect(text).not.toHaveBeenCalled();
   });
 
+  it("refreshes the session once on a 401 and retries the call with the new token", async () => {
+    const handler = vi.fn();
+    mod.setUnauthorizedHandler(handler);
+    ls().setItem("msBE.token", "old");
+    const f = stubFetch(() => {
+      const n = f.mock.calls.length;
+      if (n === 1) return Promise.resolve(new Response(null, { status: 401 }));
+      if (n === 2) return Promise.resolve(jsonResponse({ token: "fresh", user: { id: 7 } }));
+      return Promise.resolve(jsonResponse({ user: { id: 7 } }));
+    });
+    await expect(mod.msBE.request("GET", "/auth/me")).resolves.toEqual({ user: { id: 7 } });
+    expect(f).toHaveBeenCalledTimes(3);
+    expect(call(f, 1).url).toBe("/auth/refresh");
+    expect(call(f, 1).method).toBe("POST");
+    expect(call(f, 1).init.credentials).toBe("include");
+    expect(call(f, 2).headers.authorization).toBe("Bearer fresh");
+    expect(ls().getItem("msBE.token")).toBe("fresh");
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("signs out when the refresh is refused too, and never refreshes a login or a refresh", async () => {
+    const handler = vi.fn();
+    mod.setUnauthorizedHandler(handler);
+    const f = stubFetch(new Response(null, { status: 401 }));
+    await expect(mod.msBE.request("GET", "/concepts")).rejects.toMatchObject({ status: 401 });
+    expect(f).toHaveBeenCalledTimes(2);
+    expect(handler).toHaveBeenCalledTimes(1);
+    await expect(mod.msBE.request("POST", "/auth/login", {})).rejects.toMatchObject({ status: 401 });
+    expect(f).toHaveBeenCalledTimes(3);
+    await expect(mod.msBE.auth.refresh()).resolves.toBe(false);
+    // The login 401 counts, the refresh does not.
+    expect(handler).toHaveBeenCalledTimes(2);
+  });
+
   it("default handler: clears the session and redirects to /login?next=<path+search>", async () => {
     mod = await loadMsBE();
     ls().setItem("msBE.token", "jwt");
@@ -326,6 +362,17 @@ describe("msBE.auth", () => {
     stubFetch(() => Promise.reject(new Error("offline")));
     await expect(mod.msBE.auth.logout()).resolves.toBeUndefined();
     expect(ls().getItem("msBE.token")).toBeNull();
+  });
+
+  it("logoutEverywhere: DELETE /auth/sessions then clears the session", async () => {
+    ls().setItem("msBE.token", "jwt");
+    const f = stubFetch(jsonResponse({ ok: true, ended: 2 }));
+    await mod.msBE.auth.logoutEverywhere();
+    expect(call(f).url).toBe("/auth/sessions");
+    expect(call(f).method).toBe("DELETE");
+    expect(ls().getItem("msBE.token")).toBeNull();
+    stubFetch(() => Promise.reject(new Error("offline")));
+    await expect(mod.msBE.auth.logoutEverywhere()).resolves.toBeUndefined();
   });
 
   it("OAuth start URLs default to next=/ and encode a custom next", () => {

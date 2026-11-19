@@ -78,6 +78,20 @@ container, add `"role": "admin"` to an account in the file, restart. Deleting
 an account revokes its tokens immediately. Accounts are created by the
 administrator through the API, as above.
 
+### Sessions
+
+A sign-in (password or OpenID Connect) opens a **session**: the access
+token in the response lives 15 minutes; a refresh secret, in an HttpOnly
+cookie scoped to `/auth`, renews it (`POST /auth/refresh`, the secret
+rotates each time) for 30 days after the last renewal. The web UI renews
+by itself when a call comes back 401. `POST /auth/logout` ends the
+session of the cookie — its access tokens are refused from that moment,
+not at their expiry; `DELETE /auth/sessions` (the account menu's "sign out
+everywhere") ends every session of the account; deleting an account ends
+its sessions. Sessions are kept in `users.json` (secret hashed). A token
+signed with the shared secret by something else (`--jwt-secret-env`) has
+no session and is accepted until it expires, as before.
+
 ### Sign-in with a company identity (OpenID Connect)
 
 The binary signs users in through any OpenID Connect provider — Microsoft

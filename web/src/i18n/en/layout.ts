@@ -16,6 +16,7 @@ export const layout: Record<string, string> = {
   "Utilisateur": "User",
   "Paramètres": "Settings",
   "Se déconnecter": "Sign out",
+  "Se déconnecter partout": "Sign out everywhere",
   "Accueil": "Home",
   "Une question à poser, ce qui attend une action, ce qui a été importé cette semaine, les dernières questions. Au premier lancement, il vous guide en trois étapes.": "A question to ask, what is waiting for action, what was imported this week, the latest questions. On first launch, it walks you through three steps.",
   "Importer": "Import",

@@ -333,7 +333,7 @@ async fn first_account_is_the_administrator_and_signup_then_closes() {
         "deleted user's token on the API"
     );
 
-    // Logout is stateless.
+    // Logout without a session cookie: nothing to end, still ok.
     let (st, v, _) = call(&app, "POST", "/auth/logout", None, None).await;
     assert_eq!(st, StatusCode::OK);
     assert_eq!(v["ok"], true);
@@ -932,4 +932,111 @@ async fn without_the_login_the_audit_names_the_service_token() {
     assert_eq!(v["entries"][0]["who"], "service");
     let (st, _, _) = call(&app, "GET", "/audit", None, None).await;
     assert_eq!(st, StatusCode::UNAUTHORIZED);
+}
+
+/// A refresh cookie comes with every sign-in; `/auth/refresh` rotates it
+/// (the old secret dies at once); logout ends the session so its access
+/// tokens are refused from then on; "sign out everywhere" ends them all.
+#[tokio::test]
+async fn sessions_refresh_rotate_and_end() {
+    let dir = tempdir("sessions");
+    let app = app(dir.join("users.json"), true, None);
+    let creds = json!({ "email": "ann@example.com", "name": "Ann", "password": "Passw0rd!x" });
+    let (st, v, headers) = call(&app, "POST", "/auth/signup", None, Some(creds.clone())).await;
+    assert_eq!(st, StatusCode::CREATED, "{v}");
+    let token1 = v["token"].as_str().unwrap().to_string();
+    let cookie1 = headers["set-cookie"].to_str().unwrap().to_string();
+    assert!(
+        cookie1.starts_with("ontology_refresh=")
+            && cookie1.contains("HttpOnly")
+            && cookie1.contains("Path=/auth"),
+        "{cookie1}"
+    );
+    assert!(!cookie1.contains("Secure"), "plain http");
+    let secret1 = cookie1.split(';').next().unwrap().to_string();
+
+    let with_cookie = |method: &'static str, uri: &'static str, cookie: String| {
+        let app = app.clone();
+        async move {
+            let req = Request::builder()
+                .method(method)
+                .uri(uri)
+                .header("cookie", cookie)
+                .body(Body::empty())
+                .unwrap();
+            let resp = app.oneshot(req).await.unwrap();
+            let status = resp.status();
+            let set = resp
+                .headers()
+                .get("set-cookie")
+                .map(|h| h.to_str().unwrap().to_string());
+            let bytes = to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+            let v: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+            (status, v, set)
+        }
+    };
+
+    // Refresh: a new token and a new secret; the old secret is dead.
+    let (st, v, set) = with_cookie("POST", "/auth/refresh", secret1.clone()).await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    let token2 = v["token"].as_str().unwrap().to_string();
+    assert_eq!(v["user"]["email"], "ann@example.com");
+    let secret2 = set.unwrap().split(';').next().unwrap().to_string();
+    assert_ne!(secret2, secret1, "rotated");
+    let (st, _, set) = with_cookie("POST", "/auth/refresh", secret1.clone()).await;
+    assert_eq!(st, StatusCode::UNAUTHORIZED, "the old secret");
+    assert!(set.unwrap().contains("Max-Age=0"), "cleared");
+    let (st, _, _) = with_cookie("POST", "/auth/refresh", "ontology_refresh=nope".into()).await;
+    assert_eq!(st, StatusCode::UNAUTHORIZED);
+    let (st, _, _) = call(&app, "POST", "/auth/refresh", None, None).await;
+    assert_eq!(st, StatusCode::UNAUTHORIZED, "no cookie");
+    // Both access tokens of the session still work.
+    for t in [&token1, &token2] {
+        let (st, _, _) = call(&app, "GET", "/auth/me", Some(t), None).await;
+        assert_eq!(st, StatusCode::OK);
+    }
+
+    // Logout with the cookie ends that session: its tokens are refused.
+    let (st, v, set) = with_cookie("POST", "/auth/logout", secret2.clone()).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(v["ok"], true);
+    assert!(set.unwrap().contains("Max-Age=0"));
+    for t in [&token1, &token2] {
+        let (st, _, _) = call(&app, "GET", "/auth/me", Some(t), None).await;
+        assert_eq!(st, StatusCode::UNAUTHORIZED, "token of an ended session");
+    }
+    let (st, _, _) = with_cookie("POST", "/auth/refresh", secret2).await;
+    assert_eq!(st, StatusCode::UNAUTHORIZED);
+
+    // Two new sessions; "sign out everywhere" ends both.
+    let (_, a, _) = call(
+        &app,
+        "POST",
+        "/auth/login",
+        None,
+        Some(json!({ "email": "ann@example.com", "password": "Passw0rd!x" })),
+    )
+    .await;
+    let (_, b, _) = call(
+        &app,
+        "POST",
+        "/auth/login",
+        None,
+        Some(json!({ "email": "ann@example.com", "password": "Passw0rd!x" })),
+    )
+    .await;
+    let (ta, tb) = (a["token"].as_str().unwrap(), b["token"].as_str().unwrap());
+    let (st, v, _) = call(&app, "DELETE", "/auth/sessions", Some(ta), None).await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert_eq!(v["ended"], 2);
+    for t in [ta, tb] {
+        let (st, _, _) = call(&app, "GET", "/auth/me", Some(t), None).await;
+        assert_eq!(st, StatusCode::UNAUTHORIZED);
+    }
+    let raw: Value =
+        serde_json::from_slice(&std::fs::read(dir.join("users.json")).unwrap()).unwrap();
+    assert_eq!(raw["sessions"].as_array().unwrap().len(), 0);
+    assert!(
+        raw.to_string().contains("refreshHash") || raw["sessions"].as_array().unwrap().is_empty()
+    );
 }

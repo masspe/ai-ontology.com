@@ -274,10 +274,25 @@ async fn callback(app: &Router, uri: &str, cookie: Option<&str>) -> HashMap<Stri
     let resp = req_get(app, uri, cookie, None).await;
     let loc = location(&resp);
     assert!(loc.starts_with("http://app.test/oauth/callback"), "{loc}");
-    let cleared = resp.headers()["set-cookie"].to_str().unwrap().to_string();
+    let cookies: Vec<String> = resp
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .map(|h| h.to_str().unwrap().to_string())
+        .collect();
     assert!(
-        cleared.starts_with("oidc_state=;") && cleared.contains("Max-Age=0"),
-        "{cleared}"
+        cookies
+            .iter()
+            .any(|c| c.starts_with("oidc_state=;") && c.contains("Max-Age=0")),
+        "{cookies:?}"
+    );
+    let signed_in = loc.contains("#token=");
+    assert_eq!(
+        cookies
+            .iter()
+            .any(|c| c.starts_with("ontology_refresh=") && c.contains("HttpOnly")),
+        signed_in,
+        "a refresh cookie exactly when signed in: {cookies:?}"
     );
     query(&loc)
 }

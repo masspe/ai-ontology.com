@@ -986,6 +986,10 @@ impl JwtAuth {
 #[derive(Debug, Clone, Deserialize)]
 struct JwtClaims {
     sub: String,
+    /// The session of a token the built-in login signed; a token signed
+    /// elsewhere with the shared secret has none.
+    #[serde(default)]
+    sid: Option<String>,
     #[serde(default)]
     email: Option<String>,
     #[serde(default)]
@@ -1546,6 +1550,14 @@ async fn require_auth(
             Ok(claims) => {
                 if let Some(store) = accounts.as_ref() {
                     if !store.exists(&claims.sub) {
+                        return Err(StatusCode::UNAUTHORIZED);
+                    }
+                    // A logout ends the session: its tokens die with it.
+                    if claims
+                        .sid
+                        .as_deref()
+                        .is_some_and(|sid| !store.session_alive(sid))
+                    {
                         return Err(StatusCode::UNAUTHORIZED);
                     }
                 }

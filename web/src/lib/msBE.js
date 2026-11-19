@@ -38,7 +38,39 @@ let onUnauthorized = () => {
 export function setUnauthorizedHandler(fn) { onUnauthorized = fn; }
 
 // ---- low-level fetch -------------------------------------------------------
-async function request(method, path, body) {
+// A 401 on an API call first tries `/auth/refresh` once (the refresh
+// cookie, HttpOnly, is sent by the browser): an expired access token is
+// renewed without the user noticing; only a dead session signs out.
+async function request(method, path, body, retried = false) {
+  if (!retried && path !== "/auth/refresh" && !path.startsWith("/auth/login") && !path.startsWith("/auth/signup")) {
+    try {
+      return await requestOnce(method, path, body);
+    } catch (e) {
+      if (e?.status !== 401 || !(await refreshSession())) {
+        if (e?.status === 401) onUnauthorized();
+        throw e;
+      }
+      return request(method, path, body, true);
+    }
+  }
+  try {
+    return await requestOnce(method, path, body);
+  } catch (e) {
+    if (e?.status === 401 && path !== "/auth/refresh") onUnauthorized();
+    throw e;
+  }
+}
+
+/** `true` when the session could be refreshed (a new access token is stored). */
+async function refreshSession() {
+  try {
+    const data = await requestOnce("POST", "/auth/refresh");
+    if (data?.token) { tokenStore.set(data.token); if (data.user) userStore.set(data.user); return true; }
+  } catch { /* no session */ }
+  return false;
+}
+
+async function requestOnce(method, path, body) {
   const headers = { "accept": "application/json" };
   if (body !== undefined) headers["content-type"] = "application/json";
   const token = tokenStore.get();
@@ -60,7 +92,6 @@ async function request(method, path, body) {
   }
 
   if (res.status === 401) {
-    onUnauthorized();
     const err = new Error("Unauthorized");
     err.status = 401;
     throw err;
@@ -98,9 +129,15 @@ const auth = {
     return data?.user ?? null;
   },
   async logout() {
-    try { await request("POST", "/auth/logout"); } catch { /* ignore */ }
+    try { await requestOnce("POST", "/auth/logout"); } catch { /* ignore */ }
     tokenStore.clear();
   },
+  // Ends every session of the account (every browser), then this one.
+  async logoutEverywhere() {
+    try { await request("DELETE", "/auth/sessions"); } catch { /* ignore */ }
+    tokenStore.clear();
+  },
+  refresh: refreshSession,
   isAuthenticated: () => Boolean(tokenStore.get()),
   currentUser: () => userStore.get(),
 

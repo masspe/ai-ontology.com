@@ -148,6 +148,15 @@ describe("TopBar", () => {
     expect(window.localStorage.getItem("msBE.token")).toBeNull();
   });
 
+  it("signs out everywhere from the account menu", async () => {
+    const { user } = mount("/");
+    window.localStorage.setItem("msBE.token", "jwt");
+    await user.click(screen.getByRole("button", { name: "Compte" }));
+    await user.click(screen.getByRole("menuitem", { name: "Se déconnecter partout" }));
+    expect(await screen.findByTestId("location")).toHaveTextContent("/login");
+    expect(window.localStorage.getItem("msBE.token")).toBeNull();
+  });
+
   it("opens the guide from the ? button", async () => {
     const { user } = mount("/");
     expect(screen.queryByTestId("tour")).not.toBeInTheDocument();

@@ -56,6 +56,11 @@ export default function TopBar() {
     await msBE.auth.logout();
     nav("/login", { replace: true });
   };
+  const logoutEverywhere = async () => {
+    setMenuOpen(false);
+    await msBE.auth.logoutEverywhere();
+    nav("/login", { replace: true });
+  };
 
   return (
     <header className="topbar">
@@ -123,6 +128,9 @@ export default function TopBar() {
               </button>
               <button className="btn-ghost" role="menuitem" onClick={() => void logout()}>
                 {t("Se déconnecter")}
+              </button>
+              <button className="btn-ghost" role="menuitem" onClick={() => void logoutEverywhere()}>
+                {t("Se déconnecter partout")}
               </button>
             </div>
           )}

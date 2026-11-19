@@ -30,7 +30,7 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::auth::{AuthState, User};
+use crate::auth::{open_session, AuthState, User};
 use crate::key_hint;
 
 /// The sign-in section of the settings.
@@ -468,20 +468,27 @@ fn state_cookie(value: &str, max_age: u64, secure: bool) -> HeaderValue {
 }
 
 /// The UI's callback page with the token in the fragment (never in a
-/// `Referer` or an access log) or the error in the query.
-fn bounce(base: &str, result: Result<(String, String), Flow>) -> Response {
-    let target = match result {
-        Ok((token, next)) => format!(
-            "{base}/oauth/callback#token={}&next={}",
-            url_encode(&token),
-            url_encode(&next)
+/// `Referer` or an access log) or the error in the query; the refresh
+/// cookie of the new session comes with the token.
+fn bounce(base: &str, result: Result<Signed, Flow>) -> Response {
+    let (target, cookie) = match result {
+        Ok(signed) => (
+            format!(
+                "{base}/oauth/callback#token={}&next={}",
+                url_encode(&signed.token),
+                url_encode(&signed.next)
+            ),
+            Some(signed.cookie),
         ),
         Err(flow) => {
             tracing::warn!(code = flow.code, detail = %flow.detail, "sign-in refused");
-            format!("{base}/oauth/callback?error={}", flow.code)
+            (format!("{base}/oauth/callback?error={}", flow.code), None)
         }
     };
     let mut resp = Redirect::to(&target).into_response();
+    if let Some(c) = cookie {
+        resp.headers_mut().append(header::SET_COOKIE, c);
+    }
     // The state cookie has served; drop it.
     resp.headers_mut().append(
         header::SET_COOKIE,
@@ -501,6 +508,13 @@ fn url_encode(s: &str) -> String {
         }
     }
     out
+}
+
+/// A finished sign-in: the access token, the refresh cookie, where to go.
+struct Signed {
+    token: String,
+    cookie: HeaderValue,
+    next: String,
 }
 
 #[derive(Serialize)]
@@ -625,7 +639,7 @@ async fn finish(
     id: &str,
     q: CallbackQuery,
     headers: &header::HeaderMap,
-) -> Result<(String, String), Flow> {
+) -> Result<Signed, Flow> {
     let p = provider(s, id).ok_or_else(|| Flow::new("provider_not_configured", id))?;
     let state = cookie_value(headers, STATE_COOKIE)
         .and_then(|c| s.oidc.verify_state(&c))
@@ -761,7 +775,12 @@ async fn finish(
         _ => user,
     };
     tracing::info!(provider = %p.id, email = %user.email, admin = user.is_admin(), "user signed in");
-    Ok((s.signer.sign(&user), state.next))
+    let (token, cookie) = open_session(s, &user).map_err(|e| Flow::fail("store_failed", e))?;
+    Ok(Signed {
+        token,
+        cookie,
+        next: state.next,
+    })
 }
 
 #[cfg(test)]
