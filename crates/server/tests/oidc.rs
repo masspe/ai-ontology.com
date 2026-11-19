@@ -687,3 +687,37 @@ async fn the_signin_settings_are_patched_and_served_without_the_secret() {
     assert_eq!(out.get("error"), None, "{out:?}");
     assert_eq!(me(&app, &out["token"]).await["role"], "user");
 }
+
+/// With `groups_as_clearances`, the provider's group claims are the
+/// account's clearances at every sign-in (lower-cased, invalid ones
+/// skipped); without it, the clearances are the administrator's to set.
+#[tokio::test]
+async fn group_claims_become_clearances_when_asked() {
+    let mock = mock_provider().await;
+    let dir = tempdir("clearances");
+    let mut p = provider(&mock);
+    p.groups_as_clearances = true;
+    let app = build(dir.join("users.json"), vec![p]);
+    let out = signin(
+        &app,
+        &mock,
+        "dan@example.com",
+        json!({ "groups": ["HR", "Pay roll", "finance"] }),
+    )
+    .await;
+    assert_eq!(out.get("error"), None, "{out:?}");
+    assert_eq!(
+        me(&app, &out["token"]).await["clearances"],
+        json!(["hr", "finance"])
+    );
+    let out = signin(&app, &mock, "dan@example.com", json!({ "groups": [] })).await;
+    assert_eq!(me(&app, &out["token"]).await["clearances"], json!([]));
+
+    let app = build(dir.join("users.json"), vec![provider(&mock)]);
+    let out = signin(&app, &mock, "dan@example.com", json!({ "groups": ["hr"] })).await;
+    assert_eq!(
+        me(&app, &out["token"]).await["clearances"],
+        json!([]),
+        "not asked: untouched"
+    );
+}

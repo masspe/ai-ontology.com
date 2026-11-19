@@ -248,6 +248,8 @@ export interface Concept {
   name: string;
   description?: string;
   properties?: Record<string, any>;
+  /** Security labels: a reader sees the sheet when their clearances cover them all. */
+  labels?: string[];
 }
 
 export interface Relation {
@@ -562,7 +564,7 @@ export const createConcept = (c: {
 
 export const updateConcept = (
   id: number,
-  patch: { name?: string; description?: string; properties?: Record<string, any> },
+  patch: { name?: string; description?: string; properties?: Record<string, any>; labels?: string[] },
 ) =>
   http<Concept>(`/concepts/${id}`, {
     method: "PATCH",

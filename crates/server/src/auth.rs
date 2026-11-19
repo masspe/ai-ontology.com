@@ -86,6 +86,9 @@ pub(crate) struct User {
     created_at: String,
     #[serde(default)]
     role: Option<String>,
+    /// Security clearances: the sheet labels this user may see.
+    #[serde(default)]
+    clearances: Vec<String>,
 }
 
 impl User {
@@ -108,6 +111,7 @@ impl User {
             providers: self.providers.clone(),
             created_at: self.created_at.clone(),
             role: self.role.clone().unwrap_or_else(|| "user".into()),
+            clearances: self.clearances.clone(),
         }
     }
 }
@@ -122,6 +126,7 @@ pub struct PublicUser {
     providers: Vec<Provider>,
     pub created_at: String,
     pub role: String,
+    pub clearances: Vec<String>,
 }
 
 /// A named API key of the tenant for machine callers:
@@ -461,6 +466,7 @@ impl UserStore {
             }],
             created_at: now_rfc3339(),
             role: db.users.is_empty().then(|| "admin".to_string()),
+            clearances: Vec::new(),
         };
         let mut next = db.clone();
         next.users.push(user.clone());
@@ -509,6 +515,7 @@ impl UserStore {
             providers: Vec::new(),
             created_at: now_rfc3339(),
             role: role.map(str::to_string),
+            clearances: Vec::new(),
         };
         let mut next = db.clone();
         next.users.push(user.clone());
@@ -537,6 +544,31 @@ impl UserStore {
     /// `true` when `id` names an administrator.
     pub fn is_admin(&self, id: &str) -> bool {
         self.find_by_id(id).map(|u| u.is_admin()).unwrap_or(false)
+    }
+
+    /// What `id` may see: `(administrator, clearances)`. An administrator
+    /// sees everything; another user, the sheets whose labels are all
+    /// among their clearances.
+    pub fn access_of(&self, id: &str) -> Option<(bool, Vec<String>)> {
+        self.find_by_id(id)
+            .map(|u| (u.is_admin(), u.clearances.clone()))
+    }
+
+    /// Set the role and/or the clearances of `id` (`None` leaves one as is).
+    pub(crate) fn set_access(
+        &self,
+        id: &str,
+        role: Option<String>,
+        clearances: Option<Vec<String>>,
+    ) -> Result<User, UserStoreError> {
+        self.update(id, |u| {
+            if let Some(r) = role {
+                u.role = (r == "admin").then_some(r);
+            }
+            if let Some(c) = clearances {
+                u.clearances = c;
+            }
+        })
     }
 
     /// The key a bearer secret names, if any: what `require_auth` asks.
@@ -780,7 +812,10 @@ pub fn protected_routes(state: AuthState) -> Router {
         .route("/auth/me", get(me))
         .route("/auth/sessions", axum::routing::delete(sign_out_everywhere))
         .route("/auth/users", get(list_users).post(create_user))
-        .route("/auth/users/:id", axum::routing::delete(delete_user))
+        .route(
+            "/auth/users/:id",
+            axum::routing::delete(delete_user).patch(update_user),
+        )
         .route("/auth/keys", get(list_keys).post(create_key))
         .route("/auth/keys/:id", axum::routing::delete(delete_key))
         .with_state(state)
@@ -1136,6 +1171,62 @@ async fn create_user(
         Err(CreateError::EmailTaken) => error(StatusCode::CONFLICT, "Email already registered"),
         Err(CreateError::Closed) => unreachable!("an administrator's create is never a sign-up"),
         Err(CreateError::Store(e)) => store_error(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct AccessPatch {
+    #[serde(default)]
+    role: Option<String>,
+    #[serde(default)]
+    clearances: Option<Vec<String>>,
+}
+
+/// `PATCH /auth/users/:id {role?, clearances?}`: an administrator sets
+/// what an account may see. Taking one's own administrator role away
+/// is refused (the last administrator would lock everyone out).
+async fn update_user(
+    State(s): State<AuthState>,
+    Extension(ctx): Extension<AuthContext>,
+    Path(id): Path<String>,
+    Json(p): Json<AccessPatch>,
+) -> Response {
+    let me = match admin(&s, &ctx) {
+        Ok(u) => u,
+        Err((st, m)) => return error(st, m),
+    };
+    if let Some(r) = p.role.as_deref() {
+        if r != "admin" && r != "user" {
+            return error(StatusCode::BAD_REQUEST, "role must be admin or user");
+        }
+        if me.id == id && r != "admin" {
+            return error(
+                StatusCode::BAD_REQUEST,
+                "An administrator cannot take their own role away",
+            );
+        }
+    }
+    let clearances = p.clearances.map(|c| {
+        c.into_iter()
+            .map(|l| l.trim().to_lowercase())
+            .filter(|l| !l.is_empty())
+            .collect::<Vec<_>>()
+    });
+    if let Some(bad) = clearances
+        .as_ref()
+        .and_then(|c| c.iter().find(|l| !crate::valid_label(l)))
+    {
+        return error(
+            StatusCode::BAD_REQUEST,
+            &format!("invalid clearance `{bad}`: lowercase letters, digits, `_ . -`, 64 at most"),
+        );
+    }
+    if s.store.find_by_id(&id).is_none() {
+        return error(StatusCode::NOT_FOUND, "User not found");
+    }
+    match s.store.set_access(&id, p.role, clearances) {
+        Ok(user) => Json(serde_json::json!({ "user": user.public() })).into_response(),
+        Err(e) => store_error(e),
     }
 }
 

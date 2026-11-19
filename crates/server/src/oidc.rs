@@ -67,6 +67,9 @@ pub struct OidcProvider {
     /// Group or role claims whose members are administrators. Empty: the
     /// provider does not decide roles.
     pub admin_groups: Vec<String>,
+    /// The user's group claims become their clearances at every sign-in
+    /// (lower-cased; a group that is not a valid label is skipped).
+    pub groups_as_clearances: bool,
     pub enabled: bool,
 }
 
@@ -82,6 +85,7 @@ impl Default for OidcProvider {
             scopes: "openid email profile".into(),
             allowed_domains: Vec::new(),
             admin_groups: Vec::new(),
+            groups_as_clearances: false,
             enabled: true,
         }
     }
@@ -113,6 +117,7 @@ pub struct OidcProviderPatch {
     pub scopes: Option<String>,
     pub allowed_domains: Option<Vec<String>>,
     pub admin_groups: Option<Vec<String>>,
+    pub groups_as_clearances: Option<bool>,
     pub enabled: Option<bool>,
 }
 
@@ -176,6 +181,9 @@ impl SigninSettings {
                         .map(|g| g.trim().to_string())
                         .filter(|g| !g.is_empty())
                         .collect();
+                }
+                if let Some(v) = p.groups_as_clearances {
+                    cur.groups_as_clearances = v;
                 }
                 if let Some(v) = p.enabled {
                     cur.enabled = v;
@@ -773,6 +781,18 @@ async fn finish(
             .set_admin(&user.id, false)
             .map_err(|e| Flow::fail("store_failed", e))?,
         _ => user,
+    };
+    let user = if p.groups_as_clearances {
+        let clearances: Vec<String> = groups
+            .iter()
+            .map(|g| g.trim().to_lowercase())
+            .filter(|g| crate::valid_label(g))
+            .collect();
+        s.store
+            .set_access(&user.id, None, Some(clearances))
+            .map_err(|e| Flow::fail("store_failed", e))?
+    } else {
+        user
     };
     tracing::info!(provider = %p.id, email = %user.email, admin = user.is_admin(), "user signed in");
     let (token, cookie) = open_session(s, &user).map_err(|e| Flow::fail("store_failed", e))?;

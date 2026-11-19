@@ -126,6 +126,9 @@ export default function TopBar() {
               <button className="btn-ghost" role="menuitem" onClick={() => { setMenuOpen(false); nav("/settings"); }}>
                 {t("Paramètres")}
               </button>
+              <button className="btn-ghost" role="menuitem" onClick={() => { setMenuOpen(false); nav("/access"); }}>
+                {t("Accès")}
+              </button>
               <button className="btn-ghost" role="menuitem" onClick={() => void logout()}>
                 {t("Se déconnecter")}
               </button>

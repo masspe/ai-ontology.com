@@ -177,4 +177,25 @@ describe("ConceptSheet — guards", () => {
     expect(screen.getByText("Liens (1)")).toBeInTheDocument();
     expect(screen.getAllByText("boucle")).toHaveLength(1);
   });
+
+  it("shows the access labels as chips and sends them only when edited", async () => {
+    mocked.getConcept!.mockResolvedValue({ ...acme, labels: ["hr"] });
+    mocked.updateConcept!
+      .mockResolvedValueOnce({ ...acme, labels: ["hr"] })
+      .mockResolvedValueOnce({ ...acme, labels: ["hr", "finance"] });
+    const { user } = mount();
+    await screen.findByRole("heading", { name: "Acme SA" });
+    expect(screen.getByText("⚿ hr")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Corriger" }));
+    const labels = screen.getByRole("textbox", { name: "Labels d'accès" });
+    expect(labels).toHaveValue("hr");
+    await user.click(screen.getByRole("button", { name: "Enregistrer" }));
+    expect(mocked.updateConcept).toHaveBeenLastCalledWith(7, { name: "Acme SA", description: acme.description });
+    await user.click(await screen.findByRole("button", { name: "Corriger" }));
+    await user.clear(screen.getByRole("textbox", { name: "Labels d'accès" }));
+    await user.type(screen.getByRole("textbox", { name: "Labels d'accès" }), " HR, finance ,");
+    await user.click(screen.getByRole("button", { name: "Enregistrer" }));
+    expect(mocked.updateConcept).toHaveBeenLastCalledWith(7, { name: "Acme SA", description: acme.description, labels: ["hr", "finance"] });
+    expect(await screen.findByText("⚿ finance")).toBeInTheDocument();
+  });
 });

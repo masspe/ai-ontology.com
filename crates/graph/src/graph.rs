@@ -238,6 +238,7 @@ type ListRelationsCacheKey = (
     usize,             // offset
     usize,             // limit
     bool,              // track_total
+    Option<u64>,       // the reader's visibility key, None for everyone
 );
 
 const LIST_RELATIONS_CACHE_CAP: usize = 256;
@@ -2499,8 +2500,37 @@ impl OntologyGraph {
         limit: usize,
         track_total: bool,
     ) -> (usize, Vec<Relation>) {
+        self.list_relations_page_for(
+            source,
+            target,
+            relation_type,
+            offset,
+            limit,
+            track_total,
+            None,
+        )
+    }
+
+    /// `list_relations_page` for one reader: a link with a hidden end is
+    /// neither listed nor counted. Cached per reader as well.
+    #[allow(clippy::too_many_arguments)]
+    pub fn list_relations_page_for(
+        &self,
+        source: Option<ConceptId>,
+        target: Option<ConceptId>,
+        relation_type: Option<&str>,
+        offset: usize,
+        limit: usize,
+        track_total: bool,
+        who: Option<&Visibility>,
+    ) -> (usize, Vec<Relation>) {
         // Query cache — same gen-snapshot trick as `list_concepts_page`.
-        let gen = self.relations_gen.load(Ordering::Acquire);
+        // A label change bumps the concept generation, not this one, so
+        // the reader's key carries the concept generation too.
+        let gen = self.relations_gen.load(Ordering::Acquire)
+            ^ who.map_or(0, |_| {
+                self.concepts_gen.load(Ordering::Acquire).rotate_left(32)
+            });
         let cache_key: ListRelationsCacheKey = (
             source,
             target,
@@ -2508,6 +2538,7 @@ impl OntologyGraph {
             offset,
             limit,
             track_total,
+            who.map(|v| v.key),
         );
         if let Some(entry) = self.list_relations_cache.lock().get(&cache_key) {
             if entry.gen == gen {
@@ -2523,6 +2554,7 @@ impl OntologyGraph {
             limit,
             track_total,
             None,
+            who,
         );
 
         let mut cache = self.list_relations_cache.lock();
@@ -2551,6 +2583,19 @@ impl OntologyGraph {
         after: Option<RelationId>,
         limit: usize,
     ) -> (Vec<Relation>, Option<RelationId>) {
+        self.list_relations_after_for(source, target, relation_type, after, limit, None)
+    }
+
+    /// `list_relations_after` for one reader.
+    pub fn list_relations_after_for(
+        &self,
+        source: Option<ConceptId>,
+        target: Option<ConceptId>,
+        relation_type: Option<&str>,
+        after: Option<RelationId>,
+        limit: usize,
+        who: Option<&Visibility>,
+    ) -> (Vec<Relation>, Option<RelationId>) {
         let (_, page) = self.list_relations_page_uncached(
             source,
             target,
@@ -2559,11 +2604,13 @@ impl OntologyGraph {
             limit,
             false,
             after,
+            who,
         );
         let next = page.last().filter(|_| page.len() == limit).map(|r| r.id);
         (page, next)
     }
 
+    #[allow(clippy::too_many_arguments)]
     #[allow(clippy::too_many_arguments)]
     fn list_relations_page_uncached(
         &self,
@@ -2574,7 +2621,9 @@ impl OntologyGraph {
         limit: usize,
         track_total: bool,
         after: Option<RelationId>,
+        who: Option<&Visibility>,
     ) -> (usize, Vec<Relation>) {
+        let visible = |id: ConceptId| who.is_none_or(|v| v.allows(id));
         // Adjacency fast path. When `source` and/or `target` is set, pull
         // candidate relation ids from the adjacency index rather than scanning
         // the full `relations_sorted` set. Picking the smaller of the two
@@ -2660,6 +2709,9 @@ impl OntologyGraph {
                         continue;
                     }
                 }
+                if !visible(rel.source) || !visible(rel.target) {
+                    continue;
+                }
                 let rank = total;
                 total += 1;
                 if rank >= offset && page.len() < limit {
@@ -2693,6 +2745,9 @@ impl OntologyGraph {
                 if rel.relation_type != rt {
                     continue;
                 }
+            }
+            if !visible(rel.source) || !visible(rel.target) {
+                continue;
             }
             let rank = total;
             total += 1;

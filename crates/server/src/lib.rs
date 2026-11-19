@@ -44,7 +44,7 @@ use futures::stream::StreamExt;
 use ontology_graph::{
     Action, ActionId, ActionPatch, Concept, ConceptId, ConceptKey, ConceptPatch, Ontology,
     OntologyGraph, Path as GraphPath, Relation, RelationId, RelationPatch, Rule, RuleId, RulePatch,
-    Subgraph, TraversalSpec,
+    Subgraph, TraversalSpec, Visibility,
 };
 use ontology_index::{HybridIndex, RetrievalRequest, ScoredConcept};
 use ontology_io::{
@@ -107,6 +107,8 @@ pub struct AppState {
     /// Where `POST /backup` copies the store (`serve --backup-dir`). The
     /// destination is the operator's, never the caller's: `None` refuses.
     pub backup_dir: Option<PathBuf>,
+    /// Hidden sheets per clearance set, per generation.
+    pub visibility: Arc<VisibilityCache>,
 }
 
 impl AppState {
@@ -133,6 +135,7 @@ impl AppState {
             writer: Arc::new(tokio::sync::Mutex::new(())),
             memory_plan: Arc::new(PlRwLock::new(None)),
             backup_dir: None,
+            visibility: Arc::new(VisibilityCache::default()),
         }
     }
 
@@ -1007,6 +1010,103 @@ pub struct AuthContext {
     /// `true` when the caller authenticated with the static service token
     /// rather than a user JWT.
     pub service: bool,
+    /// The sheet labels the caller may see; `None` sees everything
+    /// (an administrator, the service token, an API key).
+    pub clearances: Option<StdArc<Vec<String>>>,
+}
+
+/// A valid security label or clearance: `[a-z0-9][a-z0-9_.-]{0,63}`.
+pub fn valid_label(s: &str) -> bool {
+    let b = s.as_bytes();
+    !b.is_empty()
+        && b.len() <= 64
+        && (b[0].is_ascii_lowercase() || b[0].is_ascii_digit())
+        && b.iter().all(|c| {
+            c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, b'_' | b'.' | b'-')
+        })
+}
+
+/// The hidden sheets of every clearance set seen so far, per concept
+/// generation (`PERFORMANCE.md` R5: invalidated by generation, no TTL).
+/// A label change bumps the generation, so a stale set is never served.
+#[derive(Default)]
+pub struct VisibilityCache {
+    entries: PlMutex<ahash::AHashMap<u64, (u64, HiddenSet)>>,
+}
+
+/// The ids a clearance set may not see.
+type HiddenSet = StdArc<ahash::AHashSet<ConceptId>>;
+
+impl VisibilityCache {
+    /// The visibility of a reader with `clearances`.
+    pub fn for_clearances(&self, graph: &OntologyGraph, clearances: &[String]) -> Visibility {
+        use std::hash::{Hash, Hasher};
+        let mut sorted: Vec<&String> = clearances.iter().collect();
+        sorted.sort();
+        sorted.dedup();
+        let mut h = ahash::AHasher::default();
+        sorted.hash(&mut h);
+        let key = h.finish();
+        let gen = graph.concepts_generation();
+        let hidden = {
+            let mut entries = self.entries.lock();
+            match entries.get(&key) {
+                Some((g, set)) if *g == gen => set.clone(),
+                _ => {
+                    let set: ahash::AHashSet<ConceptId> = graph
+                        .labelled_concepts()
+                        .into_iter()
+                        .filter(|(_, labels)| !labels.iter().all(|l| sorted.contains(&l)))
+                        .map(|(id, _)| id)
+                        .collect();
+                    let set = StdArc::new(set);
+                    if entries.len() >= 256 {
+                        entries.clear();
+                    }
+                    entries.insert(key, (gen, set.clone()));
+                    set
+                }
+            }
+        };
+        // shortcut: a hash set of hidden ids, not a bitset — hidden sheets
+        // are few; upgrade to a bitset when a tenant labels most of a
+        // large store.
+        Visibility::new(key, move |id| !hidden.contains(&id))
+    }
+}
+
+/// The caller's visibility: `None` sees everything (no login configured,
+/// an administrator, the service token, an API key).
+fn visibility_for(s: &AppState, ctx: Option<&AuthContext>) -> Option<Visibility> {
+    let clearances = ctx?.clearances.as_ref()?;
+    Some(s.visibility.for_clearances(&s.graph, clearances))
+}
+
+/// A sheet the caller may not see does not exist for them: a 404, the
+/// same answer as for an id that was never allocated.
+fn ensure_visible(who: Option<&Visibility>, id: ConceptId, what: &str) -> Result<(), ApiError> {
+    match who {
+        Some(v) if !v.allows(id) => Err(ApiError::NotFound(format!("{what} {} not found", id.0))),
+        _ => Ok(()),
+    }
+}
+
+/// Labels a caller attaches must be valid and within their clearances:
+/// nobody can hide a sheet from themselves, nor label beyond their reach.
+fn ensure_labels_allowed(labels: &[String], ctx: Option<&AuthContext>) -> Result<(), ApiError> {
+    if let Some(bad) = labels.iter().find(|l| !valid_label(l)) {
+        return Err(ApiError::BadRequest(format!(
+            "invalid label `{bad}`: lowercase letters, digits, `_ . -`, 64 at most"
+        )));
+    }
+    if let Some(clearances) = ctx.and_then(|c| c.clearances.as_ref()) {
+        if let Some(beyond) = labels.iter().find(|l| !clearances.contains(l)) {
+            return Err(ApiError::Forbidden(format!(
+                "label `{beyond}` is beyond your clearances"
+            )));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1536,6 +1636,7 @@ async fn require_auth(
                 email: None,
                 name: Some(key.name),
                 service: true,
+                clearances: None,
             });
             return Ok(next.run(req).await);
         }
@@ -1548,10 +1649,11 @@ async fn require_auth(
     if let Some(jwt) = jwt.as_ref() {
         match jwt.verify(&provided) {
             Ok(claims) => {
+                let mut clearances = None;
                 if let Some(store) = accounts.as_ref() {
-                    if !store.exists(&claims.sub) {
+                    let Some((admin, mine)) = store.access_of(&claims.sub) else {
                         return Err(StatusCode::UNAUTHORIZED);
-                    }
+                    };
                     // A logout ends the session: its tokens die with it.
                     if claims
                         .sid
@@ -1560,12 +1662,16 @@ async fn require_auth(
                     {
                         return Err(StatusCode::UNAUTHORIZED);
                     }
+                    if !admin {
+                        clearances = Some(StdArc::new(mine));
+                    }
                 }
                 req.extensions_mut().insert(AuthContext {
                     subject: claims.sub,
                     email: claims.email,
                     name: claims.name,
                     service: false,
+                    clearances,
                 });
                 return Ok(next.run(req).await);
             }
@@ -1583,6 +1689,7 @@ async fn require_auth(
                 email: None,
                 name: None,
                 service: true,
+                clearances: None,
             });
             return Ok(next.run(req).await);
         }
@@ -1614,8 +1721,10 @@ struct PathResponse {
 
 async fn path(
     State(s): State<AppState>,
+    ctx: Option<axum::Extension<AuthContext>>,
     Json(req): Json<PathRequest>,
 ) -> Result<Json<PathResponse>, ApiError> {
+    let who = visibility_for(&s, ctx.as_deref());
     let src = s
         .graph
         .find_by_name(&req.from_type, &req.from_name)
@@ -1628,7 +1737,9 @@ async fn path(
         .ok_or_else(|| {
             ApiError::BadRequest(format!("no concept ({}) {}", req.to_type, req.to_name,))
         })?;
-    let p = s.graph.shortest_path(src, tgt, req.max_depth)?;
+    let p = s
+        .graph
+        .shortest_path_where(src, tgt, req.max_depth, who.as_ref())?;
     Ok(Json(PathResponse {
         found: p.is_some(),
         path: p,
@@ -2066,8 +2177,10 @@ struct CreatedConcept {
 
 async fn create_concept(
     State(s): State<AppState>,
+    ctx: Option<axum::Extension<AuthContext>>,
     Json(mut concept): Json<Concept>,
 ) -> Result<Json<CreatedConcept>, ApiError> {
+    ensure_labels_allowed(&concept.labels, ctx.as_deref())?;
     let _w = s.writer.lock().await;
     s.graph.prepare_concept(&mut concept)?;
     if let Err(e) = s.store.append(&LogRecord::concept(concept.clone())).await {
@@ -2081,8 +2194,11 @@ async fn create_concept(
 
 async fn get_concept(
     State(s): State<AppState>,
+    ctx: Option<axum::Extension<AuthContext>>,
     Path(id): Path<u64>,
 ) -> Result<Json<Concept>, ApiError> {
+    let who = visibility_for(&s, ctx.as_deref());
+    ensure_visible(who.as_ref(), ConceptId(id), "concept")?;
     let c = lookup(s.graph.get_concept(ConceptId(id)), "concept", id)?;
     Ok(Json(c))
 }
@@ -2154,9 +2270,11 @@ fn decode_cursor<T: serde::de::DeserializeOwned>(s: &str) -> Result<T, ApiError>
 /// `(concept_type, name)` so the response is stable across calls.
 async fn list_concepts(
     State(s): State<AppState>,
+    ctx: Option<axum::Extension<AuthContext>>,
     headers: HeaderMap,
     Query(q): Query<ListConceptsQuery>,
 ) -> Result<Response, ApiError> {
+    let who = visibility_for(&s, ctx.as_deref());
     // ETag = generation tag. The cache key for the client is the full URL
     // (query string included), so the ETag only needs to vary on the
     // underlying data version: as long as no concept has been written, the
@@ -2179,23 +2297,25 @@ async fn list_concepts(
     let (total, concepts, next) = match cursor {
         Some(c) => {
             let after: ConceptKey = decode_cursor(c)?;
-            let (page, next) = s.graph.try_list_concepts_after(
+            let (page, next) = s.graph.try_list_concepts_after_for(
                 q.concept_type.as_deref(),
                 needle.as_deref(),
                 Some(&after),
                 limit,
                 q.include_subtypes,
+                who.as_ref(),
             )?;
             (None, page, next)
         }
         None => {
-            let (total, page) = s.graph.try_list_concepts_page(
+            let (total, page) = s.graph.try_list_concepts_page_for(
                 q.concept_type.as_deref(),
                 needle.as_deref(),
                 q.offset,
                 limit,
                 q.track_total,
                 q.include_subtypes,
+                who.as_ref(),
             )?;
             let next = page
                 .last()
@@ -2224,9 +2344,15 @@ async fn get_ontology(State(s): State<AppState>) -> Json<Ontology> {
 
 async fn update_concept(
     State(s): State<AppState>,
+    ctx: Option<axum::Extension<AuthContext>>,
     Path(id): Path<u64>,
     Json(patch): Json<ConceptPatch>,
 ) -> Result<Json<Concept>, ApiError> {
+    let who = visibility_for(&s, ctx.as_deref());
+    ensure_visible(who.as_ref(), ConceptId(id), "concept")?;
+    if let Some(labels) = &patch.labels {
+        ensure_labels_allowed(labels, ctx.as_deref())?;
+    }
     let _w = s.writer.lock().await;
     lookup(s.graph.get_concept(ConceptId(id)), "concept", id)?;
     let updated = s.graph.preview_concept_update(ConceptId(id), &patch)?;
@@ -2241,8 +2367,11 @@ async fn update_concept(
 
 async fn delete_concept(
     State(s): State<AppState>,
+    ctx: Option<axum::Extension<AuthContext>>,
     Path(id): Path<u64>,
 ) -> Result<StatusCode, ApiError> {
+    let who = visibility_for(&s, ctx.as_deref());
+    ensure_visible(who.as_ref(), ConceptId(id), "concept")?;
     let _w = s.writer.lock().await;
     let cid = ConceptId(id);
     // Journal the whole cascade under one durability barrier: the concept
@@ -2286,8 +2415,10 @@ struct DeleteConceptsResponse {
 /// prefix is harmless (deletes are idempotent), like the single delete.
 async fn delete_concepts(
     State(s): State<AppState>,
+    ctx: Option<axum::Extension<AuthContext>>,
     Json(req): Json<DeleteConceptsRequest>,
 ) -> Result<Json<DeleteConceptsResponse>, ApiError> {
+    let who = visibility_for(&s, ctx.as_deref());
     let _w = s.writer.lock().await;
     let mut ids = req.ids;
     ids.sort_unstable();
@@ -2296,7 +2427,8 @@ async fn delete_concepts(
     let mut missing = Vec::new();
     for id in ids {
         let cid = ConceptId(id);
-        if s.graph.get_concept(cid).is_ok() {
+        // A hidden sheet is "missing" for this caller.
+        if who.as_ref().is_none_or(|v| v.allows(cid)) && s.graph.get_concept(cid).is_ok() {
             targets.push(cid);
         } else {
             missing.push(id);
@@ -2347,8 +2479,12 @@ struct CreatedRelation {
 
 async fn create_relation(
     State(s): State<AppState>,
+    ctx: Option<axum::Extension<AuthContext>>,
     Json(mut rel): Json<Relation>,
 ) -> Result<Json<CreatedRelation>, ApiError> {
+    let who = visibility_for(&s, ctx.as_deref());
+    ensure_visible(who.as_ref(), rel.source, "concept")?;
+    ensure_visible(who.as_ref(), rel.target, "concept")?;
     let _w = s.writer.lock().await;
     s.graph.prepare_relation(&mut rel)?;
     s.store
@@ -2388,9 +2524,11 @@ struct ListRelationsResponse {
 
 async fn list_relations(
     State(s): State<AppState>,
+    ctx: Option<axum::Extension<AuthContext>>,
     headers: HeaderMap,
     Query(q): Query<ListRelationsQuery>,
 ) -> Result<Response, ApiError> {
+    let who = visibility_for(&s, ctx.as_deref());
     let gen = s.graph.relations_generation();
     let etag = format!("W/\"r{gen}\"");
     if let Some(if_match) = headers
@@ -2408,23 +2546,25 @@ async fn list_relations(
     let (total, relations, next) = match cursor {
         Some(c) => {
             let after: RelationId = decode_cursor(c)?;
-            let (page, next) = s.graph.list_relations_after(
+            let (page, next) = s.graph.list_relations_after_for(
                 source,
                 target,
                 q.relation_type.as_deref(),
                 Some(after),
                 limit,
+                who.as_ref(),
             );
             (None, page, next)
         }
         None => {
-            let (total, page) = s.graph.list_relations_page(
+            let (total, page) = s.graph.list_relations_page_for(
                 source,
                 target,
                 q.relation_type.as_deref(),
                 q.offset.unwrap_or(0),
                 limit,
                 q.track_total,
+                who.as_ref(),
             );
             let next = page.last().filter(|_| page.len() == limit).map(|r| r.id);
             (Some(total), page, next)
@@ -2442,24 +2582,33 @@ async fn list_relations(
     Ok(resp)
 }
 
+/// A link with a hidden end does not exist for the caller.
+fn visible_relation(s: &AppState, who: Option<&Visibility>, id: u64) -> Result<Relation, ApiError> {
+    let rel = lookup(s.graph.get_relation(RelationId(id)), "relation", id)?;
+    if who.is_some_and(|v| !v.allows(rel.source) || !v.allows(rel.target)) {
+        return Err(ApiError::NotFound(format!("relation {id} not found")));
+    }
+    Ok(rel)
+}
+
 async fn get_relation_handler(
     State(s): State<AppState>,
+    ctx: Option<axum::Extension<AuthContext>>,
     Path(id): Path<u64>,
 ) -> Result<Json<Relation>, ApiError> {
-    Ok(Json(lookup(
-        s.graph.get_relation(RelationId(id)),
-        "relation",
-        id,
-    )?))
+    let who = visibility_for(&s, ctx.as_deref());
+    Ok(Json(visible_relation(&s, who.as_ref(), id)?))
 }
 
 async fn update_relation_handler(
     State(s): State<AppState>,
+    ctx: Option<axum::Extension<AuthContext>>,
     Path(id): Path<u64>,
     Json(patch): Json<RelationPatch>,
 ) -> Result<Json<Relation>, ApiError> {
+    let who = visibility_for(&s, ctx.as_deref());
     let _w = s.writer.lock().await;
-    lookup(s.graph.get_relation(RelationId(id)), "relation", id)?;
+    visible_relation(&s, who.as_ref(), id)?;
     let updated = s.graph.preview_relation_update(RelationId(id), &patch)?;
     s.store
         .append(&LogRecord::update_relation(updated.clone()))
@@ -2471,12 +2620,14 @@ async fn update_relation_handler(
 
 async fn delete_relation_handler(
     State(s): State<AppState>,
+    ctx: Option<axum::Extension<AuthContext>>,
     Path(id): Path<u64>,
 ) -> Result<StatusCode, ApiError> {
+    let who = visibility_for(&s, ctx.as_deref());
     let _w = s.writer.lock().await;
     let rid = RelationId(id);
     // 404 before touching the log; the type routes the tombstone.
-    let relation_type = lookup(s.graph.get_relation(rid), "relation", id)?.relation_type;
+    let relation_type = visible_relation(&s, who.as_ref(), id)?.relation_type;
     s.store
         .append(&LogRecord::delete_relation(rid, relation_type))
         .await
@@ -2629,16 +2780,20 @@ struct RetrieveResponse {
 
 async fn retrieve(
     State(s): State<AppState>,
-    Json(req): Json<RetrievalRequest>,
+    ctx: Option<axum::Extension<AuthContext>>,
+    Json(mut req): Json<RetrievalRequest>,
 ) -> Json<RetrieveResponse> {
+    req.visible = visibility_for(&s, ctx.as_deref());
     let (scored, subgraph) = s.index.retrieve(&req);
     Json(RetrieveResponse { scored, subgraph })
 }
 
 async fn ask(
     State(s): State<AppState>,
-    Json(req): Json<ontology_rag::AskRequest>,
+    ctx: Option<axum::Extension<AuthContext>>,
+    Json(mut req): Json<ontology_rag::AskRequest>,
 ) -> Result<Json<RagAnswer>, ApiError> {
+    req.retrieval.visible = visibility_for(&s, ctx.as_deref());
     let ans = s
         .pipeline
         .answer_in_conversation(req.retrieval, &req.history)
@@ -2656,8 +2811,10 @@ async fn ask(
 /// 4. `event: error`     — any LLM error; stream closes after.
 async fn ask_stream(
     State(s): State<AppState>,
-    Json(req): Json<ontology_rag::AskRequest>,
+    ctx: Option<axum::Extension<AuthContext>>,
+    Json(mut req): Json<ontology_rag::AskRequest>,
 ) -> Result<Sse<futures::stream::BoxStream<'static, Result<Event, Infallible>>>, ApiError> {
+    req.retrieval.visible = visibility_for(&s, ctx.as_deref());
     let inner = s
         .pipeline
         .answer_stream_in_conversation(req.retrieval, &req.history)
@@ -3093,8 +3250,10 @@ struct SubgraphResponse {
 /// graph so the Graph View has something to render on first load.
 async fn subgraph_handler(
     State(s): State<AppState>,
+    ctx: Option<axum::Extension<AuthContext>>,
     Json(req): Json<SubgraphRequest>,
 ) -> Result<Json<SubgraphResponse>, ApiError> {
+    let who = visibility_for(&s, ctx.as_deref());
     let limit = req.limit.clamp(1, 2_000);
 
     // 1. Collect seed concept ids.
@@ -3102,7 +3261,7 @@ async fn subgraph_handler(
 
     if let Some(q) = req.seed_query.as_ref().filter(|q| !q.trim().is_empty()) {
         let req = RetrievalRequest {
-            visible: None,
+            visible: who.clone(),
             query: q.clone(),
             top_k: 8,
             lexical_weight: 0.5,
@@ -3126,9 +3285,15 @@ async fn subgraph_handler(
         // pull the first `limit` concepts from the global ordered index. In
         // both cases we never materialize the whole graph.
         if req.seed_concept_types.is_empty() {
-            let (_, page) = s
-                .graph
-                .try_list_concepts_page(None, None, 0, limit, false, true)?;
+            let (_, page) = s.graph.try_list_concepts_page_for(
+                None,
+                None,
+                0,
+                limit,
+                false,
+                true,
+                who.as_ref(),
+            )?;
             for c in page {
                 seeds.push(c.id);
             }
@@ -3159,6 +3324,7 @@ async fn subgraph_handler(
         exclude_relation_types: req.exclude_relation_types,
         max_nodes: limit,
         max_edges: req.max_edges.clamp(1, 10_000),
+        visible: who.clone(),
         ..Default::default()
     };
     let subgraph = s.graph.expand(&seeds, &spec);
@@ -3182,8 +3348,15 @@ fn default_export_format() -> String {
 
 async fn export_handler(
     State(s): State<AppState>,
+    ctx: Option<axum::Extension<AuthContext>>,
     Query(q): Query<ExportQuery>,
 ) -> Result<Response, ApiError> {
+    // The export is the whole graph: for those who see the whole graph.
+    if visibility_for(&s, ctx.as_deref()).is_some() {
+        return Err(ApiError::Forbidden(
+            "the export is for administrators".into(),
+        ));
+    }
     match q.format.as_str() {
         "jsonl" | "ndjson" => {
             // Write through a tempfile so we reuse the existing `JsonlSink`

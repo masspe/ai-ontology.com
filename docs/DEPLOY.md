@@ -118,6 +118,30 @@ to the UI with `?error=<code>` (`domain_not_allowed`, `id_token_invalid`,
 `invalid_state`, …) and the detail in the server log. The Node
 `auth-server/` is deprecated: nothing needs it any more.
 
+### Who sees what: labels and clearances
+
+A sheet may carry **security labels** (`labels` on a concept, e.g.
+`["payroll", "ch"]`); an account has **clearances**. A reader sees a sheet
+when their clearances include every label of it — a sheet without labels
+is visible to every account. Administrators, the service token and API
+keys see everything. The rule holds on every read path: a hidden sheet is
+a 404 (like an id that never existed), is neither listed nor counted, its
+links are not listed, no path runs through it, the graph page, retrieval
+and the question never carry it, and it cannot be written to; a label
+beyond one's clearances cannot be attached (403), and the export of the
+whole graph is for administrators. Visibility is computed once per
+clearance set and graph generation (a hidden-id set, cached), so a read
+costs one lookup per sheet.
+
+The administrator sets clearances in **Accès** (the account menu) or with
+`PATCH /auth/users/<id> {"clearances": ["payroll"], "role": "user"}`;
+labels are edited on the sheet (« Corriger ») or with
+`PATCH /concepts/<id> {"labels": [...]}`. A label or clearance is
+`[a-z0-9][a-z0-9_.-]{0,63}`. With OpenID Connect, a provider can turn the
+user's group claims into their clearances at every sign-in
+(`groups_as_clearances`). A change takes effect on the next request, the
+tokens already issued included.
+
 ### API keys and audit log
 
 For a machine caller (an ERP, a script), the administrator creates a **named

@@ -35,6 +35,16 @@ All notable changes to this project are listed here. The format follows
 
 ### Added
 
+- Access control on the API: a reader's clearances (`PATCH /auth/users/<id>
+  {"clearances": [...], "role": ...}`, administrators only; or the OpenID
+  provider's group claims with `groups_as_clearances`) decide which
+  labelled sheets exist for them — a 404 on the sheet, neither listed nor
+  counted, links hidden, no path through, never in a subgraph, a retrieval
+  or an answer, no write to it, no label beyond one's clearances (403),
+  the export for administrators. Administrators, the service token and
+  API keys see everything; without a login, so does everyone. Visibility
+  is cached per clearance set and generation. The **Accès** page (account
+  menu) edits roles and clearances; the sheet page shows and edits labels.
 - Security labels on sheets (`Concept.labels`, `ConceptPatch.labels`):
   a reader sees a sheet when their clearances include every label of it.
   The graph takes a reader's `Visibility` on traversals (`TraversalSpec`),

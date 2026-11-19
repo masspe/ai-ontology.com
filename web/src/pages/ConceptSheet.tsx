@@ -53,7 +53,7 @@ export default function ConceptSheet() {
   const [files, setFiles] = useState<FileRecord[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState({ name: "", description: "" });
+  const [draft, setDraft] = useState({ name: "", description: "", labels: "" });
 
   useEffect(() => {
     let cancelled = false;
@@ -75,7 +75,7 @@ export default function ConceptSheet() {
         ]);
         if (cancelled) return;
         setConcept(c);
-        setDraft({ name: c.name, description: c.description ?? "" });
+        setDraft({ name: c.name, description: c.description ?? "", labels: (c.labels ?? []).join(", ") });
         setNeighbours(new Map(sg.subgraph.concepts.map((n) => [n.id, n])));
         setRelations(sg.subgraph.relations.filter((rel) => rel.source === id || rel.target === id));
         setRules(r.filter((rule) => rule.applies_to.length === 0 || rule.applies_to.includes(id)));
@@ -94,10 +94,18 @@ export default function ConceptSheet() {
   const save = async () => {
     if (!concept) return;
     try {
-      const updated = await updateConcept(concept.id, {
+      const labels = draft.labels
+        .split(",")
+        .map((l) => l.trim().toLowerCase())
+        .filter(Boolean);
+      const patch: Parameters<typeof updateConcept>[1] = {
         name: draft.name.trim(),
         description: draft.description.trim(),
-      });
+      };
+      // Labels travel only when they changed: the server checks them
+      // against the caller's clearances.
+      if (labels.join(",") !== (concept.labels ?? []).join(",")) patch.labels = labels;
+      const updated = await updateConcept(concept.id, patch);
       setConcept(updated);
       setEditing(false);
       setError(null);
@@ -162,6 +170,12 @@ export default function ConceptSheet() {
                 value={draft.description}
                 onChange={(e) => setDraft((d) => ({ ...d, description: e.target.value }))}
               />
+              <input
+                aria-label={t("Labels d'accès")}
+                placeholder={t("labels, séparés par des virgules (vide : visible de tous)")}
+                value={draft.labels}
+                onChange={(e) => setDraft((d) => ({ ...d, labels: e.target.value }))}
+              />
               <div className="onboarding-actions">
                 <button className="btn-primary" type="submit">
                   {t("Enregistrer")}
@@ -175,6 +189,15 @@ export default function ConceptSheet() {
             <>
               <h1 className="page-title sheet-name">{concept.name}</h1>
               <p className="page-subtitle sheet-desc">{concept.description || t("Pas de description.")}</p>
+              {(concept.labels ?? []).length > 0 && (
+                <p className="sheet-labels" aria-label={t("Labels d'accès")}>
+                  {(concept.labels ?? []).map((l) => (
+                    <span key={l} className="badge" title={t("Visible des comptes habilités à ce label")}>
+                      ⚿ {l}
+                    </span>
+                  ))}
+                </p>
+              )}
             </>
           )}
         </div>

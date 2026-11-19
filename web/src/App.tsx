@@ -14,6 +14,7 @@ import Rules from "./pages/Rules";
 import Queries from "./pages/Queries";
 import Actions from "./pages/Actions";
 import Settings from "./pages/Settings";
+import Access from "./pages/Access";
 // @ts-expect-error JSX module
 import Login from "./pages/Login.jsx";
 // @ts-expect-error JSX module
@@ -48,6 +49,7 @@ export default function App() {
             <Route path="queries" element={<Queries />} />
             <Route path="actions" element={<Actions />} />
             <Route path="settings" element={<Settings />} />
+            <Route path="access" element={<Access />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Route>
         </Routes>
