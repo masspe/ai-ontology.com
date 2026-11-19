@@ -26,6 +26,7 @@ pub mod audit;
 pub mod auth;
 mod ingest_review;
 mod openapi;
+pub mod secrets;
 
 use axum::{
     extract::{Multipart, Path, Query, State},
@@ -187,7 +188,7 @@ impl AppState {
 /// settings file must never stop the server (or a CLI command) from starting.
 fn load_settings(path: &std::path::Path) -> Option<Settings> {
     match std::fs::read_to_string(path) {
-        Ok(raw) => match serde_json::from_str::<Settings>(&raw) {
+        Ok(raw) => match parse_settings(path, &raw) {
             Ok(mut loaded) => {
                 loaded.migrate();
                 tracing::info!(path = %path.display(), "settings loaded");
@@ -217,6 +218,23 @@ fn load_settings(path: &std::path::Path) -> Option<Settings> {
     }
 }
 
+/// Parse a settings file, opening its sealed secrets with the master key
+/// of `path` (see [`secrets`]). A secret the key does not open is cleared
+/// and logged, never a reason to refuse the file.
+fn parse_settings(path: &std::path::Path, raw: &str) -> Result<Settings, String> {
+    let mut v: serde_json::Value = serde_json::from_str(raw).map_err(|e| e.to_string())?;
+    let key = secrets::MasterKey::for_settings(path).map_err(|e| format!("master key: {e}"))?;
+    let failed = secrets::open_fields(&mut v, &key, &is_secret_field);
+    if failed > 0 {
+        tracing::warn!(
+            failed,
+            path = %path.display(),
+            "secrets sealed with another master key were cleared; enter them again"
+        );
+    }
+    serde_json::from_value(v).map_err(|e| e.to_string())
+}
+
 fn load_settings_into(settings: &Arc<PlRwLock<Settings>>, path: &std::path::Path) {
     if let Some(loaded) = load_settings(path) {
         *settings.write() = loaded;
@@ -225,19 +243,56 @@ fn load_settings_into(settings: &Arc<PlRwLock<Settings>>, path: &std::path::Path
 
 /// Persist the given settings to disk as JSON, secrets included — with no
 /// environment variables left in the picture, this file *is* the credential
-/// store. `Settings` now serializes completely and redaction happens only at
+/// store. `Settings` serializes completely and redaction happens only at
 /// the HTTP boundary ([`settings_view`]), so a secret field added later can
-/// no longer be silently dropped on restart.
+/// no longer be silently dropped on restart; every secret field is sealed
+/// with the master key of `path` ([`secrets`]), so the file alone reveals
+/// none of them.
 ///
 /// On Unix the file is created with mode 0600. An already-existing file keeps
 /// its current mode, and Windows ACLs are not touched — the file inherits the
 /// data directory, so keep that directory out of shared locations.
 fn persist_settings(path: &std::path::Path, s: &Settings) -> std::io::Result<()> {
+    persist_settings_with(path, s, &secrets::MasterKey::for_settings(path)?)
+}
+
+fn persist_settings_with(
+    path: &std::path::Path,
+    s: &Settings,
+    key: &secrets::MasterKey,
+) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let json = serde_json::to_string_pretty(s).map_err(std::io::Error::other)?;
+    let mut v = serde_json::to_value(s).map_err(std::io::Error::other)?;
+    secrets::seal_fields(&mut v, key, &is_secret_field);
+    let json = serde_json::to_string_pretty(&v).map_err(std::io::Error::other)?;
     write_private(path, json.as_bytes())
+}
+
+/// Re-seal the settings of `settings_path` with a fresh master key and
+/// replace the key file; returns the key file. Refused while
+/// `ONTOLOGY_MASTER_KEY` is set (rotate the variable's value instead).
+// shortcut: not atomic — a crash between the two writes leaves the secrets
+// sealed with a key that is gone (they are cleared on load, re-enter
+// them); back the data directory up first. Upgrade: write the new key to
+// a sibling file first and rename it over the old one last.
+pub fn rotate_master_key(settings_path: &std::path::Path) -> std::io::Result<std::path::PathBuf> {
+    if std::env::var_os(secrets::ENV_VAR).is_some() {
+        return Err(std::io::Error::other(format!(
+            "{} is set: unset it (or change its value and re-enter the secrets)",
+            secrets::ENV_VAR
+        )));
+    }
+    let current = load_settings(settings_path).unwrap_or_default();
+    let file = secrets::MasterKey::file_for(settings_path);
+    let key = secrets::MasterKey::generate();
+    if file.exists() {
+        std::fs::remove_file(&file)?;
+    }
+    key.write(&file)?;
+    persist_settings_with(settings_path, &current, &key)?;
+    Ok(file)
 }
 
 #[cfg(unix)]

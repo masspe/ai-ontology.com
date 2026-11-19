@@ -28,9 +28,14 @@ no `*_API_KEY` variable and no provider flag on `ontology serve`.
 
 * The file is `<data>/settings.json`, or `./.ontology/settings.json` when no
   `--data` directory is given. Override with `--settings <path>`.
-* It is created on the first save and holds the raw keys, so it survives
-  restarts. On Unix it is created mode 0600; on Windows it inherits the
-  directory, so keep the data directory out of shared locations.
+* It is created on the first save and holds the keys, so it survives
+  restarts — sealed (AES-256-GCM) with the master key in `master.key`
+  beside it, generated on first use, or in `ONTOLOGY_MASTER_KEY` (64 hex
+  characters) when set. Keep the key with the file: a settings file
+  restored without it loses its keys (cleared and logged, nothing else).
+  `ontology rotate-key` re-seals with a fresh key. On Unix both files are
+  created mode 0600; on Windows they inherit the directory, so keep the
+  data directory out of shared locations.
 * Keys never travel back out: `GET /settings` strips every secret-shaped
   field and returns a masked `*_api_key_hint` instead.
 * Applying a provider or model takes effect on the next request — `/ask`,

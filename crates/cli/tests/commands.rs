@@ -992,3 +992,46 @@ fn eval_reports_ranks_misses_and_the_pass_share() {
     let err = fail(Some(&data), &["eval", &p(&bad)]);
     assert!(err.contains("bad.jsonl:1"), "{err}");
 }
+
+/// `rotate-key` re-seals the settings file's secrets with a fresh
+/// `master.key`, without the store; refused while `ONTOLOGY_MASTER_KEY`
+/// is set, since the variable is the key then.
+#[test]
+fn rotate_key_reseals_the_settings_without_the_store() {
+    let data = tempdir("rotate-key");
+    std::fs::write(
+        data.join("settings.json"),
+        r#"{ "llm": { "active_provider": "openai", "openai_api_key": "sk-rotate-4321", "openai_model": "" } }"#,
+    )
+    .unwrap();
+    let out = ok(Some(&data), &["rotate-key"]);
+    assert!(out.starts_with("rotated: "), "{out}");
+    let key = std::fs::read_to_string(data.join("master.key")).unwrap();
+    assert_eq!(key.trim().len(), 64);
+    let raw = std::fs::read_to_string(data.join("settings.json")).unwrap();
+    assert!(
+        !raw.contains("sk-rotate-4321") && raw.contains("enc:v1:"),
+        "sealed on disk:\n{raw}"
+    );
+    // Rotating again replaces the key; the settings still open: `ask`
+    // reaches the provider with the key (and fails on the empty model).
+    ok(Some(&data), &["rotate-key"]);
+    assert_ne!(
+        std::fs::read_to_string(data.join("master.key")).unwrap(),
+        key
+    );
+    let err = fail(Some(&data), &["ask", "anything"]);
+    assert!(
+        err.contains("Aucun mod"),
+        "the key opened, the model is what is missing:\n{err}"
+    );
+
+    let out = ontology(Some(&data))
+        .env("ONTOLOGY_MASTER_KEY", "00".repeat(32))
+        .arg("rotate-key")
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(text(&out.stderr).contains("ONTOLOGY_MASTER_KEY"));
+    let _ = std::fs::remove_dir_all(&data);
+}

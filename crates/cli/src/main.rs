@@ -342,6 +342,10 @@ enum Cmd {
         #[arg(long, value_delimiter = ',', required = true)]
         to: Vec<String>,
     },
+    /// Re-seal the secrets of the settings file (provider keys, …) with a
+    /// fresh master key and replace `master.key`. Back the data directory
+    /// up first; refused while `ONTOLOGY_MASTER_KEY` is set.
+    RotateKey,
     /// Container health probe: GET `url`, exit 0 on a 2xx, 1 otherwise. The
     /// runtime image has no curl; this needs no dependency either.
     Healthcheck {
@@ -432,6 +436,13 @@ async fn main() -> Result<()> {
 
     // Benchmarks manage the store themselves (they time its opening and
     // hydration), so they run before the generic open below.
+    if let Cmd::RotateKey = &cli.cmd {
+        // Files beside the store only; a running server keeps its old key
+        // in memory until restarted.
+        let file = ontology_server::rotate_master_key(&settings_path(&cli))?;
+        println!("rotated: {}", file.display());
+        return Ok(());
+    }
     if let Cmd::Healthcheck { url } = &cli.cmd {
         // Never touches the store: the running server holds its LOCK.
         return match healthcheck(url) {
@@ -1084,7 +1095,7 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        Cmd::Healthcheck { .. } | Cmd::XrefStats { .. } => {
+        Cmd::Healthcheck { .. } | Cmd::XrefStats { .. } | Cmd::RotateKey => {
             unreachable!("handled before the store opens")
         }
         Cmd::Serve {

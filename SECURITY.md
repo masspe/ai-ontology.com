@@ -18,7 +18,7 @@ You will get an acknowledgement within 5 working days.
 | Git, local | Pre-commit and pre-push hooks run the guard. Enable once per clone: `git config core.hooksPath .githooks`. | `.githooks/` |
 | Git, local | Commits signed with the developer's SSH key (`gpg.format ssh`, `commit.gpgsign true`), so an unsigned commit shows as unverified on GitHub. | per-clone git config |
 | Review | Code owners on everything; the CI and policy files need both owners. | `.github/CODEOWNERS` |
-| Runtime | Built-in login (bcrypt, HS256 sessions, per-IP rate limit on `/auth/*`), named API keys hashed at rest, audit log of every write, `--memory-mode strict` refusing a store that does not fit its budget, distroless image running as a non-root user. | `crates/server`, `Dockerfile` |
+| Runtime | Built-in login (bcrypt, HS256 sessions, per-IP rate limit on `/auth/*`), named API keys hashed at rest, provider API keys sealed at rest with a tenant master key (AES-256-GCM, `master.key` or `ONTOLOGY_MASTER_KEY`, `ontology rotate-key`), audit log of every write, `--memory-mode strict` refusing a store that does not fit its budget, distroless image running as a non-root user. | `crates/server`, `Dockerfile` |
 
 ## What the repository owner must keep enabled on GitHub
 

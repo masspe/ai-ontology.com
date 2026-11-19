@@ -35,6 +35,13 @@ All notable changes to this project are listed here. The format follows
 
 ### Added
 
+- Secrets at rest: every secret field of the settings file (the provider
+  API keys) is sealed with a tenant master key, AES-256-GCM, before it is
+  written — `master.key` beside the settings, generated owner-only on
+  first use, or `ONTOLOGY_MASTER_KEY` (64 hex characters). A settings
+  file written before this is read as it is and sealed on its next save;
+  a secret the key does not open is cleared and logged, never a reason to
+  refuse the file. `ontology rotate-key` re-seals with a fresh key.
 - `ontology ingest --df <dump> --df-db <name>` reads a Progress
   data-definition dump (`.df`): every table and field of the database —
   including the ones no program touches — with the labels, descriptions,

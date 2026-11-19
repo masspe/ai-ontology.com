@@ -16,7 +16,12 @@ cache, compilation of the `ontology` binary, and a minimal final image
   rest);
 - user login (`/auth/login`, `/auth/signup`, `/auth/me`, `/auth/logout`,
   account management by the administrator), with the accounts in
-  `/data/users.json` and the token secret in `/data/jwt.secret`.
+  `/data/users.json` and the token secret in `/data/jwt.secret`;
+- the settings (`/data/settings.json`, written from the UI), whose secrets
+  — provider API keys — are sealed with the master key in
+  `/data/master.key` (generated on first start) or in the environment
+  variable `ONTOLOGY_MASTER_KEY` (64 hex characters) when set. A copy of
+  the settings file without the key reveals no credential.
 
 One process per client (STORAGE.md §10.8): each client has its own container,
 its own data volume, its own accounts, its own memory limit.
@@ -45,6 +50,7 @@ Useful binary options (in `command:`):
 | `--tier p1` | payloads on disk: the setting for a 16 GB node beyond one million concepts (STORAGE.md §7.8) |
 | `--login` | built-in login (enabled by the image); `--allow-signup` leaves sign-up open after the first account |
 | `--jwt-secret-env NAME` | take the token secret from the environment variable `NAME` rather than from `/data/jwt.secret` |
+| `ONTOLOGY_MASTER_KEY` (environment) | the master key sealing the settings' secrets, instead of `/data/master.key`; `ontology rotate-key` re-seals them with a fresh key file (back the volume up first) |
 | `--seed /path` | load an example (schema + JSONL) into an empty store, once |
 | `--web /srv/web` | folder of the built interface (the one in the image) |
 | `--backup-dir /backups` | folder where `POST /backup` copies the store (image default; §5) |
@@ -149,9 +155,11 @@ docker start acme
 
 The restored store has its own identity: its next backup goes to an empty
 folder (or to an emptied `/backups`), never on top of the original backup.
-The small files next to the store (`users.json`, `jwt.secret`, `settings.json`)
-are not part of the backup: copy them along with the volume, or supply the
-secret through `--jwt-secret-env`. The CI runs backup through the API, restore
+The small files next to the store (`users.json`, `jwt.secret`, `settings.json`,
+`master.key`) are not part of the backup: copy them along with the volume, or
+supply the secrets through `--jwt-secret-env` and `ONTOLOGY_MASTER_KEY`. A
+`settings.json` restored without its `master.key` keeps everything but the
+provider keys, which the administrator enters again. The CI runs backup through the API, restore
 through the command and a graph comparison on every change
 (`scripts/e2e_image.sh`), and the store's tests check the round trip, the
 incremental behavior and the refusals (`crates/storage/tests/backup.rs`).

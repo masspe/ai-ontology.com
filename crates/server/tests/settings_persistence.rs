@@ -141,12 +141,17 @@ async fn infomaniak_config_survives_a_restart() {
     // Whitespace around a pasted product id is absorbed.
     assert_eq!(patched["llm"]["infomaniak_product_id"], "101112");
 
-    // The file on disk *is* the credential store: it must hold the raw key,
-    // otherwise the provider is silently logged out on the next boot.
+    // The file on disk *is* the credential store, sealed with the master
+    // key beside it: the key is there (the provider stays logged in on the
+    // next boot) but not in clear.
     let raw = std::fs::read_to_string(&file).expect("settings.json written");
     assert!(
-        raw.contains("tok-secret-1234"),
-        "raw key missing from settings.json:\n{raw}"
+        !raw.contains("tok-secret-1234") && raw.contains("\"infomaniak_api_key\": \"enc:v1:"),
+        "key must be sealed in settings.json:\n{raw}"
+    );
+    assert!(
+        dir.join("master.key").is_file(),
+        "master key generated beside the settings"
     );
 
     // Restart: a brand-new AppState reading the same file.
@@ -315,4 +320,62 @@ async fn missing_credentials_are_reported_before_any_request() {
         test["error"].as_str().unwrap().contains("Product ID"),
         "unhelpful error: {test}"
     );
+}
+
+/// The secrets open only with the key that sealed them: another key
+/// clears them (the operator re-enters them) and keeps the rest of the
+/// file; `rotate_master_key` re-seals them with a fresh key in place.
+#[tokio::test]
+async fn secrets_follow_the_master_key() {
+    let dir = temp_dir("master-key");
+    let file = dir.join("settings.json");
+    let (status, _) = send_json(
+        &file,
+        "PATCH",
+        "/settings",
+        json!({ "llm": { "active_provider": "openai", "openai_api_key": "sk-openai-7777", "openai_model": "o1" } }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let key_file = dir.join("master.key");
+    let before = std::fs::read_to_string(&key_file).unwrap();
+
+    let rotated = ontology_server::rotate_master_key(&file).unwrap();
+    assert_eq!(rotated, key_file);
+    assert_ne!(std::fs::read_to_string(&key_file).unwrap(), before);
+    let after = get_settings(&file).await;
+    assert_eq!(
+        after["llm"]["openai_api_key_hint"], "sk-...7777",
+        "still opens after rotation"
+    );
+    assert_eq!(after["llm"]["openai_model"], "o1");
+
+    // A plain-text file from before sealing existed loads as it is and is
+    // sealed on the next save.
+    std::fs::write(
+        &file,
+        r#"{ "llm": { "active_provider": "openai", "openai_api_key": "sk-plain-0001" } }"#,
+    )
+    .unwrap();
+    let plain = get_settings(&file).await;
+    assert_eq!(plain["llm"]["openai_api_key_hint"], "sk-...0001");
+
+    // The wrong key: the secret is cleared, the rest of the settings stay.
+    let (status, _) = send_json(
+        &file,
+        "PATCH",
+        "/settings",
+        json!({ "llm": { "openai_model": "o3" } }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    std::fs::write(
+        &key_file,
+        ontology_server::secrets::MasterKey::generate().to_hex(),
+    )
+    .unwrap();
+    let lost = get_settings(&file).await;
+    assert_eq!(lost["llm"]["openai_api_key_hint"], "");
+    assert_eq!(lost["llm"]["openai_model"], "o3");
+    let _ = std::fs::remove_dir_all(&dir);
 }
