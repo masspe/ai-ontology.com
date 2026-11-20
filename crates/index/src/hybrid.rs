@@ -53,6 +53,11 @@ pub struct RetrievalRequest {
     /// server from the settings, never by a client.
     #[serde(skip)]
     pub on_premises_domains: Option<std::sync::Arc<Vec<String>>>,
+    /// Rows a live lookup fetched for this question (a named query of a
+    /// data source), rendered as a data block after the retrieved sheets.
+    /// Set by the server, never by a client.
+    #[serde(skip)]
+    pub extra_context: Option<String>,
 }
 
 fn default_top_k() -> usize {
@@ -126,6 +131,7 @@ impl Default for RetrievalRequest {
             expansion: TraversalSpec::default(),
             visible: None,
             on_premises_domains: None,
+            extra_context: None,
         }
     }
 }

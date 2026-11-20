@@ -35,6 +35,11 @@ All notable changes to this project are listed here. The format follows
 
 ### Added
 
+- Named queries: a data source can answer a question live — a trigger
+  (a regular expression with named groups) and an administrator's SELECT
+  with `{group}` blanks; a matching question binds the groups as safe
+  literals, runs the query (200 rows at most) and the rows join the
+  prompt as a delimited data block. The model never writes SQL.
 - Data sources: a database or a file the graph is kept in step with
   (`/sources`, the *Sources de données* page, administrators). A source
   carries mappings — a table or a SELECT becomes sheets of a type, a

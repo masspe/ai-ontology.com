@@ -2928,18 +2928,24 @@ async fn ask(
     req.retrieval.visible = visibility_for(&s, ctx.as_deref());
     req.retrieval.on_premises_domains = on_premises_policy(&s);
     let question = req.retrieval.query.clone();
+    let unrestricted = req.retrieval.visible.is_none();
+    let lookup = sources::lookup(&s, &question, unrestricted).await;
+    req.retrieval.extra_context = lookup.as_ref().map(|l| l.context.clone());
     let ans = s
         .pipeline
         .answer_in_conversation(req.retrieval, &req.history)
         .await
         .map_err(|e| ApiError::Llm(e.to_string()))?;
-    let domains = domains_of(
+    let mut domains = domains_of(
         &s,
         ans.subgraph
             .concepts
             .iter()
             .map(|c| c.concept_type.as_str()),
     );
+    if let Some(l) = &lookup {
+        domains.push(format!("lookup:{}", l.query));
+    }
     let mut resp = Json(ans).into_response();
     resp.extensions_mut()
         .insert(audit::AuditNote::ask(&question, &domains));
@@ -2975,6 +2981,10 @@ async fn ask_stream(
 ) -> Result<Sse<futures::stream::BoxStream<'static, Result<Event, Infallible>>>, ApiError> {
     req.retrieval.visible = visibility_for(&s, ctx.as_deref());
     req.retrieval.on_premises_domains = on_premises_policy(&s);
+    let unrestricted = req.retrieval.visible.is_none();
+    req.retrieval.extra_context = sources::lookup(&s, &req.retrieval.query, unrestricted)
+        .await
+        .map(|l| l.context);
     let inner = s
         .pipeline
         .answer_stream_in_conversation(req.retrieval, &req.history)
@@ -3423,6 +3433,7 @@ async fn subgraph_handler(
         let req = RetrievalRequest {
             visible: who.clone(),
             on_premises_domains: None,
+            extra_context: None,
             query: q.clone(),
             top_k: 8,
             lexical_weight: 0.5,
@@ -3695,6 +3706,7 @@ async fn run_query(
     let req = RetrievalRequest {
         visible: None,
         on_premises_domains: None,
+        extra_context: None,
         query: q.query.clone(),
         top_k: q.top_k,
         lexical_weight: q.lexical_weight,

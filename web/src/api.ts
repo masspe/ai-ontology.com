@@ -877,7 +877,23 @@ export interface DataSource {
   timeout_secs: number;
   created_at: string;
   mappings: MappingSpec[];
+  queries: NamedQuery[];
 }
+
+/** A live lookup: a question matching `trigger` runs `sql` with the
+ * trigger's named groups bound, and the rows join the prompt. */
+export interface NamedQuery {
+  id: number;
+  name: string;
+  description: string;
+  trigger: string;
+  sql: string;
+  max_rows: number;
+  admin_only: boolean;
+  enabled: boolean;
+}
+
+export type NamedQueryPatch = Partial<Omit<NamedQuery, "id">>;
 
 export interface SourcePatch {
   name?: string;
@@ -938,6 +954,16 @@ export const previewMapping = (id: number, mid: number) =>
   );
 export const runMapping = (id: number, mid: number) =>
   http<{ job: number }>(`/sources/${id}/mappings/${mid}/run`, { method: "POST", headers: headers() });
+export const createNamedQuery = (id: number, p: NamedQueryPatch) => http<NamedQuery>(`/sources/${id}/queries`, jsonInit("POST", p));
+export const updateNamedQuery = (id: number, qid: number, p: NamedQueryPatch) =>
+  http<NamedQuery>(`/sources/${id}/queries/${qid}`, jsonInit("PATCH", p));
+export const deleteNamedQuery = (id: number, qid: number) =>
+  http<void>(`/sources/${id}/queries/${qid}`, { method: "DELETE", headers: headers() });
+export const tryNamedQuery = (id: number, qid: number, question: string) =>
+  http<{ matched: boolean; sql?: string; columns?: { name: string }[]; rows?: unknown[][]; context?: string }>(
+    `/sources/${id}/queries/${qid}/try`,
+    jsonInit("POST", { question }),
+  );
 
 export const getQueries = () => http<{ queries: SavedQuery[] }>("/queries");
 export const createQuery = (q: {

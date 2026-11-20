@@ -321,7 +321,9 @@ the boost weighted by how rare the naming word is (`HybridIndex::rank`).
    CSV, SQL Server (`tiberius`, feature) and ODBC (`odbc-api`, feature)
    behind it; a mapping turns rows into `Record`s (`RowSource`) for the
    same ingester, so a synced table is upserted, journaled and indexed
-   like every other import.
+   like every other import. A source's named queries answer at question
+   time: a trigger regex binds its groups into an administrator's
+   SELECT, and the rows join the prompt as a data block after the sheets.
 
 `scripts/import-erp.ps1` runs the three in this order against one store
 (build, `--xref --sync`, `--abl --sync`, one `--df` per database).

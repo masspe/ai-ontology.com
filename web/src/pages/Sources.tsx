@@ -4,15 +4,19 @@
 // Data sources: a database or a file the graph is kept in step with.
 // A source (where, how to connect) carries mappings (a table → sheets
 // of a type, with links from its foreign keys), previewed before they
-// run, run by hand or on a schedule as background jobs. Administrators.
+// run, run by hand or on a schedule as background jobs, and named
+// queries (a trigger and a SELECT with blanks) that answer a question
+// live. Administrators.
 import { useEffect, useState } from "react";
 import Card from "../components/Card";
 // @ts-expect-error JSX module
 import { useConfirm } from "../components/ConfirmDialog.jsx";
 import {
   createMapping,
+  createNamedQuery,
   createSource,
   deleteMapping,
+  deleteNamedQuery,
   deleteSource,
   listSourceColumns,
   listSources,
@@ -20,11 +24,15 @@ import {
   previewMapping,
   runMapping,
   testSource,
+  tryNamedQuery,
   updateMapping,
+  updateNamedQuery,
   updateSource,
   type DataSource,
   type MappingPatch,
   type MappingSpec,
+  type NamedQuery,
+  type NamedQueryPatch,
   type SourcePatch,
 } from "../api";
 import { t } from "../lib/i18n";
@@ -251,6 +259,67 @@ function MappingForm({ source, initial, onSave, onCancel }: { source: DataSource
   );
 }
 
+function QueryForm({ initial, onSave, onCancel }: { initial?: NamedQuery; onSave: (p: NamedQueryPatch) => Promise<void>; onCancel: () => void }) {
+  const [p, setP] = useState<NamedQueryPatch>({
+    name: initial?.name ?? "",
+    description: initial?.description ?? "",
+    trigger: initial?.trigger ?? "",
+    sql: initial?.sql ?? "",
+    max_rows: initial?.max_rows ?? 20,
+    admin_only: initial?.admin_only ?? false,
+    enabled: initial?.enabled ?? true,
+  });
+  const set = <K extends keyof NamedQueryPatch>(k: K, v: NamedQueryPatch[K]) => setP((x) => ({ ...x, [k]: v }));
+  return (
+    <form
+      className="mapping-form"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void onSave(p);
+      }}
+    >
+      <div className="grid grid-2" style={{ gap: 12 }}>
+        <label className="field">
+          <span>{t("Nom de la requête")}</span>
+          <input required value={p.name ?? ""} onChange={(e) => set("name", e.target.value)} />
+        </label>
+        <label className="field">
+          <span>{t("Déclencheur (expression régulière, groupes nommés)")}</span>
+          <input required value={p.trigger ?? ""} onChange={(e) => set("trigger", e.target.value)} placeholder="(?i)ticket\\s*(?:n°|#)?\\s*(?P<id>\\d{1,9})" />
+        </label>
+        <label className="field" style={{ gridColumn: "1 / -1" }}>
+          <span>{t("SELECT avec des blancs : le nom du groupe entre accolades")}</span>
+          <textarea required rows={3} value={p.sql ?? ""} onChange={(e) => set("sql", e.target.value)} placeholder="SELECT id, title, status FROM tickets WHERE id = {id}" />
+        </label>
+        <label className="field">
+          <span>{t("Description")}</span>
+          <input value={p.description ?? ""} onChange={(e) => set("description", e.target.value)} />
+        </label>
+        <label className="field">
+          <span>{t("Lignes au plus (200 max)")}</span>
+          <input type="number" min={1} max={200} value={p.max_rows ?? 20} onChange={(e) => set("max_rows", Number(e.target.value))} />
+        </label>
+        <label className="checkbox-row">
+          <input type="checkbox" checked={!!p.admin_only} onChange={(e) => set("admin_only", e.target.checked)} />
+          <span>{t("Administrateurs seulement")}</span>
+        </label>
+        <label className="checkbox-row">
+          <input type="checkbox" checked={p.enabled !== false} onChange={(e) => set("enabled", e.target.checked)} />
+          <span>{t("Activée")}</span>
+        </label>
+      </div>
+      <div className="onboarding-actions" style={{ marginTop: 12 }}>
+        <button className="btn-primary" type="submit">
+          {t("Enregistrer")}
+        </button>
+        <button className="btn-outline" type="button" onClick={onCancel}>
+          {t("Annuler")}
+        </button>
+      </div>
+    </form>
+  );
+}
+
 export default function Sources() {
   const confirm = useConfirm();
   const [sources, setSources] = useState<DataSource[] | null>(null);
@@ -260,6 +329,8 @@ export default function Sources() {
   const [editing, setEditing] = useState<number | null>(null);
   const [mappingFor, setMappingFor] = useState<{ source: DataSource; mapping?: MappingSpec } | null>(null);
   const [preview, setPreview] = useState<{ mapping: string; data: Awaited<ReturnType<typeof previewMapping>> } | null>(null);
+  const [queryFor, setQueryFor] = useState<{ source: DataSource; query?: NamedQuery } | null>(null);
+  const [trying, setTrying] = useState<{ source: number; query: NamedQuery; question: string; result?: Awaited<ReturnType<typeof tryNamedQuery>> } | null>(null);
 
   const load = async () => {
     try {
@@ -336,6 +407,9 @@ export default function Sources() {
                 </button>
                 <button className="btn-ghost" onClick={() => setMappingFor({ source: s })}>
                   {t("Ajouter un mapping")}
+                </button>
+                <button className="btn-ghost" onClick={() => setQueryFor({ source: s })}>
+                  {t("Ajouter une requête")}
                 </button>
                 <button
                   className="btn-ghost"
@@ -417,8 +491,91 @@ export default function Sources() {
                 </tbody>
               </table>
             )}
+            {queryFor?.source.id === s.id && (
+              <QueryForm
+                initial={queryFor.query}
+                onSave={(p) =>
+                  run(() => (queryFor.query ? updateNamedQuery(s.id, queryFor.query.id, p) : createNamedQuery(s.id, p)), t("Requête enregistrée.")).then(() => setQueryFor(null))
+                }
+                onCancel={() => setQueryFor(null)}
+              />
+            )}
+            {(s.queries ?? []).length > 0 && (
+              <table className="table" style={{ marginTop: 12 }}>
+                <thead>
+                  <tr>
+                    <th>{t("Requête nommée")}</th>
+                    <th>{t("Déclencheur")}</th>
+                    <th>SQL</th>
+                    <th />
+                  </tr>
+                </thead>
+                <tbody>
+                  {s.queries.map((q) => (
+                    <tr key={q.id} className={q.enabled ? "" : "muted"}>
+                      <td>
+                        <strong>{q.name}</strong>
+                        {q.admin_only && <span className="badge"> {t("admin")}</span>}
+                        {!q.enabled && <span className="muted"> · {t("désactivée")}</span>}
+                      </td>
+                      <td>
+                        <code>{q.trigger}</code>
+                      </td>
+                      <td>
+                        <code>{q.sql}</code>
+                      </td>
+                      <td style={{ whiteSpace: "nowrap" }}>
+                        <button className="btn-ghost" onClick={() => setTrying({ source: s.id, query: q, question: "" })}>
+                          {t("Essayer")}
+                        </button>
+                        <button className="btn-ghost" onClick={() => setQueryFor({ source: s, query: q })}>
+                          {t("Modifier")}
+                        </button>
+                        <button
+                          className="btn-ghost"
+                          onClick={async () => {
+                            if (await confirm({ title: t("Supprimer la requête ?"), message: q.name, danger: true })) void run(() => deleteNamedQuery(s.id, q.id));
+                          }}
+                        >
+                          {t("Supprimer")}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
           </Card>
         ))
+      )}
+
+      {trying && (
+        <Card title={t("Essayer : {name}", { name: trying.query.name })} actions={<button className="btn-ghost" onClick={() => setTrying(null)}>{t("Fermer")}</button>}>
+          <form
+            style={{ display: "flex", gap: 8 }}
+            onSubmit={(e) => {
+              e.preventDefault();
+              void run(async () => {
+                const result = await tryNamedQuery(trying.source, trying.query.id, trying.question);
+                setTrying((x) => (x ? { ...x, result } : x));
+              });
+            }}
+          >
+            <input aria-label={t("Question")} style={{ flex: 1 }} value={trying.question} onChange={(e) => setTrying({ ...trying, question: e.target.value, result: undefined })} placeholder={t("Une question comme un utilisateur la poserait")} />
+            <button className="btn-primary" type="submit">
+              {t("Essayer")}
+            </button>
+          </form>
+          {trying.result && !trying.result.matched && <p className="muted">{t("Le déclencheur ne correspond pas à cette question.")}</p>}
+          {trying.result?.matched && (
+            <>
+              <p>
+                <code>{trying.result.sql}</code>
+              </p>
+              <pre className="code-block">{trying.result.context}</pre>
+            </>
+          )}
+        </Card>
       )}
 
       {preview && (

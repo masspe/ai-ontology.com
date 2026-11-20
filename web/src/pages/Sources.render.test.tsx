@@ -25,6 +25,10 @@ vi.mock("../api", async () => {
     deleteMapping: vi.fn(),
     previewMapping: vi.fn(),
     runMapping: vi.fn(),
+    createNamedQuery: vi.fn(),
+    updateNamedQuery: vi.fn(),
+    deleteNamedQuery: vi.fn(),
+    tryNamedQuery: vi.fn(),
   };
 });
 import * as api from "../api";
@@ -36,6 +40,9 @@ const source = {
   mappings: [
     { id: 1, name: "orders", from: "dbo.orders", concept_type: "Order", key_column: "id", property_columns: [], relations: [], schedule_minutes: 30,
       last_run_at: "2026-11-20T10:30:00Z", last_status: "ok", last_report: { rows: 42 } },
+  ],
+  queries: [
+    { id: 1, name: "ticket", description: "", trigger: "ticket (?P<id>\\d+)", sql: "SELECT * FROM tickets WHERE id = {id}", max_rows: 20, admin_only: true, enabled: false },
   ],
 };
 
@@ -110,6 +117,41 @@ describe("Sources page", () => {
     fireEvent.click(screen.getByRole("button", { name: "Synchroniser" }));
     await waitFor(() => expect(m.runMapping).toHaveBeenCalledWith(1, 1));
     expect(await screen.findByText(/Synchronisation lancée/)).toBeInTheDocument();
+  });
+
+  it("lists, adds, edits and tries a named query", async () => {
+    m.createNamedQuery.mockResolvedValue({});
+    m.updateNamedQuery.mockResolvedValue({});
+    m.tryNamedQuery.mockResolvedValueOnce({ matched: false }).mockResolvedValueOnce({ matched: true, sql: "SELECT * FROM tickets WHERE id = '12'", context: "id | title\n12 | Printer" });
+    renderPage(<Sources />);
+    await screen.findByText("erp");
+    expect(screen.getByText("ticket")).toBeInTheDocument();
+    expect(screen.getByText("désactivée", { exact: false })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Ajouter une requête" }));
+    fireEvent.change(screen.getByLabelText("Nom de la requête"), { target: { value: "client" } });
+    fireEvent.change(screen.getByLabelText("Déclencheur (expression régulière, groupes nommés)"), { target: { value: "client (?P<name>\\w+)" } });
+    fireEvent.change(screen.getByLabelText("SELECT avec des blancs : le nom du groupe entre accolades"), { target: { value: "SELECT * FROM c WHERE name = {name}" } });
+    fireEvent.click(screen.getByLabelText("Administrateurs seulement"));
+    fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
+    await waitFor(() => expect(m.createNamedQuery).toHaveBeenCalledWith(1, expect.objectContaining({ name: "client", trigger: "client (?P<name>\\w+)", sql: "SELECT * FROM c WHERE name = {name}", admin_only: true, enabled: true, max_rows: 20 })));
+    expect(await screen.findByText("Requête enregistrée.")).toBeInTheDocument();
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Modifier" })[2]);
+    fireEvent.click(screen.getByLabelText("Activée"));
+    fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
+    await waitFor(() => expect(m.updateNamedQuery).toHaveBeenCalledWith(1, 1, expect.objectContaining({ name: "ticket", enabled: true })));
+
+    fireEvent.click(screen.getByRole("button", { name: "Essayer" }));
+    expect(await screen.findByText("Essayer : ticket")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Question"), { target: { value: "rien" } });
+    fireEvent.submit(screen.getByLabelText("Question").closest("form")!);
+    expect(await screen.findByText("Le déclencheur ne correspond pas à cette question.")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Question"), { target: { value: "ticket 12" } });
+    fireEvent.submit(screen.getByLabelText("Question").closest("form")!);
+    expect(await screen.findByText("SELECT * FROM tickets WHERE id = '12'")).toBeInTheDocument();
+    expect(screen.getByText(/12 \| Printer/)).toBeInTheDocument();
+    await waitFor(() => expect(m.tryNamedQuery).toHaveBeenLastCalledWith(1, 1, "ticket 12"));
   });
 
   it("shows the listing error and the empty state", async () => {

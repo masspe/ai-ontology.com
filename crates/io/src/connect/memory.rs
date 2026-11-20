@@ -23,6 +23,8 @@ type Table = (Vec<ColumnInfo>, Vec<Vec<Value>>);
 #[derive(Debug, Default)]
 pub struct MemoryConnector {
     tables: Mutex<BTreeMap<String, Table>>,
+    /// Canned results of `SELECT` statements, by their exact text.
+    statements: Mutex<BTreeMap<String, Table>>,
     /// Every `ping` fails with this: a connector that cannot be reached.
     down: Option<String>,
 }
@@ -36,8 +38,28 @@ impl MemoryConnector {
     pub fn down(why: &str) -> Self {
         Self {
             tables: Mutex::new(BTreeMap::new()),
+            statements: Mutex::new(BTreeMap::new()),
             down: Some(why.to_string()),
         }
+    }
+
+    /// The result of a `SELECT` statement, given by its exact text (what
+    /// a named query renders after its parameters are bound).
+    pub fn statement(self, sql: &str, columns: &[&str], rows: Vec<Vec<Value>>) -> Self {
+        self.statements.lock().insert(
+            sql.trim().to_string(),
+            (
+                columns
+                    .iter()
+                    .map(|c| ColumnInfo {
+                        name: c.to_string(),
+                        data_type: "any".into(),
+                    })
+                    .collect(),
+                rows,
+            ),
+        );
+        self
     }
 
     /// Add (or replace) a table: column names and rows of JSON values.
@@ -127,7 +149,22 @@ impl Connector for MemoryConnector {
     async fn query(&self, q: &Query) -> Result<ResultSet, ConnectError> {
         self.check()?;
         if q.is_statement() {
-            return Err(ConnectError::Unsupported("a SELECT statement".into()));
+            let key = q.from.trim().trim_end_matches(';').to_string();
+            let Some((columns, rows)) = self.statements.lock().get(&key).cloned() else {
+                return Err(ConnectError::Unsupported(format!(
+                    "no canned result for `{key}`"
+                )));
+            };
+            let truncated = q.max_rows > 0 && rows.len() > q.max_rows;
+            let mut rows = rows;
+            if truncated {
+                rows.truncate(q.max_rows);
+            }
+            return Ok(ResultSet {
+                columns,
+                rows,
+                truncated,
+            });
         }
         let tables = self.tables.lock();
         let (columns, rows) = tables

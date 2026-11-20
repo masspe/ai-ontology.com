@@ -646,3 +646,192 @@ async fn sources_are_for_administrators_and_a_schedule_is_due_once_its_interval_
     assert_eq!(v["schedule_minutes"], 0);
     assert!(w.state.sources.due().is_empty(), "by hand only");
 }
+
+/// A named query: a question that matches its trigger runs the SQL with
+/// the groups bound as literals and the rows join the prompt; an
+/// administrator tries it; a question that matches nothing is unchanged.
+#[tokio::test]
+async fn a_named_query_answers_a_question_from_the_live_source() {
+    let w = world("lookup").await;
+    let sid = make_source(&w).await;
+    // The memory source knows the bound statement.
+    let tickets = Arc::new(MemoryConnector::new().statement(
+        "SELECT id, title, status FROM tickets WHERE id = '1234'",
+        &["id", "title", "status"],
+        vec![vec![json!(1234), json!("Printer offline"), json!("open")]],
+    ));
+    w.state.sources.register_test_connector("erp", tickets);
+    let (st, v) = call(
+        &w.app,
+        "POST",
+        &format!("/sources/{sid}/queries"),
+        Some(&w.admin),
+        Some(json!({ "name": "ticket", "trigger": r"(?i)ticket\s*(?:n°|#)?\s*(?P<id>\d{1,9})", "sql": "SELECT id, title, status FROM tickets WHERE id = {id}", "max_rows": 5 })),
+    )
+    .await;
+    assert_eq!(st, StatusCode::CREATED, "{v}");
+    let qid = v["id"].as_u64().unwrap();
+    let (st, v) = call(
+        &w.app,
+        "POST",
+        &format!("/sources/{sid}/queries"),
+        Some(&w.admin),
+        Some(json!({ "name": "bad", "trigger": "(", "sql": "SELECT 1" })),
+    )
+    .await;
+    assert_eq!(st, StatusCode::BAD_REQUEST, "{v}");
+    let (st, v) = call(
+        &w.app,
+        "POST",
+        &format!("/sources/{sid}/queries"),
+        Some(&w.admin),
+        Some(json!({ "name": "bad", "trigger": "x", "sql": "DELETE FROM t" })),
+    )
+    .await;
+    assert_eq!(st, StatusCode::BAD_REQUEST, "{v}");
+
+    // Try: the bound SQL and the rows.
+    let (st, v) = call(
+        &w.app,
+        "POST",
+        &format!("/sources/{sid}/queries/{qid}/try"),
+        Some(&w.admin),
+        Some(json!({ "question": "J'ai le ticket n° 1234, comment résoudre ?" })),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert_eq!(v["matched"], true);
+    assert_eq!(
+        v["sql"],
+        "SELECT id, title, status FROM tickets WHERE id = '1234'"
+    );
+    assert_eq!(v["rows"][0][1], "Printer offline");
+    let (_, v) = call(
+        &w.app,
+        "POST",
+        &format!("/sources/{sid}/queries/{qid}/try"),
+        Some(&w.admin),
+        Some(json!({ "question": "rien" })),
+    )
+    .await;
+    assert_eq!(v["matched"], false);
+
+    // The question: the rows are in the prompt (the echo model shows it).
+    let (st, v) = call(
+        &w.app,
+        "POST",
+        "/ask",
+        Some(&w.admin),
+        Some(json!({ "query": "J'ai le ticket n° 1234, comment résoudre ?", "top_k": 3 })),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    let answer = v["answer"].as_str().unwrap();
+    assert!(
+        answer.contains("---DATA---")
+            && answer.contains("Printer offline")
+            && answer.contains("query `ticket`"),
+        "{answer}"
+    );
+    let (_, v) = call(
+        &w.app,
+        "POST",
+        "/ask",
+        Some(&w.admin),
+        Some(json!({ "query": "une question sans ticket", "top_k": 3 })),
+    )
+    .await;
+    assert!(!v["answer"].as_str().unwrap().contains("---DATA---"));
+
+    // Administrators only when asked; disabled queries never run.
+    let (_, v) = call(
+        &w.app,
+        "POST",
+        "/auth/users",
+        Some(&w.admin),
+        Some(json!({ "email": "u@example.com", "name": "U", "password": "Passw0rd!x" })),
+    )
+    .await;
+    assert!(v["user"]["id"].is_string());
+    let (_, v) = call(
+        &w.app,
+        "POST",
+        "/auth/login",
+        None,
+        Some(json!({ "email": "u@example.com", "password": "Passw0rd!x" })),
+    )
+    .await;
+    let user = v["token"].as_str().unwrap().to_string();
+    let (_, v) = call(
+        &w.app,
+        "POST",
+        "/ask",
+        Some(&user),
+        Some(json!({ "query": "ticket 1234", "top_k": 3 })),
+    )
+    .await;
+    assert!(
+        v["answer"].as_str().unwrap().contains("Printer offline"),
+        "open to every reader by default"
+    );
+    let (st, _) = call(
+        &w.app,
+        "PATCH",
+        &format!("/sources/{sid}/queries/{qid}"),
+        Some(&w.admin),
+        Some(json!({ "admin_only": true })),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    let (_, v) = call(
+        &w.app,
+        "POST",
+        "/ask",
+        Some(&user),
+        Some(json!({ "query": "ticket 1234", "top_k": 3 })),
+    )
+    .await;
+    assert!(
+        !v["answer"].as_str().unwrap().contains("Printer offline"),
+        "administrators only"
+    );
+    let (st, _) = call(
+        &w.app,
+        "PATCH",
+        &format!("/sources/{sid}/queries/{qid}"),
+        Some(&w.admin),
+        Some(json!({ "admin_only": false, "enabled": false })),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    let (_, v) = call(
+        &w.app,
+        "POST",
+        "/ask",
+        Some(&w.admin),
+        Some(json!({ "query": "ticket 1234", "top_k": 3 })),
+    )
+    .await;
+    assert!(
+        !v["answer"].as_str().unwrap().contains("Printer offline"),
+        "disabled"
+    );
+    let (st, _) = call(
+        &w.app,
+        "DELETE",
+        &format!("/sources/{sid}/queries/{qid}"),
+        Some(&w.admin),
+        None,
+    )
+    .await;
+    assert_eq!(st, StatusCode::NO_CONTENT);
+    let (st, _) = call(
+        &w.app,
+        "DELETE",
+        &format!("/sources/{sid}/queries/{qid}"),
+        Some(&w.admin),
+        None,
+    )
+    .await;
+    assert_eq!(st, StatusCode::NOT_FOUND);
+}

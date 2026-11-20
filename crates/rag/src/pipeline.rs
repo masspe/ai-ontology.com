@@ -239,10 +239,18 @@ impl RagPipeline {
         let builder = PromptBuilder::new(&onto).with_max_chars(self.max_context_chars);
         let query_context = builder.render_query_context(&scored, &subgraph);
         let conversation = render_history(history);
+        // Rows from a live lookup are data too: delimited, after the sheets.
+        let data = match req.extra_context.as_deref() {
+            Some(d) if !d.trim().is_empty() => {
+                format!("---DATA---\n{d}\n---END DATA---\n\n")
+            }
+            _ => String::new(),
+        };
         let user_message = format!(
             "Use the context below to answer the question.\n\n\
              {conversation}\
              ---RETRIEVED---\n{ctx}\n---END RETRIEVED---\n\n\
+             {data}\
              Question: {q}",
             ctx = query_context,
             q = req.query,
@@ -950,6 +958,39 @@ mod tests {
         assert!(ans.answer.ends_with("Question: anything?"));
         assert_eq!(ans.answer_body, ans.answer);
         assert_eq!(ans.model, "echo");
+        // Rows a live lookup fetched join the prompt as a delimited data
+        // block between the sheets and the question; blank is no block.
+        let mut req = RetrievalRequest {
+            query: "anything?".into(),
+            ..Default::default()
+        };
+        req.extra_context = Some(
+            "id | title
+1 | Printer"
+                .into(),
+        );
+        let ans = pipe.answer_with(req).await.unwrap();
+        assert!(
+            ans.answer.contains(
+                "---END RETRIEVED---
+
+---DATA---
+id | title
+1 | Printer
+---END DATA---
+
+Question: anything?"
+            ),
+            "{}",
+            ans.answer
+        );
+        let mut req = RetrievalRequest {
+            query: "anything?".into(),
+            ..Default::default()
+        };
+        req.extra_context = Some("  ".into());
+        let ans = pipe.answer_with(req).await.unwrap();
+        assert!(!ans.answer.contains("---DATA---"));
     }
 
     /// `top_k` bounds the seeds and `expansion.max_depth` bounds the

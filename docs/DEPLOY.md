@@ -216,6 +216,19 @@ connector says so and names the fix (`dbtool` option 2, or
 not redistributable: install it where the binary runs and name it in the
 connection string (`Driver={Progress OpenEdge 12.2 driver};Host=…;Port=…;DB=…;UID=…;PWD=…`).
 
+### Live lookups at question time (named queries)
+
+A source can carry **named queries**: a trigger (a regular expression
+with named groups) and a `SELECT` written by the administrator with
+`{group}` blanks. A question that matches the trigger — « J'ai le ticket
+n° 1234, comment résoudre ? » against `(?i)ticket\s*(?:n°|#)?\s*(?P<id>\d{1,9})`
+— runs the SELECT with the groups bound as quoted literals (letters,
+digits and a few separators only; a quote never binds) and the rows join
+the prompt as a delimited data block, after the retrieved sheets. The
+model never writes SQL. At most 200 rows; `admin_only` keeps a query for
+callers who see everything; *Try* on the page shows what a question would
+get. The audit line of the question names the query (`lookup:<name>`).
+
 ### Background jobs
 
 A sync, a re-index, anything that outlives a request runs as a **job**:
