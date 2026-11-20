@@ -161,3 +161,28 @@ of the README. How it does so is in
 On a 16 GB laptop with 14 threads: the `release` build of the CLI takes
 about 13 minutes, the full web suite about 3 minutes, the instrumented
 Rust suite about 15 minutes.
+
+## Build cache: keep it from growing
+
+Cargo never deletes an artifact it built: every dependency bump, every
+feature set and every coverage run leaves its objects in `target/`, and a
+workstation that builds and tests daily reaches 100 GB in a few weeks
+(measured here: 109 GB of debug artifacts, 12 GB of instrumented coverage
+builds). Three measures keep it bounded:
+
+1. **Smaller artifacts.** `Cargo.toml` builds debug code with line tables
+   only and no debug info for dependencies (`[profile.dev]`): a build is a
+   few GB, not tens. Backtraces still name files and lines.
+2. **Stale artifacts are swept.** `scripts/clean-build.ps1` (or `.sh`) runs
+   `cargo sweep --time 7` in every target directory it knows (`target/`,
+   the sibling `target-claude/`, the coverage directory), removes the
+   coverage build (`cargo llvm-cov clean`) and, when a directory is still
+   above the cap (15 GB), removes it whole — a full rebuild is five
+   minutes. Run it after a coverage measurement and whenever `target/`
+   bothers you; `cargo install cargo-sweep` once.
+3. **Coverage builds are temporary.** `cargo llvm-cov` compiles the whole
+   workspace instrumented into `target/llvm-cov-target`; delete it after
+   reading the report, it is rebuilt on the next measurement anyway.
+
+The web side overwrites itself (`web/coverage`, `web/dist`); `node_modules`
+is the only large directory and it does not grow.

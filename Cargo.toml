@@ -56,6 +56,15 @@ ontology-io = { path = "crates/io" }
 ontology-rag = { path = "crates/rag" }
 ontology-server = { path = "crates/server" }
 
+# Debug builds carry line tables only, and no debug info at all for the
+# dependencies: the full DWARF of a 600-crate tree was most of a build
+# directory that reached 100 GB. Backtraces still name files and lines.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
 [profile.release]
 lto = "thin"
 codegen-units = 1
