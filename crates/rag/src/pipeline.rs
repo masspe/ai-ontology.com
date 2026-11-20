@@ -268,6 +268,7 @@ impl RagPipeline {
             messages: vec![Message::user(user_message)],
             max_tokens: self.max_tokens,
             temperature: self.temperature,
+            on_premises_only: stays_on_premises(&req, &subgraph, self.index.graph()),
         };
 
         let valid_ids: std::collections::HashSet<ConceptId> =
@@ -373,6 +374,7 @@ impl RagPipeline {
             messages: vec![Message::user(user_message)],
             max_tokens: self.max_tokens,
             temperature: self.temperature,
+            on_premises_only: stays_on_premises(&req, &subgraph, self.index.graph()),
         };
 
         let inner = self.llm.generate_stream(&llm_req).await?;
@@ -423,6 +425,7 @@ impl RagPipeline {
             )],
             max_tokens: self.max_tokens.max(2048),
             temperature: 0.0,
+            on_premises_only: false,
         };
         let resp = self
             .llm
@@ -463,6 +466,7 @@ impl RagPipeline {
             ))],
             max_tokens: self.max_tokens.max(1024),
             temperature: 0.0,
+            on_premises_only: false,
         };
         let resp = self
             .llm
@@ -673,6 +677,27 @@ pub enum OntologyGenError {
     Llm(crate::model::LlmError),
     #[error("parse: {error}")]
     Parse { raw: String, error: String },
+}
+
+/// `true` when the context holds a sheet of a domain the request names
+/// as on-premises: the strictest domain decides for the whole question.
+pub fn stays_on_premises(
+    req: &RetrievalRequest,
+    subgraph: &Subgraph,
+    graph: &OntologyGraph,
+) -> bool {
+    let Some(domains) = req.on_premises_domains.as_ref() else {
+        return false;
+    };
+    if domains.is_empty() {
+        return false;
+    }
+    let onto = graph.ontology();
+    subgraph.concepts.iter().any(|c| {
+        domains
+            .iter()
+            .any(|d| *d == onto.ns_of_type(&c.concept_type))
+    })
 }
 
 #[cfg(test)]

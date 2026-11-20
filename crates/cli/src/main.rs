@@ -346,6 +346,13 @@ enum Cmd {
     /// fresh master key and replace `master.key`. Back the data directory
     /// up first; refused while `ONTOLOGY_MASTER_KEY` is set.
     RotateKey,
+    /// Check the audit log's hash chain: every line follows the one
+    /// before and is unaltered. Exit 1 at the first broken line.
+    AuditVerify {
+        /// The log (default: `<data>/audit.jsonl`).
+        #[arg(long)]
+        audit_log: Option<PathBuf>,
+    },
     /// Container health probe: GET `url`, exit 0 on a 2xx, 1 otherwise. The
     /// runtime image has no curl; this needs no dependency either.
     Healthcheck {
@@ -416,11 +423,27 @@ enum Cmd {
         audit_log: Option<PathBuf>,
         #[arg(long)]
         no_audit: bool,
+        /// Keep the text of questions in the audit log (by default only
+        /// the domains a question touched are logged, and a hash of it).
+        #[arg(long)]
+        audit_questions: bool,
     },
 }
 
+/// The command runs on a thread with a wide stack: its future is one
+/// large state machine, and a debug build overflows the main thread's
+/// 1 MB (Windows) before the store is even open.
+fn main() -> Result<()> {
+    std::thread::Builder::new()
+        .stack_size(64 << 20)
+        .spawn(real_main)
+        .expect("spawn the main thread")
+        .join()
+        .expect("the main thread panicked")
+}
+
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn real_main() -> Result<()> {
     fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env()
@@ -433,9 +456,22 @@ async fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
-
     // Benchmarks manage the store themselves (they time its opening and
     // hydration), so they run before the generic open below.
+    if let Cmd::AuditVerify { audit_log } = &cli.cmd {
+        let path = audit_log
+            .clone()
+            .or_else(|| cli.data.as_ref().map(|d| d.join("audit.jsonl")))
+            .ok_or_else(|| anyhow!("--audit-log <path> or --data <dir> is needed"))?;
+        let log = ontology_server::audit::AuditLog::open(&path)?;
+        return match log.verify() {
+            Ok(n) => {
+                println!("ok: {n} lines, chain intact ({})", path.display());
+                Ok(())
+            }
+            Err(e) => anyhow::bail!("{}: {e}", path.display()),
+        };
+    }
     if let Cmd::RotateKey = &cli.cmd {
         // Files beside the store only; a running server keeps its old key
         // in memory until restarted.
@@ -1095,7 +1131,10 @@ async fn main() -> Result<()> {
                 }
             }
         }
-        Cmd::Healthcheck { .. } | Cmd::XrefStats { .. } | Cmd::RotateKey => {
+        Cmd::Healthcheck { .. }
+        | Cmd::XrefStats { .. }
+        | Cmd::RotateKey
+        | Cmd::AuditVerify { .. } => {
             unreachable!("handled before the store opens")
         }
         Cmd::Serve {
@@ -1113,6 +1152,7 @@ async fn main() -> Result<()> {
             backup_dir,
             audit_log,
             no_audit,
+            audit_questions,
         } => {
             // Resolve a seed directory: explicit --seed wins, otherwise look
             // for ONTOLOGY_SEED_DIR, then <data>/seed, then ./seed. Seeding
@@ -1178,6 +1218,7 @@ async fn main() -> Result<()> {
             let audit = match (no_audit, audit_path) {
                 (false, Some(path)) => {
                     let log = ontology_server::audit::AuditLog::open(&path)
+                        .map(|l| l.keep_questions(audit_questions))
                         .with_context(|| format!("opening the audit log {}", path.display()))?;
                     tracing::info!(path = %path.display(), "audit log enabled");
                     Some(Arc::new(log))

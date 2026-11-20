@@ -147,17 +147,41 @@ tokens already issued included.
 For a machine caller (an ERP, a script), the administrator creates a **named
 key** rather than lending their own account: `POST /auth/keys {"name":"ERP"}`
 returns the secret once (`ok_…`); `GET /auth/keys` lists the keys (name,
-prefix, creation, by whom), `DELETE /auth/keys/<id>` revokes immediately. The
-key is presented like a token (`Authorization: Bearer ok_…`); it opens the
-API, but not account management, reset or backup, which need a signed-in
-user. The `users.json` file keeps only a fingerprint.
+prefix, creation, by whom, scope, last use), `DELETE /auth/keys/<id>` revokes
+immediately, `POST /auth/keys/<id>/rotate` issues a fresh secret with the same
+scope (the old one dies at once). A key can be **scoped**: `"clearances":
+["erp"]` restricts it to the sheets those labels allow (absent: it sees
+everything), `"read_only": true` refuses every write (a retrieval or a
+question is a read), `"expires_in_days": 90` ends it. The key is presented
+like a token (`Authorization: Bearer ok_…`); it opens the API, but not
+account management, reset or backup, which need a signed-in user. The
+`users.json` file keeps only a fingerprint and the time of last use.
 
-Every successful write (read-only POSTs, such as search, question and
-analysis, excluded) is recorded in `/data/audit.jsonl` (one JSON line: time,
-caller, method, path, status, request identifier). `GET /audit?limit=100`
+Every successful write is recorded in `/data/audit.jsonl` (one JSON line:
+time, caller, method, path, status, request identifier), and so are the
+events that matter without being writes: a sign-in and its means (password,
+the provider), a refused sign-in and why, a role or clearance change, a key
+created or rotated, and every question or retrieval with the **storage
+domains it touched** — the text of the question itself only with
+`--audit-questions`, otherwise a short hash of it. Each line carries the
+hash of the line before and its own (`prev`, `hash`): a line removed,
+altered or inserted breaks the chain, which `ontology audit-verify` checks
+(exit 1 naming the first bad line). `GET /audit?limit=100&who=<email>&path=/auth&since=<RFC 3339>`
 reads back the last lines, administrators only. The file is part of the
 `/data` volume; it is not in the store backup (§5), so copy it along with the
-volume. Options: `--audit-log <path>`, `--no-audit`.
+volume. Options: `--audit-log <path>`, `--no-audit`, `--audit-questions`.
+
+### Questions that must not leave the premises
+
+A storage domain (the `ns` of its concept types) can be declared
+on-premises: `PATCH /settings {"llm": {"on_premises_domains": ["payroll"],
+"on_premises_provider": "openai"}}`. A question whose context holds a sheet
+of such a domain is answered only by the **on-premises provider** — a model
+served on your network behind an OpenAI-compatible URL (`openai_base_url`),
+whatever the active provider is — and refused with the reason when none is
+configured. A question that touches no such domain goes to the active
+provider as usual. The strictest domain in the context decides. The audit
+line of every question names the domains it touched.
 
 ## 4. Memory
 

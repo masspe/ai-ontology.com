@@ -48,6 +48,11 @@ pub struct RetrievalRequest {
     /// `retrieve` hands it to the expansion when that has none.
     #[serde(skip)]
     pub visible: Option<ontology_graph::Visibility>,
+    /// Storage domains whose sheets must not leave the premises: when the
+    /// context holds one, only an on-premises model may answer. Set by the
+    /// server from the settings, never by a client.
+    #[serde(skip)]
+    pub on_premises_domains: Option<std::sync::Arc<Vec<String>>>,
 }
 
 fn default_top_k() -> usize {
@@ -120,6 +125,7 @@ impl Default for RetrievalRequest {
             concept_types: Vec::new(),
             expansion: TraversalSpec::default(),
             visible: None,
+            on_premises_domains: None,
         }
     }
 }

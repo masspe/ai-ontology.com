@@ -523,6 +523,7 @@ struct Signed {
     token: String,
     cookie: HeaderValue,
     next: String,
+    email: String,
 }
 
 #[derive(Serialize)]
@@ -638,6 +639,17 @@ pub async fn callback(
 ) -> Response {
     let base = public_base(&s.settings.read().signin, &headers);
     let result = finish(&s, &base, &id, q, &headers).await;
+    let path = format!("/auth/oauth/{id}/callback");
+    match &result {
+        Ok(signed) => s.audit(&signed.email, "GET", &path, 303, format!("sign-in: {id}")),
+        Err(flow) => s.audit(
+            "anonymous",
+            "GET",
+            &path,
+            303,
+            format!("sign-in refused: {} ({})", flow.code, flow.detail),
+        ),
+    }
     bounce(&base, result)
 }
 
@@ -800,6 +812,7 @@ async fn finish(
         token,
         cookie,
         next: state.next,
+        email: user.email.clone(),
     })
 }
 

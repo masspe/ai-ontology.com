@@ -588,6 +588,14 @@ pub struct LlmSettings {
 
     pub infomaniak_api_key: String,
     pub infomaniak_api_key_hint: String,
+    /// Storage domains (`ns`) whose sheets must not leave the premises: a
+    /// question whose context holds one is answered by
+    /// `on_premises_provider` only.
+    pub on_premises_domains: Vec<String>,
+    /// The provider (`openai`, `anthropic`, `infomaniak`) whose endpoint
+    /// is on the premises (a local server behind an OpenAI-compatible
+    /// URL); empty: such questions are refused.
+    pub on_premises_provider: String,
     /// AI Tools product id, from `GET https://api.infomaniak.com/1/ai`. The
     /// OpenAI-compatible base URL is derived from it, so this is the only
     /// Infomaniak-specific value a user supplies beyond the token.
@@ -621,6 +629,8 @@ impl Default for LlmSettings {
             anthropic_model: "claude-sonnet-4-6".into(),
             infomaniak_api_key: String::new(),
             infomaniak_api_key_hint: String::new(),
+            on_premises_domains: Vec::new(),
+            on_premises_provider: String::new(),
             infomaniak_product_id: String::new(),
             infomaniak_base_url: String::new(),
             infomaniak_model: String::new(),
@@ -753,6 +763,8 @@ pub struct LlmSettingsPatch {
     pub anthropic_base_url: Option<String>,
     pub anthropic_model: Option<String>,
     pub infomaniak_api_key: Option<String>,
+    pub on_premises_domains: Option<Vec<String>>,
+    pub on_premises_provider: Option<String>,
     pub infomaniak_product_id: Option<String>,
     pub infomaniak_base_url: Option<String>,
     pub infomaniak_model: Option<String>,
@@ -1011,8 +1023,10 @@ pub struct AuthContext {
     /// rather than a user JWT.
     pub service: bool,
     /// The sheet labels the caller may see; `None` sees everything
-    /// (an administrator, the service token, an API key).
+    /// (an administrator, the service token, an unscoped API key).
     pub clearances: Option<StdArc<Vec<String>>>,
+    /// A read-only API key: every mutating request is refused.
+    pub read_only: bool,
 }
 
 /// A valid security label or clearance: `[a-z0-9][a-z0-9_.-]{0,63}`.
@@ -1197,6 +1211,7 @@ fn build_router_inner(state: AppState, cfg: RouterConfig) -> Router {
             allow_signup: u.allow_signup,
             settings: state.settings.clone(),
             oidc: StdArc::new(oidc::Oidc::new(&j.secret)),
+            audit: audit.clone(),
         }),
         (Some(_), None) => panic!("built-in auth needs a JWT secret to sign tokens"),
         _ => None,
@@ -1628,15 +1643,19 @@ async fn require_auth(
 ) -> Result<Response, StatusCode> {
     let provided = extract_bearer(&req).ok_or(StatusCode::UNAUTHORIZED)?;
 
-    // A named API key: a machine caller of the tenant.
+    // A named API key: a machine caller of the tenant, within its scope.
     if provided.starts_with(auth::API_KEY_PREFIX) && accounts.is_some() {
         if let Some(key) = accounts.as_ref().and_then(|s| s.key_by_secret(&provided)) {
+            if key.read_only && audit::is_mutating(req.method(), req.uri().path()) {
+                return Err(StatusCode::FORBIDDEN);
+            }
             req.extensions_mut().insert(AuthContext {
                 subject: format!("key:{}", key.id),
                 email: None,
                 name: Some(key.name),
                 service: true,
-                clearances: None,
+                clearances: key.clearances.map(StdArc::new),
+                read_only: key.read_only,
             });
             return Ok(next.run(req).await);
         }
@@ -1672,6 +1691,7 @@ async fn require_auth(
                     name: claims.name,
                     service: false,
                     clearances,
+                    read_only: false,
                 });
                 return Ok(next.run(req).await);
             }
@@ -1690,6 +1710,7 @@ async fn require_auth(
                 name: None,
                 service: true,
                 clearances: None,
+                read_only: false,
             });
             return Ok(next.run(req).await);
         }
@@ -1811,6 +1832,12 @@ async fn backup(
 #[derive(Deserialize)]
 struct AuditQuery {
     limit: Option<usize>,
+    /// Only the entries of this caller (exact).
+    who: Option<String>,
+    /// Only the entries whose path starts with this.
+    path: Option<String>,
+    /// Only the entries at or after this RFC 3339 UTC instant.
+    since: Option<String>,
 }
 
 /// `GET /audit?limit=N`: the last N audit entries (100 by default, 1000 at
@@ -1839,7 +1866,12 @@ async fn audit_tail(
         }
     }
     let n = q.limit.unwrap_or(100).clamp(1, 1000);
-    let entries = tokio::task::spawn_blocking(move || log.tail(n))
+    let filter = audit::AuditFilter {
+        who: q.who,
+        path: q.path,
+        since: q.since,
+    };
+    let entries = tokio::task::spawn_blocking(move || log.tail_where(n, &filter))
         .await
         .map_err(|e| ApiError::Store(e.to_string()))?
         .map_err(|e| ApiError::Store(e.to_string()))?;
@@ -2782,24 +2814,59 @@ async fn retrieve(
     State(s): State<AppState>,
     ctx: Option<axum::Extension<AuthContext>>,
     Json(mut req): Json<RetrievalRequest>,
-) -> Json<RetrieveResponse> {
+) -> Response {
     req.visible = visibility_for(&s, ctx.as_deref());
+    let question = req.query.clone();
     let (scored, subgraph) = s.index.retrieve(&req);
-    Json(RetrieveResponse { scored, subgraph })
+    let domains = domains_of(
+        &s,
+        subgraph.concepts.iter().map(|c| c.concept_type.as_str()),
+    );
+    let mut resp = Json(RetrieveResponse { scored, subgraph }).into_response();
+    resp.extensions_mut()
+        .insert(audit::AuditNote::ask(&question, &domains));
+    resp
 }
 
 async fn ask(
     State(s): State<AppState>,
     ctx: Option<axum::Extension<AuthContext>>,
     Json(mut req): Json<ontology_rag::AskRequest>,
-) -> Result<Json<RagAnswer>, ApiError> {
+) -> Result<Response, ApiError> {
     req.retrieval.visible = visibility_for(&s, ctx.as_deref());
+    req.retrieval.on_premises_domains = on_premises_policy(&s);
+    let question = req.retrieval.query.clone();
     let ans = s
         .pipeline
         .answer_in_conversation(req.retrieval, &req.history)
         .await
         .map_err(|e| ApiError::Llm(e.to_string()))?;
-    Ok(Json(ans))
+    let domains = domains_of(
+        &s,
+        ans.subgraph
+            .concepts
+            .iter()
+            .map(|c| c.concept_type.as_str()),
+    );
+    let mut resp = Json(ans).into_response();
+    resp.extensions_mut()
+        .insert(audit::AuditNote::ask(&question, &domains));
+    Ok(resp)
+}
+
+/// The on-premises domains, when any are declared.
+fn on_premises_policy(s: &AppState) -> Option<StdArc<Vec<String>>> {
+    let d = &s.settings.read().llm.on_premises_domains;
+    (!d.is_empty()).then(|| StdArc::new(d.clone()))
+}
+
+/// The storage domains the given concept types belong to, sorted, unique.
+fn domains_of<'a>(s: &AppState, types: impl Iterator<Item = &'a str>) -> Vec<String> {
+    let onto = s.graph.ontology();
+    let mut out: Vec<String> = types.map(|t| onto.ns_of_type(t).to_string()).collect();
+    out.sort();
+    out.dedup();
+    out
 }
 
 /// Server-Sent Events flavor of `/ask`. Each event is one
@@ -2815,6 +2882,7 @@ async fn ask_stream(
     Json(mut req): Json<ontology_rag::AskRequest>,
 ) -> Result<Sse<futures::stream::BoxStream<'static, Result<Event, Infallible>>>, ApiError> {
     req.retrieval.visible = visibility_for(&s, ctx.as_deref());
+    req.retrieval.on_premises_domains = on_premises_policy(&s);
     let inner = s
         .pipeline
         .answer_stream_in_conversation(req.retrieval, &req.history)
@@ -3262,6 +3330,7 @@ async fn subgraph_handler(
     if let Some(q) = req.seed_query.as_ref().filter(|q| !q.trim().is_empty()) {
         let req = RetrievalRequest {
             visible: who.clone(),
+            on_premises_domains: None,
             query: q.clone(),
             top_k: 8,
             lexical_weight: 0.5,
@@ -3533,6 +3602,7 @@ async fn run_query(
         .ok_or_else(|| ApiError::NotFound(format!("query {id}")))?;
     let req = RetrievalRequest {
         visible: None,
+        on_premises_domains: None,
         query: q.query.clone(),
         top_k: q.top_k,
         lexical_weight: q.lexical_weight,
@@ -3591,6 +3661,16 @@ async fn patch_settings(State(s): State<AppState>, Json(patch): Json<SettingsPat
         let llm = &mut current.llm;
         if let Some(v) = l.active_provider {
             llm.active_provider = v;
+        }
+        if let Some(v) = l.on_premises_domains {
+            llm.on_premises_domains = v
+                .into_iter()
+                .map(|d| d.trim().to_string())
+                .filter(|d| !d.is_empty())
+                .collect();
+        }
+        if let Some(v) = l.on_premises_provider {
+            llm.on_premises_provider = v.trim().to_string();
         }
         if let Some(v) = l.openai_api_key {
             llm.openai_api_key_hint = key_hint(&v);
@@ -3967,8 +4047,12 @@ fn client_from_creds(creds: ProviderCreds) -> Result<Arc<dyn LanguageModel>, Str
 pub struct SettingsRoutedModel {
     settings: Arc<PlRwLock<Settings>>,
     fallback: Arc<dyn LanguageModel>,
-    cached: PlMutex<Option<(u64, Arc<dyn LanguageModel>)>>,
+    /// Two slots: the configured provider and the on-premises one.
+    cached: PlMutex<[CachedModel; 2]>,
 }
+
+/// A built client behind its configuration fingerprint.
+type CachedModel = Option<(u64, Arc<dyn LanguageModel>)>;
 
 impl SettingsRoutedModel {
     /// `settings` must be the same handle the `/settings` handlers write to —
@@ -3981,28 +4065,38 @@ impl SettingsRoutedModel {
         Self {
             settings,
             fallback,
-            cached: PlMutex::new(None),
+            cached: PlMutex::new([None, None]),
         }
     }
 
-    /// Client for the configuration in force right now.
-    fn current(&self) -> Result<Arc<dyn LanguageModel>, LlmError> {
+    /// Client for the configuration in force right now; for a question
+    /// that must stay on the premises, the on-premises provider or a
+    /// refusal — never the configured one.
+    fn current(&self, on_premises_only: bool) -> Result<Arc<dyn LanguageModel>, LlmError> {
         let llm = self.settings.read().llm.clone();
-        let ov = LlmOverrides::default();
-        if effective_provider(&llm, &ov) == "default" {
+        let mut ov = LlmOverrides::default();
+        if on_premises_only {
+            if llm.on_premises_provider.trim().is_empty() {
+                return Err(LlmError::Config(
+                    "this question touches a domain that must not leave the premises and no on-premises provider is configured (Settings → on_premises_provider)".into(),
+                ));
+            }
+            ov.provider = Some(llm.on_premises_provider.trim().to_string());
+        } else if effective_provider(&llm, &ov) == "default" {
             return Ok(self.fallback.clone());
         }
         let creds = resolve_provider_creds(&llm, &ov).map_err(LlmError::Config)?;
         let fingerprint = creds.fingerprint();
 
         let mut cached = self.cached.lock();
-        if let Some((known, model)) = cached.as_ref() {
+        let slot = &mut cached[usize::from(on_premises_only)];
+        if let Some((known, model)) = slot.as_ref() {
             if *known == fingerprint {
                 return Ok(model.clone());
             }
         }
         let model = client_from_creds(creds).map_err(LlmError::Config)?;
-        *cached = Some((fingerprint, model.clone()));
+        *slot = Some((fingerprint, model.clone()));
         Ok(model)
     }
 }
@@ -4010,11 +4104,13 @@ impl SettingsRoutedModel {
 #[async_trait::async_trait]
 impl LanguageModel for SettingsRoutedModel {
     async fn generate(&self, req: &LlmRequest) -> Result<LlmResponse, LlmError> {
-        self.current()?.generate(req).await
+        self.current(req.on_premises_only)?.generate(req).await
     }
 
     async fn generate_stream(&self, req: &LlmRequest) -> Result<LlmStream, LlmError> {
-        self.current()?.generate_stream(req).await
+        self.current(req.on_premises_only)?
+            .generate_stream(req)
+            .await
     }
 }
 
@@ -5091,7 +5187,7 @@ mod provider_tests {
     fn routed_model_picks_up_an_applied_provider_without_a_restart() {
         let (shared, model) = routed(Settings::default());
         // Unconfigured: the fallback itself, not a copy of it.
-        let before = model.current().unwrap();
+        let before = model.current(false).unwrap();
         assert!(
             Arc::ptr_eq(&before, &model.fallback),
             "an unconfigured server should answer from the fallback"
@@ -5100,7 +5196,7 @@ mod provider_tests {
         // Exactly what PATCH /settings does to the shared store.
         *shared.write() = unreachable_infomaniak();
 
-        let after = model.current().unwrap();
+        let after = model.current(false).unwrap();
         assert!(
             !Arc::ptr_eq(&after, &model.fallback),
             "provider change ignored: still routing to the fallback"
@@ -5124,15 +5220,15 @@ mod provider_tests {
     fn routed_model_reuses_its_client_until_the_config_changes() {
         let (shared, model) = routed(unreachable_infomaniak());
 
-        let first = model.current().unwrap();
-        let second = model.current().unwrap();
+        let first = model.current(false).unwrap();
+        let second = model.current(false).unwrap();
         assert!(
             Arc::ptr_eq(&first, &second),
             "client rebuilt for an unchanged configuration"
         );
 
         shared.write().llm.infomaniak_model = "granite".into();
-        let third = model.current().unwrap();
+        let third = model.current(false).unwrap();
         assert!(
             !Arc::ptr_eq(&first, &third),
             "client reused across a model change"

@@ -1035,3 +1035,24 @@ fn rotate_key_reseals_the_settings_without_the_store() {
     assert!(text(&out.stderr).contains("ONTOLOGY_MASTER_KEY"));
     let _ = std::fs::remove_dir_all(&data);
 }
+
+/// `audit-verify` walks the log's hash chain without the store: intact
+/// is exit 0 with the line count, an altered line is exit 1 naming it.
+#[test]
+fn audit_verify_checks_the_chain_without_the_store() {
+    let data = tempdir("audit-verify");
+    let path = data.join("audit.jsonl");
+    let log = ontology_server::audit::AuditLog::open(&path).unwrap();
+    for i in 0..3 {
+        log.event("alice@example.com", "POST", &format!("/p{i}"), 200, "event");
+    }
+    let out = ok(Some(&data), &["audit-verify"]);
+    assert!(out.starts_with("ok: 3 lines"), "{out}");
+    let raw = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, raw.replacen("/p1", "/p9", 1)).unwrap();
+    let err = fail(None, &["audit-verify", "--audit-log", &p(&path)]);
+    assert!(err.contains("line 2") && err.contains("altered"), "{err}");
+    let err = fail(None, &["audit-verify"]);
+    assert!(err.contains("--audit-log"), "{err}");
+    let _ = std::fs::remove_dir_all(&data);
+}

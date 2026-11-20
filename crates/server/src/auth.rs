@@ -142,6 +142,16 @@ struct ApiKey {
     prefix: String,
     created_at: String,
     created_by: String,
+    /// The sheet labels the key may see; `None` sees everything.
+    #[serde(default)]
+    clearances: Option<Vec<String>>,
+    #[serde(default)]
+    read_only: bool,
+    /// Unix seconds; past it the key is refused.
+    #[serde(default)]
+    expires_at: Option<u64>,
+    #[serde(default)]
+    last_used_at: Option<String>,
 }
 
 impl ApiKey {
@@ -152,6 +162,10 @@ impl ApiKey {
             prefix: self.prefix.clone(),
             created_at: self.created_at.clone(),
             created_by: self.created_by.clone(),
+            clearances: self.clearances.clone(),
+            read_only: self.read_only,
+            expires_at: self.expires_at,
+            last_used_at: self.last_used_at.clone(),
         }
     }
 }
@@ -164,6 +178,10 @@ pub struct PublicApiKey {
     pub prefix: String,
     pub created_at: String,
     pub created_by: String,
+    pub clearances: Option<Vec<String>>,
+    pub read_only: bool,
+    pub expires_at: Option<u64>,
+    pub last_used_at: Option<String>,
 }
 
 pub const API_KEY_PREFIX: &str = "ok_";
@@ -571,29 +589,53 @@ impl UserStore {
         })
     }
 
-    /// The key a bearer secret names, if any: what `require_auth` asks.
+    /// The key a bearer secret names, if any and not expired: what
+    /// `require_auth` asks. Its last use is noted, at most once a minute
+    /// (the file is rewritten whole).
     pub fn key_by_secret(&self, secret: &str) -> Option<PublicApiKey> {
         if !secret.starts_with(API_KEY_PREFIX) {
             return None;
         }
         let h = sha256_hex(secret);
-        self.db
-            .lock()
-            .keys
-            .iter()
-            .find(|k| k.hash == h)
-            .map(ApiKey::public)
+        let now = unix_now();
+        let mut db = self.db.lock();
+        let pos = db.keys.iter().position(|k| k.hash == h)?;
+        if db.keys[pos].expires_at.is_some_and(|t| t <= now) {
+            return None;
+        }
+        let stamp = now_rfc3339();
+        let stale = db.keys[pos]
+            .last_used_at
+            .as_deref()
+            .is_none_or(|t| t[..16] != stamp[..16]);
+        if stale {
+            let mut next = db.clone();
+            next.keys[pos].last_used_at = Some(stamp);
+            if self.persist(&next).is_ok() {
+                *db = next;
+            }
+        }
+        Some(db.keys[pos].public())
     }
 
-    /// Mint a key: the secret is returned once, only its hash is kept.
-    fn create_key(&self, name: &str, by: &str) -> Result<(PublicApiKey, String), UserStoreError> {
+    fn new_secret() -> String {
         use rand::RngCore;
         let mut raw = [0u8; 32];
         rand::rng().fill_bytes(&mut raw);
-        let secret = format!(
+        format!(
             "{API_KEY_PREFIX}{}",
             raw.iter().map(|b| format!("{b:02x}")).collect::<String>()
-        );
+        )
+    }
+
+    /// Mint a key: the secret is returned once, only its hash is kept.
+    fn create_key(
+        &self,
+        name: &str,
+        by: &str,
+        scope: KeyScope,
+    ) -> Result<(PublicApiKey, String), UserStoreError> {
+        let secret = Self::new_secret();
         let key = ApiKey {
             id: new_id(),
             name: name.trim().to_string(),
@@ -601,6 +643,10 @@ impl UserStore {
             prefix: secret[..API_KEY_PREFIX.len() + 8].to_string(),
             created_at: now_rfc3339(),
             created_by: by.to_string(),
+            clearances: scope.clearances,
+            read_only: scope.read_only,
+            expires_at: scope.expires_at,
+            last_used_at: None,
         };
         let mut db = self.db.lock();
         let mut next = db.clone();
@@ -608,6 +654,22 @@ impl UserStore {
         self.persist(&next)?;
         *db = next;
         Ok((key.public(), secret))
+    }
+
+    /// A fresh secret for an existing key, same scope: the old one is
+    /// dead at once. `None` when no key has that id.
+    fn rotate_key(&self, id: &str) -> Result<Option<(PublicApiKey, String)>, UserStoreError> {
+        let secret = Self::new_secret();
+        let mut db = self.db.lock();
+        let Some(pos) = db.keys.iter().position(|k| k.id == id) else {
+            return Ok(None);
+        };
+        let mut next = db.clone();
+        next.keys[pos].hash = sha256_hex(&secret);
+        next.keys[pos].prefix = secret[..API_KEY_PREFIX.len() + 8].to_string();
+        self.persist(&next)?;
+        *db = next;
+        Ok(Some((db.keys[pos].public(), secret)))
     }
 
     fn delete_key(&self, id: &str) -> Result<bool, UserStoreError> {
@@ -789,6 +851,25 @@ pub struct AuthState {
     /// The sign-in providers live in the settings.
     pub settings: Arc<PlRwLock<Settings>>,
     pub oidc: Arc<oidc::Oidc>,
+    /// Sign-ins, refusals and access changes are logged here (the audit
+    /// layer sees only the protected routes).
+    pub audit: Option<Arc<crate::audit::AuditLog>>,
+}
+
+impl AuthState {
+    /// An audit line for an event of the sign-in surface.
+    pub(crate) fn audit(
+        &self,
+        who: &str,
+        method: &str,
+        path: &str,
+        status: u16,
+        detail: impl Into<String>,
+    ) {
+        if let Some(log) = &self.audit {
+            log.event(who, method, path, status, detail);
+        }
+    }
 }
 
 /// `/auth/signup`, `/auth/login`, `/auth/logout` and the OAuth bounces:
@@ -818,13 +899,31 @@ pub fn protected_routes(state: AuthState) -> Router {
         )
         .route("/auth/keys", get(list_keys).post(create_key))
         .route("/auth/keys/:id", axum::routing::delete(delete_key))
+        .route("/auth/keys/:id/rotate", post(rotate_key))
         .with_state(state)
+}
+
+/// What a key may do: see everything or only some labels, write or not,
+/// until when.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct KeyScope {
+    pub clearances: Option<Vec<String>>,
+    pub read_only: bool,
+    pub expires_at: Option<u64>,
 }
 
 #[derive(Deserialize)]
 struct KeyRequest {
     #[serde(default)]
     name: String,
+    /// The labels the key may see; absent: everything.
+    #[serde(default)]
+    clearances: Option<Vec<String>>,
+    #[serde(default)]
+    read_only: bool,
+    /// Days until the key expires; absent: never.
+    #[serde(default)]
+    expires_in_days: Option<u64>,
 }
 
 async fn list_keys(State(s): State<AuthState>, Extension(ctx): Extension<AuthContext>) -> Response {
@@ -849,12 +948,66 @@ async fn create_key(
             "Key name required (80 characters at most)",
         );
     }
-    match s.store.create_key(&r.name, &me.email) {
-        Ok((key, secret)) => (
-            StatusCode::CREATED,
-            Json(serde_json::json!({ "key": secret, "id": key.id, "name": key.name, "prefix": key.prefix, "createdAt": key.created_at, "createdBy": key.created_by })),
-        )
-            .into_response(),
+    let clearances = r.clearances.map(|c| {
+        c.into_iter()
+            .map(|l| l.trim().to_lowercase())
+            .filter(|l| !l.is_empty())
+            .collect::<Vec<_>>()
+    });
+    if let Some(bad) = clearances
+        .as_ref()
+        .and_then(|c| c.iter().find(|l| !crate::valid_label(l)))
+    {
+        return error(
+            StatusCode::BAD_REQUEST,
+            &format!("invalid clearance `{bad}`"),
+        );
+    }
+    let scope = KeyScope {
+        clearances,
+        read_only: r.read_only,
+        expires_at: r
+            .expires_in_days
+            .map(|d| unix_now() + d.clamp(1, 3650) * 86_400),
+    };
+    match s.store.create_key(&r.name, &me.email, scope) {
+        Ok((key, secret)) => {
+            let mut resp = (
+                StatusCode::CREATED,
+                Json(serde_json::json!({ "key": secret, "id": key.id, "name": key.name, "prefix": key.prefix, "createdAt": key.created_at, "createdBy": key.created_by, "clearances": key.clearances, "readOnly": key.read_only, "expiresAt": key.expires_at })),
+            )
+                .into_response();
+            resp.extensions_mut()
+                .insert(crate::audit::AuditNote(format!(
+                    "key created: {} ({})",
+                    key.name, key.id
+                )));
+            resp
+        }
+        Err(e) => store_error(e),
+    }
+}
+
+/// `POST /auth/keys/:id/rotate`: a fresh secret, the same scope.
+async fn rotate_key(
+    State(s): State<AuthState>,
+    Extension(ctx): Extension<AuthContext>,
+    Path(id): Path<String>,
+) -> Response {
+    if let Err((st, m)) = admin(&s, &ctx) {
+        return error(st, m);
+    }
+    match s.store.rotate_key(&id) {
+        Ok(Some((key, secret))) => {
+            let mut resp = Json(serde_json::json!({ "key": secret, "id": key.id, "name": key.name, "prefix": key.prefix })).into_response();
+            resp.extensions_mut()
+                .insert(crate::audit::AuditNote(format!(
+                    "key rotated: {}",
+                    key.name
+                )));
+            resp
+        }
+        Ok(None) => error(StatusCode::NOT_FOUND, "Key not found"),
         Err(e) => store_error(e),
     }
 }
@@ -1091,8 +1244,20 @@ async fn login(State(s): State<AuthState>, Json(c): Json<Credentials>) -> Respon
     )
     .await;
     match user {
-        Some(user) if ok => session(&s, &user, StatusCode::OK),
-        _ => error(StatusCode::UNAUTHORIZED, "Invalid credentials"),
+        Some(user) if ok => {
+            s.audit(&user.email, "POST", "/auth/login", 200, "sign-in: password");
+            session(&s, &user, StatusCode::OK)
+        }
+        _ => {
+            s.audit(
+                c.email.trim(),
+                "POST",
+                "/auth/login",
+                401,
+                "sign-in refused: invalid credentials",
+            );
+            error(StatusCode::UNAUTHORIZED, "Invalid credentials")
+        }
     }
 }
 
@@ -1225,7 +1390,17 @@ async fn update_user(
         return error(StatusCode::NOT_FOUND, "User not found");
     }
     match s.store.set_access(&id, p.role, clearances) {
-        Ok(user) => Json(serde_json::json!({ "user": user.public() })).into_response(),
+        Ok(user) => {
+            let mut resp = Json(serde_json::json!({ "user": user.public() })).into_response();
+            resp.extensions_mut()
+                .insert(crate::audit::AuditNote(format!(
+                    "access: {} role={} clearances={}",
+                    user.email,
+                    user.public().role,
+                    user.clearances.join(",")
+                )));
+            resp
+        }
         Err(e) => store_error(e),
     }
 }

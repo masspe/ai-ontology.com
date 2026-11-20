@@ -190,6 +190,7 @@ async fn anthropic_drops_system_role_messages_and_keeps_the_assistant_turn() {
             ],
             max_tokens: 4321,
             temperature: 0.0,
+            on_premises_only: false,
         })
         .await
         .unwrap();

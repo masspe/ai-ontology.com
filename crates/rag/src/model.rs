@@ -65,6 +65,10 @@ pub struct LlmRequest {
     pub messages: Vec<Message>,
     pub max_tokens: u32,
     pub temperature: f32,
+    /// The context holds sheets of a domain that must not leave the
+    /// premises: only a model declared on-premises may answer.
+    #[serde(default)]
+    pub on_premises_only: bool,
 }
 
 impl Default for LlmRequest {
@@ -75,6 +79,7 @@ impl Default for LlmRequest {
             messages: Vec::new(),
             max_tokens: 1024,
             temperature: 0.0,
+            on_premises_only: false,
         }
     }
 }

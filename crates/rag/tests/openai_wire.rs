@@ -112,6 +112,7 @@ async fn infomaniak_layout_hits_the_product_scoped_v1_chat_path() {
             messages: vec![Message::user("ping")],
             max_tokens: 64,
             temperature: 0.2,
+            on_premises_only: false,
         })
         .await
         .unwrap();

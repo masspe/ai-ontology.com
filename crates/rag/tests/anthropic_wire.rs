@@ -96,6 +96,7 @@ async fn cached_context_serializes_with_cache_control_and_no_temperature_on_opus
             messages: vec![Message::user("What is a person?")],
             max_tokens: 64,
             temperature: 0.7,
+            on_premises_only: false,
         })
         .await
         .unwrap();
@@ -253,6 +254,7 @@ async fn temperature_sent_for_non_opus_4_7_models() {
             messages: vec![Message::user("ping")],
             max_tokens: 16,
             temperature: 0.3,
+            on_premises_only: false,
         })
         .await
         .unwrap();
@@ -354,6 +356,7 @@ async fn streaming_yields_text_deltas_then_end() {
             messages: vec![Message::user("ping")],
             max_tokens: 64,
             temperature: 0.0,
+            on_premises_only: false,
         })
         .await
         .unwrap();

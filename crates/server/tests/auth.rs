@@ -790,7 +790,8 @@ async fn writes_are_audited_with_their_caller_and_read_by_administrators() {
     assert_eq!(st, StatusCode::OK, "{v}");
     let (st, _, _) = call(&app, "GET", "/stats", Some(&admin), None).await;
     assert_eq!(st, StatusCode::OK);
-    // A POST that reads (a retrieval) is not a write.
+    // A POST that reads (a retrieval) is not a write, but a question is
+    // audited as a read with the domains it touched.
     let (st, _, _) = call(
         &app,
         "POST",
@@ -860,6 +861,12 @@ async fn writes_are_audited_with_their_caller_and_read_by_administrators() {
             (
                 "admin@example.com".to_string(),
                 "POST".to_string(),
+                "/retrieve".to_string(),
+                200
+            ),
+            (
+                "admin@example.com".to_string(),
+                "POST".to_string(),
                 "/auth/keys".to_string(),
                 201
             ),
@@ -872,10 +879,10 @@ async fn writes_are_audited_with_their_caller_and_read_by_administrators() {
         ],
         "{v}"
     );
-    assert_eq!(entries[2]["request_id"], rid);
+    assert_eq!(entries[3]["request_id"], rid);
     assert!(entries[0]["ts"].as_str().unwrap().ends_with('Z'));
     // The file is what the API reads.
-    assert_eq!(std::fs::read_to_string(&audit).unwrap().lines().count(), 3);
+    assert_eq!(std::fs::read_to_string(&audit).unwrap().lines().count(), 4);
 
     // `limit` keeps the last ones; a plain user and a key are refused.
     let (_, v, _) = call(&app, "GET", "/audit?limit=1", Some(&admin), None).await;

@@ -448,6 +448,7 @@ Do not wrap it in markdown fences. Do not include commentary.",
         }],
         max_tokens: 4096,
         temperature: 0.1,
+        on_premises_only: false,
     };
     model.generate(&req).await
 }

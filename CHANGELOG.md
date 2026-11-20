@@ -35,6 +35,23 @@ All notable changes to this project are listed here. The format follows
 
 ### Added
 
+- Scoped API keys: `POST /auth/keys` takes `clearances` (the sheets the
+  key may see; absent: everything), `read_only` (every write refused;
+  retrievals and questions are reads), `expires_in_days`;
+  `POST /auth/keys/<id>/rotate` issues a fresh secret with the same
+  scope; the listing shows the scope and the time of last use.
+- The audit log is a hash chain (`prev`, `hash` on every line;
+  `ontology audit-verify` walks it) and records, beyond writes: sign-ins
+  and their means, refused sign-ins and why, role and clearance changes,
+  keys created or rotated, and every question or retrieval with the
+  storage domains it touched — the question's text only with
+  `serve --audit-questions`, a short hash otherwise. `GET /audit` filters
+  by `who`, `path` prefix and `since`.
+- Questions that must not leave the premises: `llm.on_premises_domains`
+  names the storage domains whose sheets stay inside; a question whose
+  context holds one is answered by `llm.on_premises_provider` only (a
+  model on your network behind an OpenAI-compatible URL) or refused with
+  the reason. The strictest domain in the context decides.
 - Access control on the API: a reader's clearances (`PATCH /auth/users/<id>
   {"clearances": [...], "role": ...}`, administrators only; or the OpenID
   provider's group claims with `groups_as_clearances`) decide which
