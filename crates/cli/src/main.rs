@@ -1293,6 +1293,11 @@ async fn real_main() -> Result<()> {
                 }),
                 None => None,
             };
+            if let Some(dir) = cli.data.as_ref() {
+                let jobs = ontology_server::jobs::Jobs::open(dir.join("jobs.json"))
+                    .with_context(|| format!("opening {}", dir.join("jobs.json").display()))?;
+                state.jobs = Arc::new(jobs);
+            }
             if let Some(dir) = &web {
                 anyhow::ensure!(
                     dir.join("index.html").is_file(),

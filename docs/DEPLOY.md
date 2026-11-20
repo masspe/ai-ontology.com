@@ -174,6 +174,17 @@ the `/data` volume; it is not in the store backup (§5), so copy it along
 with the volume. Options: `--audit-log <path>`, `--no-audit`,
 `--audit-questions`.
 
+### Background jobs
+
+A sync, a re-index, anything that outlives a request runs as a **job**:
+`GET /jobs` lists them (newest first; `?active=true` for the running
+ones), `GET /jobs/<id>` shows status, progress and the tail of its log,
+`DELETE /jobs/<id>` asks a running one to stop between two batches. The
+top bar shows a light while a job runs or when one failed in the last
+hour. The list lives in `/data/jobs.json` (the last 200 jobs); a job that
+was running when the process stopped shows as *interrupted* after the
+restart.
+
 ### What never accumulates
 
 A backup is a mirror of the store in `/backups`, brought up to date on
@@ -252,7 +263,7 @@ docker start acme
 The restored store has its own identity: its next backup goes to an empty
 folder (or to an emptied `/backups`), never on top of the original backup.
 The small files next to the store (`users.json`, `jwt.secret`, `settings.json`,
-`master.key`) are not part of the backup: copy them along with the volume, or
+`master.key`, `jobs.json`) are not part of the backup: copy them along with the volume, or
 supply the secrets through `--jwt-secret-env` and `ONTOLOGY_MASTER_KEY`. A
 `settings.json` restored without its `master.key` keeps everything but the
 provider keys, which the administrator enters again. The CI runs backup through the API, restore

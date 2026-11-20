@@ -52,6 +52,7 @@ fn ontology() -> Ontology {
 struct World {
     app: Router,
     settings: Arc<parking_lot::RwLock<ontology_server::Settings>>,
+    jobs: Arc<ontology_server::jobs::Jobs>,
 }
 
 fn world(tag: &str) -> World {
@@ -60,6 +61,7 @@ fn world(tag: &str) -> World {
     let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
     let state = state_with(store, graph);
     let settings = state.settings.clone();
+    let jobs = state.jobs.clone();
     let app = build_router_with_config(
         state,
         RouterConfig {
@@ -74,7 +76,11 @@ fn world(tag: &str) -> World {
             audit: Some(Arc::new(AuditLog::open(dir.join("audit.jsonl")).unwrap())),
         },
     );
-    World { app, settings }
+    World {
+        app,
+        settings,
+        jobs,
+    }
 }
 
 async fn send(app: &Router, req: Request<Body>) -> (StatusCode, http::HeaderMap, Value) {
@@ -368,4 +374,78 @@ fn rand_suffix() -> u64 {
     use std::sync::atomic::{AtomicU64, Ordering};
     static N: AtomicU64 = AtomicU64::new(0);
     N.fetch_add(1, Ordering::Relaxed)
+}
+
+/// `/jobs`: the list (newest first, `active=true` for the running ones),
+/// one job, a cancel that reaches it, 404 for the rest; behind the login.
+#[tokio::test]
+async fn jobs_are_listed_read_and_cancelled_over_http() {
+    let w = world("jobs");
+    let (admin, _) = signup(&w.app, "ann@example.com").await;
+    let (st, _, _) = send(&w.app, req("GET", "/jobs", None, None)).await;
+    assert_eq!(st, StatusCode::UNAUTHORIZED);
+    let (st, _, v) = send(&w.app, req("GET", "/jobs", Some(&admin), None)).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(v["jobs"], json!([]));
+
+    let jobs = w.jobs.clone();
+    let slow = jobs.start("sync", "orders", "ann", |h| async move {
+        h.progress(1, Some(10));
+        while !h.cancelled() {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        Ok(json!({ "stopped": true }))
+    });
+    let quick = jobs.start("reindex", "all", "ann", |_| async { Ok(json!({ "n": 1 })) });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let (_, _, v) = send(&w.app, req("GET", "/jobs?active=true", Some(&admin), None)).await;
+    let ids: Vec<u64> = v["jobs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|j| j["id"].as_u64().unwrap())
+        .collect();
+    assert_eq!(ids, vec![slow]);
+    let (_, _, v) = send(&w.app, req("GET", "/jobs", Some(&admin), None)).await;
+    assert_eq!(v["jobs"].as_array().unwrap().len(), 2);
+    assert_eq!(v["jobs"][0]["id"], quick, "newest first");
+    let (st, _, v) = send(
+        &w.app,
+        req("GET", &format!("/jobs/{slow}"), Some(&admin), None),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(
+        (v["progress"].as_u64(), v["total"].as_u64()),
+        (Some(1), Some(10))
+    );
+    assert_eq!(v["status"], "running");
+
+    let (st, _, _) = send(
+        &w.app,
+        req("DELETE", &format!("/jobs/{quick}"), Some(&admin), None),
+    )
+    .await;
+    assert_eq!(st, StatusCode::NOT_FOUND, "finished: nothing to cancel");
+    let (st, _, _) = send(
+        &w.app,
+        req("DELETE", &format!("/jobs/{slow}"), Some(&admin), None),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    for _ in 0..100 {
+        if jobs.get(slow).unwrap().status != ontology_server::jobs::JobStatus::Running {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    let (_, _, v) = send(
+        &w.app,
+        req("GET", &format!("/jobs/{slow}"), Some(&admin), None),
+    )
+    .await;
+    assert_eq!(v["status"], "cancelled");
+    let (st, _, _) = send(&w.app, req("GET", "/jobs/999", Some(&admin), None)).await;
+    assert_eq!(st, StatusCode::NOT_FOUND);
 }

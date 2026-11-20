@@ -35,6 +35,12 @@ All notable changes to this project are listed here. The format follows
 
 ### Added
 
+- Background jobs: a list of the work that outlives a request (a sync, a
+  re-index) with status, progress and the tail of each job's log —
+  `GET /jobs`, `GET /jobs/<id>`, `DELETE /jobs/<id>` to stop one between
+  batches — kept in `jobs.json` across restarts (a job running at the
+  stop shows as interrupted). The top bar lights up while a job runs or
+  after a recent failure.
 - Nothing accumulates: the audit log rotates past 64 MB (the last ten
   files kept, the hash chain running across them; `--audit-rotate-mb`,
   `--audit-keep`); the embedding cache of a previous model is removed when

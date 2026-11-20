@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import FeedbackModal from "../components/FeedbackModal";
 import { openTour } from "../components/Tour";
 import TopNav from "./TopNav";
+import JobsIndicator from "../components/JobsIndicator";
 // @ts-expect-error JS module without types (shared with the auth pages)
 import { msBE } from "../lib/msBE";
 import { getLang, setLang, t } from "../lib/i18n";
@@ -65,6 +66,7 @@ export default function TopBar() {
   return (
     <header className="topbar">
       <TopNav />
+      <JobsIndicator />
       <form className="topbar-search" onSubmit={onSubmit} data-tour="search">
         <span className="topbar-search-icon">⌕</span>
         <input

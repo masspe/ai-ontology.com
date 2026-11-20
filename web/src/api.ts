@@ -809,6 +809,27 @@ export const getFiles = () => http<{ files: FileRecord[] }>("/files");
 export const deleteFile = (id: number) =>
   http<void>(`/files/${id}`, { method: "DELETE", headers: headers() });
 
+/** A background job (a sync, a re-index): status, progress, the log's tail. */
+export interface Job {
+  id: number;
+  kind: string;
+  label: string;
+  status: "running" | "done" | "failed" | "cancelled" | "interrupted";
+  created_at: string;
+  finished_at?: string;
+  progress: number;
+  total?: number;
+  message: string;
+  log: string[];
+  result?: unknown;
+  by: string;
+}
+
+export const listJobs = (active = false) =>
+  http<{ jobs: Job[] }>(`/jobs${active ? "?active=true" : ""}`);
+export const cancelJob = (id: number) =>
+  http<{ ok: boolean }>(`/jobs/${id}`, { method: "DELETE", headers: headers() });
+
 export const getQueries = () => http<{ queries: SavedQuery[] }>("/queries");
 export const createQuery = (q: {
   name: string;

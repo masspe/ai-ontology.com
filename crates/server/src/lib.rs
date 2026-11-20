@@ -25,6 +25,7 @@
 pub mod audit;
 pub mod auth;
 mod ingest_review;
+pub mod jobs;
 pub mod oidc;
 mod openapi;
 pub mod secrets;
@@ -109,6 +110,9 @@ pub struct AppState {
     pub backup_dir: Option<PathBuf>,
     /// Hidden sheets per clearance set, per generation.
     pub visibility: Arc<VisibilityCache>,
+    /// Background jobs (syncs, re-indexes): `jobs::Jobs::open` in
+    /// `ontology serve`, in memory otherwise.
+    pub jobs: Arc<jobs::Jobs>,
 }
 
 impl AppState {
@@ -136,6 +140,7 @@ impl AppState {
             memory_plan: Arc::new(PlRwLock::new(None)),
             backup_dir: None,
             visibility: Arc::new(VisibilityCache::default()),
+            jobs: Arc::new(jobs::Jobs::in_memory()),
         }
     }
 
@@ -1190,6 +1195,7 @@ pub fn build_router_with_config(state: AppState, cfg: RouterConfig) -> Router {
 fn build_router_inner(state: AppState, cfg: RouterConfig) -> Router {
     // Read later by the header and CORS layers, after `state` has moved.
     let settings_handle = state.settings.clone();
+    let settings_jobs = state.jobs.clone();
     let RouterConfig {
         bearer_token,
         jwt,
@@ -1323,6 +1329,7 @@ fn build_router_inner(state: AppState, cfg: RouterConfig) -> Router {
         .route("/audit", get(audit_tail))
         .with_state((audit.clone(), auth_state.as_ref().map(|a| a.store.clone())));
     let protected = protected.merge(reader);
+    let protected = protected.merge(jobs::routes(settings_jobs.clone()));
     let protected = match &audit {
         Some(log) => {
             let log = log.clone();
