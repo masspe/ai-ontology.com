@@ -316,6 +316,13 @@ screen sheets people ask about are not crowded out by their fields. A
 sheet the question names exactly (a screen code, a table) ranks first,
 the boost weighted by how rare the naming word is (`HybridIndex::rank`).
 
+6. **Data sources** (`crates/io/src/connect/`, `crates/server/src/sources.rs`):
+   a `Connector` trait (tables, columns, a query with a watermark) with
+   CSV, SQL Server (`tiberius`, feature) and ODBC (`odbc-api`, feature)
+   behind it; a mapping turns rows into `Record`s (`RowSource`) for the
+   same ingester, so a synced table is upserted, journaled and indexed
+   like every other import.
+
 `scripts/import-erp.ps1` runs the three in this order against one store
 (build, `--xref --sync`, `--abl --sync`, one `--df` per database).
 

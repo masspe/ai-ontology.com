@@ -26,6 +26,8 @@ export const layout: Record<string, string> = {
   "interrompu": "interrupted",
   "Arrêter": "Stop",
   "Accès": "Access",
+  "Sources de données": "Data sources",
+  "Une base ou un fichier dont le graphe est tenu à jour : chaque table devient des fiches, à la main ou toutes les N minutes.": "A database or a file the graph is kept in step with: each table becomes sheets, by hand or every N minutes.",
   "Accueil": "Home",
   "Une question à poser, ce qui attend une action, ce qui a été importé cette semaine, les dernières questions. Au premier lancement, il vous guide en trois étapes.": "A question to ask, what is waiting for action, what was imported this week, the latest questions. On first launch, it walks you through three steps.",
   "Importer": "Import",

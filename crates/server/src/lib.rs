@@ -29,6 +29,7 @@ pub mod jobs;
 pub mod oidc;
 mod openapi;
 pub mod secrets;
+pub mod sources;
 
 use axum::{
     extract::{Multipart, Path, Query, State},
@@ -113,6 +114,9 @@ pub struct AppState {
     /// Background jobs (syncs, re-indexes): `jobs::Jobs::open` in
     /// `ontology serve`, in memory otherwise.
     pub jobs: Arc<jobs::Jobs>,
+    /// The data sources and their mappings (`sources::SourceStore::open`
+    /// in `ontology serve`, in memory otherwise).
+    pub sources: Arc<sources::SourceStore>,
 }
 
 impl AppState {
@@ -141,6 +145,7 @@ impl AppState {
             backup_dir: None,
             visibility: Arc::new(VisibilityCache::default()),
             jobs: Arc::new(jobs::Jobs::in_memory()),
+            sources: Arc::new(sources::SourceStore::in_memory()),
         }
     }
 
@@ -328,9 +333,9 @@ fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
 /// later is masked at the HTTP boundary without anyone having to remember to
 /// update a list. Note that `max_tokens` and the `*_api_key_hint` fields do
 /// not match — they are meant to reach the client.
-const SECRET_FIELD_SUFFIXES: [&str; 3] = ["_api_key", "_secret", "_token"];
+const SECRET_FIELD_SUFFIXES: [&str; 4] = ["_api_key", "_secret", "_token", "password"];
 
-fn is_secret_field(name: &str) -> bool {
+pub(crate) fn is_secret_field(name: &str) -> bool {
     SECRET_FIELD_SUFFIXES
         .iter()
         .any(|suffix| name.ends_with(suffix))
@@ -1196,6 +1201,7 @@ fn build_router_inner(state: AppState, cfg: RouterConfig) -> Router {
     // Read later by the header and CORS layers, after `state` has moved.
     let settings_handle = state.settings.clone();
     let settings_jobs = state.jobs.clone();
+    let state_for_sources = state.clone();
     let RouterConfig {
         bearer_token,
         jwt,
@@ -1330,6 +1336,7 @@ fn build_router_inner(state: AppState, cfg: RouterConfig) -> Router {
         .with_state((audit.clone(), auth_state.as_ref().map(|a| a.store.clone())));
     let protected = protected.merge(reader);
     let protected = protected.merge(jobs::routes(settings_jobs.clone()));
+    let protected = protected.merge(sources::routes(state_for_sources.clone()));
     let protected = match &audit {
         Some(log) => {
             let log = log.clone();

@@ -830,6 +830,115 @@ export const listJobs = (active = false) =>
 export const cancelJob = (id: number) =>
   http<{ ok: boolean }>(`/jobs/${id}`, { method: "DELETE", headers: headers() });
 
+// ---- Data sources ---------------------------------------------------------
+
+/** A foreign-key column that becomes a link to a sheet of `target_type`. */
+export interface RelationRule {
+  column: string;
+  relation_type: string;
+  target_type: string;
+  create_target?: boolean;
+}
+
+/** A table (or SELECT) of a source and how it becomes sheets. */
+export interface MappingSpec {
+  id: number;
+  name: string;
+  from: string;
+  concept_type: string;
+  key_column: string;
+  name_column?: string | null;
+  description_column?: string | null;
+  property_columns: string[];
+  relations: RelationRule[];
+  ns?: string | null;
+  watermark_column?: string | null;
+  last_watermark?: unknown;
+  schedule_minutes: number;
+  last_run_at?: string | null;
+  last_status: string;
+  last_report?: unknown;
+}
+
+/** A source as the API serves it: never its password. */
+export interface DataSource {
+  id: number;
+  name: string;
+  kind: string;
+  location: string;
+  host: string;
+  port: number;
+  database: string;
+  user: string;
+  password_hint: string;
+  encrypt: boolean;
+  trust_cert: boolean;
+  allow_private_hosts: boolean;
+  timeout_secs: number;
+  created_at: string;
+  mappings: MappingSpec[];
+}
+
+export interface SourcePatch {
+  name?: string;
+  kind?: string;
+  location?: string;
+  host?: string;
+  port?: number;
+  database?: string;
+  user?: string;
+  /** Write-only; empty keeps the stored one. */
+  password?: string;
+  encrypt?: boolean;
+  trust_cert?: boolean;
+  allow_private_hosts?: boolean;
+  timeout_secs?: number;
+}
+
+export interface MappingPatch {
+  name?: string;
+  from?: string;
+  concept_type?: string;
+  key_column?: string;
+  name_column?: string | null;
+  description_column?: string | null;
+  property_columns?: string[];
+  relations?: RelationRule[];
+  ns?: string | null;
+  watermark_column?: string | null;
+  schedule_minutes?: number;
+  reset_watermark?: boolean;
+}
+
+const jsonInit = (method: string, body: unknown): RequestInit => ({
+  method,
+  headers: headers(true),
+  body: JSON.stringify(body),
+});
+
+export const listSources = () => http<{ sources: DataSource[] }>("/sources");
+export const createSource = (p: SourcePatch) => http<DataSource>("/sources", jsonInit("POST", p));
+export const updateSource = (id: number, p: SourcePatch) => http<DataSource>(`/sources/${id}`, jsonInit("PATCH", p));
+export const deleteSource = (id: number) => http<void>(`/sources/${id}`, { method: "DELETE", headers: headers() });
+export const testSource = (id: number) =>
+  http<{ ok: boolean; ms?: number; error?: string }>(`/sources/${id}/test`, { method: "POST", headers: headers() });
+export const listSourceTables = (id: number) =>
+  http<{ tables: { schema?: string | null; name: string }[] }>(`/sources/${id}/tables`);
+export const listSourceColumns = (id: number, table: string) =>
+  http<{ columns: { name: string; data_type: string }[] }>(`/sources/${id}/columns?table=${encodeURIComponent(table)}`);
+export const createMapping = (id: number, p: MappingPatch) => http<MappingSpec>(`/sources/${id}/mappings`, jsonInit("POST", p));
+export const updateMapping = (id: number, mid: number, p: MappingPatch) =>
+  http<MappingSpec>(`/sources/${id}/mappings/${mid}`, jsonInit("PATCH", p));
+export const deleteMapping = (id: number, mid: number) =>
+  http<void>(`/sources/${id}/mappings/${mid}`, { method: "DELETE", headers: headers() });
+export const previewMapping = (id: number, mid: number) =>
+  http<{ columns: { name: string; data_type: string }[]; rows: unknown[][]; sheets: { name: string; description: string; properties: Record<string, unknown> }[]; links: number; skipped: number }>(
+    `/sources/${id}/mappings/${mid}/preview`,
+    { method: "POST", headers: headers() },
+  );
+export const runMapping = (id: number, mid: number) =>
+  http<{ job: number }>(`/sources/${id}/mappings/${mid}/run`, { method: "POST", headers: headers() });
+
 export const getQueries = () => http<{ queries: SavedQuery[] }>("/queries");
 export const createQuery = (q: {
   name: string;

@@ -35,6 +35,17 @@ All notable changes to this project are listed here. The format follows
 
 ### Added
 
+- Data sources: a database or a file the graph is kept in step with
+  (`/sources`, the *Sources de données* page, administrators). A source
+  carries mappings — a table or a SELECT becomes sheets of a type, a
+  foreign-key column a link — previewed before they run, synced by hand
+  or every N minutes as background jobs through the regular ingester
+  (batches of 2 000 rows under the writer lock; sheets the source no
+  longer has are marked stale; a watermark column makes a sync
+  incremental). Connectors: CSV (path or HTTPS URL) in every build, SQL
+  Server and ODBC (OpenEdge and anything with a driver) behind the
+  `sqlserver` and `odbc` build features. Credentials sealed at rest and
+  never served; private and local hosts refused unless allowed per source.
 - Background jobs: a list of the work that outlives a request (a sync, a
   re-index) with status, progress and the tail of each job's log —
   `GET /jobs`, `GET /jobs/<id>`, `DELETE /jobs/<id>` to stop one between

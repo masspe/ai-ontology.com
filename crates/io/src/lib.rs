@@ -18,6 +18,7 @@
 
 pub mod abl;
 pub mod charset;
+pub mod connect;
 pub mod csv;
 pub mod df;
 pub mod docs;
@@ -40,6 +41,10 @@ pub use abl::{
     scan_abl, scan_dir, strip_comments, AblFile, AblSource, JoinUse, ScannedDir, TableIndex,
 };
 pub use charset::{decode_to_utf8, looks_binary, DecodedText};
+pub use connect::{
+    ColumnInfo, ConnectError, Connector, CsvConnector, Mapping as RowMapping, MemoryConnector,
+    Query as ConnectorQuery, RelationRule, ResultSet, RowSource, TableInfo,
+};
 pub use csv::CsvSource;
 pub use df::{parse_df, parse_df_file, DfField, DfIndex, DfSource, DfTable};
 pub use docs::{decode_entities, html_to_text, DocOptions, DocReport, DocSource};

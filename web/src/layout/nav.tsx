@@ -100,6 +100,17 @@ export const NAV_GROUPS: NavGroup[] = [
         },
       },
       {
+        to: "/sources",
+        get label() {
+          return t("Sources de données");
+        },
+        icon: NavIcon.folder,
+        tour: "importer",
+        get guide() {
+          return t("Une base ou un fichier dont le graphe est tenu à jour : chaque table devient des fiches, à la main ou toutes les N minutes.");
+        },
+      },
+      {
         to: "/builder",
         get label() {
           return t("Modèle de données");

@@ -24,3 +24,18 @@ whatlang = "0.16"
 zip = { version = "9.0", default-features = false, features = ["deflate"] }
 quick-xml = "0.42"
 regex = { workspace = true }
+parking_lot = { workspace = true }
+reqwest = { workspace = true }
+# Database connectors, each behind a feature: the runtime image carries
+# only what the operator asked for.
+tiberius = { version = "0.13", default-features = false, features = ["rustls", "tds73"], optional = true }
+tokio-util = { version = "0.7", features = ["compat"], optional = true }
+odbc-api = { version = "30", optional = true }
+
+[features]
+default = []
+sqlserver = ["dep:tiberius", "dep:tokio-util"]
+odbc = ["dep:odbc-api"]
+
+[dev-dependencies]
+tempfile = "3"

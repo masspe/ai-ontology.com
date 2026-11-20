@@ -174,6 +174,48 @@ the `/data` volume; it is not in the store backup (§5), so copy it along
 with the volume. Options: `--audit-log <path>`, `--no-audit`,
 `--audit-questions`.
 
+### Data sources
+
+**Data sources** (`/sources`, administrators) keep the graph in step with
+a database or a file: a source says where and how to connect (the
+password or the ODBC connection string sealed at rest with the master key,
+never served; `sources.json` beside the store), and carries **mappings**:
+a table (or a `SELECT`) becomes sheets of a type — a key column is the
+identity, a name column the name, the other columns the properties, and a
+foreign-key column becomes a link to a sheet of another type (created as a
+bare sheet when it is not there yet). *Test connection*, browse the tables
+and columns, *Preview* (the first 50 rows and the sheets they would be,
+nothing written), *Sync* now, or every N minutes. A sync is a background
+job (`/jobs`, the light in the top bar): rows go through the regular
+ingester by batches of 2 000 (the writer lock per batch, never per sync),
+so a running sync never blocks a question. A full sync marks the sheets
+the source no longer has as `stale: true` (nothing is deleted); with a
+**watermark column** (an updated-at or an increasing id) a sync reads only
+the rows past the last value seen. Each sheet carries `source =
+"<source>/<mapping>"`. At most 200 000 rows per run: past that, use a
+watermark column.
+
+Kinds in every build: `csv` (a path on the server, or an HTTPS URL
+fetched on every run; `;` or `,`). Behind a build feature, because the
+runtime image carries only what the operator asked for: `sqlserver`
+(pure Rust, TLS by default, `ApplicationIntent=ReadOnly`) and `odbc` (the
+driver manager and the engine's driver on the host: `cargo build
+--features sqlserver,odbc`, or an `-odbc` image with `unixODBC` and the
+driver mounted). A host that resolves to a loopback, link-local or private
+address is refused unless the source says *the server is on the private
+network* (an administrator typing a host is the classic way to reach a
+cloud's metadata service).
+
+**OpenEdge (Progress) through ODBC.** The SQL engine, not the ABL broker:
+the DBA confirms the SQL broker's port and that it is started with SQL
+servers. A read-only SQL account with `GRANT SELECT` on the listed tables
+(tables created from ABL belong to `PUB`: `PUB.prog`). Rows wider than a
+field's SQL width make the engine refuse the query (error 7864); the
+connector says so and names the fix (`dbtool` option 2, or
+`-SQLWidthUpdate ON` on the broker). The Progress driver is licensed and
+not redistributable: install it where the binary runs and name it in the
+connection string (`Driver={Progress OpenEdge 12.2 driver};Host=…;Port=…;DB=…;UID=…;PWD=…`).
+
 ### Background jobs
 
 A sync, a re-index, anything that outlives a request runs as a **job**:
@@ -263,7 +305,7 @@ docker start acme
 The restored store has its own identity: its next backup goes to an empty
 folder (or to an emptied `/backups`), never on top of the original backup.
 The small files next to the store (`users.json`, `jwt.secret`, `settings.json`,
-`master.key`, `jobs.json`) are not part of the backup: copy them along with the volume, or
+`master.key`, `jobs.json`, `sources.json`) are not part of the backup: copy them along with the volume, or
 supply the secrets through `--jwt-secret-env` and `ONTOLOGY_MASTER_KEY`. A
 `settings.json` restored without its `master.key` keeps everything but the
 provider keys, which the administrator enters again. The CI runs backup through the API, restore

@@ -36,6 +36,12 @@ ahash = { workspace = true }
 jsonwebtoken = { version = "9", default-features = false }
 reqwest = { workspace = true }
 
+[features]
+default = []
+# Database drivers of the io crate, by name.
+sqlserver = ["ontology-io/sqlserver"]
+odbc = ["ontology-io/odbc"]
+
 [dev-dependencies]
 ontology-graph = { workspace = true }
 ontology-rag = { workspace = true }

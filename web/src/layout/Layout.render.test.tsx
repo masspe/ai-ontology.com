@@ -58,7 +58,7 @@ describe("Layout shell", () => {
         expect(within(menu).getByRole("link", { name: item.label })).toHaveAttribute("href", item.to);
       }
     }
-    expect(NAV_ITEMS).toHaveLength(10);
+    expect(NAV_ITEMS).toHaveLength(11);
     expect(screen.getByPlaceholderText(SEARCH)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Guide" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Compte" })).toHaveTextContent("U");

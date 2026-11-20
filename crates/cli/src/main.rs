@@ -1297,7 +1297,12 @@ async fn real_main() -> Result<()> {
                 let jobs = ontology_server::jobs::Jobs::open(dir.join("jobs.json"))
                     .with_context(|| format!("opening {}", dir.join("jobs.json").display()))?;
                 state.jobs = Arc::new(jobs);
+                let sources = ontology_server::sources::SourceStore::open(dir.join("sources.json"))
+                    .with_context(|| format!("opening {}", dir.join("sources.json").display()))?;
+                state.sources = Arc::new(sources);
             }
+            // Scheduled syncs start on their own, for the life of the server.
+            tokio::spawn(ontology_server::sources::scheduler(state.clone()));
             if let Some(dir) = &web {
                 anyhow::ensure!(
                     dir.join("index.html").is_file(),
