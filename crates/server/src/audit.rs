@@ -112,7 +112,15 @@ pub struct AuditLog {
     // rotate by size when a tenant's log outgrows a few hundred MB.
     lock: Mutex<String>,
     keep_questions: bool,
+    /// Rotate once the file is this big; 0 never rotates.
+    rotate_bytes: u64,
+    /// Rotated files kept beside the current one; older ones are deleted.
+    keep: usize,
 }
+
+/// Default rotation: 64 MB, the last 10 files kept.
+pub const ROTATE_BYTES: u64 = 64 * 1024 * 1024;
+pub const ROTATE_KEEP: usize = 10;
 
 impl std::fmt::Debug for AuditLog {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -133,16 +141,72 @@ impl AuditLog {
             .append(true)
             .create(true)
             .open(&path)?;
-        // The chain continues from the last line already there.
-        let last = Self::read_all(&path)?
+        // The chain continues from the last line already there — in the
+        // current file, else in the newest rotated one.
+        let mut last = Self::read_all(&path)?
             .last()
             .map(|e| e.hash.clone())
             .unwrap_or_default();
+        if last.is_empty() {
+            if let Some(newest) = rotated_files(&path).pop() {
+                last = Self::read_all(&newest)?
+                    .last()
+                    .map(|e| e.hash.clone())
+                    .unwrap_or_default();
+            }
+        }
         Ok(Self {
             path,
             lock: Mutex::new(last),
             keep_questions: false,
+            rotate_bytes: ROTATE_BYTES,
+            keep: ROTATE_KEEP,
         })
+    }
+
+    /// Rotate the file past `bytes` (0: never) and keep the last `keep`
+    /// rotated files. The chain runs across files: the first line of a
+    /// new file follows the last line of the one before.
+    pub fn rotate(mut self, bytes: u64, keep: usize) -> Self {
+        self.rotate_bytes = bytes;
+        self.keep = keep;
+        self
+    }
+
+    /// The rotated files, oldest first.
+    fn rotated(&self) -> Vec<PathBuf> {
+        rotated_files(&self.path)
+    }
+
+    /// Called with the lock held, after a write: move the file aside
+    /// once it is big enough, and drop the oldest rotated files.
+    fn maybe_rotate(&self, written: u64) {
+        if self.rotate_bytes == 0 || written < self.rotate_bytes {
+            return;
+        }
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let stem = self
+            .path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("audit");
+        let mut aside = self.path.with_file_name(format!("{stem}.{secs}.jsonl"));
+        let mut n = secs;
+        while aside.exists() {
+            n += 1;
+            aside = self.path.with_file_name(format!("{stem}.{n}.jsonl"));
+        }
+        if let Err(e) = std::fs::rename(&self.path, &aside) {
+            tracing::warn!(path = %self.path.display(), error = %e, "audit log not rotated");
+            return;
+        }
+        let rotated = self.rotated();
+        for old in rotated.iter().take(rotated.len().saturating_sub(self.keep)) {
+            let _ = std::fs::remove_file(old);
+        }
     }
 
     /// Keep the text of questions in the log (off by default: the
@@ -156,8 +220,14 @@ impl AuditLog {
         &self.path
     }
 
+    /// The entries of one file; a file that is not there (the current one,
+    /// just rotated) holds none.
     fn read_all(path: &Path) -> std::io::Result<Vec<AuditEntry>> {
-        let f = std::fs::File::open(path)?;
+        let f = match std::fs::File::open(path) {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(e),
+        };
         Ok(std::io::BufReader::new(f)
             .lines()
             .map_while(Result::ok)
@@ -181,7 +251,10 @@ impl AuditLog {
             .create(true)
             .open(&self.path)?;
         f.write_all(&line)?;
+        let written = f.metadata().map(|m| m.len()).unwrap_or(0);
+        drop(f);
         *last = entry.hash;
+        self.maybe_rotate(written);
         Ok(())
     }
 
@@ -257,7 +330,16 @@ impl AuditLog {
     /// chain existed (no hash) are accepted only at the start.
     pub fn verify(&self) -> Result<usize, String> {
         let _g = self.lock.lock();
-        let entries = Self::read_all(&self.path).map_err(|e| e.to_string())?;
+        // The rotated files first, oldest first, then the current one:
+        // one chain.
+        let mut entries = Vec::new();
+        for p in self
+            .rotated()
+            .into_iter()
+            .chain(std::iter::once(self.path.clone()))
+        {
+            entries.extend(Self::read_all(&p).map_err(|e| format!("{}: {e}", p.display()))?);
+        }
         let mut prev = String::new();
         let mut chained = false;
         for (i, e) in entries.iter().enumerate() {
@@ -266,6 +348,11 @@ impl AuditLog {
                     return Err(format!("line {}: unchained line after chained ones", i + 1));
                 }
                 continue;
+            }
+            // The oldest kept file may start mid-chain: its first line
+            // follows a line that rotation has since deleted.
+            if !chained {
+                prev = e.prev.clone();
             }
             chained = true;
             if e.prev != prev {
@@ -278,6 +365,37 @@ impl AuditLog {
         }
         Ok(entries.len())
     }
+}
+
+/// The rotated files beside `path`, oldest first: `<stem>.<unix seconds>.jsonl`.
+fn rotated_files(path: &Path) -> Vec<PathBuf> {
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("audit")
+        .to_string();
+    let Some(dir) = path.parent() else {
+        return Vec::new();
+    };
+    let mut out: Vec<PathBuf> = std::fs::read_dir(dir)
+        .map(|rd| {
+            rd.filter_map(Result::ok)
+                .map(|e| e.path())
+                .filter(|p| {
+                    p.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+                        n.len() > stem.len() + 7
+                            && n.starts_with(&format!("{stem}."))
+                            && n.ends_with(".jsonl")
+                            && n[stem.len() + 1..n.len() - 6]
+                                .chars()
+                                .all(|c| c.is_ascii_digit())
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    out.sort();
+    out
 }
 
 /// A request that changes something: every PUT, PATCH and DELETE, and
@@ -353,6 +471,34 @@ pub async fn audit_layer(req: Request, next: Next, log: Arc<AuditLog>) -> Respon
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_log_rotates_past_the_size_and_the_chain_runs_across_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.jsonl");
+        // Tiny files: every line rotates; keep the last two.
+        let log = AuditLog::open(&path).unwrap().rotate(1, 2);
+        for i in 0..5 {
+            log.event("w", "POST", &format!("/p{i}"), 200, "e");
+        }
+        let rotated = log.rotated();
+        assert_eq!(rotated.len(), 2, "{rotated:?}");
+        assert!(!path.exists() || std::fs::metadata(&path).unwrap().len() == 0);
+        assert_eq!(log.verify().unwrap(), 2, "the two kept files chain");
+        // A reopened log continues from the last kept line.
+        let again = AuditLog::open(&path).unwrap().rotate(0, 2);
+        again.event("w", "POST", "/p5", 200, "e");
+        assert_eq!(again.verify().unwrap(), 3);
+        // Never rotating keeps one file.
+        let never = AuditLog::open(dir.path().join("never.jsonl"))
+            .unwrap()
+            .rotate(0, 1);
+        for _ in 0..3 {
+            never.event("w", "POST", "/x", 200, "e");
+        }
+        assert!(never.rotated().is_empty());
+        assert_eq!(never.tail(10).unwrap().len(), 3);
+    }
 
     #[test]
     fn tail_returns_the_last_entries_and_skips_a_torn_line() {

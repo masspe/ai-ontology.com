@@ -4247,13 +4247,36 @@ pub fn configured_embedder(
                 .chars()
                 .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
                 .collect();
-            Arc::new(ontology_index::CachedEmbedder::open(
-                remote,
-                dir.join("embeddings").join(format!("{file}.bin")),
-            ))
+            let cache = dir.join("embeddings").join(format!("{file}.bin"));
+            prune_embedding_caches(&cache);
+            Arc::new(ontology_index::CachedEmbedder::open(remote, cache))
         }
         None => remote,
     }))
+}
+
+/// The cache of a previous embedding model is dead weight once another is
+/// configured (a model change re-embeds everything): every `.bin` beside
+/// `keep` goes.
+fn prune_embedding_caches(keep: &std::path::Path) {
+    let Some(dir) = keep.parent() else {
+        return;
+    };
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for p in rd.filter_map(Result::ok).map(|e| e.path()) {
+        if p != keep && p.extension().is_some_and(|x| x == "bin") {
+            match std::fs::remove_file(&p) {
+                Ok(()) => {
+                    tracing::info!(file = %p.display(), "removed the embedding cache of another model")
+                }
+                Err(e) => {
+                    tracing::warn!(file = %p.display(), error = %e, "embedding cache not removed")
+                }
+            }
+        }
+    }
 }
 
 /// Resolve the LLM the given settings select, for callers outside the HTTP
@@ -4751,6 +4774,25 @@ impl IntoResponse for ApiError {
 
 #[cfg(test)]
 mod provider_tests {
+    #[test]
+    fn embedding_caches_of_other_models_are_removed() {
+        let dir = tempfile::tempdir().unwrap();
+        let emb = dir.path().join("embeddings");
+        std::fs::create_dir_all(&emb).unwrap();
+        for n in ["old_model.bin", "current.bin", "notes.txt"] {
+            std::fs::write(emb.join(n), b"x").unwrap();
+        }
+        super::prune_embedding_caches(&emb.join("current.bin"));
+        let mut left: Vec<String> = std::fs::read_dir(&emb)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        left.sort();
+        assert_eq!(left, ["current.bin", "notes.txt"]);
+        // A cache directory that does not exist yet is not an error.
+        super::prune_embedding_caches(&dir.path().join("nowhere").join("x.bin"));
+    }
+
     use super::*;
     use serde_json::json;
 

@@ -35,6 +35,14 @@ All notable changes to this project are listed here. The format follows
 
 ### Added
 
+- Nothing accumulates: the audit log rotates past 64 MB (the last ten
+  files kept, the hash chain running across them; `--audit-rotate-mb`,
+  `--audit-keep`); the embedding cache of a previous model is removed when
+  another is configured; the release workflow deletes untagged image
+  layers and image versions beyond the newest ten on GHCR; debug builds
+  carry line tables only (`Cargo.toml` profiles) and
+  `scripts/clean-build` sweeps stale build artifacts, test stores in the
+  temp directory and the npm cache.
 - Platform hardening: security headers on every response (`nosniff`,
   `X-Frame-Options: DENY`, a strict referrer policy, a content security
   policy forbidding framing, base and object injection, HSTS once the

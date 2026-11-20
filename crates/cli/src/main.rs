@@ -427,6 +427,13 @@ enum Cmd {
         /// the domains a question touched are logged, and a hash of it).
         #[arg(long)]
         audit_questions: bool,
+        /// Rotate the audit log past this size (MB; 0 never); the hash
+        /// chain runs across the rotated files.
+        #[arg(long, default_value_t = 64)]
+        audit_rotate_mb: u64,
+        /// Rotated audit files kept; older ones are deleted.
+        #[arg(long, default_value_t = 10)]
+        audit_keep: usize,
     },
 }
 
@@ -1153,6 +1160,8 @@ async fn real_main() -> Result<()> {
             audit_log,
             no_audit,
             audit_questions,
+            audit_rotate_mb,
+            audit_keep,
         } => {
             // Resolve a seed directory: explicit --seed wins, otherwise look
             // for ONTOLOGY_SEED_DIR, then <data>/seed, then ./seed. Seeding
@@ -1218,7 +1227,10 @@ async fn real_main() -> Result<()> {
             let audit = match (no_audit, audit_path) {
                 (false, Some(path)) => {
                     let log = ontology_server::audit::AuditLog::open(&path)
-                        .map(|l| l.keep_questions(audit_questions))
+                        .map(|l| {
+                            l.keep_questions(audit_questions)
+                                .rotate(audit_rotate_mb * 1024 * 1024, audit_keep)
+                        })
                         .with_context(|| format!("opening the audit log {}", path.display()))?;
                     tracing::info!(path = %path.display(), "audit log enabled");
                     Some(Arc::new(log))

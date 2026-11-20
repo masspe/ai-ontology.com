@@ -70,6 +70,29 @@ jobs:
           chmod +x cosign-linux-amd64
           ./cosign-linux-amd64 sign --yes "ghcr.io/${{ github.repository_owner }}/ai-ontology@${DIGEST}"
 
+  prune-images:
+    # Every release pushes tags and buildx leaves untagged layers: the
+    # untagged versions go, and tagged ones beyond the newest ten.
+    name: prune old images (ghcr.io)
+    needs: image
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      packages: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          gh api --paginate "/users/${OWNER}/packages/container/ai-ontology/versions?per_page=100" \
+            --jq '.[] | [.id, ((.metadata.container.tags // []) | join(","))] | @tsv' > versions.tsv
+          awk -F'\t' '$2==""{print $1}' versions.tsv > drop.txt
+          awk -F'\t' '$2!=""' versions.tsv | tail -n +11 | cut -f1 >> drop.txt
+          while read -r id; do
+            [ -n "$id" ] && gh api -X DELETE "/users/${OWNER}/packages/container/ai-ontology/versions/${id}" || true
+          done < drop.txt
+          echo "kept $(awk -F'\t' '$2!=""' versions.tsv | head -n 10 | wc -l) tagged versions, dropped $(wc -l < drop.txt)"
+
   release:
     name: github release
     needs: guard

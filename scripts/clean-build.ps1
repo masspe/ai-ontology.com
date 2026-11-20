@@ -51,3 +51,10 @@ foreach ($d in $dirs) {
 }
 $web = Join-Path $repo 'web\coverage'
 if (Test-Path $web) { Remove-Item -LiteralPath $web -Recurse -Force -ErrorAction SilentlyContinue }
+
+# The tests leave their stores in the temp directory; the npm cache is unbounded.
+$tmp = [System.IO.Path]::GetTempPath()
+Get-ChildItem -LiteralPath $tmp -Directory -Filter 'ontology-*' -ErrorAction SilentlyContinue |
+    Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-1) } |
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+if (Get-Command npm -ErrorAction SilentlyContinue) { & npm cache verify 2>$null | Out-Null }

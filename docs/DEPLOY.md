@@ -167,9 +167,21 @@ domains it touched** — the text of the question itself only with
 hash of the line before and its own (`prev`, `hash`): a line removed,
 altered or inserted breaks the chain, which `ontology audit-verify` checks
 (exit 1 naming the first bad line). `GET /audit?limit=100&who=<email>&path=/auth&since=<RFC 3339>`
-reads back the last lines, administrators only. The file is part of the
-`/data` volume; it is not in the store backup (§5), so copy it along with the
-volume. Options: `--audit-log <path>`, `--no-audit`, `--audit-questions`.
+reads back the last lines, administrators only. The file rotates past
+64 MB (`audit.<unix seconds>.jsonl` beside it, the last ten kept, the chain
+running across files; `--audit-rotate-mb`, `--audit-keep`). It is part of
+the `/data` volume; it is not in the store backup (§5), so copy it along
+with the volume. Options: `--audit-log <path>`, `--no-audit`,
+`--audit-questions`.
+
+### What never accumulates
+
+A backup is a mirror of the store in `/backups`, brought up to date on
+each `POST /backup` (only the changed files are copied), not a new folder
+every time. The embedding cache keeps one file per model and deletes the
+others' when the model changes. The audit log rotates. Container images:
+every release pushes tags to GHCR and the release workflow deletes the
+untagged layers and the tagged versions beyond the newest ten.
 
 ### Questions that must not leave the premises
 

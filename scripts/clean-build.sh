@@ -33,3 +33,6 @@ for d in $dirs; do
   fi
 done
 rm -rf "$repo/web/coverage"
+# The tests leave their stores in the temp directory; the npm cache is unbounded.
+find "${TMPDIR:-/tmp}" -maxdepth 1 -type d -name 'ontology-*' -mtime +1 -exec rm -rf {} + 2>/dev/null
+command -v npm >/dev/null 2>&1 && npm cache verify >/dev/null 2>&1
