@@ -1123,10 +1123,28 @@ impl AuthState {
 
 /// `POST /auth/refresh`: the refresh cookie for a new access token and a
 /// new cookie; the old secret is dead at once.
+/// The header a browser only sends from our own pages: a cross-site form
+/// or image cannot add it, so a request that uses the cookie must carry
+/// it (CSRF).
+pub(crate) const REQUESTED_WITH: &str = "ontology";
+
+fn same_site(headers: &axum::http::HeaderMap) -> bool {
+    headers
+        .get("x-requested-with")
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v == REQUESTED_WITH)
+}
+
 async fn refresh(State(s): State<AuthState>, headers: axum::http::HeaderMap) -> Response {
     let Some(secret) = refresh_secret(&headers) else {
         return error(StatusCode::UNAUTHORIZED, "No session");
     };
+    if !same_site(&headers) {
+        return error(
+            StatusCode::FORBIDDEN,
+            "X-Requested-With: ontology is required",
+        );
+    }
     match s.store.rotate_session(&secret) {
         Ok(Some((fresh, user))) => {
             let sid = s.store.session_of_secret(&fresh).unwrap_or_default();
@@ -1265,6 +1283,12 @@ async fn login(State(s): State<AuthState>, Json(c): Json<Credentials>) -> Respon
 /// access tokens of that session are refused from now on) and clears it.
 /// Without a cookie there is nothing to end; still `ok`.
 async fn logout(State(s): State<AuthState>, headers: axum::http::HeaderMap) -> Response {
+    if refresh_secret(&headers).is_some() && !same_site(&headers) {
+        return error(
+            StatusCode::FORBIDDEN,
+            "X-Requested-With: ontology is required",
+        );
+    }
     if let Some(sid) = refresh_secret(&headers).and_then(|v| s.store.session_of_secret(&v)) {
         if let Err(e) = s.store.end_sessions(|rec| rec.id != sid) {
             return store_error(e);

@@ -35,6 +35,15 @@ All notable changes to this project are listed here. The format follows
 
 ### Added
 
+- Platform hardening: security headers on every response (`nosniff`,
+  `X-Frame-Options: DENY`, a strict referrer policy, a content security
+  policy forbidding framing, base and object injection, HSTS once the
+  public URL is HTTPS); CORS restricted to the public URL once it is set;
+  request bodies capped at 8 MB except uploads (512 MB) and the import
+  assistant (64 MB); the cookie routes (`/auth/refresh`, `/auth/logout`)
+  require `X-Requested-With: ontology`, which the UI sends. `cargo deny`
+  in CI (`deny.toml`); releases carry a CycloneDX SBOM and the image is
+  signed with cosign (keyless). `docs/THREAT-MODEL.md`.
 - Scoped API keys: `POST /auth/keys` takes `clearances` (the sheets the
   key may see; absent: everything), `read_only` (every write refused;
   retrievals and questions are reads), `expires_in_days`;

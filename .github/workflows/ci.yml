@@ -110,6 +110,20 @@ jobs:
       - run: npm audit --audit-level=high
         working-directory: auth-server
 
+  deny:
+    # Licences, advisories, sources and duplicate versions of the Rust
+    # dependency tree, against `deny.toml`.
+    name: deny (cargo-deny)
+    needs: guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+      - uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172 # v2.87.20
+        with:
+          tool: cargo-deny
+      - run: cargo deny check
+
   auth-server:
     # The Node auth server has its own tests;
     # they run after the guard, never before.

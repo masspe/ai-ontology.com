@@ -1188,6 +1188,8 @@ pub fn build_router_with_config(state: AppState, cfg: RouterConfig) -> Router {
 }
 
 fn build_router_inner(state: AppState, cfg: RouterConfig) -> Router {
+    // Read later by the header and CORS layers, after `state` has moved.
+    let settings_handle = state.settings.clone();
     let RouterConfig {
         bearer_token,
         jwt,
@@ -1272,9 +1274,20 @@ fn build_router_inner(state: AppState, cfg: RouterConfig) -> Router {
         .route("/compact", post(compact))
         .route("/backup", post(backup))
         .route("/reset", post(reset_all))
-        .route("/upload", post(upload))
-        .route("/ingest/analyze", post(ingest_review::analyze))
-        .route("/ingest/apply", post(ingest_review::apply))
+        .route(
+            "/upload",
+            post(upload).layer(axum::extract::DefaultBodyLimit::max(BODY_LIMIT_UPLOAD)),
+        )
+        .route(
+            "/ingest/analyze",
+            post(ingest_review::analyze)
+                .layer(axum::extract::DefaultBodyLimit::max(BODY_LIMIT_INGEST)),
+        )
+        .route(
+            "/ingest/apply",
+            post(ingest_review::apply)
+                .layer(axum::extract::DefaultBodyLimit::max(BODY_LIMIT_INGEST)),
+        )
         .route("/export", get(export_handler))
         .route("/files", get(list_files))
         .route("/files/:id", get(get_file).delete(delete_file))
@@ -1387,19 +1400,84 @@ fn build_router_inner(state: AppState, cfg: RouterConfig) -> Router {
         }));
     }
 
+    // Route layers above set larger limits; everything else is capped here.
+    app = app.layer(axum::extract::DefaultBodyLimit::max(BODY_LIMIT_DEFAULT));
+
     // Outermost — every response gets an X-Request-Id and every span gets one.
     app = app.layer(middleware::from_fn(request_id_layer));
 
-    // Permissive CORS — fine for the demo / local React dev server. In
-    // production restrict origins via CorsLayer::new().allow_origin(...).
+    // The browser-side headers on every response; HSTS once the public
+    // URL says the server is reached over HTTPS.
+    let settings_for_headers = settings_handle.clone();
+    app = app.layer(middleware::from_fn(move |req, next| {
+        let settings = settings_for_headers.clone();
+        async move { security_headers_layer(req, next, settings).await }
+    }));
+
+    // CORS: any origin until a public URL is configured (the demo, the
+    // local React dev server), then that origin only. Cookies are never
+    // sent cross-origin (no `allow_credentials`): the API is bearer-token.
+    let settings_for_cors = settings_handle.clone();
     app = app.layer(
         CorsLayer::new()
-            .allow_origin(Any)
+            .allow_origin(tower_http::cors::AllowOrigin::predicate(
+                move |origin: &HeaderValue, _| {
+                    let public = settings_for_cors.read().signin.public_url.clone();
+                    public.is_empty() || origin.as_bytes() == public.as_bytes()
+                },
+            ))
             .allow_methods(Any)
             .allow_headers(Any),
     );
 
     app
+}
+
+/// Request bodies: 8 MB unless a route says otherwise (uploads and the
+/// import assistant carry files and extracted text).
+const BODY_LIMIT_DEFAULT: usize = 8 * 1024 * 1024;
+const BODY_LIMIT_UPLOAD: usize = 512 * 1024 * 1024;
+const BODY_LIMIT_INGEST: usize = 64 * 1024 * 1024;
+
+/// What every response carries so a browser does not sniff, frame or
+/// leak: `nosniff`, no framing, a strict referrer, no object or base
+/// injection; and HSTS when the operator says the server is behind HTTPS.
+async fn security_headers_layer(
+    req: Request<axum::body::Body>,
+    next: Next,
+    settings: Arc<PlRwLock<Settings>>,
+) -> Response {
+    let https = settings.read().signin.public_url.starts_with("https://");
+    let mut resp = next.run(req).await;
+    let h = resp.headers_mut();
+    let set = |h: &mut HeaderMap, name: &'static str, value: &'static str| {
+        h.entry(name).or_insert(HeaderValue::from_static(value));
+    };
+    set(h, "x-content-type-options", "nosniff");
+    set(h, "x-frame-options", "DENY");
+    set(h, "referrer-policy", "strict-origin-when-cross-origin");
+    set(
+        h,
+        "permissions-policy",
+        "camera=(), microphone=(), geolocation=()",
+    );
+    // shortcut: no script-src/connect-src — the UI reads PDFs and OCRs
+    // images in the browser with workers and language data whose origins
+    // the operator would have to list; upgrade to a full policy once
+    // those assets are served by the binary.
+    set(
+        h,
+        "content-security-policy",
+        "frame-ancestors 'none'; base-uri 'self'; object-src 'none'; form-action 'self'",
+    );
+    if https {
+        set(
+            h,
+            "strict-transport-security",
+            "max-age=31536000; includeSubDomains",
+        );
+    }
+    resp
 }
 
 /// Token-bucket-ish rate limiter keyed by remote IP. Uses `parking_lot::Mutex`

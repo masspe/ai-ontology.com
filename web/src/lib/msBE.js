@@ -71,7 +71,9 @@ async function refreshSession() {
 }
 
 async function requestOnce(method, path, body) {
-  const headers = { "accept": "application/json" };
+  // The custom header is what lets the server tell our own pages from a
+  // cross-site form when the refresh cookie is in play (CSRF).
+  const headers = { "accept": "application/json", "x-requested-with": "ontology" };
   if (body !== undefined) headers["content-type"] = "application/json";
   const token = tokenStore.get();
   if (token) headers["authorization"] = `Bearer ${token}`;

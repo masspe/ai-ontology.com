@@ -1,0 +1,57 @@
+# cargo-deny: advisories, licences, sources and duplicate versions of the
+# dependency tree, checked in CI (`deny` job) — SECURITY.md.
+
+[graph]
+all-features = false
+
+[advisories]
+version = 2
+# A vulnerability in the tree fails the job; unmaintained or yanked crates
+# are warnings until replaced.
+yanked = "warn"
+# A crate nobody maintains any more is our problem when we depend on it
+# directly; three levels down it is the maintainers' upstream's.
+unmaintained = "workspace"
+ignore = []
+
+[licenses]
+version = 2
+# The workspace is AGPL-3.0-or-later; its dependencies must be permissive
+# or weak-copyleft. Anything else is a failed check, not a surprise at
+# release time.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "MPL-2.0",
+    "CC0-1.0",
+    "OpenSSL",
+    "BSL-1.0",
+    "CDLA-Permissive-2.0",
+    "AGPL-3.0-or-later",
+    "AGPL-3.0",
+]
+confidence-threshold = 0.8
+
+[[licenses.clarify]]
+name = "ring"
+expression = "MIT AND ISC AND OpenSSL"
+license-files = [{ path = "LICENSE", hash = 0xbd0eed23 }]
+
+[bans]
+multiple-versions = "warn"
+# The workspace crates depend on each other by path and version; a
+# wildcard on a crates.io dependency would be caught by review.
+wildcards = "allow"
+highlight = "all"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

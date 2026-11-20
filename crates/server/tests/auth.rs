@@ -969,6 +969,7 @@ async fn sessions_refresh_rotate_and_end() {
                 .method(method)
                 .uri(uri)
                 .header("cookie", cookie)
+                .header("x-requested-with", "ontology")
                 .body(Body::empty())
                 .unwrap();
             let resp = app.oneshot(req).await.unwrap();

@@ -147,7 +147,7 @@ describe("request()", () => {
     const c = call(f);
     expect(c.url).toBe("/auth/me");
     expect(c.method).toBe("GET");
-    expect(c.headers).toEqual({ accept: "application/json" });
+    expect(c.headers).toEqual({ accept: "application/json", "x-requested-with": "ontology" });
     expect(c.init.credentials).toBe("include");
     expect(c.init.body).toBeUndefined();
   });
