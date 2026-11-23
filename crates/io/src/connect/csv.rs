@@ -20,13 +20,23 @@ use crate::charset::decode_to_utf8;
 pub struct CsvConnector {
     /// A path, or `http://` / `https://`.
     pub location: String,
+    /// The address the host policy checked: the URL is fetched there and
+    /// nowhere else (no second DNS answer, no redirect).
+    pub pin: Option<std::net::IpAddr>,
 }
 
 impl CsvConnector {
     pub fn new(location: impl Into<String>) -> Self {
         Self {
             location: location.into(),
+            pin: None,
         }
+    }
+
+    /// Fetch the URL at `ip` only: see `pin`.
+    pub fn pinned(mut self, ip: std::net::IpAddr) -> Self {
+        self.pin = Some(ip);
+        self
     }
 
     fn is_url(&self) -> bool {
@@ -36,8 +46,18 @@ impl CsvConnector {
 
     async fn read(&self) -> Result<String, ConnectError> {
         let raw = if self.is_url() {
-            let resp = reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(60))
+            let mut client = reqwest::Client::builder().timeout(std::time::Duration::from_secs(60));
+            if let Some(ip) = self.pin {
+                let host = reqwest::Url::parse(&self.location)
+                    .ok()
+                    .and_then(|u| u.host_str().map(str::to_string))
+                    .unwrap_or_default();
+                // Port 0: the scheme's own port.
+                client = client
+                    .resolve(&host, std::net::SocketAddr::new(ip, 0))
+                    .redirect(reqwest::redirect::Policy::none());
+            }
+            let resp = client
                 .build()
                 .map_err(|e| ConnectError::Connect(e.to_string()))?
                 .get(&self.location)
@@ -45,6 +65,13 @@ impl CsvConnector {
                 .await
                 .and_then(|r| r.error_for_status())
                 .map_err(|e| ConnectError::Connect(e.to_string()))?;
+            if resp.status().is_redirection() {
+                return Err(ConnectError::Connect(format!(
+                    "{} redirects elsewhere ({}): give the source the final address",
+                    self.location,
+                    resp.status()
+                )));
+            }
             resp.bytes()
                 .await
                 .map_err(|e| ConnectError::Connect(e.to_string()))?
@@ -242,5 +269,43 @@ mod tests {
             vec![vec![Value::String("1".into()), Value::String("2".into())]]
         );
         assert!(CsvConnector::parse("").0.is_empty());
+    }
+
+    /// Serve one canned HTTP response per connection, in order.
+    fn serve(responses: Vec<&'static str>) -> u16 {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for body in responses {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut buf = [0u8; 2048];
+                let _ = stream.read(&mut buf);
+                let _ = stream.write_all(body.as_bytes());
+            }
+        });
+        port
+    }
+
+    #[tokio::test]
+    async fn a_pinned_url_is_fetched_at_its_pin_and_a_redirect_is_refused() {
+        let port = serve(vec![
+            "HTTP/1.1 200 OK\r\ncontent-length: 8\r\nconnection: close\r\n\r\nid\n1\n2\n\n",
+            "HTTP/1.1 302 Found\r\nlocation: http://127.0.0.1:1/\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+        ]);
+        // A name no resolver knows: only the pin can lead to the listener.
+        let c = CsvConnector::new(format!("http://files.invalid:{port}/t.csv"))
+            .pinned("127.0.0.1".parse().unwrap());
+        let rs = c
+            .query(&Query {
+                from: "data".into(),
+                after: None,
+                max_rows: 0,
+            })
+            .await
+            .unwrap();
+        assert_eq!(rs.rows.len(), 2);
+        let e = c.ping().await.unwrap_err().to_string();
+        assert!(e.contains("redirects elsewhere (302"), "{e}");
     }
 }

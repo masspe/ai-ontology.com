@@ -835,3 +835,123 @@ async fn a_named_query_answers_a_question_from_the_live_source() {
     .await;
     assert_eq!(st, StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn a_source_is_counted_on_metrics_and_its_circuit_opens_over_http() {
+    let w = world("health").await;
+    let sid = make_source(&w).await;
+    let mid = make_mapping(&w, sid, json!({})).await;
+    let (st, v) = call(
+        &w.app,
+        "POST",
+        &format!("/sources/{sid}/mappings/{mid}/run"),
+        Some(&w.admin),
+        None,
+    )
+    .await;
+    assert_eq!(st, StatusCode::ACCEPTED, "{v}");
+    let job = wait_job(&w, v["job"].as_u64().unwrap()).await;
+    assert_eq!(job["status"], "done", "{job}");
+
+    let metrics = |app: Router, token: String| async move {
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/metrics")
+                    .header("authorization", format!("Bearer {token}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        String::from_utf8(to_bytes(resp.into_body(), 1 << 20).await.unwrap().to_vec()).unwrap()
+    };
+    let text = metrics(w.app.clone(), w.admin.clone()).await;
+    for line in [
+        "# TYPE ontology_source_calls_total counter",
+        "ontology_source_calls_total{source=\"erp\"} 1",
+        "ontology_source_rows_total{source=\"erp\"} 3",
+        "ontology_source_syncs_total{source=\"erp\"} 1",
+        "ontology_source_sync_failures_total{source=\"erp\"} 0",
+        "ontology_source_failures_total{source=\"erp\"} 0",
+        "ontology_source_lookups_total{source=\"erp\"} 0",
+        "# TYPE ontology_source_breaker_open gauge",
+        "ontology_source_breaker_open{source=\"erp\"} 0",
+    ] {
+        assert!(text.contains(line), "missing `{line}` in:\n{text}");
+    }
+
+    // The engine goes away: five listings fail, the sixth is not sent.
+    w.state
+        .sources
+        .register_test_connector("erp", Arc::new(MemoryConnector::down("connection refused")));
+    for _ in 0..5 {
+        let (st, v) = call(
+            &w.app,
+            "GET",
+            &format!("/sources/{sid}/tables"),
+            Some(&w.admin),
+            None,
+        )
+        .await;
+        assert_eq!(st, StatusCode::BAD_REQUEST, "{v}");
+        assert!(v.to_string().contains("connection refused"), "{v}");
+    }
+    let (st, v) = call(
+        &w.app,
+        "GET",
+        &format!("/sources/{sid}/tables"),
+        Some(&w.admin),
+        None,
+    )
+    .await;
+    assert_eq!(st, StatusCode::BAD_REQUEST, "{v}");
+    assert!(v.to_string().contains("circuit open"), "{v}");
+    // A sync started now fails at once, and is counted.
+    let (_, v) = call(
+        &w.app,
+        "POST",
+        &format!("/sources/{sid}/mappings/{mid}/run"),
+        Some(&w.admin),
+        None,
+    )
+    .await;
+    let job = wait_job(&w, v["job"].as_u64().unwrap()).await;
+    assert_eq!(job["status"], "failed", "{job}");
+    assert!(job.to_string().contains("circuit open"), "{job}");
+    let text = metrics(w.app.clone(), w.admin.clone()).await;
+    assert!(
+        text.contains("ontology_source_breaker_open{source=\"erp\"} 1"),
+        "{text}"
+    );
+    assert!(
+        text.contains("ontology_source_sync_failures_total{source=\"erp\"} 1"),
+        "{text}"
+    );
+
+    // The engine is back: "Test connection" goes through and closes it.
+    w.state
+        .sources
+        .register_test_connector("erp", w.orders.clone());
+    let (st, v) = call(
+        &w.app,
+        "POST",
+        &format!("/sources/{sid}/test"),
+        Some(&w.admin),
+        None,
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert_eq!(v["ok"], true, "{v}");
+    let (st, v) = call(
+        &w.app,
+        "GET",
+        &format!("/sources/{sid}/tables"),
+        Some(&w.admin),
+        None,
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert_eq!(w.state.sources.health(sid).failures_in_a_row, 0);
+}

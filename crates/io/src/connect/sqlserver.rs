@@ -20,6 +20,9 @@ use super::{quote_ansi, ColumnInfo, ConnectError, Connector, Query, ResultSet, T
 #[derive(Debug, Clone)]
 pub struct SqlServerConnector {
     pub host: String,
+    /// The address the host policy checked for `host`: connect there, so
+    /// a second DNS answer cannot lead elsewhere. The name still goes to TLS.
+    pub addr: Option<std::net::IpAddr>,
     pub port: u16,
     pub database: String,
     pub user: String,
@@ -50,9 +53,11 @@ impl SqlServerConnector {
             config.trust_cert();
         }
         let connect = async {
-            let tcp = TcpStream::connect(config.get_addr())
-                .await
-                .map_err(|e| ConnectError::Connect(format!("{}:{}: {e}", self.host, self.port)))?;
+            let tcp = match self.addr {
+                Some(ip) => TcpStream::connect((ip, self.port)).await,
+                None => TcpStream::connect(config.get_addr()).await,
+            }
+            .map_err(|e| ConnectError::Connect(format!("{}:{}: {e}", self.host, self.port)))?;
             tcp.set_nodelay(true)
                 .map_err(|e| ConnectError::Connect(e.to_string()))?;
             Client::connect(config, tcp.compat_write())

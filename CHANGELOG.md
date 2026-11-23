@@ -35,6 +35,14 @@ All notable changes to this project are listed here. The format follows
 
 ### Added
 
+- Data sources fail well. Every call to a source ends within its
+  timeout (the ODBC driver gets the same limit for the statement). Five
+  calls in a row without an answer open the source's circuit for a
+  minute: syncs and lookups fail at once instead of queueing behind a
+  dead engine; *Test connection* goes through and closes it. `/metrics`
+  carries one series per source (`ontology_source_calls_total`,
+  `_failures_total`, `_rows_total`, `_lookups_total`, `_syncs_total`,
+  `_sync_failures_total`, `ontology_source_breaker_open`).
 - Named queries: a data source can answer a question live — a trigger
   (a regular expression with named groups) and an administrator's SELECT
   with `{group}` blanks; a matching question binds the groups as safe
@@ -208,6 +216,15 @@ All notable changes to this project are listed here. The format follows
   and description the new record does not set, so the cross-reference,
   the sources and the schema dump can each write their part of one Table
   or Field sheet. On for the three `erp` importers.
+
+### Security
+
+- The host policy of data sources judged an IPv4 address written as IPv6
+  (`::ffff:169.254.169.254`, the NAT64 prefix) as public; it is now
+  judged as the IPv4 address it is, and the carrier-NAT range, `0.0.0.0/8`,
+  broadcast and multicast are refused too. The address that passed the
+  check is the one the connector connects to (no second DNS lookup), and
+  a CSV URL that redirects is refused instead of followed.
 
 ## [0.2.0] - 2026-10-21
 

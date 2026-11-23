@@ -359,6 +359,7 @@ into your Prometheus scrape config alongside the bearer token.
 | `ontology_store_next_seq`, `ontology_store_syncs` | Next global sequence number; `fdatasync` calls since the store was opened. |
 | `ontology_store_last_compaction_seconds`, `_timestamp_seconds`, `_partitions_removed` | The last compaction since open (absent until one ran). |
 | `ontology_stream_sealed_segments{ns}`, `ontology_stream_data_bytes{ns}`, `ontology_stream_records{ns}`, `ontology_stream_last_seq{ns}`, `ontology_stream_syncs{ns}` | One series per storage domain (`ns="meta"` is the schema stream): sealed segments, bytes of `.data`, records, last sequence number, syncs since open. |
+| `ontology_source_calls_total{source}`, `_failures_total`, `_rows_total`, `_lookups_total`, `_syncs_total`, `_sync_failures_total`, `ontology_source_breaker_open{source}` | One series per data source, since the server started: calls to its engine and those that failed, rows read, questions that got rows from one of its named queries, syncs ended and failed, 1 while its circuit is open. |
 | `ontology_domain_tier{ns,tier}` | 1 on the current memory tier of each domain (`p0` everything in memory, `p1` payloads on disk). |
 
 The per-stream families exist only on the segment store (the default).

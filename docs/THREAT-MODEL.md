@@ -63,6 +63,9 @@ tenant.
 | A copy of the data directory | Provider keys sealed (AES-256-GCM, master key); password hashes; key fingerprints | `secrets.rs` |
 | Tampering with the audit log | Hash chain; `ontology audit-verify` | `audit.rs` |
 | Clickjacking, MIME sniffing, referrer leaks | `X-Frame-Options`, `Content-Security-Policy: frame-ancestors 'none'; base-uri 'self'; object-src 'none'`, `nosniff`, `Referrer-Policy`, HSTS when the public URL is HTTPS | `security_headers_layer` |
+| A data source pointed at an internal address (SSRF), or rebinding to one after the check | Private, local and metadata ranges refused per source unless allowed, IPv4-in-IPv6 forms included; the checked address is the one connected to; redirects refused; administrators only | `sources.rs` (`check_host`), `crates/io/src/connect/` |
+| A question or a model writing SQL | Named queries: the administrator's SELECT, parameters bound as quoted literals from a restricted alphabet; rows rendered as data | `sources.rs` (`bind_query`) |
+| A dead or slow engine holding the server | A deadline on every call, a circuit breaker per source, one sync per mapping at a time, a row cap | `sources.rs` (`Guarded`) |
 | Oversized requests | Body limits: 8 MB by default, more only on upload and ingest routes | `build_router` |
 | A compromised dependency | `cargo audit` and `cargo deny` (advisories, licences, sources) in CI; `npm audit`; lockfiles; pinned actions; `ignore-scripts` | `.github/workflows/ci.yml`, `deny.toml` |
 | A tampered release | Images signed with cosign (keyless, GitHub OIDC); SBOM (CycloneDX) attached to every release | `.github/workflows/release.yml` |

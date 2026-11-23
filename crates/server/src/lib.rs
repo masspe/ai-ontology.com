@@ -2092,6 +2092,7 @@ async fn metrics(State(s): State<AppState>) -> ([(String, String); 1], String) {
             m.resident_payloads,
         ));
     }
+    body.push_str(&s.sources.metrics());
     // The store lock may be held by a compaction: never wait for it on a
     // runtime worker.
     let store = s.store.clone();

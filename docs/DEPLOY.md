@@ -204,7 +204,18 @@ driver manager and the engine's driver on the host: `cargo build
 driver mounted). A host that resolves to a loopback, link-local or private
 address is refused unless the source says *the server is on the private
 network* (an administrator typing a host is the classic way to reach a
-cloud's metadata service).
+cloud's metadata service). The address that passed the check is the one
+connected to (a second DNS answer cannot lead elsewhere), and a file URL
+that redirects is refused: give the final address.
+
+**When the engine does not answer.** Every call to a source ends within
+its timeout (60 s unless the source says otherwise; the ODBC driver is
+given the same limit for the statement). After five calls in a row that
+got no answer, the source's circuit opens: for a minute, syncs and
+lookups fail at once with *circuit open* instead of queueing behind a
+dead engine, then one call is let through. *Test connection* always goes
+through, and closes the circuit when the engine answers. A statement the
+engine refuses is an answer: it never opens the circuit.
 
 **OpenEdge (Progress) through ODBC.** The SQL engine, not the ABL broker:
 the DBA confirms the SQL broker's port and that it is started with SQL

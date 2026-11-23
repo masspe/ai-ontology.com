@@ -21,6 +21,7 @@ use std::collections::HashMap;
 use std::net::{IpAddr, ToSocketAddrs};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -29,7 +30,8 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use ontology_graph::{ConceptPatch, PropertyValue};
 use ontology_io::connect::{
-    Connector, CsvConnector, Mapping as RowMapping, Query as ConnectorQuery, RowSource,
+    ColumnInfo, ConnectError, Connector, CsvConnector, Mapping as RowMapping,
+    Query as ConnectorQuery, ResultSet, RowSource, TableInfo,
 };
 use ontology_io::{ingest_records_with, IngestOptions};
 use parking_lot::Mutex;
@@ -196,6 +198,7 @@ pub async fn lookup(state: &AppState, question: &str, unrestricted: bool) -> Opt
                     continue;
                 }
             };
+            state.sources.note(source.id, |h| h.lookups += 1);
             return Some(Lookup {
                 context: render_rows(q, &rs),
                 query: q.name.clone(),
@@ -265,6 +268,8 @@ pub struct SourceStore {
     inner: Mutex<File>,
     /// Test hook: connectors for sources of kind `memory`, by name.
     test_connectors: Mutex<TestConnectors>,
+    /// Counters and breaker state by source id, since the server started.
+    health: Health,
 }
 
 impl std::fmt::Debug for SourceStore {
@@ -287,6 +292,7 @@ impl SourceStore {
             path: None,
             inner: Mutex::new(File::default()),
             test_connectors: Mutex::new(HashMap::new()),
+            health: Health::default(),
         }
     }
 
@@ -309,6 +315,7 @@ impl SourceStore {
             path: Some(path),
             inner: Mutex::new(inner),
             test_connectors: Mutex::new(HashMap::new()),
+            health: Health::default(),
         })
     }
 
@@ -355,6 +362,82 @@ impl SourceStore {
         let out = s.clone();
         self.persist(&inner)?;
         Ok(out)
+    }
+
+    fn note(&self, id: u64, f: impl FnOnce(&mut SourceHealth)) {
+        f(self.health.lock().entry(id).or_default())
+    }
+
+    /// A source's counters and breaker state (zeroes before its first call).
+    pub fn health(&self, id: u64) -> SourceHealth {
+        self.health.lock().get(&id).cloned().unwrap_or_default()
+    }
+
+    /// The per-source families of `/metrics`, labelled by source name.
+    pub fn metrics(&self) -> String {
+        type Read = fn(&SourceHealth) -> u64;
+        let families: [(&str, &str, &str, Read); 7] = [
+            ("calls_total", "counter", "Calls made to the source.", |h| {
+                h.calls
+            }),
+            (
+                "failures_total",
+                "counter",
+                "Calls to the source that failed.",
+                |h| h.failures,
+            ),
+            ("rows_total", "counter", "Rows read from the source.", |h| {
+                h.rows
+            }),
+            (
+                "lookups_total",
+                "counter",
+                "Questions that got rows from a named query of the source.",
+                |h| h.lookups,
+            ),
+            (
+                "syncs_total",
+                "counter",
+                "Syncs of the source that ended.",
+                |h| h.syncs,
+            ),
+            (
+                "sync_failures_total",
+                "counter",
+                "Syncs of the source that failed.",
+                |h| h.sync_failures,
+            ),
+            (
+                "breaker_open",
+                "gauge",
+                "1 while the source's circuit is open.",
+                |h| u64::from(h.open_until.is_some_and(|t| t > Instant::now())),
+            ),
+        ];
+        let sources = self.list();
+        let health = self.health.lock().clone();
+        let mut out = String::new();
+        if sources.is_empty() {
+            return out;
+        }
+        for (name, kind, help, read) in families {
+            out.push_str(&format!(
+                "# HELP ontology_source_{name} {help}\n# TYPE ontology_source_{name} {kind}\n"
+            ));
+            for s in &sources {
+                let label = s
+                    .name
+                    .replace('\\', "\\\\")
+                    .replace('"', "\\\"")
+                    .replace('\n', "\\n");
+                let h = health.get(&s.id).cloned().unwrap_or_default();
+                out.push_str(&format!(
+                    "ontology_source_{name}{{source=\"{label}\"}} {}\n",
+                    read(&h)
+                ));
+            }
+        }
+        out
     }
 
     /// The mappings due now: `(source id, mapping id)` for every schedule
@@ -416,51 +499,87 @@ fn minutes_between(from: &str, to: &str) -> u64 {
     }
 }
 
-/// Where the engine lives: refused when the address is ours, the
-/// link's, a cloud's metadata service or a private range — unless the
-/// administrator allowed it for this source (SSRF through a host an
-/// administrator types is the classic hole; they still must say so).
-pub fn check_host(host: &str, port: u16, allow_private: bool) -> Result<(), ApiError> {
+/// An address no source may point at without the administrator saying
+/// so: ours, the link's, a private range, a cloud's metadata service —
+/// also when it hides in an IPv6 form of an IPv4 address.
+fn is_private(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            let o = v4.octets();
+            v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+                || v4.is_broadcast()
+                || v4.is_multicast()
+                || o[0] == 0
+                // 100.64.0.0/10: carrier NAT, and a cloud's metadata address.
+                || o[0] == 100 && (o[1] & 0xc0) == 64
+        }
+        IpAddr::V6(v6) => {
+            let s = v6.segments();
+            // ::ffff:a.b.c.d and the NAT64 prefix 64:ff9b::/96 carry an IPv4 address.
+            let embedded = v6.to_ipv4_mapped().or_else(|| {
+                (s[..6] == [0x64, 0xff9b, 0, 0, 0, 0]).then(|| {
+                    std::net::Ipv4Addr::new(
+                        (s[6] >> 8) as u8,
+                        s[6] as u8,
+                        (s[7] >> 8) as u8,
+                        s[7] as u8,
+                    )
+                })
+            });
+            match embedded {
+                Some(v4) => is_private(IpAddr::V4(v4)),
+                None => {
+                    v6.is_loopback()
+                        || v6.is_unspecified()
+                        || v6.is_multicast()
+                        || (s[0] & 0xfe00) == 0xfc00
+                        || (s[0] & 0xffc0) == 0xfe80
+                }
+            }
+        }
+    }
+}
+
+/// Where the engine lives: refused when an address of the host is
+/// private or local — unless the administrator allowed it for this
+/// source (SSRF through a host an administrator types is the classic
+/// hole; they still must say so). Returns the address that was checked,
+/// for the connector to use: resolving again could answer differently.
+pub fn check_host(host: &str, port: u16, allow_private: bool) -> Result<Option<IpAddr>, ApiError> {
     if host.trim().is_empty() {
         return Err(ApiError::BadRequest("a host is required".into()));
     }
     if allow_private {
-        return Ok(());
+        return Ok(None);
     }
     let addrs: Vec<IpAddr> = (host, port)
         .to_socket_addrs()
         .map_err(|e| ApiError::BadRequest(format!("host `{host}`: {e}")))?
         .map(|a| a.ip())
         .collect();
-    for ip in addrs {
-        let private = match ip {
-            IpAddr::V4(v4) => {
-                v4.is_loopback()
-                    || v4.is_private()
-                    || v4.is_link_local()
-                    || v4.is_unspecified()
-                    || v4.octets()[0] == 169 && v4.octets()[1] == 254
-                    || v4.octets() == [100, 100, 100, 200]
-            }
-            IpAddr::V6(v6) => {
-                v6.is_loopback()
-                    || v6.is_unspecified()
-                    || (v6.segments()[0] & 0xfe00) == 0xfc00
-                    || (v6.segments()[0] & 0xffc0) == 0xfe80
-            }
-        };
-        if private {
-            return Err(ApiError::Forbidden(format!(
-                "host `{host}` resolves to {ip}, a private or local address: set allow_private_hosts on the source if that is where the engine is"
-            )));
-        }
+    if let Some(ip) = addrs.iter().find(|ip| is_private(**ip)) {
+        return Err(ApiError::Forbidden(format!(
+            "host `{host}` resolves to {ip}, a private or local address: set allow_private_hosts on the source if that is where the engine is"
+        )));
     }
-    Ok(())
+    Ok(addrs.first().copied())
 }
 
 /// The connector of a source, built per use (connections are not
 /// pooled; a sync opens one).
 pub fn connector_for(store: &SourceStore, s: &DataSource) -> Result<Arc<dyn Connector>, ApiError> {
+    Ok(Arc::new(Guarded {
+        inner: raw_connector(store, s)?,
+        source: s.id,
+        timeout: Duration::from_secs(s.timeout_secs.max(1)),
+        health: store.health.clone(),
+    }))
+}
+
+fn raw_connector(store: &SourceStore, s: &DataSource) -> Result<Arc<dyn Connector>, ApiError> {
     match s.kind.as_str() {
         "memory" => store
             .test_connectors
@@ -483,16 +602,19 @@ pub fn connector_for(store: &SourceStore, s: &DataSource) -> Result<Arc<dyn Conn
                     .and_then(|r| r.split('/').next())
                     .and_then(|h| h.split(':').next())
                     .unwrap_or("");
-                check_host(host, 443, s.allow_private_hosts)?;
+                if let Some(ip) = check_host(host, 443, s.allow_private_hosts)? {
+                    return Ok(Arc::new(CsvConnector::new(s.location.clone()).pinned(ip)));
+                }
             }
             Ok(Arc::new(CsvConnector::new(s.location.clone())))
         }
         #[cfg(feature = "sqlserver")]
         "sqlserver" => {
-            check_host(&s.host, s.port, s.allow_private_hosts)?;
+            let addr = check_host(&s.host, s.port, s.allow_private_hosts)?;
             Ok(Arc::new(
                 ontology_io::connect::sqlserver::SqlServerConnector {
                     host: s.host.clone(),
+                    addr,
                     port: if s.port == 0 { 1433 } else { s.port },
                     database: s.database.clone(),
                     user: s.user.clone(),
@@ -524,6 +646,113 @@ pub fn connector_for(store: &SourceStore, s: &DataSource) -> Result<Arc<dyn Conn
             },
             if cfg!(feature = "odbc") { ", odbc" } else { "" },
         ))),
+    }
+}
+
+// ---------------------------------------------------------------- health
+
+/// Calls in a row the engine did not answer before its circuit opens.
+const BREAKER_FAILURES: u32 = 5;
+/// How long an open circuit refuses calls before letting one through.
+const BREAKER_OPEN: Duration = Duration::from_secs(60);
+
+/// A source since the server started: what its circuit breaker decides
+/// on and what `/metrics` serves.
+#[derive(Debug, Default, Clone)]
+pub struct SourceHealth {
+    pub calls: u64,
+    pub failures: u64,
+    pub rows: u64,
+    pub lookups: u64,
+    pub syncs: u64,
+    pub sync_failures: u64,
+    /// Calls the engine did not answer, in a row.
+    pub failures_in_a_row: u32,
+    pub open_until: Option<Instant>,
+}
+
+type Health = Arc<Mutex<HashMap<u64, SourceHealth>>>;
+
+/// A connector behind its source's deadline and circuit breaker: every
+/// call ends within the source's timeout, and an engine that stopped
+/// answering is left alone for a minute instead of being hit by every
+/// sync and every question.
+struct Guarded {
+    inner: Arc<dyn Connector>,
+    source: u64,
+    timeout: Duration,
+    health: Health,
+}
+
+impl Guarded {
+    /// `probe`: "Test connection" goes through an open circuit, and
+    /// closes it when the engine answers.
+    async fn call<T>(
+        &self,
+        probe: bool,
+        work: impl std::future::Future<Output = Result<T, ConnectError>>,
+    ) -> Result<T, ConnectError> {
+        let open_until = self
+            .health
+            .lock()
+            .get(&self.source)
+            .and_then(|h| h.open_until);
+        if let Some(wait) = open_until.and_then(|t| t.checked_duration_since(Instant::now())) {
+            if !probe {
+                return Err(ConnectError::Connect(format!(
+                    "circuit open after {BREAKER_FAILURES} failures in a row: next try in {} s, or test the connection",
+                    wait.as_secs() + 1
+                )));
+            }
+        }
+        let out = tokio::time::timeout(self.timeout, work)
+            .await
+            .unwrap_or_else(|_| {
+                Err(ConnectError::Connect(format!(
+                    "no answer within {} s",
+                    self.timeout.as_secs_f32()
+                )))
+            });
+        let mut health = self.health.lock();
+        let h = health.entry(self.source).or_default();
+        h.calls += 1;
+        match &out {
+            Err(ConnectError::Connect(_)) => {
+                h.failures += 1;
+                h.failures_in_a_row += 1;
+                if h.failures_in_a_row >= BREAKER_FAILURES {
+                    h.open_until = Some(Instant::now() + BREAKER_OPEN);
+                }
+            }
+            // A refused statement is still an answer: the engine is there.
+            other => {
+                h.failures += u64::from(other.is_err());
+                h.failures_in_a_row = 0;
+                h.open_until = None;
+            }
+        }
+        out
+    }
+}
+
+#[async_trait::async_trait]
+impl Connector for Guarded {
+    async fn ping(&self) -> Result<(), ConnectError> {
+        self.call(true, self.inner.ping()).await
+    }
+
+    async fn tables(&self) -> Result<Vec<TableInfo>, ConnectError> {
+        self.call(false, self.inner.tables()).await
+    }
+
+    async fn columns(&self, table: &str) -> Result<Vec<ColumnInfo>, ConnectError> {
+        self.call(false, self.inner.columns(table)).await
+    }
+
+    async fn query(&self, q: &ConnectorQuery) -> Result<ResultSet, ConnectError> {
+        let rs = self.call(false, self.inner.query(q)).await?;
+        self.health.lock().entry(self.source).or_default().rows += rs.rows.len() as u64;
+        Ok(rs)
     }
 }
 
@@ -768,6 +997,10 @@ pub fn start_sync(
             ),
             Err(e) => (format!("failed: {e}"), Value::Null),
         };
+        st.sources.note(source_id, |h| {
+            h.syncs += 1;
+            h.sync_failures += u64::from(outcome.is_err());
+        });
         let watermark = outcome.as_ref().ok().and_then(|r| r.watermark.clone());
         let _ = st.sources.update(source_id, |s| {
             if let Some(m) = s.mappings.iter_mut().find(|m| m.id == mapping_id) {
@@ -1536,16 +1769,174 @@ mod tests {
 
     #[test]
     fn private_and_local_hosts_are_refused_unless_allowed() {
-        assert!(check_host("127.0.0.1", 1433, false).is_err());
-        assert!(check_host("localhost", 1433, false).is_err());
-        assert!(check_host("10.1.2.3", 1433, false).is_err());
-        assert!(check_host("192.168.1.10", 1433, false).is_err());
-        assert!(check_host("169.254.169.254", 80, false).is_err());
-        assert!(check_host("", 1, false).is_err());
-        assert!(check_host("127.0.0.1", 1433, true).is_ok());
-        assert!(
-            check_host("[::1]", 1433, false).is_err() || check_host("::1", 1433, false).is_err()
-        );
+        for refused in [
+            "127.0.0.1",
+            "127.8.9.10",
+            "localhost",
+            "10.1.2.3",
+            "172.16.0.1",
+            "172.31.255.254",
+            "192.168.1.10",
+            "169.254.169.254",
+            "100.100.100.200",
+            "100.64.0.1",
+            "0.0.0.0",
+            "0.1.2.3",
+            "255.255.255.255",
+            "224.0.0.1",
+            "::1",
+            "::",
+            "fc00::1",
+            "fd12:3456::1",
+            "fe80::1",
+            "ff02::1",
+            // An IPv4 address in IPv6 clothes is judged as the IPv4 address.
+            "::ffff:127.0.0.1",
+            "::ffff:169.254.169.254",
+            "::ffff:10.0.0.1",
+            "64:ff9b::a00:1",
+            "64:ff9b::7f00:1",
+        ] {
+            let e = check_host(refused, 1433, false);
+            assert!(
+                matches!(e, Err(ApiError::Forbidden(_))),
+                "{refused} must be refused: {e:?}"
+            );
+            assert_eq!(check_host(refused, 1433, true).unwrap(), None);
+        }
+        for public in [
+            "8.8.8.8",
+            "1.1.1.1",
+            "172.32.0.1",
+            "100.128.0.1",
+            "2606:4700:4700::1111",
+            "::ffff:8.8.8.8",
+            "64:ff9b::808:808",
+        ] {
+            // The address that passed is the one the connector must use.
+            assert_eq!(
+                check_host(public, 1433, false).unwrap(),
+                Some(public.parse().unwrap()),
+                "{public}"
+            );
+        }
+        assert!(matches!(
+            check_host("", 1, false),
+            Err(ApiError::BadRequest(_))
+        ));
+        assert!(matches!(
+            check_host("no such host.invalid", 1, false),
+            Err(ApiError::BadRequest(_))
+        ));
+    }
+
+    /// Answers, refuses to connect, or never answers, as told.
+    struct Moody(std::sync::atomic::AtomicU8);
+
+    #[async_trait::async_trait]
+    impl Connector for Moody {
+        async fn ping(&self) -> Result<(), ConnectError> {
+            match self.0.load(std::sync::atomic::Ordering::SeqCst) {
+                0 => Ok(()),
+                1 => Err(ConnectError::Connect("refused".into())),
+                2 => Err(ConnectError::Query("syntax error".into())),
+                _ => std::future::pending().await,
+            }
+        }
+        async fn tables(&self) -> Result<Vec<TableInfo>, ConnectError> {
+            self.ping().await.map(|()| Vec::new())
+        }
+        async fn columns(&self, _table: &str) -> Result<Vec<ColumnInfo>, ConnectError> {
+            self.ping().await.map(|()| Vec::new())
+        }
+        async fn query(&self, _q: &ConnectorQuery) -> Result<ResultSet, ConnectError> {
+            self.ping().await.map(|()| ResultSet {
+                rows: vec![vec![Value::Null], vec![Value::Null]],
+                ..Default::default()
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_source_that_stops_answering_is_left_alone_until_a_probe_or_the_delay() {
+        use std::sync::atomic::Ordering::SeqCst;
+        let store = SourceStore::in_memory();
+        let mood = Arc::new(Moody(std::sync::atomic::AtomicU8::new(0)));
+        let c = Guarded {
+            inner: mood.clone(),
+            source: 7,
+            timeout: Duration::from_millis(30),
+            health: store.health.clone(),
+        };
+        let q = ConnectorQuery::default();
+        assert_eq!(c.query(&q).await.unwrap().rows.len(), 2);
+        assert_eq!(store.health(7).rows, 2);
+
+        // A statement the engine refuses is an answer: the circuit stays closed.
+        mood.0.store(2, SeqCst);
+        for _ in 0..BREAKER_FAILURES + 1 {
+            assert!(matches!(c.tables().await, Err(ConnectError::Query(_))));
+        }
+        assert!(store.health(7).open_until.is_none());
+        assert_eq!(store.health(7).failures, u64::from(BREAKER_FAILURES) + 1);
+
+        // No answer in time is a failure like a refused connection.
+        mood.0.store(3, SeqCst);
+        let e = c.columns("t").await.unwrap_err().to_string();
+        assert!(e.contains("no answer within"), "{e}");
+        mood.0.store(1, SeqCst);
+        for _ in 1..BREAKER_FAILURES {
+            assert!(store.health(7).open_until.is_none());
+            assert!(c
+                .query(&q)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("refused"));
+        }
+        let h = store.health(7);
+        assert_eq!(h.failures_in_a_row, BREAKER_FAILURES);
+        assert!(h.open_until.is_some());
+
+        // Open: the engine is not called, although it would answer now.
+        mood.0.store(0, SeqCst);
+        let calls = store.health(7).calls;
+        let e = c.query(&q).await.unwrap_err().to_string();
+        assert!(e.contains("circuit open after 5 failures"), "{e}");
+        assert_eq!(store.health(7).calls, calls);
+
+        // A probe goes through and closes it.
+        c.ping().await.unwrap();
+        assert!(store.health(7).open_until.is_none());
+        assert!(c.query(&q).await.is_ok());
+
+        // Open again, a failed probe leaves it open; once the delay has
+        // passed a call goes through, and its failure opens it again.
+        mood.0.store(1, SeqCst);
+        for _ in 0..BREAKER_FAILURES {
+            let _ = c.tables().await;
+        }
+        assert!(c.ping().await.is_err());
+        assert!(c
+            .tables()
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("circuit open"));
+        store.note(7, |h| {
+            h.open_until = Some(Instant::now() - Duration::from_secs(1))
+        });
+        assert!(c
+            .tables()
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("refused"));
+        assert!(store
+            .health(7)
+            .open_until
+            .is_some_and(|t| t > Instant::now()));
+        assert_eq!(store.health(99).calls, 0, "an unknown source is all zeroes");
     }
 
     #[test]

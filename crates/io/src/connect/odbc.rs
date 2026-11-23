@@ -55,7 +55,11 @@ impl OdbcConnector {
                 },
             )
             .map_err(|e| ConnectError::Connect(e.to_string()))?;
-        let Some(mut cursor) = conn.execute(sql, (), None).map_err(with_hint)? else {
+        // The driver ends a statement that runs past the source's timeout.
+        let Some(mut cursor) = conn
+            .execute(sql, (), Some(timeout_secs.clamp(1, 600) as usize))
+            .map_err(with_hint)?
+        else {
             return Ok(ResultSet::default());
         };
         let n = cursor
