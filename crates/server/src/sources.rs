@@ -1016,16 +1016,19 @@ pub fn start_sync(
     let st = state.clone();
     let id = state.jobs.start("sync", &label, by, move |job| async move {
         let outcome = sync(&st, source_id, mapping_id, Some(&job)).await;
+        // Stopped by an administrator: not a failure of the source.
+        let cancelled = outcome.is_err() && job.cancelled();
         let (status, report) = match &outcome {
             Ok(r) => (
                 "ok".to_string(),
                 serde_json::to_value(r).unwrap_or(Value::Null),
             ),
+            Err(_) if cancelled => ("cancelled".to_string(), Value::Null),
             Err(e) => (format!("failed: {e}"), Value::Null),
         };
         st.sources.note(source_id, |h| {
             h.syncs += 1;
-            h.sync_failures += u64::from(outcome.is_err());
+            h.sync_failures += u64::from(outcome.is_err() && !cancelled);
         });
         let watermark = outcome.as_ref().ok().and_then(|r| r.watermark.clone());
         let _ = st.sources.update(source_id, |s| {

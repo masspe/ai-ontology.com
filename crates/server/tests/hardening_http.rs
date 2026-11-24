@@ -226,6 +226,71 @@ async fn request_bodies_are_capped() {
     assert_eq!(st, StatusCode::OK, "{v}");
 }
 
+/// Every class of route has its own cap — 8 MiB, 64 MiB for the import
+/// assistant, 512 MiB for an upload: one byte past it is a 413, a JSON
+/// body or a form alike, and a body the smaller class refuses is read
+/// (then judged on its content). The bodies are streamed: the test
+/// allocates one chunk.
+#[tokio::test]
+async fn each_route_refuses_a_body_past_its_own_cap() {
+    const FORM: &str = "multipart/form-data; boundary=X";
+    const JSON: &str = "application/json";
+    let w = world("caps");
+    let (admin, _) = signup(&w.app, "ann@example.com").await;
+    let post = |path: &'static str, kind: &'static str, mib: usize| {
+        let app = w.app.clone();
+        let admin = admin.clone();
+        async move {
+            let chunk = axum::body::Bytes::from(vec![b'x'; 1024 * 1024]);
+            let head = match kind {
+                FORM => {
+                    "--X
+Content-Disposition: form-data; name=\"file\"; filename=\"a.bin\"
+
+"
+                }
+                _ => "x",
+            };
+            let parts = std::iter::once(axum::body::Bytes::from(head))
+                .chain(std::iter::repeat_n(chunk, mib))
+                .map(Ok::<_, std::io::Error>);
+            let req = Request::builder()
+                .method("POST")
+                .uri(path)
+                .header("authorization", format!("Bearer {admin}"))
+                .header("content-type", kind)
+                .body(Body::from_stream(futures::stream::iter(parts)))
+                .unwrap();
+            app.oneshot(req).await.unwrap().status()
+        }
+    };
+    for (path, kind, cap) in [
+        ("/concepts", JSON, 8),
+        ("/ask", JSON, 8),
+        ("/sources", JSON, 8),
+        ("/ingest/apply", JSON, 64),
+        ("/ingest/analyze", FORM, 64),
+        ("/upload", FORM, 512),
+    ] {
+        assert_eq!(
+            post(path, kind, cap).await,
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "{path} past {cap} MiB"
+        );
+    }
+    for (path, kind, under) in [
+        ("/ingest/apply", JSON, 8),
+        ("/ingest/analyze", FORM, 8),
+        ("/upload", FORM, 64),
+    ] {
+        assert_ne!(
+            post(path, kind, under).await,
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "{path} reads {under} MiB"
+        );
+    }
+}
+
 /// Who may call what: anonymous, a plain user, a read-only key, an
 /// unscoped key, the service token, an administrator.
 #[tokio::test]

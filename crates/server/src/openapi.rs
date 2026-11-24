@@ -264,6 +264,17 @@ const SPEC_JSON: &str = r##"{
                     "responses": { "200": { "description": "ok" } }
                 }
             },
+            "/readyz": {
+                "get": {
+                    "summary": "Readiness probe: 200 once the store is replayed and requests are served, 503 with Retry-After while `serve` starts",
+                    "security": [],
+                    "tags": ["meta"],
+                    "responses": {
+                        "200": { "description": "ready" },
+                        "503": { "description": "starting: the store is being replayed" }
+                    }
+                }
+            },
             "/openapi.json": {
                 "get": {
                     "summary": "Machine-readable OpenAPI spec",

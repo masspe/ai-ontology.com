@@ -42,6 +42,44 @@ async fn healthz_is_plain_ok() {
     assert!(ct.starts_with("text/plain"), "content-type: {ct}");
 }
 
+/// While `serve` replays the store the port answers: alive on `/healthz`,
+/// a 503 with `Retry-After` on `/readyz` and on the API; once the
+/// application is handed over, it answers everything.
+#[tokio::test]
+async fn the_port_says_starting_until_the_application_is_handed_over() {
+    let get = |uri: &str| Request::builder().uri(uri).body(Body::empty()).unwrap();
+    let startup = ontology_server::Startup::default();
+    let port = startup.router();
+
+    let (st, _, bytes) = send(&port, get("/healthz")).await;
+    assert_eq!((st, bytes.as_slice()), (StatusCode::OK, &b"ok"[..]));
+    for uri in ["/readyz", "/stats", "/"] {
+        let (st, headers, bytes) = send(&port, get(uri)).await;
+        assert_eq!(st, StatusCode::SERVICE_UNAVAILABLE, "{uri}");
+        assert_eq!(headers["retry-after"], "5", "{uri}");
+        assert!(String::from_utf8_lossy(&bytes).contains("replayed"));
+    }
+
+    let (app, _, _) = flaky_app();
+    startup.ready(app);
+    let (st, _, bytes) = send(&port, get("/readyz")).await;
+    assert_eq!((st, bytes.as_slice()), (StatusCode::OK, &b"ready"[..]));
+    let (st, _, bytes) = send(&port, get("/stats")).await;
+    assert_eq!(st, StatusCode::OK);
+    assert!(serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()["concepts"].is_number());
+    let (st, _, _) = send(&port, get("/no-such-route")).await;
+    assert_eq!(st, StatusCode::NOT_FOUND);
+    // A write goes through with its body.
+    let (st, v) = call(
+        &port,
+        "POST",
+        "/concepts",
+        Some(json!({ "id": 0, "concept_type": "Topic", "name": "through" })),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+}
+
 /// On a store without a WAL to truncate, `/compact` is a 204 no-op.
 #[tokio::test]
 async fn compact_on_a_memory_store_is_a_204_no_op() {
@@ -215,6 +253,7 @@ async fn audit_without_a_log_is_refused_with_the_flag_to_use() {
 /// here **and** to `openapi.rs`; the test below fails otherwise.
 const ROUTES: &[(&str, &[&str])] = &[
     ("/healthz", &["get"]),
+    ("/readyz", &["get"]),
     ("/openapi.json", &["get"]),
     ("/docs", &["get"]),
     ("/stats", &["get"]),

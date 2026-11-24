@@ -759,45 +759,20 @@ fn rollback_schema(s: &AppState, baseline: &Ontology, changed: bool) {
 
 async fn read_analyze_form(mut form: Multipart) -> Result<AnalyzeForm, ApiError> {
     let mut out = AnalyzeForm::default();
-    while let Some(field) = form
-        .next_field()
-        .await
-        .map_err(|e| ApiError::BadRequest(format!("multipart: {e}")))?
-    {
+    while let Some(field) = form.next_field().await? {
         match field.name().unwrap_or("") {
             "file" => {
                 out.file_name = field.file_name().map(|s| s.to_string());
-                out.bytes = Some(
-                    field
-                        .bytes()
-                        .await
-                        .map_err(|e| ApiError::BadRequest(e.to_string()))?
-                        .to_vec(),
-                );
+                out.bytes = Some(field.bytes().await?.to_vec());
             }
             "provider" => {
-                out.provider = Some(
-                    field
-                        .text()
-                        .await
-                        .map_err(|e| ApiError::BadRequest(e.to_string()))?,
-                );
+                out.provider = Some(field.text().await?);
             }
             "model" => {
-                out.model = Some(
-                    field
-                        .text()
-                        .await
-                        .map_err(|e| ApiError::BadRequest(e.to_string()))?,
-                );
+                out.model = Some(field.text().await?);
             }
             "language_hint" => {
-                out.language_hint = Some(
-                    field
-                        .text()
-                        .await
-                        .map_err(|e| ApiError::BadRequest(e.to_string()))?,
-                );
+                out.language_hint = Some(field.text().await?);
             }
             _ => {}
         }

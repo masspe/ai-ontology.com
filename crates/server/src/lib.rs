@@ -12,6 +12,7 @@
 //! | Method | Path        | Body / Returns                                      |
 //! |--------|-------------|------------------------------------------------------|
 //! | GET    | `/healthz`  | `"ok"`                                                |
+//! | GET    | `/readyz`   | `"ready"`; 503 while `serve` replays the store        |
 //! | GET    | `/stats`    | counts of concepts, relations, types                  |
 //! | POST   | `/concepts` | `Concept` JSON, returns the assigned `ConceptId`      |
 //! | POST   | `/relations`| `Relation` JSON, returns the assigned `RelationId`    |
@@ -1212,6 +1213,7 @@ fn build_router_inner(state: AppState, cfg: RouterConfig) -> Router {
     } = cfg;
     let mut healthz_router = Router::new()
         .route("/healthz", get(healthz))
+        .route("/readyz", get(readyz))
         .route("/openapi.json", get(openapi::openapi_spec))
         .route("/docs", get(openapi::swagger_ui));
 
@@ -1383,6 +1385,7 @@ fn build_router_inner(state: AppState, cfg: RouterConfig) -> Router {
                     let path = req.uri().path();
                     let api_only = path.starts_with("/auth/")
                         || path == "/healthz"
+                        || path == "/readyz"
                         || path == "/docs"
                         || path == "/openapi.json";
                     let wants_html = req
@@ -1584,8 +1587,8 @@ async fn request_id_layer(mut req: Request<axum::body::Body>, next: Next) -> Res
     let path = uri.path().to_string();
     let query = uri.query().map(|q| q.to_string());
     let started = std::time::Instant::now();
-    // Healthz and metrics scrapes are noisy — log them at trace level only.
-    let noisy = matches!(path.as_str(), "/healthz" | "/metrics");
+    // Probes and metrics scrapes are noisy — log them at trace level only.
+    let noisy = matches!(path.as_str(), "/healthz" | "/readyz" | "/metrics");
     if !noisy {
         match &query {
             Some(q) => tracing::info!(
@@ -1986,6 +1989,44 @@ async fn compact(State(s): State<AppState>) -> Result<StatusCode, ApiError> {
 
 async fn healthz() -> &'static str {
     "ok"
+}
+
+async fn readyz() -> &'static str {
+    "ready"
+}
+
+/// What `serve` answers from the moment the port is open: until the
+/// application is handed over (the store replayed, the graph seeded),
+/// `/healthz` says the process is alive and every other route — `/readyz`
+/// first — is a 503 with `Retry-After`; afterwards every request goes to
+/// the application.
+#[derive(Clone, Default)]
+pub struct Startup(Arc<std::sync::OnceLock<Router>>);
+
+impl Startup {
+    pub fn router(&self) -> Router {
+        Router::new().fallback(starting).with_state(self.clone())
+    }
+
+    /// Hand the application over: from now on it answers.
+    pub fn ready(&self, app: Router) {
+        let _ = self.0.set(app);
+    }
+}
+
+async fn starting(State(s): State<Startup>, req: Request<axum::body::Body>) -> Response {
+    match s.0.get() {
+        Some(app) => tower::ServiceExt::oneshot(app.clone(), req)
+            .await
+            .unwrap_or_else(|never| match never {}),
+        None if req.uri().path() == "/healthz" => "ok".into_response(),
+        None => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            [(axum::http::header::RETRY_AFTER, "5")],
+            "starting: the store is being replayed",
+        )
+            .into_response(),
+    }
 }
 
 #[derive(Serialize)]
@@ -3037,45 +3078,20 @@ async fn upload(
     let mut filename: Option<String> = None;
     let mut bytes: Option<Vec<u8>> = None;
 
-    while let Some(field) = form
-        .next_field()
-        .await
-        .map_err(|e| ApiError::BadRequest(format!("multipart: {e}")))?
-    {
+    while let Some(field) = form.next_field().await? {
         match field.name().unwrap_or("") {
             "kind" => {
-                kind = Some(
-                    field
-                        .text()
-                        .await
-                        .map_err(|e| ApiError::BadRequest(e.to_string()))?,
-                );
+                kind = Some(field.text().await?);
             }
             "concept_type" => {
-                concept_type = Some(
-                    field
-                        .text()
-                        .await
-                        .map_err(|e| ApiError::BadRequest(e.to_string()))?,
-                );
+                concept_type = Some(field.text().await?);
             }
             "name" => {
-                name_override = Some(
-                    field
-                        .text()
-                        .await
-                        .map_err(|e| ApiError::BadRequest(e.to_string()))?,
-                );
+                name_override = Some(field.text().await?);
             }
             "file" => {
                 filename = field.file_name().map(|s| s.to_string());
-                bytes = Some(
-                    field
-                        .bytes()
-                        .await
-                        .map_err(|e| ApiError::BadRequest(e.to_string()))?
-                        .to_vec(),
-                );
+                bytes = Some(field.bytes().await?.to_vec());
             }
             _ => {} // ignore unknown form fields
         }
@@ -4765,6 +4781,20 @@ pub enum ApiError {
     Unprocessable(String),
     #[error("forbidden: {0}")]
     Forbidden(String),
+    #[error("too large: {0}")]
+    TooLarge(String),
+}
+
+/// A form that could not be read: past the route's cap it is a 413, as
+/// for any other body; anything else is the client's malformed form.
+impl From<axum::extract::multipart::MultipartError> for ApiError {
+    fn from(e: axum::extract::multipart::MultipartError) -> Self {
+        if e.status() == StatusCode::PAYLOAD_TOO_LARGE {
+            ApiError::TooLarge(e.body_text())
+        } else {
+            ApiError::BadRequest(format!("multipart: {e}"))
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -4786,6 +4816,7 @@ impl IntoResponse for ApiError {
             ApiError::Graph(_) => (StatusCode::BAD_REQUEST, self.to_string()),
             ApiError::Store(_) => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
             ApiError::Forbidden(_) => (StatusCode::FORBIDDEN, self.to_string()),
+            ApiError::TooLarge(_) => (StatusCode::PAYLOAD_TOO_LARGE, self.to_string()),
             ApiError::Llm(_) => (StatusCode::BAD_GATEWAY, self.to_string()),
             ApiError::BadRequest(_) => (StatusCode::BAD_REQUEST, self.to_string()),
             ApiError::NotFound(_) => (StatusCode::NOT_FOUND, self.to_string()),

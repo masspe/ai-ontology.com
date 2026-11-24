@@ -30,7 +30,7 @@ x-tenant: &tenant
   #           "--web", "/srv/web", "--login", "--backup-dir", "/backups",
   #           "--jwt-secret-env", "ONTOLOGY_JWT_SECRET"]
   healthcheck:
-    test: ["CMD", "/usr/local/bin/ontology", "--data", "/data", "healthcheck", "http://127.0.0.1:5000/healthz"]
+    test: ["CMD", "/usr/local/bin/ontology", "--data", "/data", "healthcheck", "http://127.0.0.1:5000/readyz"]
     interval: 30s
     timeout: 5s
     retries: 3

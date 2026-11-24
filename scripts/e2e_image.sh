@@ -31,7 +31,7 @@ start() {
     --memory-mode strict serve --bind 0.0.0.0:5000 --web /srv/web --login --seed /seed \
     --backup-dir /data/backups >/dev/null
   for _ in $(seq 1 60); do
-    if curl -fsS "$BASE/healthz" >/dev/null 2>&1; then return 0; fi
+    if curl -fsS "$BASE/readyz" >/dev/null 2>&1; then return 0; fi
     sleep 1
   done
   echo "server not healthy after 60 s"; docker logs "$NAME"; exit 1
@@ -89,7 +89,7 @@ key=$(curl -fsS -X POST -H "authorization: Bearer $TOKEN" -H 'content-type: appl
 curl -fsS -H "authorization: Bearer $key" "$BASE/stats" | json "d['concepts']" | grep -x 23 >/dev/null
 
 echo "== healthcheck subcommand inside the container"
-docker exec "$NAME" /usr/local/bin/ontology --data /data healthcheck http://127.0.0.1:5000/healthz
+docker exec "$NAME" /usr/local/bin/ontology --data /data healthcheck http://127.0.0.1:5000/readyz
 
 echo "== backup through the API, restore with the CLI, same graph"
 report=$(curl -fsS -X POST -H "authorization: Bearer $TOKEN" "$BASE/backup")

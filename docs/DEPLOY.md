@@ -36,7 +36,12 @@ open http://localhost:5001 in a browser (acme; globex is on 5002)
 
 `compose.yaml` shows the model: one service per client, one volume per
 service, `mem_limit`, a health probe (`ontology healthcheck`), a clean stop
-(`stop_grace_period`). Login attempts are rate-limited per IP address: behind
+(`stop_grace_period`). Two probes, neither asks for a token: `/healthz`
+says the process is alive, `/readyz` says it answers. `serve` opens its
+port before it replays the store: until the replay is done `/healthz` is
+200, `/readyz` and every other route are 503 with `Retry-After`. Point a
+liveness probe at `/healthz` and a readiness probe (or the load
+balancer's check) at `/readyz`, as `compose.yaml` does. Login attempts are rate-limited per IP address: behind
 a reverse proxy, the address the binary sees is the proxy's, unless the proxy
 carries that limit itself. For one more client, copy a service block and its
 volume; routing by host name (TLS included) is the job of the reverse proxy in

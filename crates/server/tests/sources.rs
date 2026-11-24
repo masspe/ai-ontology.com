@@ -72,9 +72,12 @@ struct World {
 }
 
 async fn world(tag: &str) -> World {
+    world_on(tag, Arc::new(MemoryStore::new())).await
+}
+
+async fn world_on(tag: &str, store: Arc<dyn Store>) -> World {
     let dir = tempdir(tag);
     let graph = OntologyGraph::with_arc(ontology());
-    let store: Arc<dyn Store> = Arc::new(MemoryStore::new());
     let mut state = state_with(store, graph);
     state.sources = Arc::new(SourceStore::open(dir.join("sources.json")).unwrap());
     let orders = Arc::new(MemoryConnector::new().table(
@@ -159,7 +162,7 @@ async fn call(
 }
 
 async fn wait_job(w: &World, id: u64) -> Value {
-    for _ in 0..200 {
+    for _ in 0..3000 {
         let j = w.state.jobs.get(id).unwrap();
         if j.status != ontology_server::jobs::JobStatus::Running {
             return serde_json::to_value(j).unwrap();
@@ -582,6 +585,137 @@ async fn a_sync_makes_sheets_and_links_then_follows_the_watermark_and_marks_stal
     )
     .await;
     assert_eq!(st, StatusCode::NOT_FOUND);
+}
+
+/// A store that asks for the running sync to be cancelled once `after`
+/// records are written: the request lands in the middle of a batch.
+struct CancelMidSync {
+    inner: MemoryStore,
+    written: std::sync::atomic::AtomicUsize,
+    after: usize,
+    jobs: std::sync::OnceLock<Arc<ontology_server::jobs::Jobs>>,
+}
+
+#[async_trait::async_trait]
+impl Store for CancelMidSync {
+    async fn append(
+        &self,
+        record: &ontology_storage::LogRecord,
+    ) -> ontology_storage::StoreResult<()> {
+        self.inner.append(record).await?;
+        let n = self
+            .written
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1;
+        if n == self.after {
+            let jobs = self.jobs.get().expect("the jobs of the world");
+            assert!(jobs.cancel(jobs.running("sync", "erp/orders").expect("a sync runs")));
+        }
+        Ok(())
+    }
+
+    async fn load_into(&self, graph: &Arc<OntologyGraph>) -> ontology_storage::StoreResult<()> {
+        self.inner.load_into(graph).await
+    }
+}
+
+/// A sync stopped between two batches: the batch in flight is finished —
+/// every sheet with its link, in the store as in memory — nothing is
+/// marked stale, the watermark stays where it was, a cancel is not a
+/// failure of the source; and the next sync finishes the work.
+#[tokio::test]
+async fn a_sync_cancelled_mid_run_keeps_whole_batches_and_the_next_one_finishes() {
+    let store = Arc::new(CancelMidSync {
+        inner: MemoryStore::new(),
+        written: 0.into(),
+        after: 100,
+        jobs: Default::default(),
+    });
+    let w = world_on("cancel", store.clone()).await;
+    assert!(store.jobs.set(w.state.jobs.clone()).is_ok());
+    // 4 500 orders of 50 customers: three batches.
+    let rows = (1..=4500)
+        .map(|i| {
+            vec![
+                json!(format!("O-{i}")),
+                json!(format!("Order {i}")),
+                json!(i),
+                json!(format!("C-{}", i % 50)),
+                json!(i),
+            ]
+        })
+        .collect();
+    w.state.sources.register_test_connector(
+        "erp",
+        Arc::new(MemoryConnector::new().table(
+            "orders",
+            &["id", "label", "amount", "customer", "updated"],
+            rows,
+        )),
+    );
+    let sid = make_source(&w).await;
+    let mid = make_mapping(&w, sid, json!({ "watermark_column": "updated" })).await;
+    let run = format!("/sources/{sid}/mappings/{mid}/run");
+
+    let (st, v) = call(&w.app, "POST", &run, Some(&w.admin), None).await;
+    assert_eq!(st, StatusCode::ACCEPTED, "{v}");
+    let j = wait_job(&w, v["job"].as_u64().unwrap()).await;
+    assert_eq!(j["status"], "cancelled", "{j}");
+
+    let graph = &w.state.graph;
+    let orders = graph.concepts_of_type("Order", false);
+    assert_eq!(
+        orders.len(),
+        2000,
+        "the batch in flight is finished, the next one not started"
+    );
+    for o in &orders {
+        let links = graph.outgoing(o.id);
+        assert_eq!(links.len(), 1, "{}", o.name);
+        assert_eq!(
+            graph.get_concept(links[0].target).unwrap().concept_type,
+            "Customer"
+        );
+        assert_eq!(
+            o.properties["stale"],
+            ontology_graph::PropertyValue::Bool(false),
+            "{}",
+            o.name
+        );
+    }
+    assert_eq!(graph.concepts_of_type("Customer", false).len(), 50);
+    assert_eq!(graph.relation_count(), 2000);
+    // What a restart would replay is what is in memory.
+    let replayed = OntologyGraph::with_arc(ontology());
+    w.state.store.load_into(&replayed).await.unwrap();
+    assert_eq!(
+        (replayed.concept_count(), replayed.relation_count()),
+        (graph.concept_count(), graph.relation_count())
+    );
+    // The sheets written are found.
+    assert!(w.state.index.index_concept(orders[0].id).is_ok());
+    let (_, v) = call(
+        &w.app,
+        "GET",
+        &format!("/sources/{sid}"),
+        Some(&w.admin),
+        None,
+    )
+    .await;
+    assert_eq!(v["mappings"][0]["last_status"], "cancelled", "{v}");
+    assert_eq!(v["mappings"][0]["last_watermark"], Value::Null, "{v}");
+    let health = w.state.sources.health(sid);
+    assert_eq!((health.syncs, health.sync_failures), (1, 0));
+
+    // The next run: the rest is written, what was there is recognised.
+    let (_, v) = call(&w.app, "POST", &run, Some(&w.admin), None).await;
+    let j = wait_job(&w, v["job"].as_u64().unwrap()).await;
+    assert_eq!(j["status"], "done", "{j}");
+    assert_eq!(j["result"]["rows"], 4500);
+    assert_eq!(j["result"]["sheets_new"], 2500, "{j}");
+    assert_eq!(j["result"]["watermark"], 4500);
+    assert_eq!(graph.concepts_of_type("Order", false).len(), 4500);
+    assert_eq!(graph.relation_count(), 4500);
 }
 
 #[tokio::test]

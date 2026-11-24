@@ -413,7 +413,7 @@ struct Server {
 }
 
 impl Server {
-    /// Start `serve` and wait for `/healthz`, at most 30 s.
+    /// Start `serve` and wait for `/readyz`, at most 30 s.
     fn start(cmd: &mut Command, serve_args: &[&str]) -> Self {
         let port = free_port();
         #[cfg(windows)]
@@ -434,15 +434,18 @@ impl Server {
         let mut srv = Server { child, port };
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
-            if let Some((200, body)) = http_get(port, "/healthz") {
-                assert_eq!(body, "ok");
+            // The port opens before the store is replayed: ready is the
+            // answer to wait for, alive comes first.
+            if let Some((200, body)) = http_get(port, "/readyz") {
+                assert_eq!(body, "ready");
+                assert_eq!(http_get(port, "/healthz"), Some((200, "ok".into())));
                 return srv;
             }
             if let Some(status) = srv.child.try_wait().unwrap() {
                 let out = srv.child.wait_with_output().unwrap();
                 panic!("serve exited early ({status}):\n{}", text(&out.stderr));
             }
-            assert!(Instant::now() < deadline, "serve not healthy after 30 s");
+            assert!(Instant::now() < deadline, "serve not ready after 30 s");
             std::thread::sleep(Duration::from_millis(100));
         }
     }
@@ -630,14 +633,14 @@ fn serve_refuses_bad_auth_env_and_seed_before_binding() {
         "{}",
         text(&out.stderr)
     );
-    // Nothing is listening: every refusal happened before `bind`.
+    // Nothing is listening: a refused start does not leave the port open.
     assert!(http_get(port, "/healthz").is_none());
 }
 
 /// `serve --web <dir> --users-file`: the built UI is
 /// served for every non-API path, the API stays the API, the built-in
 /// login is on (so the API needs a token) and its JWT secret is generated
-/// next to the data on first start. Misconfigurations fail before binding.
+/// next to the data on first start. Misconfigurations fail before serving.
 #[test]
 fn serve_serves_the_web_ui_and_enables_the_built_in_login() {
     let data = tempdir("serve-web");

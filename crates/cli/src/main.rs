@@ -530,6 +530,36 @@ async fn real_main() -> Result<()> {
         return bench::run(cmd.clone(), data, *json).await;
     }
 
+    // `serve` opens its port before the store: while the store is replayed
+    // `/healthz` says alive and `/readyz` says not yet (503), instead of a
+    // refused connection that looks like a dead process. The shutdown
+    // signals are taken over once ready; before that they end the process.
+    let serving = match &cli.cmd {
+        Cmd::Serve { bind, .. } => {
+            let startup = ontology_server::Startup::default();
+            let listener = tokio::net::TcpListener::bind(bind)
+                .await
+                .with_context(|| format!("binding {bind}"))?;
+            tracing::info!(addr = %bind, "port open; starting (/readyz says when)");
+            let (ready, is_ready) = tokio::sync::oneshot::channel::<()>();
+            // With the peer address attached, the rate limit on /auth/* is
+            // per client IP (behind a reverse proxy: the proxy's address).
+            let app = startup
+                .router()
+                .into_make_service_with_connect_info::<std::net::SocketAddr>();
+            let server = tokio::spawn(async move {
+                axum::serve(listener, app)
+                    .with_graceful_shutdown(async move {
+                        let _ = is_ready.await;
+                        shutdown_signal().await
+                    })
+                    .await
+            });
+            Some((startup, ready, server))
+        }
+        _ => None,
+    };
+
     // The concrete store is kept for the operations only a segment store
     // has (codec switch); everything else goes through the trait.
     let mut segment_store: Option<Arc<SegmentStore>> = None;
@@ -1325,16 +1355,11 @@ async fn real_main() -> Result<()> {
                     audit,
                 },
             );
-            let listener = tokio::net::TcpListener::bind(&bind).await?;
+            let (startup, ready, server) = serving.expect("opened for `serve` above");
+            startup.ready(app);
+            let _ = ready.send(());
             tracing::info!(addr = %bind, "server listening");
-            // With the peer address attached, the rate limit on /auth/* is
-            // per client IP (behind a reverse proxy: the proxy's address).
-            axum::serve(
-                listener,
-                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-            )
-            .with_graceful_shutdown(shutdown_signal())
-            .await?;
+            server.await??;
             tracing::info!("server stopped");
         }
     }

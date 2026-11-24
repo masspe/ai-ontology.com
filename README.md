@@ -181,7 +181,7 @@ by the binary at `/docs` (Swagger UI) and `/openapi.json`.
 | `POST` | `/ontology/generate`, `/ingest/analyze`, `/ingest/apply` | Draft a model from a description; propose sheets and links for a file; write the reviewed proposal. |
 | `GET` / `POST` | `/rules`, `/actions`, `/queries`, `/files`, `/settings` | Rules, actions, saved questions, imported files, provider settings. |
 | `POST` | `/backup`, `/compact` | Incremental backup to the configured directory; rewrite the store from the live graph. |
-| `*` | `/auth/*`, `/audit`, `/metrics`, `/healthz`, `/stats` | Accounts and keys, audit log, Prometheus metrics, probes. |
+| `*` | `/auth/*`, `/audit`, `/metrics`, `/healthz`, `/readyz`, `/stats` | Accounts and keys, audit log, Prometheus metrics, probes. |
 
 Command line, for scripts and batch jobs:
 

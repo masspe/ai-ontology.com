@@ -8,6 +8,11 @@ All notable changes to this project are listed here. The format follows
 
 ### Fixed
 
+- An upload or an import form past its size cap was answered 400
+  (`multipart: …`); it is a 413 like every other body past its cap.
+- A sync cancelled by its job was recorded `failed: cancelled` and
+  counted among the source's failures; its status is `cancelled` and the
+  failure counter is left alone.
 - A sync with a watermark compared the kept value and the new one as
   text: after 9 came 10, which sorts before it, and the watermark stayed
   at 9 — every later run read the same rows again. Values that read as
@@ -51,6 +56,16 @@ All notable changes to this project are listed here. The format follows
 
 ### Added
 
+- `/readyz`, beside `/healthz`: `serve` opens its port before it replays
+  the store, and until the replay is done `/healthz` answers 200 (alive)
+  while `/readyz` and every other route answer 503 with `Retry-After` —
+  not a refused connection for as long as a large store takes to load.
+  `compose.yaml` and the image test probe `/readyz`.
+- Tests of what was only said: a sync cancelled between two batches
+  keeps whole batches (every row with its links, the store replays to
+  the same graph, no watermark) and the next run finishes it; each route
+  refuses a body past its own cap (8 MiB, 64 MiB for an import, 512 MiB
+  for an upload) with a 413.
 - PostgreSQL as a data source (kind `postgres`, build feature
   `postgres`, pure Rust with rustls): tables, columns, a query with a
   watermark, named queries. Every session is read-only on the server
