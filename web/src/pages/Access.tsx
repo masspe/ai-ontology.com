@@ -2,7 +2,8 @@
 // Copyright (C) 2026 Mediasoft & Cie S.A.
 //
 // Access: the accounts, their role and their clearances — the sheet
-// labels each one may see. Administrators only; everyone else is told so.
+// labels each one may see — and the API keys with their scope.
+// Administrators only; everyone else is told so.
 import { useEffect, useState } from "react";
 import Card from "../components/Card";
 // @ts-expect-error JSX module
@@ -25,6 +26,155 @@ const list = (s: string) =>
     .split(",")
     .map((x) => x.trim().toLowerCase())
     .filter(Boolean);
+
+export interface KeyRow {
+  id: string;
+  name: string;
+  prefix: string;
+  createdBy: string;
+  /** `null`: sees everything. */
+  clearances: string[] | null;
+  readOnly: boolean;
+  /** Unix seconds; `null`: never. */
+  expiresAt: number | null;
+  lastUsedAt: string | null;
+}
+
+/** The API keys: what each may see and do, until when, last used; a new or
+ * rotated secret is shown once. */
+function ApiKeys() {
+  const confirm = useConfirm();
+  const [keys, setKeys] = useState<KeyRow[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [draft, setDraft] = useState({ name: "", clearances: "", readOnly: false, days: "" });
+  const [secret, setSecret] = useState<{ name: string; key: string } | null>(null);
+
+  const run = async (f: () => Promise<unknown>) => {
+    try {
+      await f();
+      setKeys(((await msBE.request("GET", "/auth/keys")) as { keys: KeyRow[] }).keys);
+      setError(null);
+    } catch (e: unknown) {
+      setKeys((k) => k ?? []);
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+  useEffect(() => {
+    void run(async () => undefined);
+  }, []);
+
+  const create = (ev: React.FormEvent) => {
+    ev.preventDefault();
+    void run(async () => {
+      const made = (await msBE.request("POST", "/auth/keys", {
+        name: draft.name,
+        // Empty: the key sees everything, as an administrator does.
+        ...(draft.clearances.trim() ? { clearances: list(draft.clearances) } : {}),
+        read_only: draft.readOnly,
+        ...(draft.days ? { expires_in_days: Number(draft.days) } : {}),
+      })) as { name: string; key: string };
+      setSecret({ name: made.name, key: made.key });
+      setDraft({ name: "", clearances: "", readOnly: false, days: "" });
+    });
+  };
+
+  const rotate = async (k: KeyRow) => {
+    if (!(await confirm({ title: t("Remplacer le secret de cette clé ?"), message: t("{name} : l'ancien secret cesse de fonctionner.", { name: k.name }) }))) return;
+    void run(async () => {
+      const made = (await msBE.request("POST", `/auth/keys/${k.id}/rotate`)) as { name: string; key: string };
+      setSecret({ name: made.name, key: made.key });
+    });
+  };
+
+  const revoke = async (k: KeyRow) => {
+    if (!(await confirm({ title: t("Révoquer cette clé ?"), message: k.name, danger: true }))) return;
+    void run(() => msBE.request("DELETE", `/auth/keys/${k.id}`));
+  };
+
+  const now = Date.now() / 1000;
+  return (
+    <Card title={t("Clés d'API")} subtitle={t("Pour les programmes : une clé voit ce que ses habilitations couvrent, écrit ou non, jusqu'à son expiration.")}>
+      {error && <div className="error-banner">{error}</div>}
+      {secret && (
+        <div className="success-banner" role="status">
+          {t("Clé {name} — copiez-la maintenant, elle ne sera plus affichée :", { name: secret.name })} <code>{secret.key}</code>{" "}
+          <button className="btn-ghost" type="button" onClick={() => setSecret(null)}>
+            {t("Fermer")}
+          </button>
+        </div>
+      )}
+      {keys === null ? (
+        <p className="muted">{t("Chargement…")}</p>
+      ) : keys.length === 0 ? (
+        <p className="muted">{t("Aucune clé.")}</p>
+      ) : (
+        <table className="table">
+          <thead>
+            <tr>
+              <th>{t("Clé")}</th>
+              <th>{t("Habilitations")}</th>
+              <th>{t("Expiration")}</th>
+              <th>{t("Dernière utilisation")}</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {keys.map((k) => (
+              <tr key={k.id}>
+                <td>
+                  <strong>{k.name}</strong> {k.readOnly && <span className="badge">{t("lecture seule")}</span>}
+                  <br />
+                  <code>{k.prefix}…</code> <span className="muted">{k.createdBy}</span>
+                </td>
+                <td>{k.clearances === null ? t("voit tout") : k.clearances.join(", ") || t("fiches sans label seulement")}</td>
+                <td>
+                  {k.expiresAt === null ? (
+                    <span className="muted">{t("jamais")}</span>
+                  ) : k.expiresAt <= now ? (
+                    <span className="badge badge-danger">{t("expirée")}</span>
+                  ) : (
+                    new Date(k.expiresAt * 1000).toISOString().slice(0, 10)
+                  )}
+                </td>
+                <td>{k.lastUsedAt ? k.lastUsedAt.slice(0, 16).replace("T", " ") : <span className="muted">{t("jamais")}</span>}</td>
+                <td style={{ whiteSpace: "nowrap" }}>
+                  <button className="btn-ghost" type="button" onClick={() => void rotate(k)}>
+                    {t("Renouveler")}
+                  </button>
+                  <button className="btn-ghost" type="button" onClick={() => void revoke(k)}>
+                    {t("Révoquer")}
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      <form onSubmit={create} className="grid grid-3" style={{ gap: 12, marginTop: 12 }}>
+        <label className="field">
+          <span>{t("Nom de la clé")}</span>
+          <input required maxLength={80} value={draft.name} onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))} />
+        </label>
+        <label className="field">
+          <span>{t("Habilitations de la clé (vide : voit tout)")}</span>
+          <input value={draft.clearances} placeholder="hr, finance" onChange={(e) => setDraft((d) => ({ ...d, clearances: e.target.value }))} />
+        </label>
+        <label className="field">
+          <span>{t("Expire dans (jours, vide : jamais)")}</span>
+          <input type="number" min={1} max={3650} value={draft.days} onChange={(e) => setDraft((d) => ({ ...d, days: e.target.value }))} />
+        </label>
+        <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <input type="checkbox" checked={draft.readOnly} onChange={(e) => setDraft((d) => ({ ...d, readOnly: e.target.checked }))} /> {t("Lecture seule")}
+        </label>
+        <div>
+          <button className="btn-primary" type="submit">
+            {t("Créer la clé")}
+          </button>
+        </div>
+      </form>
+    </Card>
+  );
+}
 
 export default function Access() {
   const confirm = useConfirm();
@@ -178,6 +328,9 @@ export default function Access() {
           </div>
         </form>
       </Card>
+
+      {/* Administrators only, as the listing above. */}
+      {rows && rows.length > 0 && <ApiKeys />}
     </>
   );
 }

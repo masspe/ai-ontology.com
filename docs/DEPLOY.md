@@ -150,7 +150,8 @@ tokens already issued included.
 ### API keys and audit log
 
 For a machine caller (an ERP, a script), the administrator creates a **named
-key** rather than lending their own account: `POST /auth/keys {"name":"ERP"}`
+key** rather than lending their own account — on the **Access** page, or
+through the API: `POST /auth/keys {"name":"ERP"}`
 returns the secret once (`ok_…`); `GET /auth/keys` lists the keys (name,
 prefix, creation, by whom, scope, last use), `DELETE /auth/keys/<id>` revokes
 immediately, `POST /auth/keys/<id>/rotate` issues a fresh secret with the same
@@ -281,7 +282,8 @@ untagged layers and the tagged versions beyond the newest ten.
 ### Questions that must not leave the premises
 
 A storage domain (the `ns` of its concept types) can be declared
-on-premises: `PATCH /settings {"llm": {"on_premises_domains": ["payroll"],
+on-premises — a tick on the data-model page, or
+`PATCH /settings {"llm": {"on_premises_domains": ["payroll"],
 "on_premises_provider": "openai"}}`. A question whose context holds a sheet
 of such a domain is answered only by the **on-premises provider** — a model
 served on your network behind an OpenAI-compatible URL (`openai_base_url`),

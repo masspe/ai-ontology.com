@@ -204,6 +204,8 @@ export interface ConceptTypeDef {
   disjoint_with?: string[];
   /** Below the grain people ask about: never a retrieval seed unless named in full. */
   detail?: boolean;
+  /** Storage domain; absent: the parent's, else `default`. */
+  ns?: string | null;
 }
 
 export interface RelationTypeDef {
@@ -346,6 +348,10 @@ export interface LlmSettings {
   embedding_provider?: string;
   embedding_model?: string;
   max_tokens: number;
+  /** Storage domains whose sheets go to `on_premises_provider` only. */
+  on_premises_domains?: string[];
+  /** Empty: a question touching such a domain is refused. */
+  on_premises_provider?: string;
 }
 
 export interface LlmSettingsPatch {
@@ -364,6 +370,8 @@ export interface LlmSettingsPatch {
   embedding_provider?: string;
   embedding_model?: string;
   max_tokens?: number;
+  on_premises_domains?: string[];
+  on_premises_provider?: string;
 }
 
 export interface OcrSettings {

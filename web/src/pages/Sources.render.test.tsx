@@ -180,4 +180,137 @@ describe("Sources page", () => {
     renderPage(<Sources />);
     expect(await screen.findByText("Aucune source pour l'instant.")).toBeInTheDocument();
   });
+
+  it("edits a source field by field, an ODBC string, and gives up without saving", async () => {
+    m.updateSource.mockResolvedValue({});
+    renderPage(<Sources />);
+    await screen.findByText("erp");
+    const edit = () => fireEvent.click(screen.getAllByRole("button", { name: "Modifier" })[0]);
+    edit();
+    fireEvent.change(screen.getByLabelText("Hôte"), { target: { value: "db2.example" } });
+    fireEvent.change(screen.getByLabelText("Port"), { target: { value: "1444" } });
+    fireEvent.change(screen.getByLabelText("Base"), { target: { value: "erp2" } });
+    fireEvent.change(screen.getByLabelText("Utilisateur (lecture seule)"), { target: { value: "reader" } });
+    fireEvent.change(screen.getByLabelText("Mot de passe"), { target: { value: "n3w" } });
+    fireEvent.click(screen.getByLabelText("Chiffrer la connexion (TLS)"));
+    fireEvent.click(screen.getByLabelText("Accepter un certificat auto-signé"));
+    fireEvent.click(screen.getByLabelText("Le serveur est sur le réseau privé"));
+    fireEvent.change(screen.getByLabelText("Délai (secondes)"), { target: { value: "30" } });
+    fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
+    await waitFor(() =>
+      expect(m.updateSource).toHaveBeenCalledWith(
+        1,
+        expect.objectContaining({ host: "db2.example", port: 1444, database: "erp2", user: "reader", password: "n3w", encrypt: false, trust_cert: true, allow_private_hosts: true, timeout_secs: 30 }),
+      ),
+    );
+    await waitFor(() => expect(screen.queryByLabelText("Nom de la source")).toBeNull());
+
+    edit();
+    fireEvent.change(screen.getByLabelText("Type"), { target: { value: "odbc" } });
+    expect(screen.queryByLabelText("Hôte")).toBeNull();
+    fireEvent.change(screen.getByLabelText("Chaîne de connexion ODBC"), { target: { value: "Driver={x};Server=db.example;" } });
+    expect(screen.getByLabelText("Chaîne de connexion ODBC")).toHaveValue("Driver={x};Server=db.example;");
+    fireEvent.click(screen.getByRole("button", { name: "Annuler" }));
+    expect(screen.queryByLabelText("Nom de la source")).toBeNull();
+    // The same button closes the form it opened.
+    edit();
+    expect(screen.getByLabelText("Nom de la source")).toBeInTheDocument();
+    edit();
+    expect(screen.queryByLabelText("Nom de la source")).toBeNull();
+    expect(m.updateSource).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Ajouter une source" }));
+    expect(screen.getByText("Nouvelle source")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Annuler" }));
+    expect(screen.queryByText("Nouvelle source")).toBeNull();
+    expect(m.createSource).not.toHaveBeenCalled();
+  });
+
+  it("edits a mapping: its columns, its schedule, a link taken back", async () => {
+    m.updateMapping.mockResolvedValue({});
+    m.listSourceColumns.mockRejectedValue(new Error("no such table"));
+    renderPage(<Sources />);
+    await screen.findByText("erp");
+    fireEvent.click(screen.getAllByRole("button", { name: "Modifier" })[1]);
+    expect(await screen.findByLabelText("Nom du mapping")).toHaveValue("orders");
+    await waitFor(() => expect(m.listSourceColumns).toHaveBeenCalledWith(1, "dbo.orders"));
+    fireEvent.change(screen.getByLabelText("Colonne du nom (sinon la clé)"), { target: { value: "label" } });
+    fireEvent.change(screen.getByLabelText("Colonne de description"), { target: { value: "notes" } });
+    fireEvent.change(screen.getByLabelText("Colonne de suivi (synchronisation incrémentale)"), { target: { value: "updated" } });
+    fireEvent.change(screen.getByLabelText("Toutes les N minutes (0 : à la main)"), { target: { value: "15" } });
+    fireEvent.click(screen.getByRole("button", { name: "Ajouter un lien" }));
+    fireEvent.change(screen.getByLabelText("Colonne"), { target: { value: "rep" } });
+    fireEvent.click(screen.getByRole("button", { name: "×" }));
+    expect(screen.queryByLabelText("Colonne")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
+    await waitFor(() =>
+      expect(m.updateMapping).toHaveBeenCalledWith(
+        1,
+        1,
+        expect.objectContaining({ name: "orders", name_column: "label", description_column: "notes", watermark_column: "updated", schedule_minutes: 15, relations: [] }),
+      ),
+    );
+    expect(await screen.findByText("Mapping enregistré.")).toBeInTheDocument();
+
+    // The tables that cannot be listed are an error on the form, which can still be left.
+    m.listSourceTables.mockRejectedValueOnce(new Error("no driver"));
+    fireEvent.click(screen.getByRole("button", { name: "Ajouter un mapping" }));
+    expect(await screen.findByText("no driver")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Annuler" }));
+    expect(screen.queryByLabelText("Nom du mapping")).toBeNull();
+    expect(m.createMapping).not.toHaveBeenCalled();
+  });
+
+  it("deletes a source, a mapping and a named query only once confirmed", async () => {
+    m.deleteSource.mockResolvedValue({});
+    m.deleteMapping.mockResolvedValue({});
+    m.deleteNamedQuery.mockRejectedValue(new Error("query in use"));
+    renderPage(<Sources />);
+    await screen.findByText("erp");
+    const remove = async (i: number, answer: string) => {
+      fireEvent.click(screen.getAllByRole("button", { name: "Supprimer" })[i]);
+      fireEvent.click(await screen.findByRole("button", { name: answer }));
+    };
+    await remove(1, "Annuler");
+    await waitFor(() => expect(screen.queryByText("Supprimer le mapping ?")).toBeNull());
+    expect(m.deleteMapping).not.toHaveBeenCalled();
+    await remove(1, "Confirmer");
+    await waitFor(() => expect(m.deleteMapping).toHaveBeenCalledWith(1, 1));
+    await remove(0, "Confirmer");
+    await waitFor(() => expect(m.deleteSource).toHaveBeenCalledWith(1));
+    await remove(2, "Confirmer");
+    await waitFor(() => expect(m.deleteNamedQuery).toHaveBeenCalledWith(1, 1));
+    expect(await screen.findByText("query in use")).toBeInTheDocument();
+  });
+
+  it("describes and caps a named query, and closes what it opened", async () => {
+    m.createNamedQuery.mockResolvedValue({});
+    m.previewMapping.mockResolvedValue({ columns: [{ name: "id", data_type: "int" }, { name: "note", data_type: "text" }], rows: [[1, null]], sheets: [], links: 0, skipped: 0 });
+    renderPage(<Sources />);
+    await screen.findByText("erp");
+    fireEvent.click(screen.getByRole("button", { name: "Ajouter une requête" }));
+    fireEvent.change(screen.getByLabelText("Nom de la requête"), { target: { value: "client" } });
+    fireEvent.change(screen.getByLabelText("Déclencheur (expression régulière, groupes nommés)"), { target: { value: "client (?P<name>\\w+)" } });
+    fireEvent.change(screen.getByLabelText("SELECT avec des blancs : le nom du groupe entre accolades"), { target: { value: "SELECT * FROM c WHERE name = {name}" } });
+    fireEvent.change(screen.getByLabelText("Description"), { target: { value: "A customer by name" } });
+    fireEvent.change(screen.getByLabelText("Lignes au plus (200 max)"), { target: { value: "50" } });
+    fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
+    await waitFor(() => expect(m.createNamedQuery).toHaveBeenCalledWith(1, expect.objectContaining({ name: "client", description: "A customer by name", max_rows: 50 })));
+    await waitFor(() => expect(screen.queryByLabelText("Nom de la requête")).toBeNull());
+
+    fireEvent.click(screen.getByRole("button", { name: "Ajouter une requête" }));
+    fireEvent.click(screen.getByRole("button", { name: "Annuler" }));
+    expect(screen.queryByLabelText("Nom de la requête")).toBeNull();
+    expect(m.createNamedQuery).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(screen.getByRole("button", { name: "Essayer" }));
+    expect(screen.getByText("Essayer : ticket")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Fermer" }));
+    expect(screen.queryByText("Essayer : ticket")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Aperçu" }));
+    expect(await screen.findByText("Aperçu : orders")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Fermer" }));
+    expect(screen.queryByText("Aperçu : orders")).toBeNull();
+  });
 });

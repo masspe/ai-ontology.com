@@ -56,6 +56,13 @@ All notable changes to this project are listed here. The format follows
 
 ### Added
 
+- Web: the **Access** page lists the API keys — what each may see
+  (clearances), whether it may write, when it expires, when it was last
+  used — and creates, rotates and revokes them; a new or rotated secret
+  is shown once. The data-model page has an **on-premises domains** card:
+  a tick per storage domain and the provider that answers for them, saved
+  to the settings at once, with a warning while questions on a ticked
+  domain would be refused for want of a provider.
 - `/readyz`, beside `/healthz`: `serve` opens its port before it replays
   the store, and until the replay is done `/healthz` answers 200 (alive)
   while `/readyz` and every other route answer 503 with `Retry-After` —

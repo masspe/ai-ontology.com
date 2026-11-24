@@ -225,6 +225,12 @@ export const components: Record<string, string> = {
   "OCR {name} · image {i}/{n}": "OCR {name} · image {i}/{n}",
   "Lecture de {name} · page {page}/{n}": "Reading {name} · page {page}/{n}",
   "OCR {name} · page {page}/{n}": "OCR {name} · page {page}/{n}",
+  "Domaines sur site": "On-premises domains",
+  "Une question dont le contexte contient une fiche d'un domaine coché n'est envoyée qu'au fournisseur sur site.": "A question whose context holds a sheet of a ticked domain is sent to the on-premises provider only.",
+  "{n} type(s)": "{n} type(s)",
+  "Fournisseur sur site": "On-premises provider",
+  "aucun": "none",
+  "Aucun fournisseur sur site : les questions qui touchent ces domaines sont refusées.": "No on-premises provider: questions that touch these domains are refused.",
   "le proxy Vite": "the Vite proxy",
   "API injoignable sur {target} ({detail}). Le serveur est-il démarré ? Avec `npm run dev` il compile d'abord (1 à 2 minutes) : réessaie ensuite. L'adresse se règle dans Réglages → Connexion serveur.": "API unreachable at {target} ({detail}). Is the server running? With `npm run dev` it compiles first (1 to 2 minutes): try again afterwards. The address is set in Settings → Server connection.",
 };
