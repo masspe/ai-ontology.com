@@ -392,4 +392,8 @@ export const pagesB: Record<string, string> = {
   "Confiance": "Confidence",
   "Exporter": "Export",
   "{n} % vs dernière exécution": "{n} % vs last run",
+  "Demander l'exécution": "Ask to run",
+  "Demander l'exécution de « {name} » dans sa source de données ? Rien n'est écrit avant qu'un autre administrateur l'approuve.": "Ask for \"{name}\" to run in its data source? Nothing is written before another administrator approves it.",
+  "Demande déposée : un autre administrateur doit l'approuver.": "Request filed: another administrator must approve it.",
+  "Demande refusée : {msg}": "Request refused: {msg}",
 };

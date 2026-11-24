@@ -7,7 +7,8 @@
 
 //! Tables held in memory: what the sync and the API are tested against
 //! without a database. Understands a table name and the watermark; a
-//! `SELECT` statement is refused.
+//! `SELECT` statement is refused unless its result was given, and so is a
+//! write.
 
 use std::collections::BTreeMap;
 
@@ -25,6 +26,10 @@ pub struct MemoryConnector {
     tables: Mutex<BTreeMap<String, Table>>,
     /// Canned results of `SELECT` statements, by their exact text.
     statements: Mutex<BTreeMap<String, Table>>,
+    /// The rows a write would change, by its exact text.
+    writes: Mutex<BTreeMap<String, u64>>,
+    /// The writes that were committed, in order.
+    executed: Mutex<Vec<String>>,
     /// Every `ping` fails with this: a connector that cannot be reached.
     down: Option<String>,
 }
@@ -37,10 +42,21 @@ impl MemoryConnector {
     /// A connector whose every call fails with `why`.
     pub fn down(why: &str) -> Self {
         Self {
-            tables: Mutex::new(BTreeMap::new()),
-            statements: Mutex::new(BTreeMap::new()),
             down: Some(why.to_string()),
+            ..Self::default()
         }
+    }
+
+    /// A write this connector takes, given by its exact text, and the
+    /// rows it changes.
+    pub fn write(self, sql: &str, rows: u64) -> Self {
+        self.writes.lock().insert(sql.trim().to_string(), rows);
+        self
+    }
+
+    /// The writes committed so far.
+    pub fn executed(&self) -> Vec<String> {
+        self.executed.lock().clone()
     }
 
     /// The result of a `SELECT` statement, given by its exact text (what
@@ -204,6 +220,16 @@ impl Connector for MemoryConnector {
             truncated,
         })
     }
+
+    async fn execute(&self, sql: &str, max_rows: u64) -> Result<u64, ConnectError> {
+        self.check()?;
+        let Some(rows) = self.writes.lock().get(sql.trim()).copied() else {
+            return Err(ConnectError::Query(format!("no such write: `{sql}`")));
+        };
+        super::guard(rows, max_rows)?;
+        self.executed.lock().push(sql.trim().to_string());
+        Ok(rows)
+    }
 }
 
 #[cfg(test)]
@@ -283,5 +309,26 @@ mod tests {
         let down = MemoryConnector::down("refused");
         assert!(matches!(down.ping().await, Err(ConnectError::Connect(_))));
         assert!(down.tables().await.is_err());
+        assert!(down.execute("delete from orders", 1).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn a_write_commits_within_its_guard_only() {
+        let m = MemoryConnector::new()
+            .write("update orders set total = 0 where id = 1", 1)
+            .write("delete from orders", 3);
+        assert_eq!(
+            m.execute(" update orders set total = 0 where id = 1 ", 1)
+                .await
+                .unwrap(),
+            1
+        );
+        let over = m.execute("delete from orders", 2).await.unwrap_err();
+        assert!(over.to_string().contains("would change 3 rows"), "{over}");
+        assert!(matches!(
+            m.execute("drop table orders", 1).await,
+            Err(ConnectError::Query(_))
+        ));
+        assert_eq!(m.executed(), ["update orders set total = 0 where id = 1"]);
     }
 }

@@ -133,6 +133,52 @@ impl OdbcConnector {
         })
     }
 
+    /// One write in a transaction of its own: committed within the guard,
+    /// rolled back past it or when the driver does not count the rows.
+    fn execute_blocking(
+        cs: &str,
+        sql: &str,
+        max_rows: u64,
+        timeout_secs: u64,
+    ) -> Result<u64, ConnectError> {
+        let failed = |e: odbc_api::Error| ConnectError::Query(e.to_string());
+        let env = Environment::new().map_err(|e| ConnectError::Connect(e.to_string()))?;
+        let conn = env
+            .connect_with_connection_string(
+                cs,
+                ConnectionOptions {
+                    login_timeout_sec: Some(timeout_secs.clamp(1, 600) as u32),
+                    ..Default::default()
+                },
+            )
+            .map_err(|e| ConnectError::Connect(e.to_string()))?;
+        conn.set_autocommit(false).map_err(failed)?;
+        let mut statement = conn.preallocate().map_err(failed)?;
+        statement
+            .set_query_timeout_sec(timeout_secs.clamp(1, 600) as usize)
+            .map_err(failed)?;
+        let outcome = statement
+            .execute(sql, ())
+            .map(|_| ())
+            .map_err(with_hint)
+            .and_then(|()| statement.row_count().map_err(failed))
+            .and_then(|rows| {
+                rows.ok_or_else(|| {
+                    ConnectError::Unsupported(
+                        "the driver does not say how many rows changed: rolled back".into(),
+                    )
+                })
+            })
+            .and_then(|rows| super::guard(rows as u64, max_rows));
+        match outcome {
+            Ok(rows) => conn.commit().map(|()| rows).map_err(failed),
+            Err(e) => {
+                conn.rollback().map_err(failed)?;
+                Err(e)
+            }
+        }
+    }
+
     async fn run(&self, sql: &str, max_rows: usize) -> Result<ResultSet, ConnectError> {
         let (cs, sql, t) = (
             self.connection_string.clone(),
@@ -209,6 +255,17 @@ impl Connector for OdbcConnector {
 
     async fn query(&self, q: &Query) -> Result<ResultSet, ConnectError> {
         self.run(&q.render_sql(quote_ansi), q.max_rows).await
+    }
+
+    async fn execute(&self, sql: &str, max_rows: u64) -> Result<u64, ConnectError> {
+        let (cs, sql, t) = (
+            self.connection_string.clone(),
+            sql.to_string(),
+            self.timeout_secs,
+        );
+        tokio::task::spawn_blocking(move || Self::execute_blocking(&cs, &sql, max_rows, t))
+            .await
+            .map_err(|e| ConnectError::Query(e.to_string()))?
     }
 }
 

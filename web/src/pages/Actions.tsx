@@ -4,6 +4,7 @@
 import { locale, t } from "../lib/i18n";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import Card from "../components/Card";
+import Approvals from "../components/Approvals";
 import Sparkline from "../components/Sparkline";
 // @ts-expect-error JSX module
 import { useToast } from "../components/Toast.jsx";
@@ -16,6 +17,7 @@ import {
   getStats,
   listActions,
   listConcepts,
+  runAction,
   updateAction,
   type Action as ActionInstance,
   type Concept,
@@ -301,6 +303,8 @@ function Donut({ data }: { data: { name: string; count: number; color: string }[
 export default function Actions() {
   const toast = useToast();
   const confirm = useConfirm();
+  // Bumped when a write was asked for: the approvals card reads its list again.
+  const [asked, setAsked] = useState(0);
   const [actions, setActions] = useState<ActionInstance[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
   const [loading, setLoading] = useState(true);
@@ -421,6 +425,17 @@ export default function Actions() {
       toast.success(t("Action supprimée."));
     } catch (e) {
       toast.error(t("Échec de la suppression : {msg}", { msg: (e as Error).message }));
+    }
+  }
+
+  async function onRun(a: ActionInstance) {
+    if (!(await confirm({ title: t("Demander l'exécution"), message: t("Demander l'exécution de « {name} » dans sa source de données ? Rien n'est écrit avant qu'un autre administrateur l'approuve.", { name: a.name }), confirmLabel: t("Demander") }))) return;
+    try {
+      await runAction(a.id);
+      setAsked((n) => n + 1);
+      toast.success(t("Demande déposée : un autre administrateur doit l'approuver."));
+    } catch (e) {
+      toast.error(t("Demande refusée : {msg}", { msg: (e as Error).message }));
     }
   }
 
@@ -615,6 +630,9 @@ export default function Actions() {
                 >
                   <span className="qa-icon-inline">{Icon.edit}</span> {t("Modifier l'action")}
                 </button>
+                <button className="btn-ghost" onClick={() => selectedAction && onRun(selectedAction)}>
+                  <span className="qa-icon-inline">{Icon.play}</span> {t("Demander l'exécution")}
+                </button>
                 <button className="btn-ghost" onClick={() => onDelete(selected.id)}>
                   <span className="qa-icon-inline">{Icon.trash}</span> {t("Supprimer")}
                 </button>
@@ -644,6 +662,8 @@ export default function Actions() {
           )}
         </Card>
       </div>
+
+      <Approvals reload={asked} />
 
       {/* Bottom row */}
       <div className="actions-bottom">

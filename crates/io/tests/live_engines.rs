@@ -168,6 +168,67 @@ async fn reads_the_seeded_table(c: &dyn Connector, table: &str) {
     assert!(matches!(refused, ConnectError::Query(_)), "{refused}");
 }
 
+/// What every connector that writes must do with the seeded rows `ids`
+/// (three in a row) of `table`: commit within the guard, roll back past
+/// it, and leave the engine's refusal as its answer. Safe to run again.
+async fn writes_within_the_guard_only(c: &dyn Connector, table: &str, ids: [i64; 3]) {
+    let (lo, hi) = (ids[0], ids[2]);
+    let states = || async {
+        c.query(&Query {
+            from: format!("select id, state from {table} where id >= {lo} and id <= {hi}"),
+            after: Some(("id".into(), json!(lo - 1))),
+            max_rows: 10,
+        })
+        .await
+        .expect("states")
+        .rows
+        .iter()
+        .map(|r| r[1].as_str().unwrap_or("").trim().to_string())
+        .collect::<Vec<_>>()
+    };
+    let all = format!("where id >= {lo} and id <= {hi}");
+    assert_eq!(
+        c.execute(&format!("update {table} set state = 'open' {all}"), 3)
+            .await
+            .expect("reset"),
+        3
+    );
+    // Past the guard: nothing is changed.
+    let over = c
+        .execute(&format!("update {table} set state = 'lost' {all}"), 2)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&over, ConnectError::Query(m) if m.contains("would change 3 rows, at most 2")),
+        "{over}"
+    );
+    assert_eq!(states().await, ["open", "open", "open"]);
+    // Within it: committed, and read back by a later connection.
+    assert_eq!(
+        c.execute(
+            &format!("update {table} set state = 'done' where id = {}", ids[1]),
+            1
+        )
+        .await
+        .expect("one row"),
+        1
+    );
+    assert_eq!(states().await, ["open", "done", "open"]);
+    // No row is no error.
+    assert_eq!(
+        c.execute(&format!("delete from {table} where id = -1"), 1)
+            .await
+            .expect("no row"),
+        0
+    );
+    let refused = c
+        .execute("update ontology_live_missing set state = 'x'", 1)
+        .await
+        .unwrap_err();
+    assert!(matches!(refused, ConnectError::Query(_)), "{refused}");
+    assert_eq!(states().await, ["open", "done", "open"]);
+}
+
 #[cfg(feature = "postgres")]
 #[tokio::test]
 async fn postgres_is_read_as_seeded_and_only_read() {
@@ -237,6 +298,17 @@ async fn postgres_is_read_as_seeded_and_only_read() {
             after: None,
             max_rows: 1,
         })
+        .await
+        .unwrap_err();
+    assert!(matches!(two, ConnectError::Query(_)), "{two}");
+
+    // But for an approved write, in its own transaction — one statement.
+    writes_within_the_guard_only(&c, "public.ontology_live_write", [1, 2, 3]).await;
+    let two = c
+        .execute(
+            "update public.ontology_live_write set state = 'a' where id = 1; delete from public.ontology_live_write",
+            10,
+        )
         .await
         .unwrap_err();
     assert!(matches!(two, ConnectError::Query(_)), "{two}");
@@ -327,6 +399,7 @@ async fn sql_server_is_read_as_seeded() {
     assert_eq!(rs.rows[0][col("id")], json!(3));
     assert_eq!(rs.rows[0][col("ok")], json!(true));
     assert_eq!(rs.rows[0][col("updated")], json!("2026-03-01T10:00:00"));
+    writes_within_the_guard_only(&c, "dbo.ontology_live_write", [1, 2, 3]).await;
 
     let strict = SqlServerConnector {
         trust_cert: false,
@@ -355,6 +428,8 @@ async fn an_odbc_driver_reads_the_seeded_table() {
         timeout_secs: 30,
     };
     reads_the_seeded_table(&c, "public.ontology_live_item").await;
+    // Its own rows: the PostgreSQL test writes the first three.
+    writes_within_the_guard_only(&c, "public.ontology_live_write", [11, 12, 13]).await;
 
     let nowhere = OdbcConnector {
         connection_string: "Driver={No Such Driver};Server=127.0.0.1;".into(),

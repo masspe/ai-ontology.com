@@ -6,8 +6,9 @@
 // from Mediasoft & Cie S.A. See LICENSE and LICENSE-COMMERCIAL.md.
 
 //! SQL Server through `tiberius` (pure Rust, TLS by rustls): a new
-//! connection per call, read-only intent, encryption on unless the
-//! source opts out. Behind the `sqlserver` feature.
+//! connection per call, read-only intent (but for an approved write),
+//! encryption on unless the source opts out. Behind the `sqlserver`
+//! feature.
 
 use async_trait::async_trait;
 use serde_json::Value;
@@ -36,14 +37,14 @@ pub struct SqlServerConnector {
 }
 
 impl SqlServerConnector {
-    async fn client(&self) -> Result<Client<Compat<TcpStream>>, ConnectError> {
+    async fn client(&self, read_only: bool) -> Result<Client<Compat<TcpStream>>, ConnectError> {
         let mut config = Config::new();
         config.host(&self.host);
         config.port(self.port);
         config.database(&self.database);
         config.authentication(AuthMethod::sql_server(&self.user, &self.password));
         config.application_name("ai-ontology");
-        config.readonly(true);
+        config.readonly(read_only);
         config.encryption(if self.encrypt {
             EncryptionLevel::Required
         } else {
@@ -73,7 +74,7 @@ impl SqlServerConnector {
     }
 
     async fn run(&self, sql: &str, max_rows: usize) -> Result<ResultSet, ConnectError> {
-        let mut client = self.client().await?;
+        let mut client = self.client(true).await?;
         let work = async {
             let stream = client
                 .simple_query(sql)
@@ -266,6 +267,42 @@ impl Connector for SqlServerConnector {
             sql = sql.replacen("SELECT *", &format!("SELECT TOP ({}) *", q.max_rows + 1), 1);
         }
         self.run(&sql, q.max_rows).await
+    }
+
+    async fn execute(&self, sql: &str, max_rows: u64) -> Result<u64, ConnectError> {
+        let mut client = self.client(false).await?;
+        let failed = |e: tiberius::error::Error| ConnectError::Query(e.to_string());
+        let work = async {
+            // A failure leaves the transaction open, and the engine rolls
+            // it back when the connection is dropped.
+            client
+                .simple_query("BEGIN TRANSACTION")
+                .await
+                .map_err(failed)?
+                .into_results()
+                .await
+                .map_err(failed)?;
+            // Every statement of the batch counts (a trigger's rows too).
+            let rows = client.execute(sql, &[]).await.map_err(failed)?.total();
+            let end = match super::guard(rows, max_rows) {
+                Ok(_) => "COMMIT TRANSACTION",
+                Err(_) => "ROLLBACK TRANSACTION",
+            };
+            client
+                .simple_query(end)
+                .await
+                .map_err(failed)?
+                .into_results()
+                .await
+                .map_err(failed)?;
+            super::guard(rows, max_rows)
+        };
+        tokio::time::timeout(
+            std::time::Duration::from_secs(self.timeout_secs.max(1)),
+            work,
+        )
+        .await
+        .map_err(|_| ConnectError::Query("timed out".into()))?
     }
 }
 

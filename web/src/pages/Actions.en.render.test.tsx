@@ -18,7 +18,9 @@ vi.mock("../api", async () => {
     getOntology: vi.fn(),
     getStats: vi.fn(),
     listActions: vi.fn(),
+    listApprovals: vi.fn(),
     listConcepts: vi.fn(),
+    runAction: vi.fn(),
     updateAction: vi.fn(),
   };
 });
@@ -37,6 +39,7 @@ beforeEach(() => {
   mocked.getStats!.mockResolvedValue(stats);
   mocked.getOntology!.mockResolvedValue({ concept_types: {}, relation_types: {}, action_types: {} });
   mocked.listConcepts!.mockResolvedValue({ total: 0, concepts: [] });
+  mocked.listApprovals!.mockResolvedValue({ approvals: [] });
 });
 
 describe("Actions page, English", () => {

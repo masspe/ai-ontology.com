@@ -155,7 +155,19 @@ pub fn quote_ansi(ident: &str) -> String {
         .join(".")
 }
 
-/// A read-only view of a database or a file.
+/// The row-count guard of a write: `rows` when it is within `max_rows`,
+/// else the refusal the caller rolls back on.
+pub fn guard(rows: u64, max_rows: u64) -> Result<u64, ConnectError> {
+    if rows > max_rows {
+        return Err(ConnectError::Query(format!(
+            "would change {rows} rows, at most {max_rows} allowed: rolled back"
+        )));
+    }
+    Ok(rows)
+}
+
+/// A view of a database or a file: read-only but for `execute`, which
+/// only an approved write-back calls.
 #[async_trait]
 pub trait Connector: Send + Sync {
     /// Reach the engine and come back: what "Test connection" runs.
@@ -163,6 +175,15 @@ pub trait Connector: Send + Sync {
     async fn tables(&self) -> Result<Vec<TableInfo>, ConnectError>;
     async fn columns(&self, table: &str) -> Result<Vec<ColumnInfo>, ConnectError>;
     async fn query(&self, q: &Query) -> Result<ResultSet, ConnectError>;
+
+    /// One `UPDATE`, `INSERT` or `DELETE` in a transaction: committed when
+    /// it changed at most `max_rows` rows, rolled back otherwise. The rows
+    /// changed.
+    async fn execute(&self, _sql: &str, _max_rows: u64) -> Result<u64, ConnectError> {
+        Err(ConnectError::Unsupported(
+            "this kind of source does not write".into(),
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -218,5 +239,17 @@ mod tests {
         };
         assert_eq!(rs.column_index("id"), Some(0));
         assert_eq!(rs.column_index("nope"), None);
+    }
+
+    #[tokio::test]
+    async fn a_write_is_guarded_by_its_row_count_and_a_file_does_not_write() {
+        assert_eq!(guard(2, 2).unwrap(), 2);
+        let over = guard(3, 2).unwrap_err().to_string();
+        assert!(over.contains("would change 3 rows, at most 2"), "{over}");
+        let file = CsvConnector::new("nowhere.csv");
+        assert!(matches!(
+            file.execute("delete from t", 1).await,
+            Err(ConnectError::Unsupported(_))
+        ));
     }
 }

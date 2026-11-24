@@ -65,6 +65,7 @@ tenant.
 | Clickjacking, MIME sniffing, referrer leaks | `X-Frame-Options`, `Content-Security-Policy: frame-ancestors 'none'; base-uri 'self'; object-src 'none'`, `nosniff`, `Referrer-Policy`, HSTS when the public URL is HTTPS | `security_headers_layer` |
 | A data source pointed at an internal address (SSRF), or rebinding to one after the check | Private, local and metadata ranges refused per source unless allowed, IPv4-in-IPv6 forms included; the checked address is the one connected to; redirects refused; administrators only | `sources.rs` (`check_host`), `crates/io/src/connect/` |
 | A question or a model writing SQL | Named queries: the administrator's SELECT, parameters bound as quoted literals from a restricted alphabet; rows rendered as data | `sources.rs` (`bind_query`) |
+| An action writing to a business database: by one person alone, with SQL nobody read, or over more rows than meant | Off unless the source says `allow_writes`; the administrator's single `UPDATE`/`INSERT`/`DELETE`, blanks bound as literals from the same restricted alphabet; a run only files an approval showing the statement as it will run; another signed-in administrator approves (not the requester, an API key or the service token); one transaction, rolled back past the statement's row limit; a changed statement or a closed source voids what waits; every step audited with the statement | `writeback.rs`, `crates/io/src/connect/` (`execute`, `guard`), tests `writeback.rs` |
 | A dead or slow engine holding the server | A deadline on every call, a circuit breaker per source, one sync per mapping at a time, a row cap | `sources.rs` (`Guarded`) |
 | Oversized requests | Body limits: 8 MB by default, more only on upload and ingest routes | `build_router` |
 | A compromised dependency | `cargo audit` and `cargo deny` (advisories, licences, sources) in CI; `npm audit`; lockfiles; pinned actions; `ignore-scripts` | `.github/workflows/ci.yml`, `deny.toml` |
@@ -84,6 +85,10 @@ tenant.
 - **Imports write labels unchecked**: an import is an administrator's act
   (keep the `import` routes to administrators and scoped keys without
   write).
+- **Write-back is four eyes between accounts, not persons**: an
+  administrator who creates a second account can approve their own
+  request, and the audit log shows both. Give a writing source a database
+  account that can change only the tables its statements name.
 - **Denial of service** beyond the rate limit on sign-in and the body
   limits: a reverse proxy's rate limiting and the container's memory limit
   (`--memory-mode strict`).

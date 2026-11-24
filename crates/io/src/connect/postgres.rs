@@ -6,7 +6,8 @@
 // from Mediasoft & Cie S.A. See LICENSE and LICENSE-COMMERCIAL.md.
 
 //! PostgreSQL through `tokio-postgres` (pure Rust, TLS by rustls): a new
-//! connection per call, read-only transactions, the statement timeout
+//! connection per call, read-only transactions (an approved write opens
+//! its own read-write one), the statement timeout
 //! set on the server, encryption on unless the source opts out. Values
 //! travel as text; booleans, integers and floats become JSON values, the
 //! rest stays the engine's text (dates sort as written). Behind the
@@ -295,6 +296,31 @@ impl Connector for PostgresConnector {
         }
         self.run(&sql, q.max_rows).await
     }
+
+    async fn execute(&self, sql: &str, max_rows: u64) -> Result<u64, ConnectError> {
+        let client = self.client().await?;
+        let failed = |e: tokio_postgres::Error| ConnectError::Query(describe(&e));
+        let work = async {
+            // The session is read-only: this one transaction is not. A
+            // failure leaves it open, and the engine rolls it back when
+            // the connection is dropped.
+            client
+                .batch_execute("BEGIN READ WRITE")
+                .await
+                .map_err(failed)?;
+            // The extended protocol takes one statement and counts its rows.
+            let rows = client.execute(sql, &[]).await.map_err(failed)?;
+            if let Err(over) = super::guard(rows, max_rows) {
+                client.batch_execute("ROLLBACK").await.map_err(failed)?;
+                return Err(over);
+            }
+            client.batch_execute("COMMIT").await.map_err(failed)?;
+            Ok(rows)
+        };
+        tokio::time::timeout(Duration::from_secs(self.timeout_secs.max(1)), work)
+            .await
+            .map_err(|_| ConnectError::Query("timed out".into()))?
+    }
 }
 
 #[cfg(test)]
@@ -345,6 +371,10 @@ mod tests {
         };
         assert!(matches!(
             verified.tables().await,
+            Err(ConnectError::Connect(_))
+        ));
+        assert!(matches!(
+            verified.execute("delete from t", 1).await,
             Err(ConnectError::Connect(_))
         ));
     }

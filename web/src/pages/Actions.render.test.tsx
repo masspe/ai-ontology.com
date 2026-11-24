@@ -20,7 +20,9 @@ vi.mock("../api", async () => {
     getOntology: vi.fn(),
     getStats: vi.fn(),
     listActions: vi.fn(),
+    listApprovals: vi.fn(),
     listConcepts: vi.fn(),
+    runAction: vi.fn(),
     updateAction: vi.fn(),
   };
 });
@@ -33,7 +35,9 @@ const mocked = api as unknown as {
   getOntology: ReturnType<typeof vi.fn>;
   getStats: ReturnType<typeof vi.fn>;
   listActions: ReturnType<typeof vi.fn>;
+  listApprovals: ReturnType<typeof vi.fn>;
   listConcepts: ReturnType<typeof vi.fn>;
+  runAction: ReturnType<typeof vi.fn>;
   updateAction: ReturnType<typeof vi.fn>;
 };
 
@@ -110,6 +114,8 @@ beforeEach(() => {
   mocked.createAction.mockResolvedValue({ id: 99 });
   mocked.updateAction.mockResolvedValue(undefined);
   mocked.deleteAction.mockResolvedValue(undefined);
+  mocked.listApprovals.mockResolvedValue({ approvals: [] });
+  mocked.runAction.mockReset().mockResolvedValue({ id: 5 });
 });
 
 function libraryTable(): HTMLElement {
@@ -311,6 +317,35 @@ describe("Actions page", () => {
     await waitFor(() => expect(mocked.deleteAction).toHaveBeenCalledWith(1));
     expect(await screen.findByRole("status")).toHaveTextContent("Échec de la suppression : locked");
     expect(within(libraryTable()).getByText("Notify owner")).toBeInTheDocument();
+  });
+
+  it("asks for the selected action to be written back, and shows what now awaits an approval", async () => {
+    const { user } = renderPage(<Actions />);
+    await loaded();
+    expect(screen.queryByText("Écritures à approuver")).not.toBeInTheDocument();
+    await user.click(within(detailsPanel()).getByRole("button", { name: "Demander l'exécution" }));
+    await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Annuler" }));
+    expect(mocked.runAction).not.toHaveBeenCalled();
+
+    mocked.listApprovals.mockResolvedValue({
+      approvals: [{ id: 5, action_name: "Notify owner", source_name: "erp", sql: "update t set a = 1", max_rows: 1, requested_by: "admin@example.com", requested_at: "2026-11-24T12:00:00Z", status: "pending" }],
+    });
+    await user.click(within(detailsPanel()).getByRole("button", { name: "Demander l'exécution" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent("Rien n'est écrit avant qu'un autre administrateur l'approuve.");
+    await user.click(within(dialog).getByRole("button", { name: "Demander" }));
+    await waitFor(() => expect(mocked.runAction).toHaveBeenCalledWith(1));
+    expect(await screen.findByRole("status")).toHaveTextContent("Demande déposée");
+    expect(await screen.findByText("update t set a = 1")).toBeInTheDocument();
+  });
+
+  it("says why a write was not asked for", async () => {
+    mocked.runAction.mockRejectedValue(new Error("no source writes back actions of type Alert"));
+    const { user } = renderPage(<Actions />);
+    await loaded();
+    await user.click(within(detailsPanel()).getByRole("button", { name: "Demander l'exécution" }));
+    await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Demander" }));
+    expect(await screen.findByRole("status")).toHaveTextContent("Demande refusée : no source writes back actions of type Alert");
   });
 
   it("creates an action through the modal and selects it", async () => {

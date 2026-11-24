@@ -1,5 +1,6 @@
 -- The table crates/io/tests/live_engines.rs reads; safe to run again.
 DROP TABLE IF EXISTS public.ontology_live_item;
+DROP TABLE IF EXISTS public.ontology_live_write;
 DROP SEQUENCE IF EXISTS public.ontology_live_seq;
 CREATE SEQUENCE public.ontology_live_seq;
 CREATE TABLE public.ontology_live_item (
@@ -14,3 +15,10 @@ INSERT INTO public.ontology_live_item VALUES
     (1, 'Pump', 120.50, true, '2026-01-01 10:00:00', 'first'),
     (2, 'O''Brien & fils — été', 80.00, false, '2026-02-01 10:00:00', NULL),
     (3, 'Valve', 9.99, true, '2026-03-01 10:00:00', 'third');
+-- What the write tests change: 1..3 natively, 11..13 through ODBC.
+CREATE TABLE public.ontology_live_write (
+    id    integer PRIMARY KEY,
+    state varchar(20) NOT NULL
+);
+INSERT INTO public.ontology_live_write VALUES
+    (1, 'open'), (2, 'open'), (3, 'open'), (11, 'open'), (12, 'open'), (13, 'open');

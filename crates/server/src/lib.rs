@@ -31,6 +31,7 @@ pub mod oidc;
 mod openapi;
 pub mod secrets;
 pub mod sources;
+pub mod writeback;
 
 use axum::{
     extract::{Multipart, Path, Query, State},
@@ -1339,6 +1340,7 @@ fn build_router_inner(state: AppState, cfg: RouterConfig) -> Router {
     let protected = protected.merge(reader);
     let protected = protected.merge(jobs::routes(settings_jobs.clone()));
     let protected = protected.merge(sources::routes(state_for_sources.clone()));
+    let protected = protected.merge(writeback::routes(state_for_sources.clone()));
     let protected = match &audit {
         Some(log) => {
             let log = log.clone();

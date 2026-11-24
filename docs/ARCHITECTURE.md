@@ -325,6 +325,11 @@ the boost weighted by how rare the naming word is (`HybridIndex::rank`).
    like every other import. A source's named queries answer at question
    time: a trigger regex binds its groups into an administrator's
    SELECT, and the rows join the prompt as a data block after the sheets.
+   A source that says `allow_writes` also writes back
+   (`crates/server/src/writeback.rs`): an action type bound to a named
+   statement, a run that files an approval, another administrator's
+   approval, then `Connector::execute` — one transaction, rolled back
+   past its row limit.
 
 `scripts/import-erp.ps1` runs the three in this order against one store
 (build, `--xref --sync`, `--abl --sync`, one `--df` per database).

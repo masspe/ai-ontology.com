@@ -9,7 +9,8 @@
 //! A source (where, how to connect; the secret sealed at rest) carries
 //! mappings (a table or a SELECT → sheets of a type, with links from its
 //! foreign keys), each synced on demand or on a schedule as a background
-//! job through the regular ingester. Read only, administrators only.
+//! job through the regular ingester. Read only, administrators only —
+//! but for a source that says `allow_writes`: see [`crate::writeback`].
 //!
 //! Routes: `GET|POST /sources`, `GET|PATCH|DELETE /sources/:id`,
 //! `POST /sources/:id/test`, `GET /sources/:id/tables`,
@@ -74,6 +75,10 @@ pub struct DataSource {
     pub mappings: Vec<MappingSpec>,
     /// Live lookups at question time.
     pub queries: Vec<NamedQuery>,
+    /// Write-back: off unless an administrator says so.
+    pub allow_writes: bool,
+    /// What an approved action may run here.
+    pub statements: Vec<crate::writeback::NamedStatement>,
 }
 
 /// A question that matches `trigger` runs `sql` with the trigger's named
@@ -98,7 +103,7 @@ pub struct NamedQuery {
 
 /// A bound value: letters, digits and a few separators — what an
 /// identifier, a code or a date is made of; never a quote or a comment.
-fn safe_param(v: &str) -> bool {
+pub(crate) fn safe_param(v: &str) -> bool {
     !v.is_empty()
         && v.len() <= 64
         && v.chars()
@@ -228,6 +233,8 @@ impl Default for DataSource {
             created_at: String::new(),
             mappings: Vec::new(),
             queries: Vec::new(),
+            allow_writes: false,
+            statements: Vec::new(),
         }
     }
 }
@@ -255,9 +262,13 @@ pub struct MappingSpec {
 }
 
 #[derive(Default, Serialize, Deserialize)]
-struct File {
+pub(crate) struct File {
     next_id: u64,
-    sources: Vec<DataSource>,
+    pub(crate) sources: Vec<DataSource>,
+    #[serde(default)]
+    pub(crate) next_approval: u64,
+    #[serde(default)]
+    pub(crate) approvals: Vec<crate::writeback::Approval>,
 }
 
 type TestConnectors = HashMap<String, Arc<dyn Connector>>;
@@ -265,7 +276,7 @@ type TestConnectors = HashMap<String, Arc<dyn Connector>>;
 /// The sources, in `<data>/sources.json` (secrets sealed) or in memory.
 pub struct SourceStore {
     path: Option<PathBuf>,
-    inner: Mutex<File>,
+    pub(crate) inner: Mutex<File>,
     /// Test hook: connectors for sources of kind `memory`, by name.
     test_connectors: Mutex<TestConnectors>,
     /// Counters and breaker state by source id, since the server started.
@@ -324,7 +335,7 @@ impl SourceStore {
         self.test_connectors.lock().insert(name.to_string(), c);
     }
 
-    fn persist(&self, file: &File) -> Result<(), ApiError> {
+    pub(crate) fn persist(&self, file: &File) -> Result<(), ApiError> {
         let Some(path) = &self.path else {
             return Ok(());
         };
@@ -351,7 +362,11 @@ impl SourceStore {
             .cloned()
     }
 
-    fn update(&self, id: u64, f: impl FnOnce(&mut DataSource)) -> Result<DataSource, ApiError> {
+    pub(crate) fn update(
+        &self,
+        id: u64,
+        f: impl FnOnce(&mut DataSource),
+    ) -> Result<DataSource, ApiError> {
         let mut inner = self.inner.lock();
         let s = inner
             .sources
@@ -776,6 +791,10 @@ impl Connector for Guarded {
         self.health.lock().entry(self.source).or_default().rows += rs.rows.len() as u64;
         Ok(rs)
     }
+
+    async fn execute(&self, sql: &str, max_rows: u64) -> Result<u64, ConnectError> {
+        self.call(false, self.inner.execute(sql, max_rows)).await
+    }
 }
 
 /// What the API serves: never the secrets.
@@ -1066,7 +1085,7 @@ pub async fn scheduler(state: AppState) {
 
 // ---------------------------------------------------------------- routes
 
-fn admin_only(ctx: &Option<axum::Extension<AuthContext>>) -> Result<String, ApiError> {
+pub(crate) fn admin_only(ctx: &Option<axum::Extension<AuthContext>>) -> Result<String, ApiError> {
     match ctx {
         None => Ok("anonymous".into()),
         Some(c) if c.clearances.is_none() && !c.read_only => Ok(c
@@ -1121,6 +1140,7 @@ pub struct SourcePatch {
     trust_cert: Option<bool>,
     allow_private_hosts: Option<bool>,
     timeout_secs: Option<u64>,
+    allow_writes: Option<bool>,
 }
 
 fn apply_patch(s: &mut DataSource, p: SourcePatch) -> Result<(), ApiError> {
@@ -1170,6 +1190,9 @@ fn apply_patch(s: &mut DataSource, p: SourcePatch) -> Result<(), ApiError> {
     if let Some(v) = p.timeout_secs {
         s.timeout_secs = v.clamp(1, 3600);
     }
+    if let Some(v) = p.allow_writes {
+        s.allow_writes = v;
+    }
     Ok(())
 }
 
@@ -1207,8 +1230,14 @@ async fn create_source(
     let mut resp = (StatusCode::CREATED, Json(view(&created))).into_response();
     resp.extensions_mut()
         .insert(crate::audit::AuditNote(format!(
-            "source created: {} ({})",
-            created.name, created.kind
+            "source created: {} ({}){}",
+            created.name,
+            created.kind,
+            if created.allow_writes {
+                ", write-back allowed"
+            } else {
+                ""
+            }
         )));
     Ok(resp)
 }
@@ -1231,10 +1260,12 @@ async fn update_source(
     ctx: Option<axum::Extension<AuthContext>>,
     Path(id): Path<u64>,
     Json(p): Json<SourcePatch>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Response, ApiError> {
     admin_only(&ctx)?;
     let mut err = None;
+    let mut wrote = false;
     let updated = s.sources.update(id, |src| {
+        wrote = src.allow_writes;
         if let Err(e) = apply_patch(src, p) {
             err = Some(e);
         }
@@ -1242,7 +1273,20 @@ async fn update_source(
     if let Some(e) = err {
         return Err(e);
     }
-    Ok(Json(view(&updated)))
+    let mut resp = Json(view(&updated)).into_response();
+    if wrote != updated.allow_writes {
+        resp.extensions_mut()
+            .insert(crate::audit::AuditNote(format!(
+                "source {}: write-back {}",
+                updated.name,
+                if updated.allow_writes {
+                    "allowed"
+                } else {
+                    "closed"
+                }
+            )));
+    }
+    Ok(resp)
 }
 
 async fn delete_source(

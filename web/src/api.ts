@@ -616,6 +616,32 @@ export const createAction = (a: Omit<Action, "id"> & { id?: number }) =>
   });
 export const deleteAction = (id: number) =>
   http<void>(`/actions/${id}`, { method: "DELETE", headers: headers() });
+
+/** A write an action asked for on a data source: it runs once another administrator approves it. */
+export interface Approval {
+  id: number;
+  action_id: number;
+  action_type: string;
+  action_name: string;
+  source_id: number;
+  source_name: string;
+  statement_id: number;
+  /** The statement as it will run, values filled in. */
+  sql: string;
+  max_rows: number;
+  requested_by: string;
+  requested_at: string;
+  status: "pending" | "running" | "done" | "failed" | "rejected";
+  decided_by?: string | null;
+  decided_at?: string | null;
+  rows_affected?: number | null;
+  error?: string | null;
+}
+export const runAction = (id: number) =>
+  http<Approval>(`/actions/${id}/run`, { method: "POST", headers: headers() });
+export const listApprovals = () => http<{ approvals: Approval[] }>("/approvals");
+export const decideApproval = (id: number, decision: "approve" | "reject") =>
+  http<Approval>(`/approvals/${id}/${decision}`, { method: "POST", headers: headers() });
 export const updateAction = (
   id: number,
   patch: Partial<Omit<Action, "id" | "action_type">>,

@@ -492,6 +492,29 @@ const SPEC_JSON: &str = r##"{
                 },
                 "delete": { "summary": "Delete an action", "tags": ["actions"], "responses": { "204": { "description": "Deleted" } } }
             },
+            "/actions/{id}/run": {
+                "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
+                "post": {
+                    "summary": "Ask for the action to be written back to its source: files a pending approval, runs nothing",
+                    "tags": ["actions"],
+                    "responses": { "201": { "description": "The pending approval, its statement filled in" }, "400": { "description": "No statement, or several, bound to the action's type on a source that allows writes" }, "403": { "description": "Not a signed-in administrator account" }, "422": { "description": "A value cannot be written, or the action already awaits an approval" } }
+                }
+            },
+            "/approvals": {
+                "get": { "summary": "Write-back approvals, newest first (administrators)", "tags": ["actions"], "responses": { "200": { "description": "List" } } }
+            },
+            "/approvals/{id}/approve": {
+                "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
+                "post": {
+                    "summary": "Approve as another administrator: the statement runs once, in a transaction, within its row-count guard",
+                    "tags": ["actions"],
+                    "responses": { "200": { "description": "The approval, `done` with the rows changed or `failed` with the reason" }, "403": { "description": "The one who asked, or not a signed-in administrator account" }, "422": { "description": "Already decided, or the source or its statement changed since" } }
+                }
+            },
+            "/approvals/{id}/reject": {
+                "parameters": [{ "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }],
+                "post": { "summary": "Reject a pending approval: nothing runs", "tags": ["actions"], "responses": { "200": { "description": "The approval, `rejected`" }, "422": { "description": "Already decided" } } }
+            },
             "/retrieve": {
                 "post": {
                     "summary": "Hybrid (lexical+vector) retrieval over the graph",

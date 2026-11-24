@@ -205,8 +205,9 @@ Kinds in every build: `csv` (a path on the server, or an HTTPS URL
 fetched on every run; `;` or `,`). Behind a build feature: `sqlserver`
 (pure Rust, TLS by default, `ApplicationIntent=ReadOnly`), `postgres`
 (pure Rust, TLS by default against the public authorities and the ones
-the host trusts; every session is read-only and its statements end at the
-source's timeout on the server) and `odbc` (the driver manager and the
+the host trusts; every session is read-only — but for the one transaction
+of an approved write, below — and its statements end at the source's
+timeout on the server) and `odbc` (the driver manager and the
 engine's driver on the host). The container image is built with
 `sqlserver` and `postgres` (`--build-arg FEATURES=…` to change that); a
 binary built by hand takes `cargo build -p ontology-cli --features
@@ -258,6 +259,62 @@ the prompt as a delimited data block, after the retrieved sheets. The
 model never writes SQL. At most 200 rows; `admin_only` keeps a query for
 callers who see everything; *Try* on the page shows what a question would
 get. The audit line of the question names the query (`lookup:<name>`).
+
+### Writing back to a source (approved actions)
+
+Off by default: a source is read only until an administrator says
+`allow_writes` on it. Such a source carries **named statements**: one
+`UPDATE`, `INSERT` or `DELETE` written by the administrator, bound to an
+action type of the data model, with `{blank}`s and a row limit.
+
+```
+PATCH /sources/1               {"allow_writes": true}
+POST  /sources/1/statements    {"name": "close an order", "action_type": "close",
+                                "sql": "update orders set state = 'done' where code = {subject.code}",
+                                "max_rows": 1}
+POST  /actions/42/run          -> 201, an approval, "pending"
+GET   /approvals
+POST  /approvals/7/approve     (another administrator)
+POST  /approvals/7/reject
+```
+
+A blank reads the action: `{subject}` and `{object}` are the names of its
+sheets, `{subject.code}` / `{object.code}` a property of one, any other
+name a parameter of the action. A value is written as a literal only — a
+short text of letters, digits and a few separators (a quote never
+passes), a number, or yes/no; anything else and the run is refused,
+nothing is asked.
+
+**Run** on an action (the *Ask to run* button of the Actions page) writes
+nothing: it files an approval that shows the statement exactly as it
+would run. **Another** signed-in administrator approves it (the Actions
+page lists what waits) — never the one who asked, never an API key or
+the service token, and not at all on a server without sign-in. The
+statement then runs in one transaction; if it would change more rows
+than `max_rows` (1 unless said otherwise, 10 000 at most) it is rolled
+back and the approval is `failed`. Changing the statement or closing the
+source voids what was asked before: reject it and run the action again.
+Asking, approving (with the rows changed, or the failure) and rejecting
+are in the audit log with the statement, as is every change of
+`allow_writes`.
+
+What to know before opening a source:
+
+- Give a writing source **its own database account**, with `UPDATE` /
+  `INSERT` / `DELETE` on the tables its statements name and nothing
+  more; keep the read-only account for the source that syncs. On a SQL
+  Server availability group, point it at the primary.
+- Four eyes are two **accounts**: an administrator who can create
+  accounts can make a second one. The audit log names both.
+- A write that ends on the source's timeout is reported `failed`, yet
+  the engine may have committed it: check the database before running
+  the action again. A server stopped in the middle of a write leaves the
+  approval `running`; the audit log and the database say what happened.
+- The audit line carries the statement with its values.
+- The last 200 decided approvals are listed; the audit log keeps them
+  all. Statements are administered through the API (no page yet), by
+  administrators — and by an unscoped API key or the service token,
+  which can prepare a statement but neither ask nor approve.
 
 ### Background jobs
 

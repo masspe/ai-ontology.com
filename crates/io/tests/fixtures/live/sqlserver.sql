@@ -14,4 +14,11 @@ INSERT INTO dbo.ontology_live_item VALUES
     (1, N'Pump', 120.50, 1, '2026-01-01T10:00:00', N'first'),
     (2, N'O''Brien & fils ' + NCHAR(8212) + N' ' + NCHAR(233) + N't' + NCHAR(233), 80.00, 0, '2026-02-01T10:00:00', NULL),
     (3, N'Valve', 9.99, 1, '2026-03-01T10:00:00', N'third');
+-- What the write test changes.
+DROP TABLE IF EXISTS dbo.ontology_live_write;
+CREATE TABLE dbo.ontology_live_write (
+    id    int PRIMARY KEY,
+    state varchar(20) NOT NULL
+);
+INSERT INTO dbo.ontology_live_write VALUES (1, 'open'), (2, 'open'), (3, 'open');
 GO

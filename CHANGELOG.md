@@ -56,6 +56,21 @@ All notable changes to this project are listed here. The format follows
 
 ### Added
 
+- **Write-back with approvals**, off unless a source says
+  `allow_writes`. A source carries named statements (`POST
+  /sources/{id}/statements`): one `UPDATE`, `INSERT` or `DELETE` bound to
+  an action type, with `{subject.code}`-style blanks filled from the
+  action and its sheets as literals only, and a row limit. `POST
+  /actions/{id}/run` writes nothing: it files an approval (`GET
+  /approvals`) showing the statement as it will run; another signed-in
+  administrator approves (`POST /approvals/{id}/approve`), any of
+  them rejects — the requester, an API key or the service token never approves.
+  The statement runs in one transaction on SQL Server, PostgreSQL or
+  ODBC (`Connector::execute`) and is rolled back if it would change more
+  rows than its limit; changing the statement or closing the source
+  voids what waits. Asking, approving, rejecting and every change of
+  `allow_writes` are audited. Web: *Ask to run* on an action and a
+  **Writes to approve** card on the Actions page.
 - Web: the **Access** page lists the API keys — what each may see
   (clearances), whether it may write, when it expires, when it was last
   used — and creates, rotates and revokes them; a new or rotated secret
