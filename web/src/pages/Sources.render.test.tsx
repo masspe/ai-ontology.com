@@ -68,6 +68,23 @@ describe("Sources page", () => {
     expect(await screen.findByText("login failed")).toBeInTheDocument();
   });
 
+  it("adds a database by host, the port following the engine", async () => {
+    m.createSource.mockResolvedValue({ ...source, id: 3, name: "pg", kind: "postgres", port: 5432 });
+    renderPage(<Sources />);
+    await screen.findByText("erp");
+    fireEvent.click(screen.getByRole("button", { name: "Ajouter une source" }));
+    expect(screen.queryByLabelText("Hôte")).toBeNull();
+    fireEvent.change(screen.getByLabelText("Nom de la source"), { target: { value: "pg" } });
+    fireEvent.change(screen.getByLabelText("Type"), { target: { value: "postgres" } });
+    expect(screen.getByLabelText("Port")).toHaveValue(5432);
+    fireEvent.change(screen.getByLabelText("Hôte"), { target: { value: "pg.example" } });
+    fireEvent.change(screen.getByLabelText("Type"), { target: { value: "sqlserver" } });
+    expect(screen.getByLabelText("Port")).toHaveValue(1433);
+    fireEvent.change(screen.getByLabelText("Type"), { target: { value: "postgres" } });
+    fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
+    await waitFor(() => expect(m.createSource).toHaveBeenCalledWith(expect.objectContaining({ name: "pg", kind: "postgres", host: "pg.example", port: 5432, encrypt: true })));
+  });
+
   it("adds a source and a mapping with a link rule, previews and syncs", async () => {
     m.createSource.mockResolvedValue({ ...source, id: 2, name: "files" });
     m.createMapping.mockResolvedValue({});

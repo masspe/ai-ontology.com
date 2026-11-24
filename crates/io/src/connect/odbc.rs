@@ -8,12 +8,13 @@
 //! Anything with an ODBC driver — OpenEdge first — through `odbc-api`.
 //! The driver manager's calls block, so each one runs on the blocking
 //! pool with its own connection. Every value comes back as text (the
-//! driver's rendering), which is what a sheet shows anyway. Behind the
+//! driver's rendering); integers, floats and bits are read back as what
+//! they are, so a watermark compares and binds as a number. Behind the
 //! `odbc` feature: the runtime image needs the driver manager and the
 //! engine's driver, mounted by the operator.
 
 use async_trait::async_trait;
-use odbc_api::{ConnectionOptions, Cursor, Environment, ResultSetMetadata};
+use odbc_api::{ConnectionOptions, Cursor, DataType, Environment, ResultSetMetadata};
 use serde_json::Value;
 
 use super::{quote_ansi, ColumnInfo, ConnectError, Connector, Query, ResultSet, TableInfo};
@@ -36,6 +37,27 @@ fn with_hint(e: impl std::fmt::Display) -> ConnectError {
         ));
     }
     ConnectError::Query(text)
+}
+
+/// The driver's text for a cell, as the JSON value its column type says.
+fn typed(kind: Option<&DataType>, text: String) -> Value {
+    let parsed = match kind {
+        Some(DataType::Integer | DataType::SmallInt | DataType::BigInt | DataType::TinyInt) => {
+            text.parse::<i64>().ok().map(Value::from)
+        }
+        Some(DataType::Real | DataType::Double | DataType::Float { .. }) => text
+            .parse::<f64>()
+            .ok()
+            .and_then(serde_json::Number::from_f64)
+            .map(Value::Number),
+        Some(DataType::Bit) => match text.as_str() {
+            "1" => Some(Value::Bool(true)),
+            "0" => Some(Value::Bool(false)),
+            _ => None,
+        },
+        _ => None,
+    };
+    parsed.unwrap_or(Value::String(text))
 }
 
 impl OdbcConnector {
@@ -66,15 +88,18 @@ impl OdbcConnector {
             .num_result_cols()
             .map_err(|e| ConnectError::Query(e.to_string()))? as usize;
         let mut columns = Vec::with_capacity(n);
+        let mut kinds = Vec::with_capacity(n);
         for i in 1..=n as u16 {
             let name = cursor
                 .col_name(i)
                 .map_err(|e| ConnectError::Query(e.to_string()))?;
-            let data_type = cursor
-                .col_data_type(i)
+            let kind = cursor.col_data_type(i).ok();
+            let data_type = kind
+                .as_ref()
                 .map(|t| format!("{t:?}").to_lowercase())
                 .unwrap_or_default();
             columns.push(ColumnInfo { name, data_type });
+            kinds.push(kind);
         }
         let mut rows = Vec::new();
         let mut truncated = false;
@@ -91,7 +116,10 @@ impl OdbcConnector {
                     .get_text(i, &mut buf)
                     .map_err(|e| ConnectError::Query(e.to_string()))?;
                 cells.push(if present {
-                    Value::String(String::from_utf8_lossy(&buf).trim_end().to_string())
+                    typed(
+                        kinds[i as usize - 1].as_ref(),
+                        String::from_utf8_lossy(&buf).trim_end().to_string(),
+                    )
                 } else {
                     Value::Null
                 });
@@ -181,5 +209,46 @@ impl Connector for OdbcConnector {
 
     async fn query(&self, q: &Query) -> Result<ResultSet, ConnectError> {
         self.run(&q.render_sql(quote_ansi), q.max_rows).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_cell_is_read_back_as_its_column_type() {
+        assert_eq!(
+            typed(Some(&DataType::Integer), "42".into()),
+            Value::from(42)
+        );
+        assert_eq!(typed(Some(&DataType::BigInt), "-7".into()), Value::from(-7));
+        assert_eq!(
+            typed(Some(&DataType::Double), "1.5".into()),
+            Value::from(1.5)
+        );
+        assert_eq!(typed(Some(&DataType::Bit), "1".into()), Value::Bool(true));
+        assert_eq!(typed(Some(&DataType::Bit), "0".into()), Value::Bool(false));
+        assert_eq!(
+            typed(Some(&DataType::Bit), "yes".into()),
+            Value::String("yes".into())
+        );
+        assert_eq!(
+            typed(Some(&DataType::Integer), "n/a".into()),
+            Value::String("n/a".into()),
+            "what does not read as its type stays the driver's text"
+        );
+        assert_eq!(
+            typed(
+                Some(&DataType::Decimal {
+                    precision: 10,
+                    scale: 2
+                }),
+                "12.30".into()
+            ),
+            Value::String("12.30".into()),
+            "an exact number keeps its digits"
+        );
+        assert_eq!(typed(None, "x".into()), Value::String("x".into()));
     }
 }

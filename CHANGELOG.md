@@ -8,6 +8,16 @@ All notable changes to this project are listed here. The format follows
 
 ### Fixed
 
+- A sync with a watermark compared the kept value and the new one as
+  text: after 9 came 10, which sorts before it, and the watermark stayed
+  at 9 — every later run read the same rows again. Values that read as
+  numbers now compare as numbers.
+- SQL Server dates and times were kept in the driver's debug form, which
+  the engine cannot read back: a date column could not be a watermark.
+  They are ISO 8601 now (`2026-02-01T10:00:00`, a `datetimeoffset` as
+  UTC with `Z`).
+- The ODBC connector returned every value as text; integers, floats and
+  bits are now the JSON values their column type says.
 - A type declared by several sources kept only the last source's
   property list: the source scanner's `Screen` declaration erased the
   `help` property the help-page import had added, and the next import
@@ -22,6 +32,12 @@ All notable changes to this project are listed here. The format follows
 
 ### Changed
 
+- The container image is built with the SQL Server and PostgreSQL
+  drivers (`--build-arg FEATURES=…`); ODBC stays a build by hand.
+- The SQL Server connector asks the engine for no more rows than the cap
+  (`TOP`), instead of cutting the result after it has travelled.
+- `url` 2.5.9, `quinn-proto` 0.11.19 and `quinn-udp` 0.5.16, past
+  RUSTSEC-2026-0592, -0523, -0524 and -0538.
 - Retrieval ranks by grain. The lexical index scores with BM25 (repeats
   saturate, a screen with a long help page is no longer ranked under a
   five-word label). A sheet the question names exactly — a screen code,
@@ -35,6 +51,22 @@ All notable changes to this project are listed here. The format follows
 
 ### Added
 
+- PostgreSQL as a data source (kind `postgres`, build feature
+  `postgres`, pure Rust with rustls): tables, columns, a query with a
+  watermark, named queries. Every session is read-only on the server
+  whatever the account may do, a statement ends at the source's timeout,
+  one statement per call, TLS on by default with the certificate checked
+  against the public authorities and the host's own.
+- The connectors are tested against real engines: the CI job
+  `connectors` starts a PostgreSQL and a SQL Server, seeds them and
+  reads them through each driver (ODBC through the PostgreSQL ODBC
+  driver), then syncs a source into the graph and asks it through
+  `/ask`. The same tests run against any engine named in
+  `ONTOLOGY_TEST_POSTGRES`, `ONTOLOGY_TEST_SQLSERVER` or
+  `ONTOLOGY_TEST_ODBC` (`crates/io/tests/live_engines.rs`).
+- A property test on named-query parameters: whatever a question
+  contains, the statement sent is the administrator's with one quoted
+  literal in it.
 - Data sources fail well. Every call to a source ends within its
   timeout (the ODBC driver gets the same limit for the statement). Five
   calls in a row without an answer open the source's circuit for a

@@ -124,6 +124,70 @@ jobs:
           tool: cargo-deny
       - run: cargo deny check
 
+  connectors:
+    # The database connectors against real engines: a PostgreSQL and a
+    # SQL Server that live for this job, seeded from
+    # crates/io/tests/fixtures/live, read through each driver (the ODBC one
+    # through the PostgreSQL ODBC driver), then a source synced into the
+    # graph and asked through the server. No other job builds the
+    # connector features. Each engine is its own step, and a failure is
+    # repeated as an annotation (scripts/ci-annotate.sh).
+    name: connectors (PostgreSQL, SQL Server, ODBC)
+    needs: guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      FEATURES: ontology-server/sqlserver,ontology-server/odbc,ontology-server/postgres
+      ONTOLOGY_TEST_ENGINES: required
+      # Not a secret: the password of engines that exist for this job only.
+      ENGINE_PASSWORD: Throwaway-ci-0nly
+      ONTOLOGY_TEST_POSTGRES: host=127.0.0.1 port=5432 database=postgres user=postgres password=Throwaway-ci-0nly
+      ONTOLOGY_TEST_SQLSERVER: host=127.0.0.1 port=1433 database=master user=sa password=Throwaway-ci-0nly
+      ONTOLOGY_TEST_ODBC: Driver={PostgreSQL Unicode};Server=127.0.0.1;Port=5432;Database=postgres;Uid=postgres;Pwd=Throwaway-ci-0nly;
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          key: connectors
+      - name: start the engines
+        run: |
+          # PostgreSQL with TLS on, under the self-signed certificate its image ships.
+          docker run -d --name pg -p 5432:5432 -e POSTGRES_PASSWORD="$ENGINE_PASSWORD" postgres:17             -c ssl=on -c ssl_cert_file=/etc/ssl/certs/ssl-cert-snakeoil.pem -c ssl_key_file=/etc/ssl/private/ssl-cert-snakeoil.key
+          docker run -d --name mssql -p 1433:1433 -e ACCEPT_EULA=Y -e MSSQL_SA_PASSWORD="$ENGINE_PASSWORD"             mcr.microsoft.com/mssql/server:2022-latest
+      - name: the ODBC driver manager and the PostgreSQL driver
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends unixodbc-dev odbc-postgresql
+      - name: clippy with every connector
+        run: cargo clippy --workspace --all-targets --locked --features "$FEATURES" -- -D warnings
+      - name: build the tests
+        run: cargo test --locked -p ontology-io -p ontology-server --features "$FEATURES" --no-run
+      - name: seed PostgreSQL
+        run: |
+          for _ in $(seq 1 60); do docker exec pg pg_isready -q -h 127.0.0.1 -U postgres && break; sleep 2; done
+          docker exec -i -e PGPASSWORD="$ENGINE_PASSWORD" pg psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -U postgres < crates/io/tests/fixtures/live/postgres.sql
+      - name: seed SQL Server
+        run: |
+          sqlcmd() { docker exec mssql /opt/mssql-tools18/bin/sqlcmd -C -b -S 127.0.0.1 -U sa -P "$ENGINE_PASSWORD" "$@"; }
+          for _ in $(seq 1 60); do sqlcmd -Q "select 1" >/dev/null 2>&1 && break; sleep 2; done
+          docker cp crates/io/tests/fixtures/live/sqlserver.sql mssql:/tmp/seed.sql
+          sqlcmd -d master -i /tmp/seed.sql
+      - name: PostgreSQL
+        run: bash scripts/ci-annotate.sh cargo test --locked -p ontology-io --features "$FEATURES" --test live_engines postgres_
+      - name: SQL Server
+        if: ${{ !cancelled() }}
+        run: bash scripts/ci-annotate.sh cargo test --locked -p ontology-io --features "$FEATURES" --test live_engines sql_server_
+      - name: ODBC
+        if: ${{ !cancelled() }}
+        run: bash scripts/ci-annotate.sh cargo test --locked -p ontology-io --features "$FEATURES" --test live_engines an_odbc_
+      - name: a source synced and asked through the server
+        if: ${{ !cancelled() }}
+        run: bash scripts/ci-annotate.sh cargo test --locked -p ontology-server --features "$FEATURES" --test sources a_real_engine_
+      - name: the io and server suites with every connector built
+        if: ${{ !cancelled() }}
+        run: bash scripts/ci-annotate.sh cargo test --locked -p ontology-io -p ontology-server --features "$FEATURES"
+
   auth-server:
     # The Node auth server has its own tests;
     # they run after the guard, never before.

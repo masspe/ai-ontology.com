@@ -37,7 +37,9 @@ import {
 } from "../api";
 import { t } from "../lib/i18n";
 
-const KINDS = ["csv", "sqlserver", "odbc"] as const;
+const KINDS = ["csv", "sqlserver", "postgres", "odbc"] as const;
+// The engines reached by host and port, with the port each listens on.
+const PORTS: Record<string, number> = { sqlserver: 1433, postgres: 5432 };
 
 const list = (s: string) => s.split(",").map((x) => x.trim()).filter(Boolean);
 
@@ -74,10 +76,10 @@ function SourceForm({ initial, onSave, onCancel }: { initial?: DataSource; onSav
         </label>
         <label className="field">
           <span>{t("Type")}</span>
-          <select value={p.kind} onChange={(e) => set("kind", e.target.value)}>
+          <select value={p.kind} onChange={(e) => setP((x) => ({ ...x, kind: e.target.value, port: PORTS[e.target.value] ?? x.port }))}>
             {KINDS.map((k) => (
               <option key={k} value={k}>
-                {k === "csv" ? t("Fichier CSV (chemin ou URL)") : k === "sqlserver" ? "SQL Server" : "ODBC (OpenEdge, …)"}
+                {k === "csv" ? t("Fichier CSV (chemin ou URL)") : k === "sqlserver" ? "SQL Server" : k === "postgres" ? "PostgreSQL" : "ODBC (OpenEdge, …)"}
               </option>
             ))}
           </select>
@@ -100,7 +102,7 @@ function SourceForm({ initial, onSave, onCancel }: { initial?: DataSource; onSav
             />
           </label>
         )}
-        {p.kind === "sqlserver" && (
+        {(p.kind ?? "") in PORTS && (
           <>
             <label className="field">
               <span>{t("Hôte")}</span>
@@ -393,7 +395,7 @@ export default function Sources() {
                 {s.name} <span className="badge">{s.kind}</span>
               </span>
             }
-            subtitle={s.kind === "sqlserver" ? `${s.host}:${s.port}/${s.database}` : s.location}
+            subtitle={s.kind in PORTS ? `${s.host}:${s.port}/${s.database}` : s.location}
             actions={
               <span style={{ display: "inline-flex", gap: 6 }}>
                 <button className="btn-ghost" onClick={() => run(async () => {

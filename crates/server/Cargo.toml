@@ -42,9 +42,11 @@ default = []
 # Database drivers of the io crate, by name.
 sqlserver = ["ontology-io/sqlserver"]
 odbc = ["ontology-io/odbc"]
+postgres = ["ontology-io/postgres"]
 
 [dev-dependencies]
 ontology-graph = { workspace = true }
 ontology-rag = { workspace = true }
 http-body-util = "0.1"
+proptest = { workspace = true }
 tokio = { workspace = true, features = ["macros"] }

@@ -2,7 +2,8 @@
 # dependency tree, checked in CI (`deny` job) — SECURITY.md.
 
 [graph]
-all-features = false
+# The database drivers are behind features and in the image: checked too.
+all-features = true
 
 [advisories]
 version = 2

@@ -7,8 +7,9 @@
 
 //! Connectors: a database or a file seen as tables of rows, read only.
 //! One trait, one implementation per engine — `csv` (a file or an HTTPS
-//! URL), `sqlserver` (feature), `odbc` (feature: the route to OpenEdge
-//! and anything with a driver), and `memory` for tests. A sync
+//! URL), `sqlserver` (feature), `postgres` (feature), `odbc` (feature:
+//! the route to OpenEdge and anything with a driver), and `memory` for
+//! tests. A sync
 //! (`RowSource`) turns rows into sheets and links through the regular
 //! ingester, so validation, journaling and idempotency are the same as
 //! for every other import.
@@ -21,6 +22,8 @@ pub mod csv;
 pub mod memory;
 #[cfg(feature = "odbc")]
 pub mod odbc;
+#[cfg(feature = "postgres")]
+pub mod postgres;
 pub mod rows;
 #[cfg(feature = "sqlserver")]
 pub mod sqlserver;

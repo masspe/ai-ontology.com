@@ -318,7 +318,8 @@ the boost weighted by how rare the naming word is (`HybridIndex::rank`).
 
 6. **Data sources** (`crates/io/src/connect/`, `crates/server/src/sources.rs`):
    a `Connector` trait (tables, columns, a query with a watermark) with
-   CSV, SQL Server (`tiberius`, feature) and ODBC (`odbc-api`, feature)
+   CSV, SQL Server (`tiberius`, feature), PostgreSQL (`tokio-postgres`,
+   feature) and ODBC (`odbc-api`, feature)
    behind it; a mapping turns rows into `Record`s (`RowSource`) for the
    same ingester, so a synced table is upserted, journaled and indexed
    like every other import. A source's named queries answer at question

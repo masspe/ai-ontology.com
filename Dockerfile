@@ -40,7 +40,11 @@ FROM chef AS builder
 COPY --from=planner /workspace/recipe.json recipe.json
 RUN cargo chef cook --release --recipe-path recipe.json
 COPY . .
-RUN cargo build --release --locked --bin ontology
+# The pure-Rust database drivers are in the image. ODBC is not: it needs a
+# driver manager and the engine's driver, which this runtime does not carry
+# (docs/DEPLOY.md).
+ARG FEATURES=sqlserver,postgres
+RUN cargo build --release --locked -p ontology-cli --bin ontology --features "$FEATURES"
 RUN strip /workspace/target/release/ontology
 
 FROM gcr.io/distroless/cc-debian12 AS runtime

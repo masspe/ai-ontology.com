@@ -2611,7 +2611,6 @@ impl OntologyGraph {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[allow(clippy::too_many_arguments)]
     fn list_relations_page_uncached(
         &self,
         source: Option<ConceptId>,

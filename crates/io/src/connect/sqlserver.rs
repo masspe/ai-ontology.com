@@ -140,17 +140,73 @@ fn cell_to_json(cell: &ColumnData<'_>) -> Value {
             .as_ref()
             .map(|x| Value::String(x.to_string()))
             .unwrap_or(Value::Null),
-        // Dates and times: their debug form is the engine's value, stable
-        // enough for a watermark and readable on a sheet.
-        other => {
-            let s = format!("{other:?}");
-            if s.ends_with("(None)") {
-                Value::Null
-            } else {
-                Value::String(s)
-            }
-        }
+        // Dates and times in ISO 8601, the one form the engine reads back
+        // the same under every language setting: a watermark kept from a
+        // sync is a literal the next sync can bind.
+        ColumnData::DateTime(v) => text(v.map(|d| {
+            // Days from 1900-01-01, the time in 1/300 s.
+            let ms = (u64::from(d.seconds_fragments()) * 10 + 1) / 3;
+            format!(
+                "{}T{}",
+                civil(DAYS_TO_1900 + i64::from(d.days())),
+                clock(ms, 3)
+            )
+        })),
+        ColumnData::SmallDateTime(v) => text(v.map(|d| {
+            // Days from 1900-01-01, the time in minutes.
+            format!(
+                "{}T{}",
+                civil(DAYS_TO_1900 + i64::from(d.days())),
+                clock(u64::from(d.seconds_fragments()) * 60, 0)
+            )
+        })),
+        ColumnData::Date(v) => text(v.map(|d| civil(i64::from(d.days())))),
+        ColumnData::Time(v) => text(v.map(|t| clock(t.increments(), t.scale()))),
+        ColumnData::DateTime2(v) => text(v.map(datetime2)),
+        // Stored as UTC beside its offset: the instant, as UTC.
+        ColumnData::DateTimeOffset(v) => text(v.map(|d| format!("{}Z", datetime2(d.datetime2())))),
     }
+}
+
+fn text(v: Option<String>) -> Value {
+    v.map(Value::String).unwrap_or(Value::Null)
+}
+
+/// 1900-01-01, the epoch of `datetime`, in days from 0001-01-01.
+const DAYS_TO_1900: i64 = 693_595;
+
+/// `YYYY-MM-DD` for a count of days from 0001-01-01.
+fn civil(days: i64) -> String {
+    // Days-to-civil over 400-year eras that start on a 1 March.
+    let z = days + 306;
+    let (era, doe) = (z.div_euclid(146_097), z.rem_euclid(146_097));
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+/// `hh:mm:ss[.fraction]` for a time of day in units of 10^-scale seconds.
+fn clock(increments: u64, scale: u8) -> String {
+    let unit = 10u64.pow(u32::from(scale));
+    let (secs, fraction) = (increments / unit, increments % unit);
+    let mut s = format!("{:02}:{:02}:{:02}", secs / 3600, secs / 60 % 60, secs % 60);
+    if scale > 0 {
+        s.push_str(&format!(".{fraction:0width$}", width = usize::from(scale)));
+    }
+    s
+}
+
+fn datetime2(d: tiberius::time::DateTime2) -> String {
+    let (date, time) = (d.date(), d.time());
+    format!(
+        "{}T{}",
+        civil(i64::from(date.days())),
+        clock(time.increments(), time.scale())
+    )
 }
 
 #[async_trait]
@@ -204,6 +260,64 @@ impl Connector for SqlServerConnector {
     }
 
     async fn query(&self, q: &Query) -> Result<ResultSet, ConnectError> {
-        self.run(&q.render_sql(quote_ansi), q.max_rows).await
+        // One row past the cap says whether the result was cut.
+        let mut sql = q.render_sql(quote_ansi);
+        if q.max_rows > 0 {
+            sql = sql.replacen("SELECT *", &format!("SELECT TOP ({}) *", q.max_rows + 1), 1);
+        }
+        self.run(&sql, q.max_rows).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tiberius::time::{Date, DateTime, DateTime2, DateTimeOffset, SmallDateTime, Time};
+
+    #[test]
+    fn dates_and_times_are_read_as_iso_8601() {
+        assert_eq!(civil(0), "0001-01-01");
+        assert_eq!(civil(DAYS_TO_1900), "1900-01-01");
+        assert_eq!(civil(719_162), "1970-01-01");
+        // A leap day, the day after, and the last day the engine has.
+        assert_eq!(civil(730_178), "2000-02-29");
+        assert_eq!(civil(730_179), "2000-03-01");
+        assert_eq!(civil(3_652_058), "9999-12-31");
+
+        let noon = Time::new(12 * 3600 + 34 * 60 + 56, 0);
+        let day = Date::new(739_647);
+        assert_eq!(
+            cell_to_json(&ColumnData::DateTime2(Some(DateTime2::new(day, noon)))),
+            "2026-02-01T12:34:56"
+        );
+        assert_eq!(
+            cell_to_json(&ColumnData::DateTime2(Some(DateTime2::new(
+                day,
+                Time::new(10_000_001, 7)
+            )))),
+            "2026-02-01T00:00:01.0000001"
+        );
+        assert_eq!(cell_to_json(&ColumnData::Date(Some(day))), "2026-02-01");
+        assert_eq!(cell_to_json(&ColumnData::Time(Some(noon))), "12:34:56");
+        // `datetime` counts thirds of a hundredth: .003 and .007.
+        assert_eq!(
+            cell_to_json(&ColumnData::DateTime(Some(DateTime::new(46_052, 300 + 2)))),
+            "2026-02-01T00:00:01.007"
+        );
+        assert_eq!(
+            cell_to_json(&ColumnData::SmallDateTime(Some(SmallDateTime::new(
+                46_052, 61
+            )))),
+            "2026-02-01T01:01:00"
+        );
+        assert_eq!(
+            cell_to_json(&ColumnData::DateTimeOffset(Some(DateTimeOffset::new(
+                DateTime2::new(day, noon),
+                120
+            )))),
+            "2026-02-01T12:34:56Z"
+        );
+        assert!(cell_to_json(&ColumnData::DateTime2(None)).is_null());
+        assert!(cell_to_json(&ColumnData::Date(None)).is_null());
     }
 }

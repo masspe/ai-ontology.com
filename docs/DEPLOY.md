@@ -196,12 +196,25 @@ the rows past the last value seen. Each sheet carries `source =
 watermark column.
 
 Kinds in every build: `csv` (a path on the server, or an HTTPS URL
-fetched on every run; `;` or `,`). Behind a build feature, because the
-runtime image carries only what the operator asked for: `sqlserver`
-(pure Rust, TLS by default, `ApplicationIntent=ReadOnly`) and `odbc` (the
-driver manager and the engine's driver on the host: `cargo build
---features sqlserver,odbc`, or an `-odbc` image with `unixODBC` and the
-driver mounted). A host that resolves to a loopback, link-local or private
+fetched on every run; `;` or `,`). Behind a build feature: `sqlserver`
+(pure Rust, TLS by default, `ApplicationIntent=ReadOnly`), `postgres`
+(pure Rust, TLS by default against the public authorities and the ones
+the host trusts; every session is read-only and its statements end at the
+source's timeout on the server) and `odbc` (the driver manager and the
+engine's driver on the host). The container image is built with
+`sqlserver` and `postgres` (`--build-arg FEATURES=…` to change that); a
+binary built by hand takes `cargo build -p ontology-cli --features
+sqlserver,postgres,odbc`, and ODBC in a container needs an image with
+`unixODBC` and the driver. *Accept a self-signed certificate* on a source
+keeps the encryption and stops checking who answers: for a server inside
+the network only.
+
+Values arrive typed where the engine says what they are (integers,
+floats, booleans); exact decimals keep their digits as text, dates are
+text, year first. A watermark compares as a number when both values read
+as one, as text otherwise — such a date sorts as written.
+
+A host that resolves to a loopback, link-local or private
 address is refused unless the source says *the server is on the private
 network* (an administrator typing a host is the classic way to reach a
 cloud's metadata service). The address that passed the check is the one

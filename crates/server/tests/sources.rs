@@ -955,3 +955,176 @@ async fn a_source_is_counted_on_metrics_and_its_circuit_opens_over_http() {
     assert_eq!(st, StatusCode::OK, "{v}");
     assert_eq!(w.state.sources.health(sid).failures_in_a_row, 0);
 }
+
+/// The whole path on a real engine, when `ONTOLOGY_TEST_POSTGRES` names
+/// one seeded with `crates/io/tests/fixtures/live/postgres.sql` (see
+/// `crates/io/tests/live_engines.rs`): a source, its tables, a mapping, a
+/// sync into sheets, a second sync by watermark, a question answered
+/// with live rows.
+#[cfg(feature = "postgres")]
+#[tokio::test]
+async fn a_real_engine_is_synced_into_sheets_and_asked_live() {
+    let Ok(spec) = std::env::var("ONTOLOGY_TEST_POSTGRES") else {
+        assert!(
+            std::env::var("ONTOLOGY_TEST_ENGINES").as_deref() != Ok("required"),
+            "ONTOLOGY_TEST_POSTGRES is not set"
+        );
+        return;
+    };
+    let e: std::collections::HashMap<&str, &str> = spec
+        .split_whitespace()
+        .filter_map(|p| p.split_once('='))
+        .collect();
+    let w = world("live").await;
+    let body = json!({
+        "name": "live", "kind": "postgres", "host": e["host"],
+        "port": e["port"].parse::<u16>().unwrap(), "database": e["database"],
+        "user": e["user"], "password": e["password"],
+        "encrypt": true, "trust_cert": true, "timeout_secs": 30
+    });
+    let (st, v) = call(&w.app, "POST", "/sources", Some(&w.admin), Some(body)).await;
+    assert_eq!(st, StatusCode::CREATED, "{v}");
+    let sid = v["id"].as_u64().unwrap();
+    // The test engine is local: refused until the source allows it.
+    let local = e["host"]
+        .parse::<std::net::IpAddr>()
+        .is_ok_and(|ip| ip.is_loopback());
+    if local {
+        let (st, v) = call(
+            &w.app,
+            "POST",
+            &format!("/sources/{sid}/test"),
+            Some(&w.admin),
+            None,
+        )
+        .await;
+        assert_eq!(st, StatusCode::FORBIDDEN, "{v}");
+        assert!(v.to_string().contains("allow_private_hosts"), "{v}");
+    }
+    let (st, v) = call(
+        &w.app,
+        "PATCH",
+        &format!("/sources/{sid}"),
+        Some(&w.admin),
+        Some(json!({ "allow_private_hosts": true })),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    let (st, v) = call(
+        &w.app,
+        "POST",
+        &format!("/sources/{sid}/test"),
+        Some(&w.admin),
+        None,
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert_eq!(v["ok"], true, "{v}");
+    let (_, v) = call(
+        &w.app,
+        "GET",
+        &format!("/sources/{sid}/tables"),
+        Some(&w.admin),
+        None,
+    )
+    .await;
+    assert!(v.to_string().contains("ontology_live_item"), "{v}");
+
+    let (st, v) = call(
+        &w.app,
+        "POST",
+        &format!("/sources/{sid}/mappings"),
+        Some(&w.admin),
+        Some(json!({
+            "name": "items", "from": "public.ontology_live_item", "concept_type": "Order",
+            "key_column": "id", "name_column": "name", "property_columns": ["price", "ok"],
+            "watermark_column": "id"
+        })),
+    )
+    .await;
+    assert_eq!(st, StatusCode::CREATED, "{v}");
+    let mid = v["id"].as_u64().unwrap();
+    let run = || async {
+        let (st, v) = call(
+            &w.app,
+            "POST",
+            &format!("/sources/{sid}/mappings/{mid}/run"),
+            Some(&w.admin),
+            None,
+        )
+        .await;
+        assert_eq!(st, StatusCode::ACCEPTED, "{v}");
+        let mut j = wait_job(&w, v["job"].as_u64().unwrap()).await;
+        // A real engine may take longer than the in-memory one.
+        for _ in 0..50 {
+            if j["status"] != "running" {
+                break;
+            }
+            j = wait_job(&w, v["job"].as_u64().unwrap()).await;
+        }
+        j
+    };
+    let j = run().await;
+    assert_eq!(j["status"], "done", "{j}");
+    assert_eq!(j["result"]["rows"], 3, "{j}");
+    assert_eq!(j["result"]["sheets_new"], 3, "{j}");
+    assert_eq!(j["result"]["watermark"], 3, "{j}");
+    let valve = w.state.graph.find_by_name("Order", "Valve").unwrap();
+    let c = w.state.graph.get_concept(valve).unwrap();
+    assert_eq!(
+        c.properties["ok"],
+        ontology_graph::PropertyValue::Bool(true)
+    );
+    assert!(w
+        .state
+        .graph
+        .find_by_name("Order", "O'Brien & fils — été")
+        .is_some());
+    // Nothing past the watermark: nothing read.
+    let j = run().await;
+    assert_eq!(j["status"], "done", "{j}");
+    assert_eq!(j["result"]["rows"], 0, "{j}");
+
+    // A question fills the blank of the administrator's statement.
+    let (st, v) = call(
+        &w.app,
+        "POST",
+        &format!("/sources/{sid}/queries"),
+        Some(&w.admin),
+        Some(json!({
+            "name": "item", "trigger": r"(?i)\bitem\s+(?P<name>[\w']+)",
+            "sql": "SELECT id, name, price FROM public.ontology_live_item WHERE name = {name}",
+            "max_rows": 5
+        })),
+    )
+    .await;
+    assert_eq!(st, StatusCode::CREATED, "{v}");
+    let (st, v) = call(
+        &w.app,
+        "POST",
+        "/ask",
+        Some(&w.admin),
+        Some(json!({ "query": "What is the price of item Valve?", "top_k": 3 })),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    let answer = v["answer"].as_str().unwrap();
+    assert!(
+        answer.contains("---DATA---") && answer.contains("9.99") && answer.contains("query `item`"),
+        "{answer}"
+    );
+    // A quote in the question is not a value: the query does not run.
+    let (_, v) = call(
+        &w.app,
+        "POST",
+        "/ask",
+        Some(&w.admin),
+        Some(json!({ "query": "item x' OR '1'='1", "top_k": 3 })),
+    )
+    .await;
+    assert!(!v["answer"].as_str().unwrap().contains("---DATA---"), "{v}");
+    // The engine was counted.
+    let h = w.state.sources.health(sid);
+    assert!(h.calls >= 5 && h.rows >= 4 && h.lookups == 1, "{h:?}");
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
