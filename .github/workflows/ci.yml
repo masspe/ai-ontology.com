@@ -174,13 +174,13 @@ jobs:
           docker cp crates/io/tests/fixtures/live/sqlserver.sql mssql:/tmp/seed.sql
           sqlcmd -d master -i /tmp/seed.sql
       - name: PostgreSQL
-        run: bash scripts/ci-annotate.sh cargo test --locked -p ontology-io --features "$FEATURES" --test live_engines postgres_
+        run: bash scripts/ci-annotate.sh cargo test --locked -p ontology-io --features sqlserver,odbc,postgres --test live_engines postgres_
       - name: SQL Server
         if: ${{ !cancelled() }}
-        run: bash scripts/ci-annotate.sh cargo test --locked -p ontology-io --features "$FEATURES" --test live_engines sql_server_
+        run: bash scripts/ci-annotate.sh cargo test --locked -p ontology-io --features sqlserver,odbc,postgres --test live_engines sql_server_
       - name: ODBC
         if: ${{ !cancelled() }}
-        run: bash scripts/ci-annotate.sh cargo test --locked -p ontology-io --features "$FEATURES" --test live_engines an_odbc_
+        run: bash scripts/ci-annotate.sh cargo test --locked -p ontology-io --features sqlserver,odbc,postgres --test live_engines an_odbc_
       - name: a source synced and asked through the server
         if: ${{ !cancelled() }}
         run: bash scripts/ci-annotate.sh cargo test --locked -p ontology-server --features "$FEATURES" --test sources a_real_engine_

@@ -13,7 +13,8 @@ out="$(mktemp)"
 "$@" 2>&1 | tee "$out"
 code=${PIPESTATUS[0]}
 if [ "$code" -ne 0 ]; then
-  why="$(grep -E -A8 'panicked at|^error' "$out" | head -60)"
+  # Without the colours cargo writes when CARGO_TERM_COLOR=always.
+  why="$(sed $'s/\x1b\[[0-9;]*m//g' "$out" | grep -E -A8 'panicked at|^error' | head -60)"
   # An annotation is one line: the workflow command's escapes for the rest.
   why="${why//'%'/%25}"
   why="${why//$'\r'/%0D}"
