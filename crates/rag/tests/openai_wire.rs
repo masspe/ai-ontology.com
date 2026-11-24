@@ -203,6 +203,40 @@ async fn run_streaming_stub(captured: Arc<Mutex<String>>) -> u16 {
     port
 }
 
+/// A gateway that reports its failure inside the stream: the error is
+/// surfaced, not swallowed into an empty answer.
+#[tokio::test]
+async fn an_error_frame_in_the_stream_is_an_error() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        let (mut sock, _) = listener.accept().await.unwrap();
+        read_request(&mut sock).await;
+        let reply =
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n\
+                     data: {\"error\":{\"message\":\"model overloaded\"}}\n\n";
+        sock.write_all(reply.as_bytes()).await.unwrap();
+        sock.shutdown().await.ok();
+    });
+    let model = OpenAiModel::infomaniak("tok", "101112")
+        .with_base_url(format!("http://127.0.0.1:{port}/2/ai/101112/openai/v1"))
+        .with_model("mixtral");
+    let stream = model
+        .generate_stream(&LlmRequest {
+            messages: vec![Message::user("ping")],
+            max_tokens: 32,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let chunks: Vec<_> = stream.collect().await;
+    assert_eq!(chunks.len(), 1, "{chunks:?}");
+    assert_eq!(
+        chunks[0].as_ref().unwrap_err().to_string(),
+        "api: model overloaded"
+    );
+}
+
 #[tokio::test]
 async fn infomaniak_streaming_yields_deltas_then_end_with_usage() {
     let captured = Arc::new(Mutex::new(String::new()));

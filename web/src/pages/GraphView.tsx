@@ -254,6 +254,9 @@ const FULL_GRAPH_MAX = 300;
 const SUBGRAPH_LIMIT = 250;
 /** Links fetched at most, strongest first: what the canvas can draw. */
 const EDGE_LIMIT = 1000;
+/** A large graph seen by types only: an overview the browser draws at once. */
+const OVERVIEW_LIMIT = 120;
+const OVERVIEW_EDGES = 400;
 
 export default function GraphView() {
   const navigate = useNavigate();
@@ -309,6 +312,9 @@ export default function GraphView() {
   const large = total !== null && total > FULL_GRAPH_MAX;
   // A large graph loads only around a selection: types, a search or a sheet.
   const canLoad = !large || nodeTypes.length > 0 || search.trim() !== "" || focusId !== null;
+  // Types alone on a large graph: a sample of each, never all of them.
+  const overview = large && search.trim() === "" && focusId === null;
+  const limit = !large ? FULL_GRAPH_MAX : overview ? OVERVIEW_LIMIT : SUBGRAPH_LIMIT;
 
   const loadSubgraph = async (d = depth) => {
     const mine = ++seq.current;
@@ -324,10 +330,10 @@ export default function GraphView() {
         seed_concept_ids: focusId !== null && !search.trim() ? [focusId] : undefined,
         seed_concept_types: nodeTypes,
         expansion_depth: d,
-        limit: large ? SUBGRAPH_LIMIT : FULL_GRAPH_MAX,
+        limit,
         relation_types: relTypes.length > 0 ? relTypes : undefined,
         exclude_relation_types: showDetail ? undefined : detailTypes,
-        max_edges: EDGE_LIMIT,
+        max_edges: overview ? OVERVIEW_EDGES : EDGE_LIMIT,
       });
       if (mine !== seq.current) return;
       setSubgraph(res.subgraph);
@@ -418,15 +424,12 @@ export default function GraphView() {
     return out;
   }, [conceptTypes]);
 
-  // Client-side filtered subgraph
+  // Client-side filtered subgraph. Not by the search: the server seeded
+  // with it and the depth brought the neighbours, which a name filter
+  // would hide again.
   const filteredSubgraph = useMemo<Subgraph | null>(() => {
     if (!subgraph) return null;
-    const q = search.trim().toLowerCase();
-    const keepConcept = (c: Concept): boolean => {
-      if (nodeTypes.length > 0 && !nodeTypes.includes(c.concept_type)) return false;
-      if (q && !c.name.toLowerCase().includes(q) && !c.concept_type.toLowerCase().includes(q)) return false;
-      return true;
-    };
+    const keepConcept = (c: Concept): boolean => nodeTypes.length === 0 || nodeTypes.includes(c.concept_type);
     const concepts = subgraph.concepts.filter(keepConcept);
     const keepIds = new Set(concepts.map((c) => c.id));
     const relations: Relation[] = subgraph.relations.filter((r) => {
@@ -435,7 +438,7 @@ export default function GraphView() {
       return keepIds.has(r.source) && keepIds.has(r.target);
     });
     return { concepts, relations };
-  }, [subgraph, search, nodeTypes, relTypes, showDetail, detailTypes]);
+  }, [subgraph, nodeTypes, relTypes, showDetail, detailTypes]);
 
   // Active filters count for KPI
   const activeFiltersCount = useMemo(() => {
@@ -720,6 +723,16 @@ export default function GraphView() {
                   total: total!.toLocaleString(getLang() === "fr" ? "fr-CH" : "en-GB"),
                   max: SUBGRAPH_LIMIT,
                 })}
+              </div>
+            )}
+            {large && subgraph && subgraph.concepts.length >= limit && (
+              <div className="gv-canvas-note" data-testid="capped" role="status">
+                {overview
+                  ? t("Aperçu : {n} fiches des types choisis, sur {total}. Cherchez une fiche pour voir ses liens en profondeur.", {
+                      n: subgraph.concepts.length,
+                      total: total!.toLocaleString(getLang() === "fr" ? "fr-CH" : "en-GB"),
+                    })
+                  : t("Affichage limité à {n} fiches : réduisez la profondeur ou choisissez des types pour voir le reste.", { n: subgraph.concepts.length })}
               </div>
             )}
             {total === 0 && subgraph && subgraph.concepts.length === 0 && conceptTypes.length > 0 && !search.trim() && (

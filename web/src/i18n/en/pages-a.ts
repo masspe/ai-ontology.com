@@ -379,6 +379,8 @@ export const pagesA: Record<string, string> = {
   "Zoom avant": "Zoom in",
   "Zoom arrière": "Zoom out",
   "Ajuster la vue": "Fit the view",
+  "Aperçu : {n} fiches des types choisis, sur {total}. Cherchez une fiche pour voir ses liens en profondeur.": "Overview: {n} sheets of the chosen types, out of {total}. Search for a sheet to see its links in depth.",
+  "Affichage limité à {n} fiches : réduisez la profondeur ou choisissez des types pour voir le reste.": "Limited to {n} sheets: lower the depth or choose types to see the rest.",
   "Plein écran": "Full screen",
   "Basculer le surlignage des chemins": "Toggle path highlighting",
   "Actualiser": "Refresh",

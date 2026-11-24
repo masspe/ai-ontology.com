@@ -776,6 +776,23 @@ async fn subgraph_seeds_by_query_and_by_type_within_the_limit() {
         "{v}"
     );
 
+    // Two types, room for two: one of each, not two of the first.
+    let (st, v) = call(
+        &app,
+        "POST",
+        "/subgraph",
+        Some(json!({ "seed_concept_types": ["Topic", "Tag"], "limit": 2, "expansion_depth": 0 })),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    let types: Vec<&str> = v["subgraph"]["concepts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["concept_type"].as_str().unwrap())
+        .collect();
+    assert!(types.contains(&"Topic") && types.contains(&"Tag"), "{v}");
+
     let (st, v) = call(
         &app,
         "POST",

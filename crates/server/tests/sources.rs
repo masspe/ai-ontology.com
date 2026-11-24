@@ -354,6 +354,62 @@ async fn a_source_is_administered_tested_browsed_and_its_secret_sealed() {
     assert_eq!(st, StatusCode::BAD_REQUEST, "{v}");
 }
 
+/// A CSV from the administrator's computer is kept beside the sources
+/// and answered as the path to give one; the drivers are listed.
+#[tokio::test]
+async fn a_csv_is_uploaded_for_a_source_and_the_odbc_drivers_are_listed() {
+    let w = world("upload").await;
+    let boundary = "XBOUNDARY";
+    let body = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"my clients.csv\"\r\nContent-Type: text/csv\r\n\r\ncode,name\r\nC1,Acme\r\n\r\n--{boundary}--\r\n"
+    );
+    let up = |body: String| {
+        Request::builder()
+            .method("POST")
+            .uri("/sources/files")
+            .header("authorization", format!("Bearer {}", w.admin))
+            .header(
+                "content-type",
+                format!("multipart/form-data; boundary={boundary}"),
+            )
+            .body(Body::from(body))
+            .unwrap()
+    };
+    let resp = w.app.clone().oneshot(up(body.clone())).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v: Value =
+        serde_json::from_slice(&to_bytes(resp.into_body(), 1 << 20).await.unwrap()).unwrap();
+    let path = PathBuf::from(v["path"].as_str().unwrap());
+    assert_eq!(path, w.dir.join("source-files").join("my_clients.csv"));
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "code,name\r\nC1,Acme\r\n"
+    );
+
+    // Not a text table: refused.
+    let resp = w
+        .app
+        .clone()
+        .oneshot(up(body.replace("my clients.csv", "tool.exe")))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let resp = w
+        .app
+        .clone()
+        .oneshot(up(format!("--{boundary}--\r\n")))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+    let (st, v) = call(&w.app, "GET", "/sources/odbc", Some(&w.admin), None).await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert!(v["drivers"].is_array() && v["dsns"].is_array(), "{v}");
+    if !cfg!(feature = "odbc") {
+        assert_eq!(v["available"], false);
+    }
+}
+
 #[tokio::test]
 async fn a_sync_makes_sheets_and_links_then_follows_the_watermark_and_marks_stale_rows() {
     let w = world("sync").await;

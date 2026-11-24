@@ -270,18 +270,19 @@ describe("GraphView page", () => {
     expect(await screen.findByText("plain failure")).toBeInTheDocument();
   });
 
-  it("filters nodes client-side by search text (name or type) and counts the filter", async () => {
+  it("seeds the server with the search and keeps the neighbours the depth brought", async () => {
     const { user } = await mount();
     const input = screen.getByPlaceholderText("Rechercher une fiche…");
-    await user.type(input, "ali");
-    expect(canvasNodes()).toBe("Alice");
-    expect(canvasRels()).toBe("");
+    await user.type(input, "ali{Enter}");
+    await waitFor(() =>
+      expect(mocked.getSubgraph).toHaveBeenLastCalledWith(expect.objectContaining({ seed_query: "ali", expansion_depth: 3 })),
+    );
+    // Alice's neighbours stay: no name filter on what the server expanded.
+    expect(canvasNodes()).toBe("Alice,ACME,Geneva,Bob");
     expect(kpiValue("Filtres actifs")).toBe("1");
+    // Refresh sends the search text as the seed query.
     await user.clear(input);
     await user.type(input, "person");
-    expect(canvasNodes()).toBe("Alice,Bob");
-    expect(canvasRels()).toBe("knows");
-    // Refresh sends the search text as the seed query.
     await user.click(screen.getByRole("button", { name: "Actualiser" }));
     await waitFor(() =>
       expect(mocked.getSubgraph).toHaveBeenLastCalledWith(expect.objectContaining({ seed_query: "person", expansion_depth: 3 })),
@@ -732,7 +733,7 @@ describe("GraphView — a large graph loads by selection only", () => {
       expect(mocked.getSubgraph).not.toHaveBeenCalled();
       await pick(user, "Types de fiche", "Person");
       await waitFor(() =>
-        expect(mocked.getSubgraph).toHaveBeenLastCalledWith(expect.objectContaining({ seed_concept_types: ["Person"], limit: 250 })),
+        expect(mocked.getSubgraph).toHaveBeenLastCalledWith(expect.objectContaining({ seed_concept_types: ["Person"], limit: 120, max_edges: 400 })),
       );
       await waitFor(() => expect(canvasNodes()).toBe("Alice,Bob"));
       const calls = mocked.getSubgraph.mock.calls.length;
@@ -743,11 +744,24 @@ describe("GraphView — a large graph loads by selection only", () => {
       // A search seeds the load on Enter.
       await user.type(screen.getByPlaceholderText(/Rechercher une fiche/), "acme{Enter}");
       await waitFor(() =>
-        expect(mocked.getSubgraph).toHaveBeenLastCalledWith(expect.objectContaining({ seed_query: "acme", seed_concept_types: [] })),
+        expect(mocked.getSubgraph).toHaveBeenLastCalledWith(expect.objectContaining({ seed_query: "acme", seed_concept_types: [], limit: 250, max_edges: 1000 })),
       );
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("says when the view is an overview cut at its limit", async () => {
+    mocked.getStats.mockResolvedValue({ concepts: 5000, relations: 9000 });
+    const many = Array.from({ length: 120 }, (_, i) => ({ id: 1000 + i, concept_type: "Person", name: `P${i}`, description: "", properties: {} }));
+    mocked.getSubgraph.mockResolvedValue({ subgraph: { concepts: many, relations: [] } });
+    const { user } = renderPage(<GraphView />, { route: "/graph", extraRoutes: probeRoutes });
+    await screen.findByTestId("select-first");
+    await pick(user, "Types de fiche", "Person");
+    expect(await screen.findByTestId("capped")).toHaveTextContent(/Aperçu : 120 fiches des types choisis, sur 5.000|Aperçu : 120 fiches des types choisis, sur 5/);
+    await user.type(screen.getByPlaceholderText(/Rechercher une fiche/), "p1{Enter}");
+    await waitFor(() => expect(mocked.getSubgraph).toHaveBeenLastCalledWith(expect.objectContaining({ seed_query: "p1", limit: 250 })));
+    expect(screen.queryByTestId("capped")).not.toBeInTheDocument();
   });
 
   it("keeps the model's detail links out of the request until the toggle asks for them", async () => {

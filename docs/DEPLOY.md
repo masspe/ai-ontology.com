@@ -244,8 +244,24 @@ servers. A read-only SQL account with `GRANT SELECT` on the listed tables
 field's SQL width make the engine refuse the query (error 7864); the
 connector says so and names the fix (`dbtool` option 2, or
 `-SQLWidthUpdate ON` on the broker). The Progress driver is licensed and
-not redistributable: install it where the binary runs and name it in the
-connection string (`Driver={Progress OpenEdge 12.2 driver};Host=…;Port=…;DB=…;UID=…;PWD=…`).
+not redistributable: install it where the binary runs.
+
+The form asks what the ODBC administrator of the server's machine shows:
+a **data source name** (a DSN set up there, listed by `GET /sources/odbc`
+with the installed drivers), or a **driver** with the host, port and
+database; then the account. The connection string is built from them —
+`DSN=…` or `Driver={…};HOST=…;PORT=…;DB=…`, then `UID=…;PWD=…`, a value
+with `;` or braces put in braces. `HOST`, `PORT` and `DB` are the short
+keywords of the DataDirect drivers (Progress among them); a driver that
+reads other names gets a DSN, or the whole connection string in the
+advanced field, which wins over the fields when given.
+
+**A CSV from the administrator's computer.** *Browse…* on a CSV source
+sends the file to `POST /sources/files` (administrators, the upload cap):
+it is kept in `source-files/` beside `sources.json` under a cleaned name
+(`.csv`, `.tsv` or `.txt` only), the same name again replacing it, and
+the source gets that path. Send it again before a sync to read a newer
+copy.
 
 ### Live lookups at question time (named queries)
 

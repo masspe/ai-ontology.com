@@ -55,9 +55,13 @@ pub struct DataSource {
     pub name: String,
     /// `csv`, `sqlserver`, `postgres`, `odbc` (`memory` in tests).
     pub kind: String,
-    /// CSV: a path or an HTTPS URL. ODBC: the connection string
-    /// (secret: never served). SQL Server: unused.
+    /// CSV: a path or an HTTPS URL. ODBC: a whole connection string, when
+    /// the fields below do not say enough (secret: never served).
     pub location: String,
+    /// ODBC: a data source name of the server's machine, or else a driver
+    /// with `host`, `port` and `database`.
+    pub dsn: String,
+    pub driver: String,
     pub host: String,
     pub port: u16,
     pub database: String,
@@ -220,6 +224,8 @@ impl Default for DataSource {
             name: String::new(),
             kind: "csv".into(),
             location: String::new(),
+            dsn: String::new(),
+            driver: String::new(),
             host: String::new(),
             port: 0,
             database: String::new(),
@@ -659,13 +665,11 @@ fn raw_connector(store: &SourceStore, s: &DataSource) -> Result<Arc<dyn Connecto
         }
         #[cfg(feature = "odbc")]
         "odbc" => {
-            if s.location.trim().is_empty() {
-                return Err(ApiError::BadRequest(
-                    "an ODBC connection string is required".into(),
-                ));
-            }
+            let connection_string = odbc_connection_string(s).ok_or_else(|| {
+                ApiError::BadRequest("a data source name or a driver is required".into())
+            })?;
             Ok(Arc::new(ontology_io::connect::odbc::OdbcConnector {
-                connection_string: s.location.clone(),
+                connection_string,
                 timeout_secs: s.timeout_secs.max(1),
             }))
         }
@@ -684,6 +688,50 @@ fn raw_connector(store: &SourceStore, s: &DataSource) -> Result<Arc<dyn Connecto
             if cfg!(feature = "odbc") { ", odbc" } else { "" },
         ))),
     }
+}
+
+/// An attribute value as ODBC reads it: in braces when it holds a
+/// separator, a brace or edge spaces.
+fn odbc_value(v: &str) -> String {
+    if v.contains([';', '{', '}', '=']) || v.trim() != v {
+        format!("{{{}}}", v.replace('}', "}}"))
+    } else {
+        v.to_string()
+    }
+}
+
+/// The connection string of an ODBC source: the administrator's own when
+/// given, else built from the fields — a data source name, or a driver
+/// with the host, port and database (the short keywords most drivers
+/// read: `HOST`, `PORT`, `DB`), then the account. `None` when neither a
+/// name nor a driver is set.
+pub fn odbc_connection_string(s: &DataSource) -> Option<String> {
+    if !s.location.trim().is_empty() {
+        return Some(s.location.clone());
+    }
+    let mut parts = if !s.dsn.is_empty() {
+        vec![format!("DSN={}", odbc_value(&s.dsn))]
+    } else if !s.driver.is_empty() {
+        vec![format!("Driver={{{}}}", s.driver.replace('}', "}}"))]
+    } else {
+        return None;
+    };
+    if !s.host.is_empty() {
+        parts.push(format!("HOST={}", odbc_value(&s.host)));
+    }
+    if s.port != 0 {
+        parts.push(format!("PORT={}", s.port));
+    }
+    if !s.database.is_empty() {
+        parts.push(format!("DB={}", odbc_value(&s.database)));
+    }
+    if !s.user.is_empty() {
+        parts.push(format!("UID={}", odbc_value(&s.user)));
+    }
+    if !s.password.is_empty() {
+        parts.push(format!("PWD={}", odbc_value(&s.password)));
+    }
+    Some(parts.join(";"))
 }
 
 // ---------------------------------------------------------------- health
@@ -1102,6 +1150,13 @@ pub(crate) fn admin_only(ctx: &Option<axum::Extension<AuthContext>>) -> Result<S
 pub fn routes(state: AppState) -> Router {
     Router::new()
         .route("/sources", get(list_sources).post(create_source))
+        .route("/sources/odbc", get(odbc_catalog))
+        .route(
+            "/sources/files",
+            post(upload_file).layer(axum::extract::DefaultBodyLimit::max(
+                crate::BODY_LIMIT_UPLOAD,
+            )),
+        )
         .route(
             "/sources/:id",
             get(get_source).patch(update_source).delete(delete_source),
@@ -1131,6 +1186,8 @@ pub struct SourcePatch {
     name: Option<String>,
     kind: Option<String>,
     location: Option<String>,
+    dsn: Option<String>,
+    driver: Option<String>,
     host: Option<String>,
     port: Option<u16>,
     database: Option<String>,
@@ -1161,6 +1218,12 @@ fn apply_patch(s: &mut DataSource, p: SourcePatch) -> Result<(), ApiError> {
     }
     if let Some(v) = p.location {
         s.location = v.trim().to_string();
+    }
+    if let Some(v) = p.dsn {
+        s.dsn = v.trim().to_string();
+    }
+    if let Some(v) = p.driver {
+        s.driver = v.trim().to_string();
     }
     if let Some(v) = p.host {
         s.host = v.trim().to_string();
@@ -1240,6 +1303,89 @@ async fn create_source(
             }
         )));
     Ok(resp)
+}
+
+/// `GET /sources/odbc`: the drivers and data source names of the
+/// server's machine, for the form; `available: false` on a build
+/// without ODBC or a machine without a driver manager.
+async fn odbc_catalog(ctx: Option<axum::Extension<AuthContext>>) -> Result<Json<Value>, ApiError> {
+    admin_only(&ctx)?;
+    #[cfg(feature = "odbc")]
+    if let Ok(Ok((drivers, dsns))) =
+        tokio::task::spawn_blocking(ontology_io::connect::odbc::catalog).await
+    {
+        let dsns: Vec<Value> = dsns
+            .into_iter()
+            .map(|(name, driver)| serde_json::json!({ "name": name, "driver": driver }))
+            .collect();
+        return Ok(Json(
+            serde_json::json!({ "available": true, "drivers": drivers, "dsns": dsns }),
+        ));
+    }
+    Ok(Json(
+        serde_json::json!({ "available": false, "drivers": [], "dsns": [] }),
+    ))
+}
+
+/// A file name kept to letters, digits, `.`, `-` and `_`, of a text
+/// table only.
+fn safe_file_name(name: &str) -> Option<String> {
+    let base = name.rsplit(['/', '\\']).next().unwrap_or("");
+    let clean: String = base
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let lower = clean.to_ascii_lowercase();
+    (!clean.starts_with('.') && [".csv", ".tsv", ".txt"].iter().any(|e| lower.ends_with(e)))
+        .then_some(clean)
+}
+
+/// `POST /sources/files` (multipart `file`): a CSV kept beside the data
+/// sources, for a source whose file is on the administrator's computer.
+/// Answers the path to give the source; the same name again replaces it.
+async fn upload_file(
+    State(s): State<AppState>,
+    ctx: Option<axum::Extension<AuthContext>>,
+    mut form: axum::extract::Multipart,
+) -> Result<Json<Value>, ApiError> {
+    admin_only(&ctx)?;
+    let dir = s
+        .sources
+        .path
+        .as_ref()
+        .and_then(|p| p.parent())
+        .map(|d| d.join("source-files"))
+        .ok_or_else(|| {
+            ApiError::BadRequest("this server keeps no files (no data directory)".into())
+        })?;
+    while let Some(field) = form.next_field().await? {
+        if field.name() != Some("file") {
+            continue;
+        }
+        let name = field
+            .file_name()
+            .and_then(safe_file_name)
+            .ok_or_else(|| ApiError::BadRequest("a .csv, .tsv or .txt file is required".into()))?;
+        let bytes = field.bytes().await?;
+        tokio::fs::create_dir_all(&dir)
+            .await
+            .map_err(|e| ApiError::Store(e.to_string()))?;
+        let path = dir.join(&name);
+        tokio::fs::write(&path, &bytes)
+            .await
+            .map_err(|e| ApiError::Store(e.to_string()))?;
+        return Ok(Json(serde_json::json!({
+            "path": path.to_string_lossy(),
+            "bytes": bytes.len(),
+        })));
+    }
+    Err(ApiError::BadRequest("missing `file`".into()))
 }
 
 async fn get_source(
@@ -2096,5 +2242,45 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(view(&csv)["location"], "/tmp/a.csv");
+    }
+
+    #[test]
+    fn an_odbc_connection_string_is_built_from_the_fields() {
+        let mut s = DataSource {
+            kind: "odbc".into(),
+            ..Default::default()
+        };
+        assert_eq!(odbc_connection_string(&s), None, "nothing to connect to");
+        s.dsn = "erp-live".into();
+        s.user = "reader".into();
+        s.password = "p;w}d".into();
+        assert_eq!(
+            odbc_connection_string(&s).unwrap(),
+            "DSN=erp-live;UID=reader;PWD={p;w}}d}"
+        );
+        s.dsn.clear();
+        s.driver = "Progress OpenEdge 12.2 Driver".into();
+        s.host = "db.example".into();
+        s.port = 20931;
+        s.database = "sports".into();
+        assert_eq!(
+            odbc_connection_string(&s).unwrap(),
+            "Driver={Progress OpenEdge 12.2 Driver};HOST=db.example;PORT=20931;DB=sports;UID=reader;PWD={p;w}}d}"
+        );
+        // A whole string, when given, wins over the fields.
+        s.location = "DSN=other".into();
+        assert_eq!(odbc_connection_string(&s).unwrap(), "DSN=other");
+        assert_eq!(odbc_value(" edge"), "{ edge}");
+    }
+
+    #[test]
+    fn an_uploaded_file_keeps_a_safe_name_of_a_text_table() {
+        assert_eq!(
+            safe_file_name("C:\\x\\Clients 2026.csv").as_deref(),
+            Some("Clients_2026.csv")
+        );
+        assert_eq!(safe_file_name("../../etc/a.TSV").as_deref(), Some("a.TSV"));
+        assert_eq!(safe_file_name("run.exe"), None);
+        assert_eq!(safe_file_name(".csv"), None);
     }
 }

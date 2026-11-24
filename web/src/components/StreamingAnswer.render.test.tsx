@@ -108,9 +108,11 @@ describe("StreamingAnswer", () => {
     expect(screen.getByText("Réponse fondée sur 0 fiche et 0 lien")).toBeInTheDocument();
     expect(document.querySelector(".citations")).toBeNull();
     act(() => stream.finish());
-    // Nothing was answered: no turn, the first-question placeholder stays.
+    // Nothing was answered: no turn, the first-question placeholder stays,
+    // the question comes back and the empty answer is said.
     await waitFor(() => expect(screen.queryByText("▍")).toBeNull());
-    expect(screen.getByPlaceholderText("Posez votre question…")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Posez votre question…")).toHaveValue("q");
+    expect(screen.getByText(/Le modèle n'a rien répondu/)).toHaveClass("error-banner");
   });
 
   it("surfaces a stream 'error' event and stops streaming", async () => {
@@ -121,6 +123,9 @@ describe("StreamingAnswer", () => {
     expect(screen.getByText("llm quota exceeded")).toHaveClass("error-banner");
     expect(screen.getByRole("button", { name: "Poser la question" })).toBeEnabled();
     act(() => stream.finish());
+    // The stream's own reason stays; no second message over it.
+    await waitFor(() => expect(screen.getByText("llm quota exceeded")).toBeInTheDocument());
+    expect(screen.queryByText(/Le modèle n'a rien répondu/)).toBeNull();
   });
 
   it("surfaces a thrown Error's message", async () => {

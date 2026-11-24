@@ -37,7 +37,18 @@ const API_PATHS = [
   "/ingest",
   "/rules",
   "/actions",
+  "/sources",
+  "/jobs",
+  "/approvals",
+  "/audit",
+  "/readyz",
+  "/backup",
 ];
+
+// A page load of an app route that is also an API path (`/sources`,
+// `/actions`, …) gets the app, not the API's JSON.
+const bypass = (req: { headers: { accept?: string } }) =>
+  req.headers.accept?.includes("text/html") ? "/index.html" : undefined;
 
 export default defineConfig({
   plugins: [react()],
@@ -48,7 +59,7 @@ export default defineConfig({
     fs: { allow: [".."] },
     proxy: {
       ...Object.fromEntries(
-        API_PATHS.map((p) => [p, { target: API_TARGET, changeOrigin: true, ws: true }]),
+        API_PATHS.map((p) => [p, { target: API_TARGET, changeOrigin: true, ws: true, bypass }]),
       ),
       "/auth": { target: AUTH_TARGET, changeOrigin: true, ws: true },
     },

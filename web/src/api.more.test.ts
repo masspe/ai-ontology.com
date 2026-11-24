@@ -558,6 +558,24 @@ describe("askStream", () => {
 // upload — multipart form
 // ---------------------------------------------------------------------------
 
+describe("data source helpers", () => {
+  it("lists the ODBC catalog and sends a CSV as multipart, bearer only", async () => {
+    const catalog = { available: true, drivers: ["d"], dsns: [{ name: "n", driver: "d" }] };
+    let fetchMock = stubFetch(jsonResponse(catalog));
+    await expect(api.odbcCatalog()).resolves.toEqual(catalog);
+    expect(call(fetchMock).url).toBe(`${BASE}/sources/odbc`);
+
+    fetchMock = stubFetch(jsonResponse({ path: "/d/source-files/a.csv", bytes: 5 }));
+    const file = new File(["a,b\n"], "a.csv", { type: "text/csv" });
+    await expect(api.uploadSourceFile(file)).resolves.toEqual({ path: "/d/source-files/a.csv", bytes: 5 });
+    const got = call(fetchMock);
+    expect(got.url).toBe(`${BASE}/sources/files`);
+    expect(got.method).toBe("POST");
+    expect(got.headers.has("content-type")).toBe(false);
+    expect(((got.rawBody as FormData).get("file") as File).name).toBe("a.csv");
+  });
+});
+
 describe("upload", () => {
   const file = new File(["hello"], "notes.txt", { type: "text/plain" });
 

@@ -53,6 +53,7 @@ export default function StreamingAnswer({ defaultQuery = "" }: Props) {
     const question = query.trim();
     if (!question) return;
     let text = "";
+    let failed = false;
     let sub: Subgraph | null = null;
     setAsked(question);
     setQuery("");
@@ -62,7 +63,13 @@ export default function StreamingAnswer({ defaultQuery = "" }: Props) {
     setStreaming(true);
     const finish = () => {
       setStreaming(false);
-      if (text) settle(question, text, sub);
+      if (text.trim()) settle(question, text, sub);
+      else if (!failed) {
+        // Never an empty answer without a word: the question comes back.
+        failed = true;
+        setError(t("Le modèle n'a rien répondu. Reposez la question ; si cela se répète, augmentez le nombre de tokens dans les Réglages."));
+        setQuery(question);
+      }
     };
     try {
       await askStream(
@@ -78,6 +85,7 @@ export default function StreamingAnswer({ defaultQuery = "" }: Props) {
           },
           onEnd: finish,
           onError: (e) => {
+            failed = true;
             setError(e);
             setStreaming(false);
             setQuery(question);
@@ -86,6 +94,7 @@ export default function StreamingAnswer({ defaultQuery = "" }: Props) {
       );
       finish();
     } catch (e: unknown) {
+      failed = true;
       const msg = e instanceof Error ? e.message : String(e);
       setError(msg);
       setStreaming(false);

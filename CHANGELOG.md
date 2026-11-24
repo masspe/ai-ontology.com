@@ -8,6 +8,25 @@ All notable changes to this project are listed here. The format follows
 
 ### Fixed
 
+- An answer could come back empty, without a word: a model that spent its
+  output limit before writing (a reasoning model under a small
+  `max_tokens`) or a gateway that reported its failure inside the stream
+  ended the stream quietly. Both are now an error with the reason, and
+  the question is given back.
+- Graph page: a search or a depth showed only the sheets whose name
+  matched — the neighbours the server had fetched were filtered out
+  again in the browser, so the depth seemed to do nothing. Types chosen
+  on a large graph now share the budget (each type has its sample, not
+  the first one all of it), and types alone give an overview of 120
+  sheets and 400 links with a note saying so.
+- Web: checkboxes stood far from their text (every input was 100 % wide);
+  the dashboard's small curves ran past the card's border.
+- Web: editing an ODBC source sent an empty connection string, which
+  wiped the stored one.
+- Dev server: `/sources`, `/jobs`, `/approvals`, `/audit`, `/readyz` and
+  `/backup` reach the API, and reloading an app page whose path is also an
+  API path gets the app.
+
 - An upload or an import form past its size cap was answered 400
   (`multipart: …`); it is a 413 like every other body past its cap.
 - A sync cancelled by its job was recorded `failed: cancelled` and
@@ -56,6 +75,15 @@ All notable changes to this project are listed here. The format follows
 
 ### Added
 
+- An ODBC source is set up as the ODBC administrator shows it: a data
+  source name of the server's machine, or a driver with host, port and
+  database, then the account — the connection string is built from them
+  (`HOST`, `PORT`, `DB`, `UID`, `PWD`), the password sealed like the
+  other engines'. `GET /sources/odbc` lists the server's drivers and data
+  source names for the form; a whole connection string stays possible.
+- A CSV source can take a file of the administrator's computer
+  (*Browse…*): `POST /sources/files` keeps it beside the data sources
+  and answers its path.
 - **Write-back with approvals**, off unless a source says
   `allow_writes`. A source carries named statements (`POST
   /sources/{id}/statements`): one `UPDATE`, `INSERT` or `DELETE` bound to

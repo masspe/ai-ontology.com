@@ -27,6 +27,29 @@ pub struct OdbcConnector {
     pub timeout_secs: u64,
 }
 
+/// Driver names, then `(data source name, driver)` pairs.
+pub type Catalog = (Vec<String>, Vec<(String, String)>);
+
+/// What the driver manager of this machine offers, as its ODBC
+/// administrator lists it: the installed drivers, and the data source
+/// names (user and system) with their driver.
+pub fn catalog() -> Result<Catalog, ConnectError> {
+    let env = Environment::new().map_err(|e| ConnectError::Connect(e.to_string()))?;
+    let drivers = env
+        .drivers()
+        .map_err(|e| ConnectError::Connect(e.to_string()))?
+        .into_iter()
+        .map(|d| d.description)
+        .collect();
+    let dsns = env
+        .data_sources()
+        .map_err(|e| ConnectError::Connect(e.to_string()))?
+        .into_iter()
+        .map(|d| (d.server_name, d.driver))
+        .collect();
+    Ok((drivers, dsns))
+}
+
 /// OpenEdge refuses rows wider than the field's SQL width (error 7864):
 /// the fix is on the database side, say so.
 fn with_hint(e: impl std::fmt::Display) -> ConnectError {

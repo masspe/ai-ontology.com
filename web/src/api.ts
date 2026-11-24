@@ -900,6 +900,9 @@ export interface DataSource {
   name: string;
   kind: string;
   location: string;
+  /** ODBC: a data source name of the server's machine, or a driver. */
+  dsn: string;
+  driver: string;
   host: string;
   port: number;
   database: string;
@@ -933,6 +936,8 @@ export interface SourcePatch {
   name?: string;
   kind?: string;
   location?: string;
+  dsn?: string;
+  driver?: string;
   host?: string;
   port?: number;
   database?: string;
@@ -967,6 +972,15 @@ const jsonInit = (method: string, body: unknown): RequestInit => ({
 });
 
 export const listSources = () => http<{ sources: DataSource[] }>("/sources");
+/** The ODBC drivers and data source names of the server's machine. */
+export const odbcCatalog = () =>
+  http<{ available: boolean; drivers: string[]; dsns: { name: string; driver: string }[] }>("/sources/odbc");
+/** A CSV from this computer, kept on the server: answers the path for the source. */
+export const uploadSourceFile = (file: File) => {
+  const form = new FormData();
+  form.append("file", file, file.name);
+  return http<{ path: string; bytes: number }>("/sources/files", { method: "POST", body: form, headers: headers() });
+};
 export const createSource = (p: SourcePatch) => http<DataSource>("/sources", jsonInit("POST", p));
 export const updateSource = (id: number, p: SourcePatch) => http<DataSource>(`/sources/${id}`, jsonInit("PATCH", p));
 export const deleteSource = (id: number) => http<void>(`/sources/${id}`, { method: "DELETE", headers: headers() });

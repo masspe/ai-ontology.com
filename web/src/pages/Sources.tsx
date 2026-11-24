@@ -7,7 +7,7 @@
 // run, run by hand or on a schedule as background jobs, and named
 // queries (a trigger and a SELECT with blanks) that answer a question
 // live. Administrators.
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Card from "../components/Card";
 // @ts-expect-error JSX module
 import { useConfirm } from "../components/ConfirmDialog.jsx";
@@ -21,6 +21,7 @@ import {
   listSourceColumns,
   listSources,
   listSourceTables,
+  odbcCatalog,
   previewMapping,
   runMapping,
   testSource,
@@ -28,6 +29,7 @@ import {
   updateMapping,
   updateNamedQuery,
   updateSource,
+  uploadSourceFile,
   type DataSource,
   type MappingPatch,
   type MappingSpec,
@@ -43,11 +45,51 @@ const PORTS: Record<string, number> = { sqlserver: 1433, postgres: 5432 };
 
 const list = (s: string) => s.split(",").map((x) => x.trim()).filter(Boolean);
 
+type Catalog = { available: boolean; drivers: string[]; dsns: { name: string; driver: string }[] };
+
+/** CSV: a path on the server, or a file of this computer sent there. */
+function CsvLocation({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const input = useRef<HTMLInputElement>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const pick = (file: File | undefined) => {
+    if (!file) return;
+    setBusy(true);
+    setError(null);
+    uploadSourceFile(file)
+      .then((r) => onChange(r.path))
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setBusy(false));
+  };
+  return (
+    <div className="field" style={{ gridColumn: "1 / -1" }}>
+      <label htmlFor="csv-location">{t("Chemin ou URL HTTPS du fichier")}</label>
+      <div style={{ display: "flex", gap: 8 }}>
+        <input id="csv-location" value={value} onChange={(e) => onChange(e.target.value)} placeholder="/data/exports/clients.csv" />
+        <button type="button" className="btn-outline" disabled={busy} onClick={() => input.current?.click()}>
+          {busy ? t("Envoi…") : t("Parcourir…")}
+        </button>
+        <input
+          ref={input}
+          type="file"
+          accept=".csv,.tsv,.txt,text/csv"
+          hidden
+          data-testid="csv-file"
+          onChange={(e) => pick(e.target.files?.[0])}
+        />
+      </div>
+      {error && <p className="field-error">{error}</p>}
+    </div>
+  );
+}
+
 function SourceForm({ initial, onSave, onCancel }: { initial?: DataSource; onSave: (p: SourcePatch) => Promise<void>; onCancel: () => void }) {
   const [p, setP] = useState<SourcePatch>({
     name: initial?.name ?? "",
     kind: initial?.kind ?? "csv",
     location: initial?.kind === "odbc" ? "" : initial?.location ?? "",
+    dsn: initial?.dsn ?? "",
+    driver: initial?.driver ?? "",
     host: initial?.host ?? "",
     port: initial?.port ?? 1433,
     database: initial?.database ?? "",
@@ -60,13 +102,22 @@ function SourceForm({ initial, onSave, onCancel }: { initial?: DataSource; onSav
   });
   const set = <K extends keyof SourcePatch>(k: K, v: SourcePatch[K]) => setP((x) => ({ ...x, [k]: v }));
   const [busy, setBusy] = useState(false);
+  const [catalog, setCatalog] = useState<Catalog | null>(null);
+  useEffect(() => {
+    if (p.kind !== "odbc" || catalog) return;
+    odbcCatalog().then(setCatalog, () => setCatalog({ available: false, drivers: [], dsns: [] }));
+  }, [p.kind, catalog]);
+  const engine = (p.kind ?? "") in PORTS;
+  const odbc = p.kind === "odbc";
   return (
     <form
       className="source-form"
       onSubmit={(e) => {
         e.preventDefault();
         setBusy(true);
-        void onSave(p).finally(() => setBusy(false));
+        // ODBC: the stored connection string is never served, so a blank
+        // field keeps it rather than wiping it.
+        void onSave(odbc && !p.location ? { ...p, location: undefined } : p).finally(() => setBusy(false));
       }}
     >
       <div className="grid grid-2" style={{ gap: 12 }}>
@@ -76,7 +127,7 @@ function SourceForm({ initial, onSave, onCancel }: { initial?: DataSource; onSav
         </label>
         <label className="field">
           <span>{t("Type")}</span>
-          <select value={p.kind} onChange={(e) => setP((x) => ({ ...x, kind: e.target.value, port: PORTS[e.target.value] ?? x.port }))}>
+          <select value={p.kind} onChange={(e) => setP((x) => ({ ...x, kind: e.target.value, port: PORTS[e.target.value] ?? 0 }))}>
             {KINDS.map((k) => (
               <option key={k} value={k}>
                 {k === "csv" ? t("Fichier CSV (chemin ou URL)") : k === "sqlserver" ? "SQL Server" : k === "postgres" ? "PostgreSQL" : "ODBC (OpenEdge, …)"}
@@ -84,33 +135,43 @@ function SourceForm({ initial, onSave, onCancel }: { initial?: DataSource; onSav
             ))}
           </select>
         </label>
-        {p.kind === "csv" && (
-          <label className="field" style={{ gridColumn: "1 / -1" }}>
-            <span>{t("Chemin ou URL HTTPS du fichier")}</span>
-            <input value={p.location ?? ""} onChange={(e) => set("location", e.target.value)} placeholder="/data/exports/clients.csv" />
-          </label>
-        )}
-        {p.kind === "odbc" && (
-          <label className="field" style={{ gridColumn: "1 / -1" }}>
-            <span>{t("Chaîne de connexion ODBC")}</span>
-            <input
-              type="password"
-              autoComplete="off"
-              value={p.location ?? ""}
-              onChange={(e) => set("location", e.target.value)}
-              placeholder={initial?.location || "Driver={Progress OpenEdge 12.2 driver};Host=…;Port=…;DB=…;UID=…;PWD=…"}
-            />
-          </label>
-        )}
-        {(p.kind ?? "") in PORTS && (
+        {p.kind === "csv" && <CsvLocation value={p.location ?? ""} onChange={(v) => set("location", v)} />}
+        {odbc && (
           <>
             <label className="field">
-              <span>{t("Hôte")}</span>
+              <span>{t("Source de données (DSN)")}</span>
+              <input list="odbc-dsns" value={p.dsn ?? ""} onChange={(e) => set("dsn", e.target.value)} />
+            </label>
+            <label className="field">
+              <span>{t("Pilote (sans DSN)")}</span>
+              <input list="odbc-drivers" value={p.driver ?? ""} onChange={(e) => set("driver", e.target.value)} disabled={!!p.dsn} />
+            </label>
+            <datalist id="odbc-dsns">
+              {catalog?.dsns.map((d) => (
+                <option key={d.name} value={d.name}>
+                  {d.driver}
+                </option>
+              ))}
+            </datalist>
+            <datalist id="odbc-drivers">
+              {catalog?.drivers.map((d) => <option key={d} value={d} />)}
+            </datalist>
+            {catalog && !catalog.available && (
+              <p className="field-hint" style={{ gridColumn: "1 / -1" }}>
+                {t("Le serveur ne liste aucun pilote ODBC (version sans ODBC, ou pas de gestionnaire de pilotes) : saisissez le nom.")}
+              </p>
+            )}
+          </>
+        )}
+        {(engine || odbc) && (
+          <>
+            <label className="field">
+              <span>{odbc ? t("Hôte (vide : celui du DSN)") : t("Hôte")}</span>
               <input value={p.host ?? ""} onChange={(e) => set("host", e.target.value)} />
             </label>
             <label className="field">
               <span>{t("Port")}</span>
-              <input type="number" value={p.port ?? 1433} onChange={(e) => set("port", Number(e.target.value))} />
+              <input type="number" value={p.port || ""} onChange={(e) => set("port", Number(e.target.value))} />
             </label>
             <label className="field">
               <span>{t("Base")}</span>
@@ -124,16 +185,36 @@ function SourceForm({ initial, onSave, onCancel }: { initial?: DataSource; onSav
               <span>{t("Mot de passe")}</span>
               <input type="password" autoComplete="new-password" value={p.password ?? ""} onChange={(e) => set("password", e.target.value)} placeholder={initial?.password_hint || ""} />
             </label>
-            <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
-              <input type="checkbox" checked={p.encrypt ?? true} onChange={(e) => set("encrypt", e.target.checked)} /> {t("Chiffrer la connexion (TLS)")}
+          </>
+        )}
+        {odbc && (
+          <details className="field" style={{ gridColumn: "1 / -1" }}>
+            <summary>{t("Chaîne de connexion complète (avancé, remplace les champs)")}</summary>
+            <input
+              type="password"
+              autoComplete="off"
+              aria-label={t("Chaîne de connexion ODBC")}
+              value={p.location ?? ""}
+              onChange={(e) => set("location", e.target.value)}
+              placeholder={initial?.location || "Driver={…};HOST=…;PORT=…;DB=…;UID=…;PWD=…"}
+            />
+          </details>
+        )}
+        {engine && (
+          <>
+            <label className="checkbox-row">
+              <input type="checkbox" checked={p.encrypt ?? true} onChange={(e) => set("encrypt", e.target.checked)} />
+              <span>{t("Chiffrer la connexion (TLS)")}</span>
             </label>
-            <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
-              <input type="checkbox" checked={p.trust_cert ?? false} onChange={(e) => set("trust_cert", e.target.checked)} /> {t("Accepter un certificat auto-signé")}
+            <label className="checkbox-row">
+              <input type="checkbox" checked={p.trust_cert ?? false} onChange={(e) => set("trust_cert", e.target.checked)} />
+              <span>{t("Accepter un certificat auto-signé")}</span>
             </label>
           </>
         )}
-        <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
-          <input type="checkbox" checked={p.allow_private_hosts ?? false} onChange={(e) => set("allow_private_hosts", e.target.checked)} /> {t("Le serveur est sur le réseau privé")}
+        <label className="checkbox-row">
+          <input type="checkbox" checked={p.allow_private_hosts ?? false} onChange={(e) => set("allow_private_hosts", e.target.checked)} />
+          <span>{t("Le serveur est sur le réseau privé")}</span>
         </label>
         <label className="field">
           <span>{t("Délai (secondes)")}</span>
@@ -395,7 +476,7 @@ export default function Sources() {
                 {s.name} <span className="badge">{s.kind}</span>
               </span>
             }
-            subtitle={s.kind in PORTS ? `${s.host}:${s.port}/${s.database}` : s.location}
+            subtitle={s.kind in PORTS ? `${s.host}:${s.port}/${s.database}` : s.kind === "odbc" && s.dsn ? `DSN ${s.dsn}` : s.kind === "odbc" && s.driver ? `${s.driver} · ${s.host}:${s.port}/${s.database}` : s.location}
             actions={
               <span style={{ display: "inline-flex", gap: 6 }}>
                 <button className="btn-ghost" onClick={() => run(async () => {

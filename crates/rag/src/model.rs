@@ -1016,6 +1016,9 @@ struct OpenAiStreamFrame {
     model: String,
     #[serde(default)]
     usage: Option<OpenAiUsage>,
+    /// Some gateways report a failure inside the stream.
+    #[serde(default)]
+    error: Option<serde_json::Value>,
 }
 
 /// Take one OpenAI-style SSE frame off the front of `buf`. Frames are
@@ -1217,6 +1220,15 @@ impl LanguageModel for OpenAiModel {
                         Ok(p) => p,
                         Err(_) => continue,
                     };
+                    if let Some(e) = parsed.error {
+                        state.end_emitted = true;
+                        let msg = e
+                            .get("message")
+                            .and_then(|m| m.as_str())
+                            .map(str::to_string)
+                            .unwrap_or_else(|| e.to_string());
+                        return Some((Err(LlmError::Api(msg)), state));
+                    }
                     if !parsed.model.is_empty() && state.model.is_empty() {
                         state.model = parsed.model;
                     }

@@ -29,6 +29,8 @@ vi.mock("../api", async () => {
     updateNamedQuery: vi.fn(),
     deleteNamedQuery: vi.fn(),
     tryNamedQuery: vi.fn(),
+    odbcCatalog: vi.fn(),
+    uploadSourceFile: vi.fn(),
   };
 });
 import * as api from "../api";
@@ -50,6 +52,7 @@ beforeEach(() => {
   m.listSources.mockResolvedValue({ sources: [source] });
   m.listSourceTables.mockResolvedValue({ tables: [{ schema: "dbo", name: "orders" }, { name: "customers" }] });
   m.listSourceColumns.mockResolvedValue({ columns: [{ name: "id", data_type: "int" }, { name: "label", data_type: "text" }] });
+  m.odbcCatalog.mockResolvedValue({ available: false, drivers: [], dsns: [] });
 });
 
 describe("Sources page", () => {
@@ -224,6 +227,65 @@ describe("Sources page", () => {
     fireEvent.click(screen.getByRole("button", { name: "Annuler" }));
     expect(screen.queryByText("Nouvelle source")).toBeNull();
     expect(m.createSource).not.toHaveBeenCalled();
+  });
+
+  it("connects ODBC by a data source name or a driver, as the ODBC administrator does", async () => {
+    m.odbcCatalog.mockResolvedValue({ available: true, drivers: ["Progress OpenEdge 12.2 Driver"], dsns: [{ name: "erp-live", driver: "Progress OpenEdge 12.2 Driver" }] });
+    m.listSources.mockResolvedValue({
+      sources: [
+        { ...source, id: 4, name: "by-dsn", kind: "odbc", dsn: "erp-live", driver: "", mappings: [], queries: [] },
+        { ...source, id: 5, name: "by-driver", kind: "odbc", dsn: "", driver: "OE", host: "h", port: 20931, database: "d", mappings: [], queries: [] },
+      ],
+    });
+    m.createSource.mockResolvedValue({});
+    const { container } = renderPage(<Sources />);
+    expect(await screen.findByText("DSN erp-live")).toBeInTheDocument();
+    expect(screen.getByText("OE · h:20931/d")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Ajouter une source" }));
+    fireEvent.change(screen.getByLabelText("Nom de la source"), { target: { value: "erp" } });
+    fireEvent.change(screen.getByLabelText("Type"), { target: { value: "odbc" } });
+    await waitFor(() => expect(container.querySelector('#odbc-dsns option[value="erp-live"]')).not.toBeNull());
+    expect(container.querySelector('#odbc-drivers option[value="Progress OpenEdge 12.2 Driver"]')).not.toBeNull();
+    expect(screen.getByLabelText("Port")).toHaveValue(null);
+    fireEvent.change(screen.getByLabelText("Source de données (DSN)"), { target: { value: "erp-live" } });
+    expect(screen.getByLabelText("Pilote (sans DSN)")).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("Utilisateur (lecture seule)"), { target: { value: "reader" } });
+    fireEvent.change(screen.getByLabelText("Mot de passe"), { target: { value: "pw" } });
+    // No TLS switches: the driver or the DSN says how it connects.
+    expect(screen.queryByLabelText("Chiffrer la connexion (TLS)")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
+    await waitFor(() =>
+      expect(m.createSource).toHaveBeenCalledWith(expect.objectContaining({ kind: "odbc", dsn: "erp-live", user: "reader", password: "pw", port: 0 })),
+    );
+    // A blank connection string is not sent: the stored one is kept.
+    expect(m.createSource.mock.calls[0]![0].location).toBeUndefined();
+  });
+
+  it("says when the server lists no ODBC driver, or cannot be asked", async () => {
+    m.odbcCatalog.mockRejectedValueOnce(new Error("down"));
+    renderPage(<Sources />);
+    await screen.findByText("erp");
+    fireEvent.click(screen.getByRole("button", { name: "Ajouter une source" }));
+    fireEvent.change(screen.getByLabelText("Type"), { target: { value: "odbc" } });
+    expect(await screen.findByText(/ne liste aucun pilote ODBC/)).toBeInTheDocument();
+  });
+
+  it("sends a CSV of this computer to the server and takes its path", async () => {
+    m.uploadSourceFile.mockResolvedValue({ path: "C:/data/source-files/clients.csv", bytes: 10 });
+    renderPage(<Sources />);
+    await screen.findByText("erp");
+    fireEvent.click(screen.getByRole("button", { name: "Ajouter une source" }));
+    const file = new File(["code,name\n"], "clients.csv", { type: "text/csv" });
+    fireEvent.change(screen.getByTestId("csv-file"), { target: { files: [file] } });
+    await waitFor(() => expect(screen.getByLabelText("Chemin ou URL HTTPS du fichier")).toHaveValue("C:/data/source-files/clients.csv"));
+    expect(m.uploadSourceFile).toHaveBeenCalledWith(file);
+    m.uploadSourceFile.mockRejectedValue(new Error("a .csv, .tsv or .txt file is required"));
+    fireEvent.change(screen.getByTestId("csv-file"), { target: { files: [file] } });
+    expect(await screen.findByText("a .csv, .tsv or .txt file is required")).toBeInTheDocument();
+    // Nothing picked: nothing sent.
+    fireEvent.change(screen.getByTestId("csv-file"), { target: { files: [] } });
+    expect(m.uploadSourceFile).toHaveBeenCalledTimes(2);
   });
 
   it("edits a mapping: its columns, its schedule, a link taken back", async () => {

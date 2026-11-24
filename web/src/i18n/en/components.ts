@@ -154,6 +154,7 @@ export const components: Record<string, string> = {
   "Citée dans la réponse": "Cited in the answer",
   "Fiches consultées": "Sheets consulted",
   "Posez votre question…": "Ask your question…",
+  "Le modèle n'a rien répondu. Reposez la question ; si cela se répète, augmentez le nombre de tokens dans les Réglages.": "The model answered nothing. Ask again; if it happens again, raise the number of tokens in Settings.",
   "Réponse en cours…": "Answering…",
   "Poser la question": "Ask the question",
   "Posez la question suivante…": "Ask the next question…",

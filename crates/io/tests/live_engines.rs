@@ -437,4 +437,8 @@ async fn an_odbc_driver_reads_the_seeded_table() {
     };
     let absent = nowhere.ping().await.unwrap_err();
     assert!(matches!(absent, ConnectError::Connect(_)), "{absent}");
+
+    // The driver that just read the table is among those listed.
+    let (drivers, _dsns) = ontology_io::connect::odbc::catalog().unwrap();
+    assert!(!drivers.is_empty());
 }

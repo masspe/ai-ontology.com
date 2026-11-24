@@ -1455,7 +1455,7 @@ fn build_router_inner(state: AppState, cfg: RouterConfig) -> Router {
 /// Request bodies: 8 MB unless a route says otherwise (uploads and the
 /// import assistant carry files and extracted text).
 const BODY_LIMIT_DEFAULT: usize = 8 * 1024 * 1024;
-const BODY_LIMIT_UPLOAD: usize = 512 * 1024 * 1024;
+pub(crate) const BODY_LIMIT_UPLOAD: usize = 512 * 1024 * 1024;
 const BODY_LIMIT_INGEST: usize = 64 * 1024 * 1024;
 
 /// What every response carries so a browser does not sniff, frame or
@@ -3489,12 +3489,15 @@ async fn subgraph_handler(
                 seeds.push(c.id);
             }
         } else {
+            // An equal share per type: ten types chosen show ten types,
+            // not the first one filling the whole budget.
+            let share = (limit / req.seed_concept_types.len()).max(1);
             'outer: for t in &req.seed_concept_types {
                 let (_, page) = s.graph.try_list_concepts_page(
                     Some(t),
                     None,
                     0,
-                    limit - seeds.len(),
+                    share.min(limit - seeds.len()),
                     false,
                     true,
                 )?;

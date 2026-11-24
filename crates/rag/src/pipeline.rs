@@ -132,6 +132,17 @@ pub enum RagStreamEvent {
 
 pub type RagStream = BoxStream<'static, Result<RagStreamEvent, LlmError>>;
 
+/// The error of a generation that ended without text.
+fn empty_answer(stop_reason: Option<&str>) -> LlmError {
+    match stop_reason {
+        Some("length" | "max_tokens") => LlmError::Api(
+            "the model returned no text: its output limit was reached first — raise max_tokens in the settings".into(),
+        ),
+        Some(r) => LlmError::Api(format!("the model returned no text (stop reason: {r})")),
+        None => LlmError::Api("the model returned no text".into()),
+    }
+}
+
 /// Wires together a [`HybridIndex`] and a [`LanguageModel`].
 ///
 /// The pipeline holds `Arc`s so it is cheap to clone and share across
@@ -393,20 +404,36 @@ impl RagPipeline {
             subgraph,
         })]);
 
-        let mapped = inner.filter_map(|r| async move {
-            match r {
-                Ok(StreamChunk::Text(text)) => Some(Ok(RagStreamEvent::Token { text })),
-                Ok(StreamChunk::KeepAlive) => None,
-                Ok(StreamChunk::End {
-                    usage,
-                    stop_reason,
-                    model,
-                }) => Some(Ok(RagStreamEvent::End {
-                    usage,
-                    stop_reason,
-                    model,
-                })),
-                Err(e) => Some(Err(e)),
+        // A model that ends without a word (its budget spent on reasoning,
+        // a filter) must say so, not leave an empty answer.
+        let said = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mapped = inner.filter_map(move |r| {
+            let said = said.clone();
+            async move {
+                match r {
+                    Ok(StreamChunk::Text(text)) => {
+                        if !text.trim().is_empty() {
+                            said.store(true, std::sync::atomic::Ordering::Relaxed);
+                        }
+                        Some(Ok(RagStreamEvent::Token { text }))
+                    }
+                    Ok(StreamChunk::KeepAlive) => None,
+                    Ok(StreamChunk::End { stop_reason, .. })
+                        if !said.load(std::sync::atomic::Ordering::Relaxed) =>
+                    {
+                        Some(Err(empty_answer(stop_reason.as_deref())))
+                    }
+                    Ok(StreamChunk::End {
+                        usage,
+                        stop_reason,
+                        model,
+                    }) => Some(Ok(RagStreamEvent::End {
+                        usage,
+                        stop_reason,
+                        model,
+                    })),
+                    Err(e) => Some(Err(e)),
+                }
             }
         });
 
@@ -1306,6 +1333,33 @@ Question: anything?"
     }
 
     // -- hardening: streaming ------------------------------------------
+
+    /// A model that ends without a word is an error with its reason, never
+    /// an empty answer.
+    #[tokio::test]
+    async fn answer_stream_without_text_ends_in_an_error() {
+        let pipe = pipeline_over(chained_graph(), ScriptedModel::new(&["  "]));
+        let stream = pipe
+            .answer_stream(RetrievalRequest {
+                query: "alpha".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let events: Vec<_> = stream.collect().await;
+        assert!(matches!(events[0], Ok(RagStreamEvent::Retrieved { .. })));
+        match events.last().unwrap() {
+            Err(LlmError::Api(m)) => assert!(m.contains("stop reason: end_turn"), "{m}"),
+            other => panic!("expected an error, got {other:?}"),
+        }
+        assert!(empty_answer(Some("length"))
+            .to_string()
+            .contains("max_tokens"));
+        assert_eq!(
+            empty_answer(None).to_string(),
+            "api: the model returned no text"
+        );
+    }
 
     /// The stream is exactly `Retrieved`, then tokens, then one `End`.
     #[tokio::test]
