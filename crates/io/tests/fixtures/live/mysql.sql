@@ -20,3 +20,12 @@ CREATE TABLE ontology_live_write (
 );
 INSERT INTO ontology_live_write VALUES
     (1, 'open'), (2, 'open'), (3, 'open');
+-- A SELECT that writes: what a read-only session must refuse.
+DROP FUNCTION IF EXISTS ontology_live_touch;
+DELIMITER //
+CREATE FUNCTION ontology_live_touch() RETURNS int MODIFIES SQL DATA
+BEGIN
+  INSERT INTO ontology_live_write VALUES (99, 'x');
+  RETURN 1;
+END //
+DELIMITER ;

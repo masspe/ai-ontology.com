@@ -415,10 +415,7 @@ async fn mysql_is_read_as_seeded_and_only_read() {
     // A write is refused by the session, whatever the account may do.
     let write = c
         .query(&Query {
-            from: format!(
-                "insert into {}.ontology_live_write values (99, 'x')",
-                e["database"]
-            ),
+            from: "select ontology_live_touch()".into(),
             after: None,
             max_rows: 1,
         })
