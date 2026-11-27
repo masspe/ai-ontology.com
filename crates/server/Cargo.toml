@@ -43,6 +43,7 @@ default = []
 sqlserver = ["ontology-io/sqlserver"]
 odbc = ["ontology-io/odbc"]
 postgres = ["ontology-io/postgres"]
+mysql = ["ontology-io/mysql"]
 
 [dev-dependencies]
 ontology-graph = { workspace = true }

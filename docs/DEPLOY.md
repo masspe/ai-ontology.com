@@ -209,11 +209,14 @@ fetched on every run; `;` or `,`). Behind a build feature: `sqlserver`
 (pure Rust, TLS by default against the public authorities and the ones
 the host trusts; every session is read-only — but for the one transaction
 of an approved write, below — and its statements end at the source's
-timeout on the server) and `odbc` (the driver manager and the
-engine's driver on the host). The container image is built with
-`sqlserver` and `postgres` (`--build-arg FEATURES=…` to change that); a
-binary built by hand takes `cargo build -p ontology-cli --features
-sqlserver,postgres,odbc`, and ODBC in a container needs an image with
+timeout on the server), `mysql` (MySQL and MariaDB — GLPI's database
+among them —, pure Rust, TLS by default, the same read-only session and
+timeout; a self-signed certificate needs *Trust server certificate*) and
+`odbc` (the driver manager and the engine's driver on the host). The
+container image is built with `sqlserver`, `postgres` and `mysql`
+(`--build-arg FEATURES=…` to change that); a binary built by hand takes
+`cargo build -p ontology-cli --features sqlserver,postgres,mysql,odbc`,
+and ODBC in a container needs an image with
 `unixODBC` and the driver. *Accept a self-signed certificate* on a source
 keeps the encryption and stops checking who answers: for a server inside
 the network only.

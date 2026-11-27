@@ -15,7 +15,12 @@
 //!   `host=… port=… database=… user=… password=…`
 //! - `ONTOLOGY_TEST_ODBC`: a connection string to the PostgreSQL above.
 
-#![cfg(any(feature = "postgres", feature = "sqlserver", feature = "odbc"))]
+#![cfg(any(
+    feature = "postgres",
+    feature = "sqlserver",
+    feature = "mysql",
+    feature = "odbc"
+))]
 
 use std::collections::HashMap;
 
@@ -355,6 +360,130 @@ async fn postgres_is_read_as_seeded_and_only_read() {
     // The pinned address is where the connection goes, whatever the name.
     if let Ok(ip) = c.host.parse() {
         PostgresConnector {
+            host: "db.invalid".into(),
+            addr: Some(ip),
+            ..c.clone()
+        }
+        .ping()
+        .await
+        .expect("pinned");
+    }
+}
+
+/// `ONTOLOGY_TEST_MYSQL`: `host= port= database= user= password= tls=`
+/// (`tls=no` for an engine without a certificate, the CI one).
+#[cfg(feature = "mysql")]
+#[tokio::test]
+async fn mysql_is_read_as_seeded_and_only_read() {
+    use ontology_io::connect::mysql::MysqlConnector;
+    use std::time::{Duration, Instant};
+
+    let Some(e) = engine("ONTOLOGY_TEST_MYSQL") else {
+        return;
+    };
+    let tls = e.get("tls").map(String::as_str) != Some("no");
+    let c = MysqlConnector {
+        host: e["host"].clone(),
+        addr: None,
+        port: e["port"].parse().unwrap(),
+        database: e["database"].clone(),
+        user: e["user"].clone(),
+        password: e["password"].clone(),
+        encrypt: tls,
+        trust_cert: true,
+        timeout_secs: 30,
+    };
+    let table = format!("{}.ontology_live_item", e["database"]);
+    reads_the_seeded_table(&c, &table).await;
+
+    // The engine's types arrive as JSON types; a tinyint(1) is its 0 or 1.
+    let rs = c
+        .query(&Query {
+            from: table.clone(),
+            after: Some(("id".into(), json!(2))),
+            max_rows: 0,
+        })
+        .await
+        .unwrap();
+    let col = |name: &str| rs.column_index(name).unwrap();
+    assert_eq!(rs.rows[0][col("id")], json!(3));
+    assert_eq!(rs.rows[0][col("ok")], json!(1));
+    assert_eq!(rs.rows[0][col("price")], json!("9.99"));
+    assert_eq!(rs.rows[0][col("updated")], json!("2026-03-01 10:00:00"));
+    assert_eq!(rs.columns[col("price")].data_type, "newdecimal");
+
+    // A write is refused by the session, whatever the account may do.
+    let write = c
+        .query(&Query {
+            from: format!(
+                "insert into {}.ontology_live_write values (99, 'x')",
+                e["database"]
+            ),
+            after: None,
+            max_rows: 1,
+        })
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&write, ConnectError::Query(m) if m.to_lowercase().contains("read only")),
+        "{write}"
+    );
+    // One statement per call: a second one is not run.
+    let two = c
+        .query(&Query {
+            from: "select 1; select 2".into(),
+            after: None,
+            max_rows: 1,
+        })
+        .await
+        .unwrap_err();
+    assert!(matches!(two, ConnectError::Query(_)), "{two}");
+
+    // But for an approved write, in its own transaction.
+    writes_within_the_guard_only(
+        &c,
+        &format!("{}.ontology_live_write", e["database"]),
+        [1, 2, 3],
+    )
+    .await;
+
+    // A statement past the source's timeout is ended.
+    let slow = MysqlConnector {
+        timeout_secs: 1,
+        ..c.clone()
+    };
+    let started = Instant::now();
+    let late = slow
+        .query(&Query {
+            from: "select sleep(20)".into(),
+            after: None,
+            max_rows: 1,
+        })
+        .await
+        .unwrap_err();
+    assert!(matches!(late, ConnectError::Query(_)), "{late}");
+    assert!(started.elapsed() < Duration::from_secs(10));
+
+    let wrong = MysqlConnector {
+        password: "not-the-password".into(),
+        ..c.clone()
+    };
+    let denied = wrong.ping().await.unwrap_err();
+    assert!(matches!(denied, ConnectError::Connect(_)), "{denied}");
+    if !tls {
+        // An engine without a certificate cannot be asked for one.
+        let demanded = MysqlConnector {
+            encrypt: true,
+            ..c.clone()
+        }
+        .ping()
+        .await
+        .unwrap_err();
+        assert!(matches!(demanded, ConnectError::Connect(_)), "{demanded}");
+    }
+    // The pinned address is where the connection goes, whatever the name.
+    if let Ok(ip) = c.host.parse() {
+        MysqlConnector {
             host: "db.invalid".into(),
             addr: Some(ip),
             ..c.clone()

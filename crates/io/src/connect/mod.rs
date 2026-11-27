@@ -7,7 +7,8 @@
 
 //! Connectors: a database or a file seen as tables of rows, read only.
 //! One trait, one implementation per engine — `csv` (a file or an HTTPS
-//! URL), `sqlserver` (feature), `postgres` (feature), `odbc` (feature:
+//! URL), `sqlserver` (feature), `postgres` (feature), `mysql` (feature:
+//! MySQL and MariaDB), `odbc` (feature:
 //! the route to OpenEdge and anything with a driver), and `memory` for
 //! tests. A sync
 //! (`RowSource`) turns rows into sheets and links through the regular
@@ -20,6 +21,8 @@ use serde_json::Value;
 
 pub mod csv;
 pub mod memory;
+#[cfg(feature = "mysql")]
+pub mod mysql;
 #[cfg(feature = "odbc")]
 pub mod odbc;
 #[cfg(feature = "postgres")]

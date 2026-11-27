@@ -39,9 +39,9 @@ import {
 } from "../api";
 import { t } from "../lib/i18n";
 
-const KINDS = ["csv", "sqlserver", "postgres", "odbc"] as const;
+const KINDS = ["csv", "sqlserver", "postgres", "mysql", "odbc"] as const;
 // The engines reached by host and port, with the port each listens on.
-const PORTS: Record<string, number> = { sqlserver: 1433, postgres: 5432 };
+const PORTS: Record<string, number> = { sqlserver: 1433, postgres: 5432, mysql: 3306 };
 
 const list = (s: string) => s.split(",").map((x) => x.trim()).filter(Boolean);
 
@@ -130,7 +130,7 @@ function SourceForm({ initial, onSave, onCancel }: { initial?: DataSource; onSav
           <select value={p.kind} onChange={(e) => setP((x) => ({ ...x, kind: e.target.value, port: PORTS[e.target.value] ?? 0 }))}>
             {KINDS.map((k) => (
               <option key={k} value={k}>
-                {k === "csv" ? t("Fichier CSV (chemin ou URL)") : k === "sqlserver" ? "SQL Server" : k === "postgres" ? "PostgreSQL" : "ODBC (OpenEdge, …)"}
+                {k === "csv" ? t("Fichier CSV (chemin ou URL)") : k === "sqlserver" ? "SQL Server" : k === "postgres" ? "PostgreSQL" : k === "mysql" ? "MySQL / MariaDB" : "ODBC (OpenEdge, …)"}
               </option>
             ))}
           </select>

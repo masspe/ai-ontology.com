@@ -43,7 +43,7 @@ COPY . .
 # The pure-Rust database drivers are in the image. ODBC is not: it needs a
 # driver manager and the engine's driver, which this runtime does not carry
 # (docs/DEPLOY.md).
-ARG FEATURES=sqlserver,postgres
+ARG FEATURES=sqlserver,postgres,mysql
 RUN cargo build --release --locked -p ontology-cli --bin ontology --features "$FEATURES"
 RUN strip /workspace/target/release/ontology
 

@@ -88,6 +88,8 @@ describe("Sources page", () => {
     fireEvent.click(screen.getByRole("button", { name: "Ajouter une source" }));
     expect(screen.queryByLabelText("Host")).toBeNull();
     fireEvent.change(screen.getByLabelText("Source name"), { target: { value: "pg" } });
+    fireEvent.change(screen.getByLabelText("Type"), { target: { value: "mysql" } });
+    expect(screen.getByLabelText("Port")).toHaveValue(3306);
     fireEvent.change(screen.getByLabelText("Type"), { target: { value: "postgres" } });
     expect(screen.getByLabelText("Port")).toHaveValue(5432);
     fireEvent.change(screen.getByLabelText("Host"), { target: { value: "pg.example" } });

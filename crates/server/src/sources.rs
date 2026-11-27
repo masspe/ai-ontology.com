@@ -53,7 +53,7 @@ const BATCH: usize = 2_000;
 pub struct DataSource {
     pub id: u64,
     pub name: String,
-    /// `csv`, `sqlserver`, `postgres`, `odbc` (`memory` in tests).
+    /// `csv`, `sqlserver`, `postgres`, `mysql`, `odbc` (`memory` in tests).
     pub kind: String,
     /// CSV: a path or an HTTPS URL. ODBC: a whole connection string, when
     /// the fields below do not say enough (secret: never served).
@@ -663,6 +663,21 @@ fn raw_connector(store: &SourceStore, s: &DataSource) -> Result<Arc<dyn Connecto
                 },
             ))
         }
+        #[cfg(feature = "mysql")]
+        "mysql" => {
+            let addr = check_host(&s.host, s.port, s.allow_private_hosts)?;
+            Ok(Arc::new(ontology_io::connect::mysql::MysqlConnector {
+                host: s.host.clone(),
+                addr,
+                port: if s.port == 0 { 3306 } else { s.port },
+                database: s.database.clone(),
+                user: s.user.clone(),
+                password: s.password.clone(),
+                encrypt: s.encrypt,
+                trust_cert: s.trust_cert,
+                timeout_secs: s.timeout_secs.max(1),
+            }))
+        }
         #[cfg(feature = "odbc")]
         "odbc" => {
             let connection_string = odbc_connection_string(s).ok_or_else(|| {
@@ -674,7 +689,7 @@ fn raw_connector(store: &SourceStore, s: &DataSource) -> Result<Arc<dyn Connecto
             }))
         }
         other => Err(ApiError::BadRequest(format!(
-            "source kind `{other}` is not available in this build (features: csv{}{}{}): start the server built with `--features {other}`",
+            "source kind `{other}` is not available in this build (features: csv{}{}{}{}): start the server built with `--features {other}`",
             if cfg!(feature = "sqlserver") {
                 ", sqlserver"
             } else {
@@ -682,6 +697,11 @@ fn raw_connector(store: &SourceStore, s: &DataSource) -> Result<Arc<dyn Connecto
             },
             if cfg!(feature = "postgres") {
                 ", postgres"
+            } else {
+                ""
+            },
+            if cfg!(feature = "mysql") {
+                ", mysql"
             } else {
                 ""
             },
@@ -1211,7 +1231,7 @@ fn apply_patch(s: &mut DataSource, p: SourcePatch) -> Result<(), ApiError> {
         s.name = v;
     }
     if let Some(v) = p.kind {
-        if !["csv", "sqlserver", "postgres", "odbc", "memory"].contains(&v.as_str()) {
+        if !["csv", "sqlserver", "postgres", "mysql", "odbc", "memory"].contains(&v.as_str()) {
             return Err(ApiError::BadRequest(format!("unknown source kind `{v}`")));
         }
         s.kind = v;

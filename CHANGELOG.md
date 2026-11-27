@@ -81,6 +81,11 @@ All notable changes to this project are listed here. The format follows
 
 ### Added
 
+- **MySQL and MariaDB** as a data source (`mysql`, behind a build
+  feature; in the container image): pure Rust, TLS by default, a
+  read-only session, the statement timeout set on the engine, writes
+  only through an approved action. The `connectors` CI job reads a real
+  MariaDB.
 - A mapping's key may be composite: several columns, comma-separated,
   the sheet named by their values joined with `/`; a link's column too.
   The fields of the source, mapping and query forms carry the English

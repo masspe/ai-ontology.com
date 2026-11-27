@@ -14,6 +14,7 @@ default = []
 sqlserver = ["ontology-server/sqlserver"]
 odbc = ["ontology-server/odbc"]
 postgres = ["ontology-server/postgres"]
+mysql = ["ontology-server/mysql"]
 
 [dependencies]
 regex = { workspace = true }

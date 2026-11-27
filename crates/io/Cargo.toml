@@ -36,12 +36,15 @@ tokio-postgres-rustls = { version = "0.14", features = ["ring"], optional = true
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"], optional = true }
 webpki-roots = { version = "1", optional = true }
 rustls-native-certs = { version = "0.8", optional = true }
+mysql_async = { version = "0.37", default-features = false, features = ["minimal-rust", "rustls-tls", "ring", "tls12"], optional = true }
 
 [features]
 default = []
 sqlserver = ["dep:tiberius", "dep:tokio-util"]
 odbc = ["dep:odbc-api"]
 postgres = ["dep:tokio-postgres", "dep:tokio-postgres-rustls", "dep:rustls", "dep:webpki-roots", "dep:rustls-native-certs"]
+mysql = ["dep:mysql_async", "dep:rustls-native-certs"]
+mysql_async = ["dep:mysql_async"]
 
 [dev-dependencies]
 tempfile = "3"
