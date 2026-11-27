@@ -70,6 +70,10 @@ impl MysqlConnector {
             .client_found_rows(true)
             .setup(vec!["SET SESSION TRANSACTION READ ONLY".to_string()]);
         if self.encrypt {
+            // The driver builds its TLS from the process-wide provider; a
+            // build with more than one provider in it has to pick (an
+            // earlier pick, the same one, stands).
+            let _ = rustls::crypto::ring::default_provider().install_default();
             let mut ssl = SslOpts::default()
                 .with_danger_accept_invalid_certs(self.trust_cert)
                 .with_danger_skip_domain_validation(self.trust_cert);

@@ -43,7 +43,7 @@ default = []
 sqlserver = ["dep:tiberius", "dep:tokio-util"]
 odbc = ["dep:odbc-api"]
 postgres = ["dep:tokio-postgres", "dep:tokio-postgres-rustls", "dep:rustls", "dep:webpki-roots", "dep:rustls-native-certs"]
-mysql = ["dep:mysql_async", "dep:rustls-native-certs"]
+mysql = ["dep:mysql_async", "dep:rustls", "dep:rustls-native-certs"]
 mysql_async = ["dep:mysql_async"]
 
 [dev-dependencies]
