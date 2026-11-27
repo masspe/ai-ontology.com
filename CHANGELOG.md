@@ -8,6 +8,12 @@ All notable changes to this project are listed here. The format follows
 
 ### Fixed
 
+- Dev server: `npm run dev` built the server without the connectors, so an
+  ODBC source answered `not available in this build`; it is built with
+  `odbc`, `sqlserver` and `postgres`, and the message says which feature
+  to build with. The ODBC fields carry the names and the order of the
+  Windows ODBC administrator (Data Source Name, Host Name, Port Number,
+  Database Name, User ID, Password), untranslated.
 - An answer could come back empty, without a word: a model that spent its
   output limit before writing (a reasoning model under a small
   `max_tokens`) or a gateway that reported its failure inside the stream

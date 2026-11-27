@@ -674,7 +674,7 @@ fn raw_connector(store: &SourceStore, s: &DataSource) -> Result<Arc<dyn Connecto
             }))
         }
         other => Err(ApiError::BadRequest(format!(
-            "source kind `{other}` is not available in this build (features: csv{}{}{})",
+            "source kind `{other}` is not available in this build (features: csv{}{}{}): start the server built with `--features {other}`",
             if cfg!(feature = "sqlserver") {
                 ", sqlserver"
             } else {

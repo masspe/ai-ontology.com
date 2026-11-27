@@ -136,14 +136,16 @@ function SourceForm({ initial, onSave, onCancel }: { initial?: DataSource; onSav
           </select>
         </label>
         {p.kind === "csv" && <CsvLocation value={p.location ?? ""} onChange={(v) => set("location", v)} />}
+        {/* ODBC: the names and the order of the Windows ODBC administrator's
+            driver setup, untranslated, so each field is found at a glance. */}
         {odbc && (
           <>
             <label className="field">
-              <span>{t("Source de données (DSN)")}</span>
+              <span>Data Source Name</span>
               <input list="odbc-dsns" value={p.dsn ?? ""} onChange={(e) => set("dsn", e.target.value)} />
             </label>
             <label className="field">
-              <span>{t("Pilote (sans DSN)")}</span>
+              <span>Driver (without a Data Source Name)</span>
               <input list="odbc-drivers" value={p.driver ?? ""} onChange={(e) => set("driver", e.target.value)} disabled={!!p.dsn} />
             </label>
             <datalist id="odbc-dsns">
@@ -166,34 +168,34 @@ function SourceForm({ initial, onSave, onCancel }: { initial?: DataSource; onSav
         {(engine || odbc) && (
           <>
             <label className="field">
-              <span>{odbc ? t("Hôte (vide : celui du DSN)") : t("Hôte")}</span>
+              <span>{odbc ? "Host Name" : t("Hôte")}</span>
               <input value={p.host ?? ""} onChange={(e) => set("host", e.target.value)} />
             </label>
             <label className="field">
-              <span>{t("Port")}</span>
+              <span>{odbc ? "Port Number" : t("Port")}</span>
               <input type="number" value={p.port || ""} onChange={(e) => set("port", Number(e.target.value))} />
             </label>
             <label className="field">
-              <span>{t("Base")}</span>
+              <span>{odbc ? "Database Name" : t("Base")}</span>
               <input value={p.database ?? ""} onChange={(e) => set("database", e.target.value)} />
             </label>
             <label className="field">
-              <span>{t("Utilisateur (lecture seule)")}</span>
+              <span>{odbc ? "User ID" : t("Utilisateur (lecture seule)")}</span>
               <input value={p.user ?? ""} onChange={(e) => set("user", e.target.value)} />
             </label>
             <label className="field">
-              <span>{t("Mot de passe")}</span>
+              <span>{odbc ? "Password" : t("Mot de passe")}</span>
               <input type="password" autoComplete="new-password" value={p.password ?? ""} onChange={(e) => set("password", e.target.value)} placeholder={initial?.password_hint || ""} />
             </label>
           </>
         )}
         {odbc && (
           <details className="field" style={{ gridColumn: "1 / -1" }}>
-            <summary>{t("Chaîne de connexion complète (avancé, remplace les champs)")}</summary>
+            <summary>Connection string (advanced: replaces the fields above)</summary>
             <input
               type="password"
               autoComplete="off"
-              aria-label={t("Chaîne de connexion ODBC")}
+              aria-label="Connection string"
               value={p.location ?? ""}
               onChange={(e) => set("location", e.target.value)}
               placeholder={initial?.location || "Driver={…};HOST=…;PORT=…;DB=…;UID=…;PWD=…"}

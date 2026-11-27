@@ -211,8 +211,8 @@ describe("Sources page", () => {
     edit();
     fireEvent.change(screen.getByLabelText("Type"), { target: { value: "odbc" } });
     expect(screen.queryByLabelText("Hôte")).toBeNull();
-    fireEvent.change(screen.getByLabelText("Chaîne de connexion ODBC"), { target: { value: "Driver={x};Server=db.example;" } });
-    expect(screen.getByLabelText("Chaîne de connexion ODBC")).toHaveValue("Driver={x};Server=db.example;");
+    fireEvent.change(screen.getByLabelText("Connection string"), { target: { value: "Driver={x};Server=db.example;" } });
+    expect(screen.getByLabelText("Connection string")).toHaveValue("Driver={x};Server=db.example;");
     fireEvent.click(screen.getByRole("button", { name: "Annuler" }));
     expect(screen.queryByLabelText("Nom de la source")).toBeNull();
     // The same button closes the form it opened.
@@ -247,11 +247,15 @@ describe("Sources page", () => {
     fireEvent.change(screen.getByLabelText("Type"), { target: { value: "odbc" } });
     await waitFor(() => expect(container.querySelector('#odbc-dsns option[value="erp-live"]')).not.toBeNull());
     expect(container.querySelector('#odbc-drivers option[value="Progress OpenEdge 12.2 Driver"]')).not.toBeNull();
-    expect(screen.getByLabelText("Port")).toHaveValue(null);
-    fireEvent.change(screen.getByLabelText("Source de données (DSN)"), { target: { value: "erp-live" } });
-    expect(screen.getByLabelText("Pilote (sans DSN)")).toBeDisabled();
-    fireEvent.change(screen.getByLabelText("Utilisateur (lecture seule)"), { target: { value: "reader" } });
-    fireEvent.change(screen.getByLabelText("Mot de passe"), { target: { value: "pw" } });
+    // The Windows ODBC administrator's names, in its order.
+    const want = ["Data Source Name", "Driver (without a Data Source Name)", "Host Name", "Port Number", "Database Name", "User ID", "Password"];
+    const shown = [...container.querySelectorAll(".source-form label > span")].map((x) => x.textContent ?? "");
+    expect(shown.filter((x) => want.includes(x))).toEqual(want);
+    expect(screen.getByLabelText("Port Number")).toHaveValue(null);
+    fireEvent.change(screen.getByLabelText("Data Source Name"), { target: { value: "erp-live" } });
+    expect(screen.getByLabelText("Driver (without a Data Source Name)")).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("User ID"), { target: { value: "reader" } });
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "pw" } });
     // No TLS switches: the driver or the DSN says how it connects.
     expect(screen.queryByLabelText("Chiffrer la connexion (TLS)")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
