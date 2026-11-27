@@ -65,6 +65,9 @@ impl MysqlConnector {
             .db_name(Some(self.database.clone()))
             .prefer_socket(false)
             .stmt_cache_size(0)
+            // The rows an UPDATE matched, not only the ones it altered:
+            // what the write guard counts, as the other engines count.
+            .client_found_rows(true)
             .setup(vec!["SET SESSION TRANSACTION READ ONLY".to_string()]);
         if self.encrypt {
             let mut ssl = SslOpts::default()
