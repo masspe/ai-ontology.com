@@ -122,8 +122,24 @@ describe("Sources page", () => {
     fireEvent.change(screen.getByLabelText("Mapping name"), { target: { value: "customers" } });
     fireEvent.change(screen.getByLabelText("Table or SELECT"), { target: { value: "customers" } });
     fireEvent.change(screen.getByLabelText("Sheet type"), { target: { value: "Customer" } });
-    fireEvent.change(screen.getByLabelText("Key column(s) — comma-separated for a composite key"), { target: { value: "id" } });
-    fireEvent.change(screen.getByLabelText("Property columns (empty: all)"), { target: { value: "label, city" } });
+    // Columns are picked one by one: Enter adds, a comma adds, × takes back.
+    const key = () => screen.getByRole("group", { name: "Key column(s)" }).querySelector("input")!;
+    fireEvent.change(key(), { target: { value: "tbl" } });
+    fireEvent.keyDown(key(), { key: "Enter" });
+    fireEvent.change(key(), { target: { value: "id" } });
+    fireEvent.keyDown(key(), { key: "Enter" });
+    fireEvent.click(screen.getByRole("button", { name: "Retirer tbl" }));
+    const props = () => screen.getByRole("group", { name: "Property columns (empty: all)" }).querySelector("input")!;
+    fireEvent.change(props(), { target: { value: "label," } });
+    fireEvent.change(props(), { target: { value: "city" } });
+    fireEvent.blur(props());
+    // A column twice is once; Backspace on an empty field takes the last back.
+    fireEvent.change(props(), { target: { value: "city" } });
+    fireEvent.keyDown(props(), { key: "Enter" });
+    fireEvent.change(props(), { target: { value: "zip" } });
+    fireEvent.keyDown(props(), { key: "Enter" });
+    fireEvent.keyDown(props(), { key: "Backspace" });
+    expect(screen.getByRole("group", { name: "Property columns (empty: all)" })).toHaveTextContent("label×city×");
     fireEvent.click(screen.getByRole("button", { name: "Add link" }));
     fireEvent.change(screen.getByLabelText("Column"), { target: { value: "rep" } });
     fireEvent.change(screen.getByLabelText("Link type"), { target: { value: "managed_by" } });

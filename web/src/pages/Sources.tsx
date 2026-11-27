@@ -47,6 +47,46 @@ const list = (s: string) => s.split(",").map((x) => x.trim()).filter(Boolean);
 
 type Catalog = { available: boolean; drivers: string[]; dsns: { name: string; driver: string }[] };
 
+/** Several columns, in order: each one a chip, the next typed with the
+ * table's columns suggested; Enter or a comma adds it, Backspace on an
+ * empty field takes the last one back. */
+function ColumnPicker({ value, onChange, label, required }: { value: string[]; onChange: (v: string[]) => void; label: string; required?: boolean }) {
+  const [draft, setDraft] = useState("");
+  const add = (raw: string) => {
+    const next = raw.split(",").map((x) => x.trim()).filter((x) => x && !value.includes(x));
+    if (next.length) onChange([...value, ...next]);
+    setDraft("");
+  };
+  return (
+    <div className="column-picker" role="group" aria-label={label}>
+      {value.map((c, i) => (
+        <span key={c} className="badge">
+          {c}
+          <button type="button" className="chip-remove" aria-label={t("Retirer {name}", { name: c })} onClick={() => onChange(value.filter((_, j) => j !== i))}>
+            ×
+          </button>
+        </span>
+      ))}
+      <input
+        list="src-columns"
+        aria-label={label}
+        value={draft}
+        required={required && value.length === 0}
+        onChange={(e) => (e.target.value.includes(",") ? add(e.target.value) : setDraft(e.target.value))}
+        onBlur={() => draft.trim() && add(draft)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && draft.trim()) {
+            e.preventDefault();
+            add(draft);
+          } else if (e.key === "Backspace" && !draft && value.length) {
+            onChange(value.slice(0, -1));
+          }
+        }}
+      />
+    </div>
+  );
+}
+
 /** What the last sync of a mapping did, in words: never run, done with
  * its counts, stopped, or failed with the reason and what that leaves. */
 function SyncStatus({ m }: { m: MappingSpec }) {
@@ -350,10 +390,10 @@ function MappingForm({ source, initial, onSave, onCancel }: { source: DataSource
           <span>{"Sheet type"}</span>
           <input required value={p.concept_type ?? ""} onChange={(e) => set("concept_type", e.target.value)} placeholder="Client" />
         </label>
-        <label className="field">
-          <span>{"Key column(s) — comma-separated for a composite key"}</span>
-          <input required list="src-columns" value={p.key_column ?? ""} onChange={(e) => set("key_column", e.target.value)} />
-        </label>
+        <div className="field">
+          <span>Key column(s)</span>
+          <ColumnPicker label="Key column(s)" required value={list(p.key_column ?? "")} onChange={(v) => set("key_column", v.join(", "))} />
+        </div>
         <label className="field">
           <span>{"Name column (default: the key)"}</span>
           <input list="src-columns" value={p.name_column ?? ""} onChange={(e) => set("name_column", e.target.value)} />
@@ -362,10 +402,10 @@ function MappingForm({ source, initial, onSave, onCancel }: { source: DataSource
           <span>{"Description column"}</span>
           <input list="src-columns" value={p.description_column ?? ""} onChange={(e) => set("description_column", e.target.value)} />
         </label>
-        <label className="field">
-          <span>{"Property columns (empty: all)"}</span>
-          <input value={(p.property_columns ?? []).join(", ")} onChange={(e) => set("property_columns", list(e.target.value))} />
-        </label>
+        <div className="field">
+          <span>Property columns (empty: all)</span>
+          <ColumnPicker label="Property columns (empty: all)" value={p.property_columns ?? []} onChange={(v) => set("property_columns", v)} />
+        </div>
         <label className="field">
           <span>{"Watermark column (incremental sync)"}</span>
           <input list="src-columns" value={p.watermark_column ?? ""} onChange={(e) => set("watermark_column", e.target.value)} />

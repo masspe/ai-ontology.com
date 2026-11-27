@@ -35,6 +35,7 @@ export const pagesB: Record<string, string> = {
   "Labels d'accès": "Access labels",
   "Fichier CSV (chemin ou URL)": "CSV file (path or URL)",
   "Parcourir…": "Browse…",
+  "Retirer {name}": "Remove {name}",
   "{rows} lignes lues : {n} fiches créées, {u} mises à jour, {s} inchangées, {k} liens": "{rows} rows read: {n} sheets created, {u} updated, {s} unchanged, {k} links",
   "{n} lignes sans clé ignorées": "{n} rows without a key skipped",
   "Arrêtée": "Stopped",
