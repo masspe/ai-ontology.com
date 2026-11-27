@@ -185,7 +185,8 @@ with the volume. Options: `--audit-log <path>`, `--no-audit`,
 **Data sources** (`/sources`, administrators) keep the graph in step with
 a database or a file: a source says where and how to connect (the
 password or the ODBC connection string sealed at rest with the master key,
-never served; `sources.json` beside the store), and carries **mappings**:
+never served, not even their ends — `password_hint` only says one is
+stored; `sources.json` beside the store), and carries **mappings**:
 a table (or a `SELECT`) becomes sheets of a type — a key column is the
 identity (several, comma-separated, for a composite key: the sheet is
 named by the parts joined with `/`, a row with a blank part is skipped),

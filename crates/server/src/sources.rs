@@ -66,7 +66,9 @@ pub struct DataSource {
     pub port: u16,
     pub database: String,
     pub user: String,
-    /// Sealed at rest, never served; `password_hint` is.
+    /// Sealed at rest, never served; `password_hint` says whether one is
+    /// stored — never a part of it, a password being short enough to guess
+    /// from its ends.
     pub password: String,
     pub password_hint: String,
     pub encrypt: bool,
@@ -865,6 +867,9 @@ impl Connector for Guarded {
     }
 }
 
+/// What the API says of a stored secret: that there is one.
+pub const SECRET_SET: &str = "••••••••";
+
 /// What the API serves: never the secrets.
 fn view(s: &DataSource) -> Value {
     let mut v = serde_json::to_value(s).unwrap_or(Value::Null);
@@ -874,7 +879,11 @@ fn view(s: &DataSource) -> Value {
             // The connection string carries the password.
             o.insert(
                 "location".into(),
-                Value::String(crate::key_hint(&s.location)),
+                Value::String(if s.location.is_empty() {
+                    String::new()
+                } else {
+                    SECRET_SET.into()
+                }),
             );
         }
     }
@@ -1258,7 +1267,7 @@ fn apply_patch(s: &mut DataSource, p: SourcePatch) -> Result<(), ApiError> {
         s.user = v.trim().to_string();
     }
     if let Some(v) = p.password.filter(|v| !v.is_empty()) {
-        s.password_hint = crate::key_hint(&v);
+        s.password_hint = SECRET_SET.into();
         s.password = v;
     }
     if let Some(v) = p.encrypt {
@@ -2255,7 +2264,7 @@ mod tests {
         };
         let v = view(&s);
         assert!(v.get("password").is_none());
-        assert_eq!(v["location"], "Dri...1234");
+        assert_eq!(v["location"], SECRET_SET, "not even its ends");
         let csv = DataSource {
             kind: "csv".into(),
             location: "/tmp/a.csv".into(),

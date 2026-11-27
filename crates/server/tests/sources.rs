@@ -183,7 +183,10 @@ async fn make_source(w: &World) -> u64 {
     .await;
     assert_eq!(st, StatusCode::CREATED, "{v}");
     assert!(v.get("password").is_none(), "never served: {v}");
-    assert_eq!(v["password_hint"], "s3c...pass");
+    assert_eq!(
+        v["password_hint"], "••••••••",
+        "that one is set, nothing of it"
+    );
     v["id"].as_u64().unwrap()
 }
 
@@ -228,7 +231,7 @@ async fn a_source_is_administered_tested_browsed_and_its_secret_sealed() {
     assert_eq!(st, StatusCode::OK, "{v}");
     assert_eq!(v["timeout_secs"], 5);
     assert_eq!(
-        v["password_hint"], "s3c...pass",
+        v["password_hint"], "••••••••",
         "an empty password keeps the stored one"
     );
     let (st, v) = call(

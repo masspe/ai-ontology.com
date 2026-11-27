@@ -38,7 +38,7 @@ const m = api as unknown as Record<string, ReturnType<typeof vi.fn>>;
 
 const source = {
   id: 1, name: "erp", kind: "sqlserver", location: "", host: "db.example", port: 1433, database: "erp", user: "ro",
-  password_hint: "s3c...pass", encrypt: true, trust_cert: false, allow_private_hosts: false, timeout_secs: 60, created_at: "2026-11-20T10:00:00Z",
+  password_hint: "••••••••", encrypt: true, trust_cert: false, allow_private_hosts: false, timeout_secs: 60, created_at: "2026-11-20T10:00:00Z",
   mappings: [
     { id: 1, name: "orders", from: "dbo.orders", concept_type: "Order", key_column: "id", property_columns: [], relations: [], schedule_minutes: 30,
       last_run_at: "2026-11-20T10:30:00Z", last_status: "ok", last_report: { rows: 42 } },
@@ -206,10 +206,19 @@ describe("Sources page", () => {
     fireEvent.change(screen.getByLabelText("Port"), { target: { value: "1444" } });
     fireEvent.change(screen.getByLabelText("Database"), { target: { value: "erp2" } });
     fireEvent.change(screen.getByLabelText("User (read-only)"), { target: { value: "reader" } });
+    // The stored password is never shown, only that one is there; what is
+    // typed is hidden until the eye.
+    expect(screen.getByLabelText("Password")).toHaveAttribute("placeholder", "••••••••");
+    expect(screen.getByLabelText("Password")).toHaveAttribute("type", "password");
     fireEvent.change(screen.getByLabelText("Password"), { target: { value: "n3w" } });
+    fireEvent.click(screen.getByRole("button", { name: "Afficher" }));
+    expect(screen.getByLabelText("Password")).toHaveAttribute("type", "text");
+    expect(screen.getByLabelText("Password")).toHaveValue("n3w");
+    fireEvent.click(screen.getByRole("button", { name: "Masquer" }));
+    expect(screen.getByLabelText("Password")).toHaveAttribute("type", "password");
     fireEvent.click(screen.getByLabelText("Encrypt (TLS)"));
     fireEvent.click(screen.getByLabelText("Trust server certificate"));
-    fireEvent.click(screen.getByLabelText("Le serveur est sur le réseau privé"));
+    fireEvent.click(screen.getByLabelText("Allow private hosts (the server is on the local network)"));
     fireEvent.change(screen.getByLabelText("Timeout (seconds)"), { target: { value: "30" } });
     fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
     await waitFor(() =>
@@ -261,7 +270,7 @@ describe("Sources page", () => {
     expect(container.querySelector('#odbc-drivers option[value="Progress OpenEdge 12.2 Driver"]')).not.toBeNull();
     // The Windows ODBC administrator's names, in its order.
     const want = ["Data Source Name", "Driver", "Host Name", "Port Number", "Database Name", "User ID", "Password"];
-    const labels = () => [...container.querySelectorAll(".source-form label > span")].map((x) => x.textContent ?? "").filter((x) => want.includes(x));
+    const labels = () => [...container.querySelectorAll(".source-form label > span, .source-form label[for]")].map((x) => x.textContent ?? "").filter((x) => want.includes(x));
     expect(labels()).toEqual(want);
     expect(screen.getByLabelText("Port Number")).toHaveValue(null);
     expect(screen.getByLabelText("Data Source Name")).toHaveAttribute("placeholder", "erp-live");

@@ -8,6 +8,10 @@ All notable changes to this project are listed here. The format follows
 
 ### Fixed
 
+- A data source's password hint showed its first three and last four
+  characters, as an API key's does — too much of a password. The hint
+  now only says one is stored (`••••••••`); the ODBC connection string
+  likewise. An eye on the field shows what is being typed.
 - Dev server: `npm run dev` built the server without the connectors, so an
   ODBC source answered `not available in this build`; it is built with
   `odbc`, `sqlserver` and `postgres`, and the message says which feature

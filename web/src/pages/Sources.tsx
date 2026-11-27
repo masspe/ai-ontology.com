@@ -47,6 +47,24 @@ const list = (s: string) => s.split(",").map((x) => x.trim()).filter(Boolean);
 
 type Catalog = { available: boolean; drivers: string[]; dsns: { name: string; driver: string }[] };
 
+/** A secret being typed: hidden, shown on the eye. The stored one is never
+ * served, so only what is typed can be seen. */
+function Secret({ value, onChange, placeholder, label, autoComplete }: { value: string; onChange: (v: string) => void; placeholder?: string; label?: string; autoComplete: string }) {
+  const [shown, setShown] = useState(false);
+  return (
+    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+      <input type={shown ? "text" : "password"} autoComplete={autoComplete} aria-label={label} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} />
+      <button type="button" className="btn-ghost" aria-label={shown ? t("Masquer") : t("Afficher")} aria-pressed={shown} onClick={() => setShown((s) => !s)} style={{ padding: "6px 8px", flexShrink: 0 }}>
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7S1 12 1 12z" />
+          <circle cx="12" cy="12" r="3" />
+          {shown && <line x1="3" y1="3" x2="21" y2="21" />}
+        </svg>
+      </button>
+    </div>
+  );
+}
+
 /** CSV: a path on the server, or a file of this computer sent there. */
 function CsvLocation({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   const input = useRef<HTMLInputElement>(null);
@@ -192,23 +210,16 @@ function SourceForm({ initial, onSave, onCancel }: { initial?: DataSource; onSav
               <span>{odbc ? "User ID" : "User (read-only)"}</span>
               <input value={p.user ?? ""} onChange={(e) => set("user", e.target.value)} />
             </label>
-            <label className="field">
-              <span>Password</span>
-              <input type="password" autoComplete="new-password" value={p.password ?? ""} onChange={(e) => set("password", e.target.value)} placeholder={initial?.password_hint || ""} />
-            </label>
+            <div className="field">
+              <label htmlFor="src-password">Password</label>
+              <Secret autoComplete="new-password" value={p.password ?? ""} onChange={(v) => set("password", v)} placeholder={initial?.password_hint || ""} label="Password" />
+            </div>
           </>
         )}
         {odbc && (
           <details className="field" style={{ gridColumn: "1 / -1" }}>
             <summary>Connection string (advanced: replaces the fields above)</summary>
-            <input
-              type="password"
-              autoComplete="off"
-              aria-label="Connection string"
-              value={p.location ?? ""}
-              onChange={(e) => set("location", e.target.value)}
-              placeholder={initial?.location || "Driver={…};HOST=…;PORT=…;DB=…;UID=…;PWD=…"}
-            />
+            <Secret autoComplete="off" label="Connection string" value={p.location ?? ""} onChange={(v) => set("location", v)} placeholder={initial?.location || "Driver={…};HOST=…;PORT=…;DB=…;UID=…;PWD=…"} />
           </details>
         )}
         {engine && (
@@ -225,7 +236,7 @@ function SourceForm({ initial, onSave, onCancel }: { initial?: DataSource; onSav
         )}
         <label className="checkbox-row">
           <input type="checkbox" checked={p.allow_private_hosts ?? false} onChange={(e) => set("allow_private_hosts", e.target.checked)} />
-          <span>{t("Le serveur est sur le réseau privé")}</span>
+          <span>Allow private hosts (the server is on the local network)</span>
         </label>
         <label className="field">
           <span>{"Timeout (seconds)"}</span>
