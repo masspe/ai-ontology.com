@@ -144,7 +144,7 @@ jobs:
       ONTOLOGY_TEST_POSTGRES: host=127.0.0.1 port=5432 database=postgres user=postgres password=Throwaway-ci-0nly
       ONTOLOGY_TEST_SQLSERVER: host=127.0.0.1 port=1433 database=master user=sa password=Throwaway-ci-0nly
       ONTOLOGY_TEST_ODBC: Driver={PostgreSQL Unicode};Server=127.0.0.1;Port=5432;Database=postgres;Uid=postgres;Pwd=Throwaway-ci-0nly;
-      ONTOLOGY_TEST_MYSQL: host=127.0.0.1 port=3306 database=ontology user=root password=Throwaway-ci-0nly tls=no
+      ONTOLOGY_TEST_MYSQL: host=127.0.0.1 port=3306 database=ontology user=root password=Throwaway-ci-0nly
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable, 2026-09-03
@@ -158,7 +158,7 @@ jobs:
           # PostgreSQL with TLS on, under the self-signed certificate its image ships.
           docker run -d --name pg -p 5432:5432 -e POSTGRES_PASSWORD="$ENGINE_PASSWORD" postgres:17             -c ssl=on -c ssl_cert_file=/etc/ssl/certs/ssl-cert-snakeoil.pem -c ssl_key_file=/etc/ssl/private/ssl-cert-snakeoil.key
           docker run -d --name mssql -p 1433:1433 -e ACCEPT_EULA=Y -e MSSQL_SA_PASSWORD="$ENGINE_PASSWORD"             mcr.microsoft.com/mssql/server:2022-latest
-          # MariaDB as its image ships: no certificate, so the test connects in clear.
+          # MariaDB as its image ships: TLS on, under a certificate it makes itself.
           docker run -d --name maria -p 3306:3306 -e MARIADB_ROOT_PASSWORD="$ENGINE_PASSWORD" -e MARIADB_DATABASE=ontology mariadb:11
       - name: the ODBC driver manager and the PostgreSQL driver
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends unixodbc-dev odbc-postgresql

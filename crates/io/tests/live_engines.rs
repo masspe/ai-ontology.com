@@ -370,8 +370,8 @@ async fn postgres_is_read_as_seeded_and_only_read() {
     }
 }
 
-/// `ONTOLOGY_TEST_MYSQL`: `host= port= database= user= password= tls=`
-/// (`tls=no` for an engine without a certificate, the CI one).
+/// `ONTOLOGY_TEST_MYSQL`: `host= port= database= user= password=`; the
+/// engine's certificate may be self-signed (MariaDB makes itself one).
 #[cfg(feature = "mysql")]
 #[tokio::test]
 async fn mysql_is_read_as_seeded_and_only_read() {
@@ -381,7 +381,6 @@ async fn mysql_is_read_as_seeded_and_only_read() {
     let Some(e) = engine("ONTOLOGY_TEST_MYSQL") else {
         return;
     };
-    let tls = e.get("tls").map(String::as_str) != Some("no");
     let c = MysqlConnector {
         host: e["host"].clone(),
         addr: None,
@@ -389,7 +388,7 @@ async fn mysql_is_read_as_seeded_and_only_read() {
         database: e["database"].clone(),
         user: e["user"].clone(),
         password: e["password"].clone(),
-        encrypt: tls,
+        encrypt: true,
         trust_cert: true,
         timeout_secs: 30,
     };
@@ -467,17 +466,22 @@ async fn mysql_is_read_as_seeded_and_only_read() {
     };
     let denied = wrong.ping().await.unwrap_err();
     assert!(matches!(denied, ConnectError::Connect(_)), "{denied}");
-    if !tls {
-        // An engine without a certificate cannot be asked for one.
-        let demanded = MysqlConnector {
-            encrypt: true,
-            ..c.clone()
-        }
-        .ping()
-        .await
-        .unwrap_err();
-        assert!(matches!(demanded, ConnectError::Connect(_)), "{demanded}");
+    // The test engine's certificate is self-signed: refused unless the
+    // source trusts it.
+    let strict = MysqlConnector {
+        trust_cert: false,
+        ..c.clone()
+    };
+    let untrusted = strict.ping().await.unwrap_err();
+    assert!(matches!(untrusted, ConnectError::Connect(_)), "{untrusted}");
+    // Without TLS when the source opts out.
+    MysqlConnector {
+        encrypt: false,
+        ..c.clone()
     }
+    .ping()
+    .await
+    .expect("plain");
     // The pinned address is where the connection goes, whatever the name.
     if let Ok(ip) = c.host.parse() {
         MysqlConnector {
