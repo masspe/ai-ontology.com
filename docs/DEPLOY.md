@@ -202,8 +202,14 @@ so a running sync never blocks a question. A full sync marks the sheets
 the source no longer has as `stale: true` (nothing is deleted); with a
 **watermark column** (an updated-at or an increasing id) a sync reads only
 the rows past the last value seen. Each sheet carries `source =
-"<source>/<mapping>"`. At most 200 000 rows per run: past that, use a
-watermark column.
+"<source>/<mapping>"`. A sync reads the table by **keyset pages** of
+10 000 rows — `WHERE key > last ORDER BY key`, one short statement each on
+the key's index (the watermark column first when there is one), so a
+table of any size is read and the source's timeout applies per page. A
+row whose key was read before in the same sync is merged into its sheet
+(the last row's values win) and counted as a duplicate. The mapping form
+lists the table's indexes (`GET /sources/{id}/indexes?table=`), the
+unique ones first: one click makes one the key.
 
 Kinds in every build: `csv` (a path on the server, or an HTTPS URL
 fetched on every run; `;` or `,`). Behind a build feature: `sqlserver`

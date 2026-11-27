@@ -63,6 +63,17 @@ fn num(v: &Value) -> i64 {
 async fn reads_the_seeded_table(c: &dyn Connector, table: &str) {
     c.ping().await.expect("ping");
     let tables = c.tables().await.expect("tables");
+    // The catalog's indexes, where the engine has one we read: the primary
+    // key on `id`, unique.
+    let indexes = c.indexes(table).await.expect("indexes");
+    if !indexes.is_empty() {
+        assert!(
+            indexes
+                .iter()
+                .any(|i| i.unique && i.columns.iter().any(|c| c.eq_ignore_ascii_case("id"))),
+            "{indexes:?}"
+        );
+    }
     assert!(
         tables
             .iter()
@@ -84,6 +95,7 @@ async fn reads_the_seeded_table(c: &dyn Connector, table: &str) {
             from: table.into(),
             after: None,
             max_rows: 2,
+            ..Default::default()
         })
         .await
         .expect("capped");
@@ -96,6 +108,7 @@ async fn reads_the_seeded_table(c: &dyn Connector, table: &str) {
             from: table.into(),
             after: Some(("id".into(), json!(0))),
             max_rows: 10,
+            ..Default::default()
         })
         .await
         .expect("all rows");
@@ -113,6 +126,7 @@ async fn reads_the_seeded_table(c: &dyn Connector, table: &str) {
             from: table.into(),
             after: Some(("id".into(), all.rows[0][col("id")].clone())),
             max_rows: 10,
+            ..Default::default()
         })
         .await
         .expect("past the watermark");
@@ -127,6 +141,7 @@ async fn reads_the_seeded_table(c: &dyn Connector, table: &str) {
             from: table.into(),
             after: Some(("updated".into(), all.rows[1][col("updated")].clone())),
             max_rows: 10,
+            ..Default::default()
         })
         .await
         .expect("past a date");
@@ -154,6 +169,7 @@ async fn reads_the_seeded_table(c: &dyn Connector, table: &str) {
             from: format!("select id, name from {table} where name = 'Valve'"),
             after: None,
             max_rows: 5,
+            ..Default::default()
         })
         .await
         .expect("statement");
@@ -167,6 +183,7 @@ async fn reads_the_seeded_table(c: &dyn Connector, table: &str) {
             from: "ontology_live_missing".into(),
             after: None,
             max_rows: 1,
+            ..Default::default()
         })
         .await
         .unwrap_err();
@@ -183,6 +200,7 @@ async fn writes_within_the_guard_only(c: &dyn Connector, table: &str, ids: [i64;
             from: format!("select id, state from {table} where id >= {lo} and id <= {hi}"),
             after: Some(("id".into(), json!(lo - 1))),
             max_rows: 10,
+            ..Default::default()
         })
         .await
         .expect("states")
@@ -263,6 +281,7 @@ async fn postgres_is_read_as_seeded_and_only_read() {
             from: table.into(),
             after: Some(("id".into(), json!(2))),
             max_rows: 0,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -277,6 +296,7 @@ async fn postgres_is_read_as_seeded_and_only_read() {
             from: format!("select id, name from {table} where id < 0"),
             after: None,
             max_rows: 5,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -289,6 +309,7 @@ async fn postgres_is_read_as_seeded_and_only_read() {
             from: "select nextval('ontology_live_seq')".into(),
             after: None,
             max_rows: 1,
+            ..Default::default()
         })
         .await
         .unwrap_err();
@@ -302,6 +323,7 @@ async fn postgres_is_read_as_seeded_and_only_read() {
             from: "select 1; select nextval('ontology_live_seq')".into(),
             after: None,
             max_rows: 1,
+            ..Default::default()
         })
         .await
         .unwrap_err();
@@ -329,6 +351,7 @@ async fn postgres_is_read_as_seeded_and_only_read() {
             from: "select pg_sleep(20)".into(),
             after: None,
             max_rows: 1,
+            ..Default::default()
         })
         .await
         .unwrap_err();
@@ -401,6 +424,7 @@ async fn mysql_is_read_as_seeded_and_only_read() {
             from: table.clone(),
             after: Some(("id".into(), json!(2))),
             max_rows: 0,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -417,6 +441,7 @@ async fn mysql_is_read_as_seeded_and_only_read() {
             from: "select ontology_live_touch()".into(),
             after: None,
             max_rows: 1,
+            ..Default::default()
         })
         .await
         .unwrap_err();
@@ -430,6 +455,7 @@ async fn mysql_is_read_as_seeded_and_only_read() {
             from: "select 1; select 2".into(),
             after: None,
             max_rows: 1,
+            ..Default::default()
         })
         .await
         .unwrap_err();
@@ -454,6 +480,7 @@ async fn mysql_is_read_as_seeded_and_only_read() {
             from: "select sleep(20)".into(),
             after: None,
             max_rows: 1,
+            ..Default::default()
         })
         .await
         .unwrap_err();
@@ -522,6 +549,7 @@ async fn sql_server_is_read_as_seeded() {
             from: table.into(),
             after: Some(("id".into(), json!(2))),
             max_rows: 0,
+            ..Default::default()
         })
         .await
         .unwrap();

@@ -297,6 +297,27 @@ impl Connector for PostgresConnector {
         self.run(&sql, q.max_rows).await
     }
 
+    async fn indexes(&self, table: &str) -> Result<Vec<super::IndexInfo>, ConnectError> {
+        let (schema, name) = match table.split_once('.') {
+            Some((s, n)) => (s, n),
+            None => ("public", table),
+        };
+        let sql = format!(
+            "SELECT i.relname, a.attname, ix.indisunique FROM pg_index ix \
+             JOIN pg_class t ON t.oid = ix.indrelid JOIN pg_class i ON i.oid = ix.indexrelid \
+             JOIN pg_namespace n ON n.oid = t.relnamespace \
+             JOIN unnest(ix.indkey) WITH ORDINALITY AS k(attnum, pos) ON true \
+             JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = k.attnum \
+             WHERE t.relname = {} AND n.nspname = {} ORDER BY i.relname, k.pos",
+            super::sql_literal(&Value::String(name.into())),
+            super::sql_literal(&Value::String(schema.into()))
+        );
+        let rs = self.run(&sql, 0).await?;
+        Ok(super::group_indexes(&rs.rows, |v| {
+            v.as_bool() == Some(true)
+        }))
+    }
+
     async fn execute(&self, sql: &str, max_rows: u64) -> Result<u64, ConnectError> {
         let client = self.client().await?;
         let failed = |e: tokio_postgres::Error| ConnectError::Query(describe(&e));

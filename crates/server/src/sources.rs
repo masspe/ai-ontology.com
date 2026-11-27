@@ -30,6 +30,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use ontology_graph::{ConceptPatch, PropertyValue};
+use ontology_io::connect::IndexInfo;
 use ontology_io::connect::{
     ColumnInfo, ConnectError, Connector, CsvConnector, Mapping as RowMapping,
     Query as ConnectorQuery, ResultSet, RowSource, TableInfo,
@@ -43,8 +44,9 @@ use crate::auth::now_rfc3339;
 use crate::secrets::MasterKey;
 use crate::{is_secret_field, ApiError, AppState, AuthContext};
 
-/// Rows fetched per sync at most; a table beyond this syncs by watermark.
-pub const MAX_ROWS: usize = 200_000;
+/// Rows fetched per page of a sync: each page is one short statement on
+/// the key's index (keyset paging), so a table of any size is read.
+pub const PAGE: usize = 10_000;
 /// Rows per ingest batch: the writer lock is held per batch, never per sync.
 const BATCH: usize = 2_000;
 
@@ -200,6 +202,7 @@ pub async fn lookup(state: &AppState, question: &str, unrestricted: bool) -> Opt
                     from: sql,
                     after: None,
                     max_rows: q.max_rows.clamp(1, 200),
+                    ..Default::default()
                 })
                 .await
             {
@@ -862,6 +865,10 @@ impl Connector for Guarded {
         Ok(rs)
     }
 
+    async fn indexes(&self, table: &str) -> Result<Vec<IndexInfo>, ConnectError> {
+        self.call(false, self.inner.indexes(table)).await
+    }
+
     async fn execute(&self, sql: &str, max_rows: u64) -> Result<u64, ConnectError> {
         self.call(false, self.inner.execute(sql, max_rows)).await
     }
@@ -902,6 +909,8 @@ pub struct SyncReport {
     pub unchanged: u64,
     pub links: u64,
     pub stale_marked: usize,
+    /// Rows merged into a sheet of the same key read before.
+    pub duplicates: usize,
     pub truncated: bool,
     pub watermark: Option<Value>,
 }
@@ -931,21 +940,26 @@ pub async fn sync(
         }
     };
     let incremental = spec.watermark_column.is_some() && spec.last_watermark.is_some();
-    let q = ConnectorQuery {
+    // The pages walk the watermark column, then the key: one short
+    // statement each on their index, whatever the table's size.
+    let mut order: Vec<String> = spec.watermark_column.iter().cloned().collect();
+    for k in spec.mapping.key_column.split(',') {
+        let k = k.trim();
+        if !k.is_empty() && !order.iter().any(|o| o.eq_ignore_ascii_case(k)) {
+            order.push(k.to_string());
+        }
+    }
+    let mut q = ConnectorQuery {
         from: spec.from.clone(),
         after: spec
             .watermark_column
             .clone()
             .zip(spec.last_watermark.clone()),
-        max_rows: MAX_ROWS,
+        order,
+        cursor: Vec::new(),
+        max_rows: PAGE,
     };
     log(format!("fetching {} from {}", spec.from, source.name));
-    let rs = connector.query(&q).await.map_err(|e| e.to_string())?;
-    let total = rs.rows.len();
-    log(format!(
-        "{total} rows{}",
-        if rs.truncated { " (capped)" } else { "" }
-    ));
     let mut mapping = spec.mapping.clone();
     mapping.source_tag = format!("{}/{}", source.name, spec.name);
     let declared = state
@@ -954,60 +968,96 @@ pub async fn sync(
         .concept_types
         .contains_key(&mapping.concept_type);
 
-    let mut report = SyncReport {
-        rows: total,
-        truncated: rs.truncated,
-        ..Default::default()
-    };
-    let mut seen: Vec<String> = Vec::with_capacity(total);
-    let mut done = 0usize;
+    let mut report = SyncReport::default();
+    let mut seen: Vec<String> = Vec::new();
+    let mut known = ahash::AHashMap::new();
+    let mut best: Option<Value> = spec.last_watermark.clone();
     let mut first = true;
-    while done < total || (first && total == 0) {
+    loop {
         if job.is_some_and(|j| j.cancelled()) {
             return Err("cancelled".into());
         }
-        let end = (done + BATCH).min(total);
-        let mut src = RowSource::new_range(&rs, &mapping, first && !declared, done..end)
-            .map_err(|e| e.to_string())?;
-        report.skipped += src.skipped;
-        seen.extend(src.keys.iter().cloned());
-        let stats = {
-            let _w = state.writer.lock().await;
-            ingest_records_with(
-                &mut src,
-                &state.graph,
-                Some(state.store.as_ref()),
-                IngestOptions {
-                    upsert: true,
-                    merge_properties: true,
-                    ..Default::default()
-                },
-            )
-            .await
-            .map_err(|e| e.to_string())?
-        };
-        report.sheets_new += stats.concepts;
-        report.sheets_updated += stats.updated;
-        report.unchanged += stats.unchanged;
-        report.links += stats.relations;
-        // The index follows the sheets the batch touched.
-        for name in &src.keys {
-            if let Some(id) = state.graph.find_by_name(&mapping.concept_type, name) {
-                let _ = state.index.index_concept(id);
+        let rs = connector.query(&q).await.map_err(|e| e.to_string())?;
+        let total = rs.rows.len();
+        report.rows += total;
+        log(format!("{} rows so far", report.rows));
+        // The watermark: the greatest value of the column among the rows read.
+        if let Some(i) = spec
+            .watermark_column
+            .as_deref()
+            .and_then(|col| rs.column_index(col))
+        {
+            for v in rs.rows.iter().map(|row| &row[i]).filter(|v| !v.is_null()) {
+                if best.as_ref().is_none_or(|b| later(v, b)) {
+                    best = Some(v.clone());
+                }
             }
         }
-        done = end;
-        first = false;
-        if let Some(j) = job {
-            j.progress(done as u64, Some(total as u64));
+        let mut done = 0usize;
+        while done < total || (first && total == 0) {
+            let end = (done + BATCH).min(total);
+            let mut src =
+                RowSource::build(&rs, &mapping, first && !declared, done..end, &mut known)
+                    .map_err(|e| e.to_string())?;
+            report.skipped += src.skipped;
+            report.duplicates += src.duplicates;
+            seen.extend(src.keys.iter().cloned());
+            let stats = {
+                let _w = state.writer.lock().await;
+                ingest_records_with(
+                    &mut src,
+                    &state.graph,
+                    Some(state.store.as_ref()),
+                    IngestOptions {
+                        upsert: true,
+                        merge_properties: true,
+                        ..Default::default()
+                    },
+                )
+                .await
+                .map_err(|e| e.to_string())?
+            };
+            report.sheets_new += stats.concepts;
+            report.sheets_updated += stats.updated;
+            report.unchanged += stats.unchanged;
+            report.links += stats.relations;
+            // The index follows the sheets the batch touched.
+            for name in &src.keys {
+                if let Some(id) = state.graph.find_by_name(&mapping.concept_type, name) {
+                    let _ = state.index.index_concept(id);
+                }
+            }
+            done = end;
+            first = false;
+            if let Some(j) = job {
+                j.progress(report.rows as u64, None);
+            }
+            if total == 0 {
+                break;
+            }
+            if job.is_some_and(|j| j.cancelled()) {
+                return Err("cancelled".into());
+            }
         }
-        if total == 0 {
+        // The next page starts past the last row of this one.
+        let more = rs.truncated || total >= PAGE;
+        let last = rs.rows.last();
+        let cursor: Vec<Value> = q
+            .order
+            .iter()
+            .map(|col| rs.column_index(col))
+            .map(|i| i.zip(last).map(|(i, row)| row[i].clone()))
+            .collect::<Option<Vec<_>>>()
+            .unwrap_or_default();
+        if !more || cursor.is_empty() {
             break;
         }
+        q.cursor = cursor;
     }
+    report.watermark = best;
 
     // A full sync: what the source no longer has is stale, not deleted.
-    if !incremental && !rs.truncated {
+    if !incremental {
         let seen_set: std::collections::HashSet<&str> = seen.iter().map(String::as_str).collect();
         let mine: Vec<_> = state
             .graph
@@ -1044,29 +1094,14 @@ pub async fn sync(
         }
     }
 
-    // The watermark: the greatest value of the column among the rows read.
-    if let Some(col) = &spec.watermark_column {
-        if let Some(i) = rs.column_index(col) {
-            let mut best: Option<Value> = spec.last_watermark.clone();
-            for row in &rs.rows {
-                let v = &row[i];
-                if v.is_null() {
-                    continue;
-                }
-                if best.as_ref().is_none_or(|b| later(v, b)) {
-                    best = Some(v.clone());
-                }
-            }
-            report.watermark = best;
-        }
-    }
     log(format!(
-        "done: {} new, {} updated, {} unchanged, {} links, {} stale",
+        "done: {} new, {} updated, {} unchanged, {} links, {} stale, {} duplicates merged",
         report.sheets_new,
         report.sheets_updated,
         report.unchanged,
         report.links,
-        report.stale_marked
+        report.stale_marked,
+        report.duplicates
     ));
     Ok(report)
 }
@@ -1188,6 +1223,7 @@ pub fn routes(state: AppState) -> Router {
         .route("/sources/:id/test", post(test_source))
         .route("/sources/:id/tables", get(list_tables))
         .route("/sources/:id/columns", get(list_columns))
+        .route("/sources/:id/indexes", get(list_indexes))
         .route("/sources/:id/mappings", post(create_mapping))
         .route(
             "/sources/:id/mappings/:mid",
@@ -1539,6 +1575,28 @@ async fn list_columns(
     Ok(Json(serde_json::json!({ "columns": columns })))
 }
 
+/// `GET /sources/:id/indexes?table=`: the table's indexes, for the key
+/// (unique first) and for knowing whether a watermark column has one.
+async fn list_indexes(
+    State(s): State<AppState>,
+    ctx: Option<axum::Extension<AuthContext>>,
+    Path(id): Path<u64>,
+    Query(q): Query<ColumnsQuery>,
+) -> Result<Json<Value>, ApiError> {
+    admin_only(&ctx)?;
+    let src = s
+        .sources
+        .get(id)
+        .ok_or_else(|| ApiError::NotFound(format!("source {id}")))?;
+    let c = connector_for(&s.sources, &src)?;
+    let mut indexes = c
+        .indexes(&q.table)
+        .await
+        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    indexes.sort_by_key(|i| !i.unique);
+    Ok(Json(serde_json::json!({ "indexes": indexes })))
+}
+
 #[derive(Deserialize, Default)]
 #[serde(default)]
 pub struct MappingPatch {
@@ -1720,6 +1778,7 @@ async fn preview_mapping(
             from: spec.from.clone(),
             after: None,
             max_rows: 50,
+            ..Default::default()
         })
         .await
         .map_err(|e| ApiError::BadRequest(e.to_string()))?;
@@ -1928,6 +1987,7 @@ async fn try_query(
             from: sql.clone(),
             after: None,
             max_rows: q.max_rows.clamp(1, 200),
+            ..Default::default()
         })
         .await
         .map_err(|e| ApiError::BadRequest(e.to_string()))?;

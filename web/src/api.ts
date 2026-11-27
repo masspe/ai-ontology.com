@@ -989,6 +989,9 @@ export const testSource = (id: number) =>
   http<{ ok: boolean; ms?: number; error?: string }>(`/sources/${id}/test`, { method: "POST", headers: headers() });
 export const listSourceTables = (id: number) =>
   http<{ tables: { schema?: string | null; name: string }[] }>(`/sources/${id}/tables`);
+/** The indexes of a table, unique first: a key to pick, a watermark to check. */
+export const listSourceIndexes = (id: number, table: string) =>
+  http<{ indexes: { name: string; columns: string[]; unique: boolean }[] }>(`/sources/${id}/indexes?table=${encodeURIComponent(table)}`);
 export const listSourceColumns = (id: number, table: string) =>
   http<{ columns: { name: string; data_type: string }[] }>(`/sources/${id}/columns?table=${encodeURIComponent(table)}`);
 export const createMapping = (id: number, p: MappingPatch) => http<MappingSpec>(`/sources/${id}/mappings`, jsonInit("POST", p));

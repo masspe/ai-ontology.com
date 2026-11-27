@@ -20,6 +20,7 @@ vi.mock("../api", async () => {
     testSource: vi.fn(),
     listSourceTables: vi.fn(),
     listSourceColumns: vi.fn(),
+    listSourceIndexes: vi.fn(),
     createMapping: vi.fn(),
     updateMapping: vi.fn(),
     deleteMapping: vi.fn(),
@@ -52,6 +53,7 @@ beforeEach(() => {
   m.listSources.mockResolvedValue({ sources: [source] });
   m.listSourceTables.mockResolvedValue({ tables: [{ schema: "dbo", name: "orders" }, { name: "customers" }] });
   m.listSourceColumns.mockResolvedValue({ columns: [{ name: "id", data_type: "int" }, { name: "label", data_type: "text" }] });
+  m.listSourceIndexes.mockResolvedValue({ indexes: [] });
   m.odbcCatalog.mockResolvedValue({ available: false, drivers: [], dsns: [] });
 });
 
@@ -210,7 +212,7 @@ describe("Sources page", () => {
         mappings: [
           { ...source.mappings[0], id: 1, name: "bad", last_status: "failed: graph: duplicate concept name `X` for type `T`", last_report: null },
           { ...source.mappings[0], id: 2, name: "halted", last_status: "cancelled", last_report: null },
-          { ...source.mappings[0], id: 3, name: "partial", last_status: "ok", last_report: { rows: 10, sheets_new: 7, sheets_updated: 1, unchanged: 0, skipped: 2, links: 3 } },
+          { ...source.mappings[0], id: 3, name: "partial", last_status: "ok", last_report: { rows: 10, sheets_new: 7, sheets_updated: 1, unchanged: 0, skipped: 2, links: 3, duplicates: 4 } },
         ],
       }],
     });
@@ -219,7 +221,7 @@ describe("Sources page", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("graph: duplicate concept name `X` for type `T`");
     expect(screen.getByText(/lots de 2 000 lignes écrits avant l'échec sont gardés/)).toBeInTheDocument();
     expect(screen.getByText("Arrêtée")).toHaveClass("badge-warn");
-    expect(screen.getByText(/10 lignes lues : 7 fiches créées, 1 mises à jour, 0 inchangées, 3 liens · 2 lignes sans clé ignorées/)).toBeInTheDocument();
+    expect(screen.getByText(/10 lignes lues : 7 fiches créées, 1 mises à jour, 0 inchangées, 3 liens · 2 lignes sans clé ignorées · 4 doublons fusionnés/)).toBeInTheDocument();
   });
 
   it("shows the listing error and the empty state", async () => {
@@ -349,6 +351,31 @@ describe("Sources page", () => {
     // Nothing picked: nothing sent.
     fireEvent.change(screen.getByTestId("csv-file"), { target: { files: [] } });
     expect(m.uploadSourceFile).toHaveBeenCalledTimes(2);
+  });
+
+  it("offers the table's indexes as the key and warns of a watermark without one", async () => {
+    m.listSourceIndexes.mockResolvedValue({
+      indexes: [
+        { name: "pk", columns: ["tbl", "id"], unique: true },
+        { name: "by_label", columns: ["label"], unique: false },
+      ],
+    });
+    m.updateMapping.mockResolvedValue({});
+    renderPage(<Sources />);
+    await screen.findByText("erp");
+    fireEvent.click(screen.getAllByRole("button", { name: "Modifier" })[1]);
+    await screen.findByLabelText("Mapping name");
+    const pk = await screen.findByRole("button", { name: /pk: tbl, id/ });
+    expect(pk).toHaveAttribute("title", "Index unique");
+    fireEvent.click(pk);
+    expect(screen.getByRole("group", { name: "Key column(s)" })).toHaveTextContent("tbl×id×");
+    // A watermark column no index starts with: a sync will scan.
+    fireEvent.change(screen.getByLabelText("Watermark column (incremental sync)"), { target: { value: "updated" } });
+    expect(screen.getByRole("status")).toHaveTextContent(/Aucun index ne commence par cette colonne/);
+    fireEvent.change(screen.getByLabelText("Watermark column (incremental sync)"), { target: { value: "label" } });
+    expect(screen.queryByRole("status")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
+    await waitFor(() => expect(m.updateMapping).toHaveBeenCalledWith(1, 1, expect.objectContaining({ key_column: "tbl, id", watermark_column: "label" })));
   });
 
   it("edits a mapping: its columns, its schedule, a link taken back", async () => {

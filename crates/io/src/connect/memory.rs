@@ -32,6 +32,8 @@ pub struct MemoryConnector {
     executed: Mutex<Vec<String>>,
     /// Every `ping` fails with this: a connector that cannot be reached.
     down: Option<String>,
+    /// The indexes of a table, as a catalog would list them.
+    indexes: Mutex<BTreeMap<String, Vec<super::IndexInfo>>>,
 }
 
 impl MemoryConnector {
@@ -79,6 +81,20 @@ impl MemoryConnector {
     }
 
     /// Add (or replace) a table: column names and rows of JSON values.
+    /// An index of `table`, as a catalog would list it.
+    pub fn index(self, table: &str, name: &str, columns: &[&str], unique: bool) -> Self {
+        self.indexes
+            .lock()
+            .entry(table.to_string())
+            .or_default()
+            .push(super::IndexInfo {
+                name: name.into(),
+                columns: columns.iter().map(|c| c.to_string()).collect(),
+                unique,
+            });
+        self
+    }
+
     pub fn table(self, name: &str, columns: &[&str], rows: Vec<Vec<Value>>) -> Self {
         self.tables.lock().insert(
             name.to_string(),
@@ -120,19 +136,6 @@ impl MemoryConnector {
 
 /// `a > b` for the JSON values a watermark can be: numbers by value,
 /// strings and the rest by their text.
-fn greater(a: &Value, b: &Value) -> bool {
-    match (a.as_f64(), b.as_f64()) {
-        (Some(x), Some(y)) => x > y,
-        _ => {
-            a.as_str()
-                .map(str::to_string)
-                .unwrap_or_else(|| a.to_string())
-                > b.as_str()
-                    .map(str::to_string)
-                    .unwrap_or_else(|| b.to_string())
-        }
-    }
-}
 
 #[async_trait]
 impl Connector for MemoryConnector {
@@ -186,30 +189,7 @@ impl Connector for MemoryConnector {
         let (columns, rows) = tables
             .get(&q.from)
             .ok_or_else(|| ConnectError::Query(format!("no table `{}`", q.from)))?;
-        let mut rows: Vec<Vec<Value>> = match &q.after {
-            Some((col, last)) => {
-                let i = columns
-                    .iter()
-                    .position(|c| c.name.eq_ignore_ascii_case(col))
-                    .ok_or_else(|| ConnectError::Query(format!("no column `{col}`")))?;
-                let mut kept: Vec<Vec<Value>> = rows
-                    .iter()
-                    .filter(|r| r.get(i).is_some_and(|v| greater(v, last)))
-                    .cloned()
-                    .collect();
-                kept.sort_by(|a, b| {
-                    if greater(&a[i], &b[i]) {
-                        std::cmp::Ordering::Greater
-                    } else if greater(&b[i], &a[i]) {
-                        std::cmp::Ordering::Less
-                    } else {
-                        std::cmp::Ordering::Equal
-                    }
-                });
-                kept
-            }
-            None => rows.clone(),
-        };
+        let mut rows: Vec<Vec<Value>> = super::page_rows(columns, rows.clone(), q)?;
         let truncated = q.max_rows > 0 && rows.len() > q.max_rows;
         if truncated {
             rows.truncate(q.max_rows);
@@ -219,6 +199,11 @@ impl Connector for MemoryConnector {
             rows,
             truncated,
         })
+    }
+
+    async fn indexes(&self, table: &str) -> Result<Vec<super::IndexInfo>, ConnectError> {
+        self.check()?;
+        Ok(self.indexes.lock().get(table).cloned().unwrap_or_default())
     }
 
     async fn execute(&self, sql: &str, max_rows: u64) -> Result<u64, ConnectError> {
@@ -257,6 +242,7 @@ mod tests {
                 from: "orders".into(),
                 after: None,
                 max_rows: 2,
+                ..Default::default()
             })
             .await
             .unwrap();
@@ -267,6 +253,7 @@ mod tests {
                 from: "orders".into(),
                 after: Some(("updated".into(), json!("2026-01-01"))),
                 max_rows: 0,
+                ..Default::default()
             })
             .await
             .unwrap();
@@ -277,6 +264,7 @@ mod tests {
                 from: "orders".into(),
                 after: Some(("id".into(), json!(2))),
                 max_rows: 0,
+                ..Default::default()
             })
             .await
             .unwrap();
@@ -285,7 +273,8 @@ mod tests {
             .query(&Query {
                 from: "select 1".into(),
                 after: None,
-                max_rows: 0
+                max_rows: 0,
+                ..Default::default()
             })
             .await
             .is_err());
@@ -298,7 +287,8 @@ mod tests {
             m.query(&Query {
                 from: "orders".into(),
                 after: None,
-                max_rows: 0
+                max_rows: 0,
+                ..Default::default()
             })
             .await
             .unwrap()

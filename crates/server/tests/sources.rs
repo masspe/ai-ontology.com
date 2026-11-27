@@ -413,6 +413,93 @@ async fn a_csv_is_uploaded_for_a_source_and_the_odbc_drivers_are_listed() {
     }
 }
 
+/// A table past one page is read by keyset pages on its key (each page
+/// one statement), a key read twice is one sheet, and the table's
+/// indexes are listed, unique first.
+#[tokio::test]
+async fn a_big_table_is_read_by_pages_and_its_indexes_listed() {
+    let w = world("pages").await;
+    let n = ontology_server::sources::PAGE + 500;
+    let mut rows: Vec<Vec<Value>> = (1..=n)
+        .map(|i| vec![json!(i), json!(format!("Item {i}")), json!(i % 7)])
+        .collect();
+    // The last key again, with another value: merged, not a failure.
+    rows.push(vec![json!(n), json!(format!("Item {n}")), json!(99)]);
+    let big = Arc::new(
+        MemoryConnector::new()
+            .table("items", &["id", "label", "amount"], rows)
+            .index("items", "by_amount", &["amount"], false)
+            .index("items", "pk", &["id"], true),
+    );
+    w.state.sources.register_test_connector("big", big);
+    let (st, v) = call(
+        &w.app,
+        "POST",
+        "/sources",
+        Some(&w.admin),
+        Some(json!({ "name": "big", "kind": "memory" })),
+    )
+    .await;
+    assert_eq!(st, StatusCode::CREATED, "{v}");
+    let sid = v["id"].as_u64().unwrap();
+    let (st, v) = call(
+        &w.app,
+        "GET",
+        &format!("/sources/{sid}/indexes?table=items"),
+        Some(&w.admin),
+        None,
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "{v}");
+    assert_eq!(
+        v["indexes"],
+        json!([
+            { "name": "pk", "columns": ["id"], "unique": true },
+            { "name": "by_amount", "columns": ["amount"], "unique": false }
+        ]),
+        "unique first"
+    );
+    let mid = make_mapping(
+        &w,
+        sid,
+        json!({ "name": "items", "from": "items", "concept_type": "Item", "key_column": "id", "name_column": "label", "property_columns": ["amount"], "relations": [] }),
+    )
+    .await;
+    let (st, v) = call(
+        &w.app,
+        "POST",
+        &format!("/sources/{sid}/mappings/{mid}/run"),
+        Some(&w.admin),
+        None,
+    )
+    .await;
+    assert_eq!(st, StatusCode::ACCEPTED, "{v}");
+    let j = wait_job(&w, v["job"].as_u64().unwrap()).await;
+    assert_eq!(j["status"], "done", "{j}");
+    assert_eq!(j["result"]["rows"], n + 1, "{j}");
+    assert_eq!(j["result"]["sheets_new"], n);
+    assert_eq!(j["result"]["duplicates"], 1);
+    assert_eq!(j["result"]["stale_marked"], 0);
+    let last = w
+        .state
+        .graph
+        .find_by_name("Item", &format!("Item {n}"))
+        .unwrap();
+    assert_eq!(
+        w.state.graph.get_concept(last).unwrap().properties["amount"],
+        ontology_graph::PropertyValue::Number(99.0),
+        "the last row's value"
+    );
+    assert!(
+        j["log"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|l| l.as_str() == Some("10000 rows so far")),
+        "{j}"
+    );
+}
+
 #[tokio::test]
 async fn a_sync_makes_sheets_and_links_then_follows_the_watermark_and_marks_stale_rows() {
     let w = world("sync").await;

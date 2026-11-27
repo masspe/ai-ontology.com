@@ -269,6 +269,20 @@ impl Connector for SqlServerConnector {
         self.run(&sql, q.max_rows).await
     }
 
+    async fn indexes(&self, table: &str) -> Result<Vec<super::IndexInfo>, ConnectError> {
+        let sql = format!(
+            "SELECT i.name, c.name, i.is_unique FROM sys.indexes i \
+             JOIN sys.index_columns ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id \
+             JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id \
+             WHERE i.object_id = OBJECT_ID({}) AND i.name IS NOT NULL ORDER BY i.name, ic.key_ordinal",
+            super::sql_literal(&Value::String(table.into()))
+        );
+        let rs = self.run(&sql, 0).await?;
+        Ok(super::group_indexes(&rs.rows, |v| {
+            v.as_bool() == Some(true) || v.as_i64() == Some(1)
+        }))
+    }
+
     async fn execute(&self, sql: &str, max_rows: u64) -> Result<u64, ConnectError> {
         let mut client = self.client(false).await?;
         let failed = |e: tiberius::error::Error| ConnectError::Query(e.to_string());

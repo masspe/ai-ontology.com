@@ -115,6 +115,9 @@ pub struct RowSource {
     queue: VecDeque<Record>,
     /// Rows whose key cell was empty: counted, never a sheet.
     pub skipped: usize,
+    /// Rows that resolved to a sheet already in this result (the key read
+    /// twice): merged into it, the last row's values winning.
+    pub duplicates: usize,
     /// The key values seen, for a stale sweep after a full sync.
     pub keys: Vec<String>,
 }
@@ -124,14 +127,25 @@ impl RowSource {
         Self::new_range(rs, m, declare_type, 0..rs.rows.len())
     }
 
-    /// The records of the rows in `range` — names made unique over the
-    /// whole result, so a sync written by batches names a sheet the same
-    /// whichever batch it is in.
     pub fn new_range(
         rs: &ResultSet,
         m: &Mapping,
         declare_type: bool,
         range: std::ops::Range<usize>,
+    ) -> Result<Self, IngestError> {
+        Self::build(rs, m, declare_type, range, &mut AHashMap::new())
+    }
+
+    /// The records of the rows in `range` — names made unique over the
+    /// whole result and over `known` (name → key of the sheet that owns
+    /// it, from the pages before), so a sync read by pages names a sheet
+    /// the same whichever page it is in. `known` learns this result's.
+    pub fn build(
+        rs: &ResultSet,
+        m: &Mapping,
+        declare_type: bool,
+        range: std::ops::Range<usize>,
+        known: &mut AHashMap<String, String>,
     ) -> Result<Self, IngestError> {
         let key = columns_of(rs, &m.key_column)?;
         if key.is_empty() {
@@ -195,24 +209,28 @@ impl RowSource {
         };
         // The names that rows of different keys carry, over every row: the
         // same key again (a re-read, a join's repeat) is the same sheet.
-        let mut first_key: AHashMap<String, String> = AHashMap::new();
         let mut shared: ahash::AHashSet<String> = ahash::AHashSet::new();
         for row in &rs.rows {
             if let Some(n) = named(row) {
                 let k = composite(row, &key);
-                match first_key.get(&n) {
+                match known.get(&n) {
                     Some(seen) if *seen != k => {
                         shared.insert(n);
                     }
                     Some(_) => {}
                     None => {
-                        first_key.insert(n, k);
+                        known.insert(n, k);
                     }
                 }
             }
         }
         let mut skipped = 0;
+        let mut duplicates = 0;
         let mut keys = Vec::with_capacity(range.len());
+        // Sheets of this range in order; a key read twice lands on the
+        // same entry, the later row's values over the earlier ones.
+        let mut built: Vec<(Concept, Vec<Record>)> = Vec::with_capacity(range.len());
+        let mut at: AHashMap<String, usize> = AHashMap::new();
         for row in &rs.rows[range] {
             let k = composite(row, &key);
             if k.is_empty() {
@@ -220,7 +238,9 @@ impl RowSource {
                 continue;
             }
             let sheet_name = match named(row) {
-                Some(n) if shared.contains(&n) => format!("{n} ({k})"),
+                Some(n) if shared.contains(&n) || known.get(&n).is_some_and(|seen| *seen != k) => {
+                    format!("{n} ({k})")
+                }
                 Some(n) => n,
                 None => k.clone(),
             };
@@ -237,6 +257,8 @@ impl RowSource {
                 .insert("source".into(), PropertyValue::Text(m.source_tag.clone()));
             c.properties
                 .insert("stale".into(), PropertyValue::Bool(false));
+            // A row's link targets go right before its sheet, as the
+            // ingester takes them row by row.
             let mut links = Vec::new();
             for (i, rule) in &rules {
                 let target = composite(row, i);
@@ -248,7 +270,7 @@ impl RowSource {
                         Concept::new(ConceptId(0), rule.target_type.clone(), target.clone());
                     t.properties
                         .insert("source".into(), PropertyValue::Text(m.source_tag.clone()));
-                    queue.push_back(Record::Concept(t));
+                    links.push(Record::Concept(t));
                 }
                 links.push(Record::NamedRelation {
                     relation_type: rule.relation_type.clone(),
@@ -260,13 +282,35 @@ impl RowSource {
                     properties: AHashMap::new(),
                 });
             }
-            keys.push(c.name.clone());
+            match at.get(&c.name) {
+                Some(&i) => {
+                    duplicates += 1;
+                    let (earlier, trailing) = &mut built[i];
+                    earlier.properties.extend(c.properties);
+                    if !c.description.is_empty() {
+                        earlier.description = c.description;
+                    }
+                    *trailing = links;
+                }
+                None => {
+                    at.insert(c.name.clone(), built.len());
+                    keys.push(c.name.clone());
+                    built.push((c, links));
+                }
+            }
+        }
+        for (c, links) in built {
+            let (stubs, rels): (Vec<Record>, Vec<Record>) = links
+                .into_iter()
+                .partition(|r| matches!(r, Record::Concept(_)));
+            queue.extend(stubs);
             queue.push_back(Record::Concept(c));
-            queue.extend(links);
+            queue.extend(rels);
         }
         Ok(Self {
             queue,
             skipped,
+            duplicates,
             keys,
         })
     }
@@ -411,13 +455,30 @@ mod tests {
         };
         let whole = RowSource::new(&rs, &m, false).unwrap();
         assert_eq!(whole.keys, ["First order (O-1)", "First order (O-2)"]);
-        // The same key twice is one sheet, not a shared name.
+        // The same key twice is one sheet, not a shared name: merged, the
+        // later row's values winning, counted.
         let mut again = rs.clone();
         again.rows[2][0] = json!("O-1");
-        assert_eq!(
-            RowSource::new(&again, &m, false).unwrap().keys,
-            ["First order", "First order"]
-        );
+        again.rows[2][2] = json!(99);
+        let merged = RowSource::new(&again, &m, false).unwrap();
+        assert_eq!(merged.keys, ["First order"]);
+        assert_eq!(merged.duplicates, 1);
+        let sheets: Vec<&Concept> = merged
+            .queue
+            .iter()
+            .filter_map(|r| match r {
+                Record::Concept(c) => Some(c),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(sheets.len(), 1);
+        assert_eq!(sheets[0].properties["amount"], PropertyValue::Number(99.0));
+        // A later page knows the names of the pages before: a name owned
+        // by another key there gets its key here.
+        let mut known = AHashMap::new();
+        known.insert("First order".to_string(), "O-0".to_string());
+        let later = RowSource::build(&rs, &m, false, 0..1, &mut known).unwrap();
+        assert_eq!(later.keys, ["First order (O-1)"]);
         // By batches of one row: the same names.
         let last = RowSource::new_range(&rs, &m, false, 2..3).unwrap();
         assert_eq!(last.keys, ["First order (O-2)"]);

@@ -19,6 +19,7 @@ import {
   deleteNamedQuery,
   deleteSource,
   listSourceColumns,
+  listSourceIndexes,
   listSources,
   listSourceTables,
   odbcCatalog,
@@ -93,7 +94,7 @@ function SyncStatus({ m }: { m: MappingSpec }) {
   if (!m.last_run_at) return <span className="muted">{t("jamais")}</span>;
   const when = m.last_run_at.slice(0, 16).replace("T", " ");
   if (m.last_status === "ok") {
-    const r = (m.last_report ?? {}) as { rows?: number; sheets_new?: number; sheets_updated?: number; unchanged?: number; skipped?: number; links?: number };
+    const r = (m.last_report ?? {}) as { rows?: number; sheets_new?: number; sheets_updated?: number; unchanged?: number; skipped?: number; links?: number; duplicates?: number };
     return (
       <span>
         <span className="badge badge-success">OK</span> {when}
@@ -106,6 +107,7 @@ function SyncStatus({ m }: { m: MappingSpec }) {
             k: r.links ?? 0,
           })}
           {r.skipped ? ` · ${t("{n} lignes sans clé ignorées", { n: r.skipped })}` : ""}
+          {r.duplicates ? ` · ${t("{n} doublons fusionnés (même clé lue deux fois)", { n: r.duplicates })}` : ""}
         </div>
       </span>
     );
@@ -351,6 +353,7 @@ function MappingForm({ source, initial, onSave, onCancel }: { source: DataSource
   });
   const [tables, setTables] = useState<string[]>([]);
   const [columns, setColumns] = useState<string[]>([]);
+  const [indexes, setIndexes] = useState<{ name: string; columns: string[]; unique: boolean }[]>([]);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     listSourceTables(source.id)
@@ -363,6 +366,9 @@ function MappingForm({ source, initial, onSave, onCancel }: { source: DataSource
     listSourceColumns(source.id, from)
       .then((r) => setColumns(r.columns.map((c) => c.name)))
       .catch(() => setColumns([]));
+    listSourceIndexes(source.id, from)
+      .then((r) => setIndexes(r.indexes))
+      .catch(() => setIndexes([]));
   }, [source.id, p.from]);
   const set = <K extends keyof MappingPatch>(k: K, v: MappingPatch[K]) => setP((x) => ({ ...x, [k]: v }));
   const colList = columns.length ? <datalist id="src-columns">{columns.map((c) => <option key={c} value={c} />)}</datalist> : null;
@@ -393,6 +399,17 @@ function MappingForm({ source, initial, onSave, onCancel }: { source: DataSource
         <div className="field">
           <span>Key column(s)</span>
           <ColumnPicker label="Key column(s)" required value={list(p.key_column ?? "")} onChange={(v) => set("key_column", v.join(", "))} />
+          {indexes.length > 0 && (
+            <div className="muted" style={{ marginTop: 6, display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+              {t("Index de la table :")}
+              {indexes.map((ix) => (
+                <button key={ix.name} type="button" className="btn-ghost" style={{ padding: "2px 8px" }} onClick={() => set("key_column", ix.columns.join(", "))} title={ix.unique ? t("Index unique") : t("Index non unique")}>
+                  {ix.unique ? "🔑 " : ""}
+                  {ix.name}: {ix.columns.join(", ")}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
         <label className="field">
           <span>{"Name column (default: the key)"}</span>
@@ -406,15 +423,21 @@ function MappingForm({ source, initial, onSave, onCancel }: { source: DataSource
           <span>Property columns (empty: all)</span>
           <ColumnPicker label="Property columns (empty: all)" value={p.property_columns ?? []} onChange={(v) => set("property_columns", v)} />
         </div>
-        <label className="field">
-          <span>{"Watermark column (incremental sync)"}</span>
-          <input list="src-columns" value={p.watermark_column ?? ""} onChange={(e) => set("watermark_column", e.target.value)} />
-        </label>
+        <div className="field">
+          <label htmlFor="src-watermark">{"Watermark column (incremental sync)"}</label>
+          <input id="src-watermark" list="src-columns" value={p.watermark_column ?? ""} onChange={(e) => set("watermark_column", e.target.value)} />
+          {p.watermark_column && indexes.length > 0 && !indexes.some((ix) => ix.columns[0]?.toLowerCase() === p.watermark_column!.trim().toLowerCase()) && (
+            <p className="field-hint" role="status">{t("Aucun index ne commence par cette colonne : chaque synchronisation parcourra toute la table.")}</p>
+          )}
+        </div>
         <label className="field">
           <span>{"Schedule (minutes, 0: manual)"}</span>
           <input type="number" min={0} value={p.schedule_minutes ?? 0} onChange={(e) => set("schedule_minutes", Number(e.target.value))} />
         </label>
       </div>
+      <p className="field-hint">
+        {t("Une ligne par année ou par société ? Faites une fiche par entité (Table or SELECT : « SELECT DISTINCT … ») et une requête nommée pour les valeurs de l'année : le graphe garde ce qui se cherche, la base répond pour le reste.")}
+      </p>
       <fieldset style={{ marginTop: 12, border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", padding: 12 }}>
         <legend>{"Links from foreign keys"}</legend>
         {(p.relations ?? []).map((r, i) => (

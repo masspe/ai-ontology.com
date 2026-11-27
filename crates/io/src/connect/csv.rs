@@ -169,19 +169,8 @@ impl Connector for CsvConnector {
             ));
         }
         let text = self.read().await?;
-        let (columns, mut rows) = Self::parse(&text);
-        if let Some((col, last)) = &q.after {
-            let i = columns
-                .iter()
-                .position(|c| c.name.eq_ignore_ascii_case(col))
-                .ok_or_else(|| ConnectError::Query(format!("no column `{col}`")))?;
-            let last = last
-                .as_str()
-                .map(str::to_string)
-                .unwrap_or_else(|| last.to_string());
-            rows.retain(|r| r[i].as_str().is_some_and(|v| v > last.as_str()));
-            rows.sort_by(|a, b| a[i].as_str().cmp(&b[i].as_str()));
-        }
+        let (columns, rows) = Self::parse(&text);
+        let mut rows = super::page_rows(&columns, rows, q)?;
         let truncated = q.max_rows > 0 && rows.len() > q.max_rows;
         if truncated {
             rows.truncate(q.max_rows);
@@ -223,6 +212,7 @@ mod tests {
                 from: "data".into(),
                 after: None,
                 max_rows: 0,
+                ..Default::default()
             })
             .await
             .unwrap();
@@ -235,6 +225,7 @@ mod tests {
                 from: "data".into(),
                 after: Some(("updated".into(), Value::String("2026-01-01".into()))),
                 max_rows: 1,
+                ..Default::default()
             })
             .await
             .unwrap();
@@ -249,7 +240,8 @@ mod tests {
             .query(&Query {
                 from: "select 1".into(),
                 after: None,
-                max_rows: 0
+                max_rows: 0,
+                ..Default::default()
             })
             .await
             .is_err());
@@ -301,6 +293,7 @@ mod tests {
                 from: "data".into(),
                 after: None,
                 max_rows: 0,
+                ..Default::default()
             })
             .await
             .unwrap();

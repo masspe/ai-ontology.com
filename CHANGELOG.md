@@ -8,6 +8,16 @@ All notable changes to this project are listed here. The format follows
 
 ### Fixed
 
+- A sync read the whole table in one statement, capped at 200 000 rows
+  and bound by the source's timeout (`no answer within 60 s` on a large
+  table). It now reads **keyset pages** of 10 000 rows on the key's
+  index (the watermark column first when there is one): a table of any
+  size, the timeout per page, memory flat. A key read twice in a sync
+  is one sheet (the last row's values win), counted as a duplicate
+  instead of failing the sync.
+- ODBC text arrived as single bytes read as UTF-8: `Isérables` showed as
+  `Is�rables`. The driver is asked for UTF-16, which it converts from
+  the database's own code page.
 - A sync failed whole on two rows sharing a name (`duplicate concept
   name`): a sheet is one name of its type. Rows of different keys that
   share a name are now named `name (key)`, both of them, whichever batch
@@ -92,6 +102,10 @@ All notable changes to this project are listed here. The format follows
 
 ### Added
 
+- `GET /sources/{id}/indexes?table=`: the table's indexes from the
+  engine's catalog (PostgreSQL, MySQL/MariaDB, SQL Server, OpenEdge
+  through ODBC), unique first; the mapping form offers them as the key
+  in one click and warns when the watermark column leads no index.
 - **MySQL and MariaDB** as a data source (`mysql`, behind a build
   feature; in the container image): pure Rust, TLS by default, a
   read-only session, the statement timeout set on the engine, writes

@@ -126,7 +126,9 @@ impl OdbcConnector {
         }
         let mut rows = Vec::new();
         let mut truncated = false;
-        let mut buf = Vec::new();
+        // UTF-16 from the driver: it knows the database's code page, the
+        // narrow API would hand over single bytes read as UTF-8.
+        let mut buf: Vec<u16> = Vec::new();
         while let Some(mut row) = cursor.next_row().map_err(with_hint)? {
             if max_rows > 0 && rows.len() >= max_rows {
                 truncated = true;
@@ -136,12 +138,12 @@ impl OdbcConnector {
             for i in 1..=n as u16 {
                 buf.clear();
                 let present = row
-                    .get_text(i, &mut buf)
+                    .get_wide_text(i, &mut buf)
                     .map_err(|e| ConnectError::Query(e.to_string()))?;
                 cells.push(if present {
                     typed(
                         kinds[i as usize - 1].as_ref(),
-                        String::from_utf8_lossy(&buf).trim_end().to_string(),
+                        String::from_utf16_lossy(&buf).trim_end().to_string(),
                     )
                 } else {
                     Value::Null
@@ -278,6 +280,30 @@ impl Connector for OdbcConnector {
 
     async fn query(&self, q: &Query) -> Result<ResultSet, ConnectError> {
         self.run(&q.render_sql(quote_ansi), q.max_rows).await
+    }
+
+    /// OpenEdge's catalog (`SYSPROGRESS.SYSINDEXES`); another engine
+    /// behind ODBC has none we know, and lists no index.
+    async fn indexes(&self, table: &str) -> Result<Vec<super::IndexInfo>, ConnectError> {
+        let (schema, name) = match table.split_once('.') {
+            Some((s, n)) => (Some(s), n),
+            None => (None, table),
+        };
+        let mut sql = format!(
+            "SELECT IDXNAME, COLNAME, IDXTYPE FROM SYSPROGRESS.SYSINDEXES WHERE TBL = {}",
+            super::sql_literal(&Value::String(name.into()))
+        );
+        if let Some(s) = schema {
+            sql.push_str(&format!(
+                " AND TBLOWNER = {}",
+                super::sql_literal(&Value::String(s.into()))
+            ));
+        }
+        sql.push_str(" ORDER BY IDXNAME, IDXSEQ");
+        match self.run(&sql, 0).await {
+            Ok(rs) => Ok(super::group_indexes(&rs.rows, |v| v.as_str() == Some("U"))),
+            Err(_) => Ok(Vec::new()),
+        }
     }
 
     async fn execute(&self, sql: &str, max_rows: u64) -> Result<u64, ConnectError> {

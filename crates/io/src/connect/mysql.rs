@@ -306,6 +306,21 @@ impl Connector for MysqlConnector {
         self.run(&sql, q.max_rows).await
     }
 
+    async fn indexes(&self, table: &str) -> Result<Vec<super::IndexInfo>, ConnectError> {
+        let (schema, name) = match table.split_once('.') {
+            Some((s, n)) => (super::sql_literal(&Value::String(s.into())), n),
+            None => ("DATABASE()".to_string(), table),
+        };
+        let sql = format!(
+            "SELECT index_name, column_name, non_unique FROM information_schema.statistics WHERE table_schema = {schema} AND table_name = {} ORDER BY index_name, seq_in_index",
+            super::sql_literal(&Value::String(name.into()))
+        );
+        let rs = self.run(&sql, 0).await?;
+        Ok(super::group_indexes(&rs.rows, |v| {
+            v.as_i64() == Some(0) || v.as_str() == Some("0")
+        }))
+    }
+
     async fn execute(&self, sql: &str, max_rows: u64) -> Result<u64, ConnectError> {
         let mut conn = self.client().await?;
         let failed = |e: mysql_async::Error| ConnectError::Query(describe(&e));
