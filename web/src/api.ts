@@ -880,6 +880,7 @@ export interface MappingSpec {
   name: string;
   from: string;
   concept_type: string;
+  /** One column, or several comma-separated (a composite key). */
   key_column: string;
   name_column?: string | null;
   description_column?: string | null;

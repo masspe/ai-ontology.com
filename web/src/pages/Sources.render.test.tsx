@@ -86,11 +86,11 @@ describe("Sources page", () => {
     renderPage(<Sources />);
     await screen.findByText("erp");
     fireEvent.click(screen.getByRole("button", { name: "Ajouter une source" }));
-    expect(screen.queryByLabelText("Hôte")).toBeNull();
-    fireEvent.change(screen.getByLabelText("Nom de la source"), { target: { value: "pg" } });
+    expect(screen.queryByLabelText("Host")).toBeNull();
+    fireEvent.change(screen.getByLabelText("Source name"), { target: { value: "pg" } });
     fireEvent.change(screen.getByLabelText("Type"), { target: { value: "postgres" } });
     expect(screen.getByLabelText("Port")).toHaveValue(5432);
-    fireEvent.change(screen.getByLabelText("Hôte"), { target: { value: "pg.example" } });
+    fireEvent.change(screen.getByLabelText("Host"), { target: { value: "pg.example" } });
     fireEvent.change(screen.getByLabelText("Type"), { target: { value: "sqlserver" } });
     expect(screen.getByLabelText("Port")).toHaveValue(1433);
     fireEvent.change(screen.getByLabelText("Type"), { target: { value: "postgres" } });
@@ -107,24 +107,24 @@ describe("Sources page", () => {
     await screen.findByText("erp");
 
     fireEvent.click(screen.getByRole("button", { name: "Ajouter une source" }));
-    fireEvent.change(screen.getByLabelText("Nom de la source"), { target: { value: "files" } });
+    fireEvent.change(screen.getByLabelText("Source name"), { target: { value: "files" } });
     fireEvent.change(screen.getByLabelText("Type"), { target: { value: "csv" } });
-    fireEvent.change(screen.getByLabelText("Chemin ou URL HTTPS du fichier"), { target: { value: "/data/x.csv" } });
+    fireEvent.change(screen.getByLabelText("File path or HTTPS URL"), { target: { value: "/data/x.csv" } });
     fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
     await waitFor(() => expect(m.createSource).toHaveBeenCalledWith(expect.objectContaining({ name: "files", kind: "csv", location: "/data/x.csv" })));
     expect(await screen.findByText("Source enregistrée.")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Ajouter un mapping" }));
-    expect(await screen.findByLabelText("Nom du mapping")).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText("Nom du mapping"), { target: { value: "customers" } });
-    fireEvent.change(screen.getByLabelText("Table ou SELECT"), { target: { value: "customers" } });
-    fireEvent.change(screen.getByLabelText("Type de fiche"), { target: { value: "Customer" } });
-    fireEvent.change(screen.getByLabelText("Colonne clé"), { target: { value: "id" } });
-    fireEvent.change(screen.getByLabelText("Colonnes gardées en propriétés (vide : toutes)"), { target: { value: "label, city" } });
-    fireEvent.click(screen.getByRole("button", { name: "Ajouter un lien" }));
-    fireEvent.change(screen.getByLabelText("Colonne"), { target: { value: "rep" } });
-    fireEvent.change(screen.getByLabelText("Type de lien"), { target: { value: "managed_by" } });
-    fireEvent.change(screen.getByLabelText("Type cible"), { target: { value: "Employee" } });
+    expect(await screen.findByLabelText("Mapping name")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Mapping name"), { target: { value: "customers" } });
+    fireEvent.change(screen.getByLabelText("Table or SELECT"), { target: { value: "customers" } });
+    fireEvent.change(screen.getByLabelText("Sheet type"), { target: { value: "Customer" } });
+    fireEvent.change(screen.getByLabelText("Key column(s) — comma-separated for a composite key"), { target: { value: "id" } });
+    fireEvent.change(screen.getByLabelText("Property columns (empty: all)"), { target: { value: "label, city" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add link" }));
+    fireEvent.change(screen.getByLabelText("Column"), { target: { value: "rep" } });
+    fireEvent.change(screen.getByLabelText("Link type"), { target: { value: "managed_by" } });
+    fireEvent.change(screen.getByLabelText("Target type"), { target: { value: "Employee" } });
     fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
     await waitFor(() =>
       expect(m.createMapping).toHaveBeenCalledWith(
@@ -159,9 +159,9 @@ describe("Sources page", () => {
     expect(screen.getByText("désactivée", { exact: false })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Ajouter une requête" }));
-    fireEvent.change(screen.getByLabelText("Nom de la requête"), { target: { value: "client" } });
-    fireEvent.change(screen.getByLabelText("Déclencheur (expression régulière, groupes nommés)"), { target: { value: "client (?P<name>\\w+)" } });
-    fireEvent.change(screen.getByLabelText("SELECT avec des blancs : le nom du groupe entre accolades"), { target: { value: "SELECT * FROM c WHERE name = {name}" } });
+    fireEvent.change(screen.getByLabelText("Query name"), { target: { value: "client" } });
+    fireEvent.change(screen.getByLabelText("Trigger (regex with named groups)"), { target: { value: "client (?P<name>\\w+)" } });
+    fireEvent.change(screen.getByLabelText("SELECT with {group} blanks"), { target: { value: "SELECT * FROM c WHERE name = {name}" } });
     fireEvent.click(screen.getByLabelText("Administrateurs seulement"));
     fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
     await waitFor(() => expect(m.createNamedQuery).toHaveBeenCalledWith(1, expect.objectContaining({ name: "client", trigger: "client (?P<name>\\w+)", sql: "SELECT * FROM c WHERE name = {name}", admin_only: true, enabled: true, max_rows: 20 })));
@@ -200,15 +200,15 @@ describe("Sources page", () => {
     await screen.findByText("erp");
     const edit = () => fireEvent.click(screen.getAllByRole("button", { name: "Modifier" })[0]);
     edit();
-    fireEvent.change(screen.getByLabelText("Hôte"), { target: { value: "db2.example" } });
+    fireEvent.change(screen.getByLabelText("Host"), { target: { value: "db2.example" } });
     fireEvent.change(screen.getByLabelText("Port"), { target: { value: "1444" } });
-    fireEvent.change(screen.getByLabelText("Base"), { target: { value: "erp2" } });
-    fireEvent.change(screen.getByLabelText("Utilisateur (lecture seule)"), { target: { value: "reader" } });
-    fireEvent.change(screen.getByLabelText("Mot de passe"), { target: { value: "n3w" } });
-    fireEvent.click(screen.getByLabelText("Chiffrer la connexion (TLS)"));
-    fireEvent.click(screen.getByLabelText("Accepter un certificat auto-signé"));
+    fireEvent.change(screen.getByLabelText("Database"), { target: { value: "erp2" } });
+    fireEvent.change(screen.getByLabelText("User (read-only)"), { target: { value: "reader" } });
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "n3w" } });
+    fireEvent.click(screen.getByLabelText("Encrypt (TLS)"));
+    fireEvent.click(screen.getByLabelText("Trust server certificate"));
     fireEvent.click(screen.getByLabelText("Le serveur est sur le réseau privé"));
-    fireEvent.change(screen.getByLabelText("Délai (secondes)"), { target: { value: "30" } });
+    fireEvent.change(screen.getByLabelText("Timeout (seconds)"), { target: { value: "30" } });
     fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
     await waitFor(() =>
       expect(m.updateSource).toHaveBeenCalledWith(
@@ -216,20 +216,20 @@ describe("Sources page", () => {
         expect.objectContaining({ host: "db2.example", port: 1444, database: "erp2", user: "reader", password: "n3w", encrypt: false, trust_cert: true, allow_private_hosts: true, timeout_secs: 30 }),
       ),
     );
-    await waitFor(() => expect(screen.queryByLabelText("Nom de la source")).toBeNull());
+    await waitFor(() => expect(screen.queryByLabelText("Source name")).toBeNull());
 
     edit();
     fireEvent.change(screen.getByLabelText("Type"), { target: { value: "odbc" } });
-    expect(screen.queryByLabelText("Hôte")).toBeNull();
+    expect(screen.queryByLabelText("Host")).toBeNull();
     fireEvent.change(screen.getByLabelText("Connection string"), { target: { value: "Driver={x};Server=db.example;" } });
     expect(screen.getByLabelText("Connection string")).toHaveValue("Driver={x};Server=db.example;");
     fireEvent.click(screen.getByRole("button", { name: "Annuler" }));
-    expect(screen.queryByLabelText("Nom de la source")).toBeNull();
+    expect(screen.queryByLabelText("Source name")).toBeNull();
     // The same button closes the form it opened.
     edit();
-    expect(screen.getByLabelText("Nom de la source")).toBeInTheDocument();
+    expect(screen.getByLabelText("Source name")).toBeInTheDocument();
     edit();
-    expect(screen.queryByLabelText("Nom de la source")).toBeNull();
+    expect(screen.queryByLabelText("Source name")).toBeNull();
     expect(m.updateSource).toHaveBeenCalledTimes(1);
 
     fireEvent.click(screen.getByRole("button", { name: "Ajouter une source" }));
@@ -253,7 +253,7 @@ describe("Sources page", () => {
     expect(screen.getByText("OE · h:20931/d")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Ajouter une source" }));
-    fireEvent.change(screen.getByLabelText("Nom de la source"), { target: { value: "erp" } });
+    fireEvent.change(screen.getByLabelText("Source name"), { target: { value: "erp" } });
     fireEvent.change(screen.getByLabelText("Type"), { target: { value: "odbc" } });
     await waitFor(() => expect(container.querySelector('#odbc-dsns option[value="erp-live"]')).not.toBeNull());
     expect(container.querySelector('#odbc-drivers option[value="Progress OpenEdge 12.2 Driver"]')).not.toBeNull();
@@ -269,7 +269,7 @@ describe("Sources page", () => {
     fireEvent.change(screen.getByLabelText("User ID"), { target: { value: "reader" } });
     fireEvent.change(screen.getByLabelText("Password"), { target: { value: "pw" } });
     // No TLS switches: the driver or the DSN says how it connects.
-    expect(screen.queryByLabelText("Chiffrer la connexion (TLS)")).toBeNull();
+    expect(screen.queryByLabelText("Encrypt (TLS)")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
     await waitFor(() =>
       expect(m.createSource).toHaveBeenCalledWith(expect.objectContaining({ kind: "odbc", dsn: "erp-live", user: "reader", password: "pw", port: 0 })),
@@ -294,7 +294,7 @@ describe("Sources page", () => {
     fireEvent.click(screen.getByRole("button", { name: "Ajouter une source" }));
     const file = new File(["code,name\n"], "clients.csv", { type: "text/csv" });
     fireEvent.change(screen.getByTestId("csv-file"), { target: { files: [file] } });
-    await waitFor(() => expect(screen.getByLabelText("Chemin ou URL HTTPS du fichier")).toHaveValue("C:/data/source-files/clients.csv"));
+    await waitFor(() => expect(screen.getByLabelText("File path or HTTPS URL")).toHaveValue("C:/data/source-files/clients.csv"));
     expect(m.uploadSourceFile).toHaveBeenCalledWith(file);
     m.uploadSourceFile.mockRejectedValue(new Error("a .csv, .tsv or .txt file is required"));
     fireEvent.change(screen.getByTestId("csv-file"), { target: { files: [file] } });
@@ -310,16 +310,16 @@ describe("Sources page", () => {
     renderPage(<Sources />);
     await screen.findByText("erp");
     fireEvent.click(screen.getAllByRole("button", { name: "Modifier" })[1]);
-    expect(await screen.findByLabelText("Nom du mapping")).toHaveValue("orders");
+    expect(await screen.findByLabelText("Mapping name")).toHaveValue("orders");
     await waitFor(() => expect(m.listSourceColumns).toHaveBeenCalledWith(1, "dbo.orders"));
-    fireEvent.change(screen.getByLabelText("Colonne du nom (sinon la clé)"), { target: { value: "label" } });
-    fireEvent.change(screen.getByLabelText("Colonne de description"), { target: { value: "notes" } });
-    fireEvent.change(screen.getByLabelText("Colonne de suivi (synchronisation incrémentale)"), { target: { value: "updated" } });
-    fireEvent.change(screen.getByLabelText("Toutes les N minutes (0 : à la main)"), { target: { value: "15" } });
-    fireEvent.click(screen.getByRole("button", { name: "Ajouter un lien" }));
-    fireEvent.change(screen.getByLabelText("Colonne"), { target: { value: "rep" } });
+    fireEvent.change(screen.getByLabelText("Name column (default: the key)"), { target: { value: "label" } });
+    fireEvent.change(screen.getByLabelText("Description column"), { target: { value: "notes" } });
+    fireEvent.change(screen.getByLabelText("Watermark column (incremental sync)"), { target: { value: "updated" } });
+    fireEvent.change(screen.getByLabelText("Schedule (minutes, 0: manual)"), { target: { value: "15" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add link" }));
+    fireEvent.change(screen.getByLabelText("Column"), { target: { value: "rep" } });
     fireEvent.click(screen.getByRole("button", { name: "×" }));
-    expect(screen.queryByLabelText("Colonne")).toBeNull();
+    expect(screen.queryByLabelText("Column")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
     await waitFor(() =>
       expect(m.updateMapping).toHaveBeenCalledWith(
@@ -335,7 +335,7 @@ describe("Sources page", () => {
     fireEvent.click(screen.getByRole("button", { name: "Ajouter un mapping" }));
     expect(await screen.findByText("no driver")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Annuler" }));
-    expect(screen.queryByLabelText("Nom du mapping")).toBeNull();
+    expect(screen.queryByLabelText("Mapping name")).toBeNull();
     expect(m.createMapping).not.toHaveBeenCalled();
   });
 
@@ -367,18 +367,18 @@ describe("Sources page", () => {
     renderPage(<Sources />);
     await screen.findByText("erp");
     fireEvent.click(screen.getByRole("button", { name: "Ajouter une requête" }));
-    fireEvent.change(screen.getByLabelText("Nom de la requête"), { target: { value: "client" } });
-    fireEvent.change(screen.getByLabelText("Déclencheur (expression régulière, groupes nommés)"), { target: { value: "client (?P<name>\\w+)" } });
-    fireEvent.change(screen.getByLabelText("SELECT avec des blancs : le nom du groupe entre accolades"), { target: { value: "SELECT * FROM c WHERE name = {name}" } });
+    fireEvent.change(screen.getByLabelText("Query name"), { target: { value: "client" } });
+    fireEvent.change(screen.getByLabelText("Trigger (regex with named groups)"), { target: { value: "client (?P<name>\\w+)" } });
+    fireEvent.change(screen.getByLabelText("SELECT with {group} blanks"), { target: { value: "SELECT * FROM c WHERE name = {name}" } });
     fireEvent.change(screen.getByLabelText("Description"), { target: { value: "A customer by name" } });
-    fireEvent.change(screen.getByLabelText("Lignes au plus (200 max)"), { target: { value: "50" } });
+    fireEvent.change(screen.getByLabelText("Max rows (200 max)"), { target: { value: "50" } });
     fireEvent.click(screen.getByRole("button", { name: "Enregistrer" }));
     await waitFor(() => expect(m.createNamedQuery).toHaveBeenCalledWith(1, expect.objectContaining({ name: "client", description: "A customer by name", max_rows: 50 })));
-    await waitFor(() => expect(screen.queryByLabelText("Nom de la requête")).toBeNull());
+    await waitFor(() => expect(screen.queryByLabelText("Query name")).toBeNull());
 
     fireEvent.click(screen.getByRole("button", { name: "Ajouter une requête" }));
     fireEvent.click(screen.getByRole("button", { name: "Annuler" }));
-    expect(screen.queryByLabelText("Nom de la requête")).toBeNull();
+    expect(screen.queryByLabelText("Query name")).toBeNull();
     expect(m.createNamedQuery).toHaveBeenCalledTimes(1);
 
     fireEvent.click(screen.getByRole("button", { name: "Essayer" }));

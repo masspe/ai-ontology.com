@@ -45,7 +45,8 @@ pub struct Mapping {
     /// The concept type the rows become (declared if needed).
     pub concept_type: String,
     /// The column whose value is the sheet's identity (its name, unless
-    /// `name_column` says otherwise).
+    /// `name_column` says otherwise); several, comma-separated, for a
+    /// composite key, joined with `/` in the sheet's name.
     pub key_column: String,
     /// The column shown as the sheet's name; the key stays a property.
     pub name_column: Option<String>,
@@ -80,6 +81,31 @@ fn text(v: &Value) -> String {
     }
 }
 
+/// The indexes of `spec`'s columns: one, or several comma-separated.
+fn columns_of(rs: &ResultSet, spec: &str) -> Result<Vec<usize>, IngestError> {
+    spec.split(',')
+        .map(str::trim)
+        .filter(|c| !c.is_empty())
+        .map(|c| {
+            rs.column_index(c)
+                .ok_or_else(|| IngestError::Source(format!("no column `{c}`")))
+        })
+        .collect()
+}
+
+/// The cells at `idx` as one value, `/` between them; empty when any
+/// part is (a composite key with a blank is no key).
+fn composite(row: &[Value], idx: &[usize]) -> String {
+    let parts: Vec<String> = idx
+        .iter()
+        .map(|&i| text(row.get(i).unwrap_or(&Value::Null)))
+        .collect();
+    if parts.iter().any(|p| p.trim().is_empty()) {
+        return String::new();
+    }
+    parts.join("/")
+}
+
 /// The records of one result set under a mapping, in the order the
 /// ingester needs them: the type declaration, then per row the link
 /// targets, the sheet, its links.
@@ -93,9 +119,10 @@ pub struct RowSource {
 
 impl RowSource {
     pub fn new(rs: &ResultSet, m: &Mapping, declare_type: bool) -> Result<Self, IngestError> {
-        let key = rs
-            .column_index(&m.key_column)
-            .ok_or_else(|| IngestError::Source(format!("no column `{}`", m.key_column)))?;
+        let key = columns_of(rs, &m.key_column)?;
+        if key.is_empty() {
+            return Err(IngestError::Source("a key column is required".into()));
+        }
         let name = match &m.name_column {
             Some(c) => Some(
                 rs.column_index(c)
@@ -122,14 +149,10 @@ impl RowSource {
                 .collect::<Result<_, _>>()?
         };
         props.retain(|i| Some(*i) != description);
-        let rules: Vec<(usize, &RelationRule)> = m
+        let rules: Vec<(Vec<usize>, &RelationRule)> = m
             .relations
             .iter()
-            .map(|r| {
-                rs.column_index(&r.column)
-                    .map(|i| (i, r))
-                    .ok_or_else(|| IngestError::Source(format!("no column `{}`", r.column)))
-            })
+            .map(|r| columns_of(rs, &r.column).map(|i| (i, r)))
             .collect::<Result<_, _>>()?;
 
         let mut queue = VecDeque::new();
@@ -154,8 +177,8 @@ impl RowSource {
         let mut skipped = 0;
         let mut keys = Vec::with_capacity(rs.rows.len());
         for row in &rs.rows {
-            let k = text(row.get(key).unwrap_or(&Value::Null));
-            if k.trim().is_empty() {
+            let k = composite(row, &key);
+            if k.is_empty() {
                 skipped += 1;
                 continue;
             }
@@ -179,8 +202,8 @@ impl RowSource {
                 .insert("stale".into(), PropertyValue::Bool(false));
             let mut links = Vec::new();
             for (i, rule) in &rules {
-                let target = text(row.get(*i).unwrap_or(&Value::Null));
-                if target.trim().is_empty() {
+                let target = composite(row, i);
+                if target.is_empty() {
                     continue;
                 }
                 if rule.create_target {
@@ -331,6 +354,44 @@ mod tests {
             "null is no property"
         );
         assert_eq!(out.len(), 6, "no link without a target value");
+    }
+
+    /// A composite key: the parts joined with `/`, a row with a blank part
+    /// skipped; a link's column may be composite too.
+    #[tokio::test]
+    async fn a_composite_key_joins_its_columns() {
+        let m = Mapping {
+            concept_type: "Line".into(),
+            key_column: "customer, id".into(),
+            name_column: None,
+            description_column: None,
+            property_columns: vec!["amount".into()],
+            relations: vec![RelationRule {
+                column: "customer,label".into(),
+                relation_type: "of".into(),
+                target_type: "Customer".into(),
+                create_target: false,
+            }],
+            ns: None,
+            source_tag: "t".into(),
+        };
+        let src = RowSource::new(&rs(), &m, false).unwrap();
+        assert_eq!(src.keys, ["C-7/O-1"]);
+        assert_eq!(src.skipped, 2, "a blank customer or id is no key");
+        let names: Vec<String> = src
+            .queue
+            .iter()
+            .filter_map(|r| match r {
+                Record::NamedRelation { target_name, .. } => Some(target_name.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(names, ["C-7/First order"]);
+        let empty = Mapping {
+            key_column: " , ".into(),
+            ..m
+        };
+        assert!(RowSource::new(&rs(), &empty, false).is_err());
     }
 
     #[test]

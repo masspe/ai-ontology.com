@@ -81,6 +81,10 @@ All notable changes to this project are listed here. The format follows
 
 ### Added
 
+- A mapping's key may be composite: several columns, comma-separated,
+  the sheet named by their values joined with `/`; a link's column too.
+  The fields of the source, mapping and query forms carry the English
+  names the database tools use.
 - An ODBC source is set up as the ODBC administrator shows it: a data
   source name of the server's machine, or a driver with host, port and
   database, then the account — the connection string is built from them

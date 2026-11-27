@@ -187,7 +187,9 @@ a database or a file: a source says where and how to connect (the
 password or the ODBC connection string sealed at rest with the master key,
 never served; `sources.json` beside the store), and carries **mappings**:
 a table (or a `SELECT`) becomes sheets of a type — a key column is the
-identity, a name column the name, the other columns the properties, and a
+identity (several, comma-separated, for a composite key: the sheet is
+named by the parts joined with `/`, a row with a blank part is skipped),
+a name column the name, the other columns the properties, and a
 foreign-key column becomes a link to a sheet of another type (created as a
 bare sheet when it is not there yet). *Test connection*, browse the tables
 and columns, *Preview* (the first 50 rows and the sheets they would be,

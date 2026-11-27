@@ -63,7 +63,7 @@ function CsvLocation({ value, onChange }: { value: string; onChange: (v: string)
   };
   return (
     <div className="field" style={{ gridColumn: "1 / -1" }}>
-      <label htmlFor="csv-location">{t("Chemin ou URL HTTPS du fichier")}</label>
+      <label htmlFor="csv-location">{"File path or HTTPS URL"}</label>
       <div style={{ display: "flex", gap: 8 }}>
         <input id="csv-location" value={value} onChange={(e) => onChange(e.target.value)} placeholder="/data/exports/clients.csv" />
         <button type="button" className="btn-outline" disabled={busy} onClick={() => input.current?.click()}>
@@ -122,7 +122,7 @@ function SourceForm({ initial, onSave, onCancel }: { initial?: DataSource; onSav
     >
       <div className="grid grid-2" style={{ gap: 12 }}>
         <label className="field">
-          <span>{t("Nom de la source")}</span>
+          <span>{"Source name"}</span>
           <input required value={p.name} onChange={(e) => set("name", e.target.value)} />
         </label>
         <label className="field">
@@ -173,15 +173,15 @@ function SourceForm({ initial, onSave, onCancel }: { initial?: DataSource; onSav
         {(engine || (odbc && !p.dsn)) && (
           <>
             <label className="field">
-              <span>{odbc ? "Host Name" : t("Hôte")}</span>
+              <span>{odbc ? "Host Name" : "Host"}</span>
               <input value={p.host ?? ""} onChange={(e) => set("host", e.target.value)} />
             </label>
             <label className="field">
-              <span>{odbc ? "Port Number" : t("Port")}</span>
+              <span>{odbc ? "Port Number" : "Port"}</span>
               <input type="number" value={p.port || ""} onChange={(e) => set("port", Number(e.target.value))} />
             </label>
             <label className="field">
-              <span>{odbc ? "Database Name" : t("Base")}</span>
+              <span>{odbc ? "Database Name" : "Database"}</span>
               <input value={p.database ?? ""} onChange={(e) => set("database", e.target.value)} />
             </label>
           </>
@@ -189,11 +189,11 @@ function SourceForm({ initial, onSave, onCancel }: { initial?: DataSource; onSav
         {(engine || odbc) && (
           <>
             <label className="field">
-              <span>{odbc ? "User ID" : t("Utilisateur (lecture seule)")}</span>
+              <span>{odbc ? "User ID" : "User (read-only)"}</span>
               <input value={p.user ?? ""} onChange={(e) => set("user", e.target.value)} />
             </label>
             <label className="field">
-              <span>{odbc ? "Password" : t("Mot de passe")}</span>
+              <span>Password</span>
               <input type="password" autoComplete="new-password" value={p.password ?? ""} onChange={(e) => set("password", e.target.value)} placeholder={initial?.password_hint || ""} />
             </label>
           </>
@@ -215,11 +215,11 @@ function SourceForm({ initial, onSave, onCancel }: { initial?: DataSource; onSav
           <>
             <label className="checkbox-row">
               <input type="checkbox" checked={p.encrypt ?? true} onChange={(e) => set("encrypt", e.target.checked)} />
-              <span>{t("Chiffrer la connexion (TLS)")}</span>
+              <span>{"Encrypt (TLS)"}</span>
             </label>
             <label className="checkbox-row">
               <input type="checkbox" checked={p.trust_cert ?? false} onChange={(e) => set("trust_cert", e.target.checked)} />
-              <span>{t("Accepter un certificat auto-signé")}</span>
+              <span>{"Trust server certificate"}</span>
             </label>
           </>
         )}
@@ -228,7 +228,7 @@ function SourceForm({ initial, onSave, onCancel }: { initial?: DataSource; onSav
           <span>{t("Le serveur est sur le réseau privé")}</span>
         </label>
         <label className="field">
-          <span>{t("Délai (secondes)")}</span>
+          <span>{"Timeout (seconds)"}</span>
           <input type="number" value={p.timeout_secs ?? 60} onChange={(e) => set("timeout_secs", Number(e.target.value))} />
         </label>
       </div>
@@ -286,51 +286,51 @@ function MappingForm({ source, initial, onSave, onCancel }: { source: DataSource
       {colList}
       <div className="grid grid-2" style={{ gap: 12 }}>
         <label className="field">
-          <span>{t("Nom du mapping")}</span>
+          <span>{"Mapping name"}</span>
           <input required value={p.name ?? ""} onChange={(e) => set("name", e.target.value)} />
         </label>
         <label className="field">
-          <span>{t("Table ou SELECT")}</span>
+          <span>{"Table or SELECT"}</span>
           <input required list="src-tables" value={p.from ?? ""} onChange={(e) => set("from", e.target.value)} />
           <datalist id="src-tables">{tables.map((x) => <option key={x} value={x} />)}</datalist>
         </label>
         <label className="field">
-          <span>{t("Type de fiche")}</span>
+          <span>{"Sheet type"}</span>
           <input required value={p.concept_type ?? ""} onChange={(e) => set("concept_type", e.target.value)} placeholder="Client" />
         </label>
         <label className="field">
-          <span>{t("Colonne clé")}</span>
+          <span>{"Key column(s) — comma-separated for a composite key"}</span>
           <input required list="src-columns" value={p.key_column ?? ""} onChange={(e) => set("key_column", e.target.value)} />
         </label>
         <label className="field">
-          <span>{t("Colonne du nom (sinon la clé)")}</span>
+          <span>{"Name column (default: the key)"}</span>
           <input list="src-columns" value={p.name_column ?? ""} onChange={(e) => set("name_column", e.target.value)} />
         </label>
         <label className="field">
-          <span>{t("Colonne de description")}</span>
+          <span>{"Description column"}</span>
           <input list="src-columns" value={p.description_column ?? ""} onChange={(e) => set("description_column", e.target.value)} />
         </label>
         <label className="field">
-          <span>{t("Colonnes gardées en propriétés (vide : toutes)")}</span>
+          <span>{"Property columns (empty: all)"}</span>
           <input value={(p.property_columns ?? []).join(", ")} onChange={(e) => set("property_columns", list(e.target.value))} />
         </label>
         <label className="field">
-          <span>{t("Colonne de suivi (synchronisation incrémentale)")}</span>
+          <span>{"Watermark column (incremental sync)"}</span>
           <input list="src-columns" value={p.watermark_column ?? ""} onChange={(e) => set("watermark_column", e.target.value)} />
         </label>
         <label className="field">
-          <span>{t("Toutes les N minutes (0 : à la main)")}</span>
+          <span>{"Schedule (minutes, 0: manual)"}</span>
           <input type="number" min={0} value={p.schedule_minutes ?? 0} onChange={(e) => set("schedule_minutes", Number(e.target.value))} />
         </label>
       </div>
       <fieldset style={{ marginTop: 12, border: "1px solid var(--border)", borderRadius: "var(--radius-sm)", padding: 12 }}>
-        <legend>{t("Liens depuis les clés étrangères")}</legend>
+        <legend>{"Links from foreign keys"}</legend>
         {(p.relations ?? []).map((r, i) => (
           <div key={i} className="grid grid-3" style={{ gap: 8, marginBottom: 6 }}>
-            <input aria-label={t("Colonne")} list="src-columns" placeholder={t("Colonne")} value={r.column} onChange={(e) => set("relations", (p.relations ?? []).map((x, j) => (j === i ? { ...x, column: e.target.value } : x)))} />
-            <input aria-label={t("Type de lien")} placeholder={t("Type de lien")} value={r.relation_type} onChange={(e) => set("relations", (p.relations ?? []).map((x, j) => (j === i ? { ...x, relation_type: e.target.value } : x)))} />
+            <input aria-label={"Column"} list="src-columns" placeholder={"Column"} value={r.column} onChange={(e) => set("relations", (p.relations ?? []).map((x, j) => (j === i ? { ...x, column: e.target.value } : x)))} />
+            <input aria-label={"Link type"} placeholder={"Link type"} value={r.relation_type} onChange={(e) => set("relations", (p.relations ?? []).map((x, j) => (j === i ? { ...x, relation_type: e.target.value } : x)))} />
             <span style={{ display: "flex", gap: 6 }}>
-              <input aria-label={t("Type cible")} placeholder={t("Type cible")} value={r.target_type} onChange={(e) => set("relations", (p.relations ?? []).map((x, j) => (j === i ? { ...x, target_type: e.target.value } : x)))} />
+              <input aria-label={"Target type"} placeholder={"Target type"} value={r.target_type} onChange={(e) => set("relations", (p.relations ?? []).map((x, j) => (j === i ? { ...x, target_type: e.target.value } : x)))} />
               <button type="button" className="btn-ghost" onClick={() => set("relations", (p.relations ?? []).filter((_, j) => j !== i))}>
                 ×
               </button>
@@ -338,7 +338,7 @@ function MappingForm({ source, initial, onSave, onCancel }: { source: DataSource
           </div>
         ))}
         <button type="button" className="btn-ghost" onClick={() => set("relations", [...(p.relations ?? []), { column: "", relation_type: "", target_type: "", create_target: true }])}>
-          {t("Ajouter un lien")}
+          {"Add link"}
         </button>
       </fieldset>
       <div className="onboarding-actions" style={{ marginTop: 12 }}>
@@ -374,15 +374,15 @@ function QueryForm({ initial, onSave, onCancel }: { initial?: NamedQuery; onSave
     >
       <div className="grid grid-2" style={{ gap: 12 }}>
         <label className="field">
-          <span>{t("Nom de la requête")}</span>
+          <span>{"Query name"}</span>
           <input required value={p.name ?? ""} onChange={(e) => set("name", e.target.value)} />
         </label>
         <label className="field">
-          <span>{t("Déclencheur (expression régulière, groupes nommés)")}</span>
+          <span>{"Trigger (regex with named groups)"}</span>
           <input required value={p.trigger ?? ""} onChange={(e) => set("trigger", e.target.value)} placeholder="(?i)ticket\\s*(?:n°|#)?\\s*(?P<id>\\d{1,9})" />
         </label>
         <label className="field" style={{ gridColumn: "1 / -1" }}>
-          <span>{t("SELECT avec des blancs : le nom du groupe entre accolades")}</span>
+          <span>{"SELECT with {group} blanks"}</span>
           <textarea required rows={3} value={p.sql ?? ""} onChange={(e) => set("sql", e.target.value)} placeholder="SELECT id, title, status FROM tickets WHERE id = {id}" />
         </label>
         <label className="field">
@@ -390,7 +390,7 @@ function QueryForm({ initial, onSave, onCancel }: { initial?: NamedQuery; onSave
           <input value={p.description ?? ""} onChange={(e) => set("description", e.target.value)} />
         </label>
         <label className="field">
-          <span>{t("Lignes au plus (200 max)")}</span>
+          <span>{"Max rows (200 max)"}</span>
           <input type="number" min={1} max={200} value={p.max_rows ?? 20} onChange={(e) => set("max_rows", Number(e.target.value))} />
         </label>
         <label className="checkbox-row">
