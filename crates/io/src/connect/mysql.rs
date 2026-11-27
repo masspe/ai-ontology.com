@@ -17,6 +17,7 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
+use mysql_async::consts::ColumnType;
 use mysql_async::prelude::Queryable;
 use mysql_async::{Conn, Opts, OptsBuilder, SslOpts, Value as SqlValue};
 use serde_json::Value;
@@ -115,6 +116,15 @@ impl MysqlConnector {
                 .query_iter(sql)
                 .await
                 .map_err(|e| ConnectError::Query(describe(&e)))?;
+            // The text protocol sends every value as text: the column
+            // types say what the text is.
+            let types: Vec<ColumnType> = result
+                .columns()
+                .as_deref()
+                .unwrap_or(&[])
+                .iter()
+                .map(|c| c.column_type())
+                .collect();
             let mut out = ResultSet {
                 columns: result
                     .columns()
@@ -141,7 +151,7 @@ impl MysqlConnector {
                 }
                 out.rows.push(
                     (0..row.len())
-                        .map(|i| cell_to_json(row.as_ref(i).unwrap_or(&SqlValue::NULL)))
+                        .map(|i| cell_to_json(types[i], row.as_ref(i).unwrap_or(&SqlValue::NULL)))
                         .collect(),
                 );
             }
@@ -177,10 +187,33 @@ fn describe(e: &mysql_async::Error) -> String {
     }
 }
 
-fn cell_to_json(v: &SqlValue) -> Value {
+fn cell_to_json(ty: ColumnType, v: &SqlValue) -> Value {
     match v {
         SqlValue::NULL => Value::Null,
-        SqlValue::Bytes(b) => Value::String(String::from_utf8_lossy(b).into_owned()),
+        SqlValue::Bytes(b) => {
+            let text = String::from_utf8_lossy(b);
+            let parsed = match ty {
+                ColumnType::MYSQL_TYPE_TINY
+                | ColumnType::MYSQL_TYPE_SHORT
+                | ColumnType::MYSQL_TYPE_INT24
+                | ColumnType::MYSQL_TYPE_LONG
+                | ColumnType::MYSQL_TYPE_LONGLONG
+                | ColumnType::MYSQL_TYPE_YEAR => text
+                    .parse::<i64>()
+                    .map(Value::from)
+                    .ok()
+                    .or_else(|| text.parse::<u64>().map(Value::from).ok()),
+                ColumnType::MYSQL_TYPE_FLOAT | ColumnType::MYSQL_TYPE_DOUBLE => text
+                    .parse::<f64>()
+                    .ok()
+                    .and_then(serde_json::Number::from_f64)
+                    .map(Value::Number),
+                // A decimal keeps its digits; dates and times stay as the
+                // engine writes them.
+                _ => None,
+            };
+            parsed.unwrap_or_else(|| Value::String(text.into_owned()))
+        }
         SqlValue::Int(i) => Value::from(*i),
         SqlValue::UInt(u) => Value::from(*u),
         SqlValue::Float(f) => serde_json::Number::from_f64(f64::from(*f))
@@ -299,6 +332,33 @@ mod tests {
 
     #[test]
     fn values_become_json_by_kind() {
+        let text =
+            |ty: ColumnType, s: &str| cell_to_json(ty, &SqlValue::Bytes(s.as_bytes().to_vec()));
+        // The text protocol: typed by the column.
+        assert_eq!(text(ColumnType::MYSQL_TYPE_LONG, "3"), Value::from(3));
+        assert_eq!(text(ColumnType::MYSQL_TYPE_TINY, "-1"), Value::from(-1));
+        assert_eq!(
+            text(ColumnType::MYSQL_TYPE_LONGLONG, "18446744073709551615"),
+            Value::from(u64::MAX),
+            "an unsigned bigint past i64"
+        );
+        assert_eq!(text(ColumnType::MYSQL_TYPE_DOUBLE, "1.5"), Value::from(1.5));
+        assert_eq!(
+            text(ColumnType::MYSQL_TYPE_NEWDECIMAL, "12.30"),
+            Value::String("12.30".into()),
+            "a decimal keeps its digits"
+        );
+        assert_eq!(
+            text(ColumnType::MYSQL_TYPE_DATETIME, "2026-03-01 10:00:00"),
+            Value::String("2026-03-01 10:00:00".into())
+        );
+        assert_eq!(
+            text(ColumnType::MYSQL_TYPE_LONG, "not a number"),
+            Value::String("not a number".into())
+        );
+        // The binary protocol's values, typed by the driver.
+        let ty = ColumnType::MYSQL_TYPE_VARCHAR;
+        let cell_to_json = |v: &SqlValue| cell_to_json(ty, v);
         assert_eq!(cell_to_json(&SqlValue::NULL), Value::Null);
         assert_eq!(cell_to_json(&SqlValue::Int(-42)), Value::from(-42));
         assert_eq!(cell_to_json(&SqlValue::UInt(7)), Value::from(7));
@@ -307,11 +367,6 @@ mod tests {
             cell_to_json(&SqlValue::Double(f64::NAN)),
             Value::String("NaN".into()),
             "JSON has no NaN"
-        );
-        assert_eq!(
-            cell_to_json(&SqlValue::Bytes(b"12.30".to_vec())),
-            Value::String("12.30".into()),
-            "a decimal keeps its digits"
         );
         assert_eq!(
             cell_to_json(&SqlValue::Date(2026, 2, 1, 0, 0, 0, 0)),
