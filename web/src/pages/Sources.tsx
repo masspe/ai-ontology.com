@@ -47,6 +47,47 @@ const list = (s: string) => s.split(",").map((x) => x.trim()).filter(Boolean);
 
 type Catalog = { available: boolean; drivers: string[]; dsns: { name: string; driver: string }[] };
 
+/** What the last sync of a mapping did, in words: never run, done with
+ * its counts, stopped, or failed with the reason and what that leaves. */
+function SyncStatus({ m }: { m: MappingSpec }) {
+  if (!m.last_run_at) return <span className="muted">{t("jamais")}</span>;
+  const when = m.last_run_at.slice(0, 16).replace("T", " ");
+  if (m.last_status === "ok") {
+    const r = (m.last_report ?? {}) as { rows?: number; sheets_new?: number; sheets_updated?: number; unchanged?: number; skipped?: number; links?: number };
+    return (
+      <span>
+        <span className="badge badge-success">OK</span> {when}
+        <div className="muted">
+          {t("{rows} lignes lues : {n} fiches créées, {u} mises à jour, {s} inchangées, {k} liens", {
+            rows: r.rows ?? 0,
+            n: r.sheets_new ?? 0,
+            u: r.sheets_updated ?? 0,
+            s: r.unchanged ?? 0,
+            k: r.links ?? 0,
+          })}
+          {r.skipped ? ` · ${t("{n} lignes sans clé ignorées", { n: r.skipped })}` : ""}
+        </div>
+      </span>
+    );
+  }
+  if (m.last_status === "cancelled") {
+    return (
+      <span>
+        <span className="badge badge-warn">{t("Arrêtée")}</span> {when}
+      </span>
+    );
+  }
+  return (
+    <span>
+      <span className="badge badge-danger">{t("Échec")}</span> {when}
+      <div className="error-banner" role="alert" style={{ marginTop: 6 }}>
+        {m.last_status.replace(/^failed: /, "")}
+      </div>
+      <div className="muted">{t("Les lots de 2 000 lignes écrits avant l'échec sont gardés. Corrigez le mapping, puis synchronisez de nouveau : tout est relu.")}</div>
+    </span>
+  );
+}
+
 /** A secret being typed: hidden, shown on the eye. The stored one is never
  * served, so only what is typed can be seen. */
 function Secret({ value, onChange, placeholder, label, autoComplete }: { value: string; onChange: (v: string) => void; placeholder?: string; label?: string; autoComplete: string }) {
@@ -561,9 +602,9 @@ export default function Sources() {
               <table className="table">
                 <thead>
                   <tr>
-                    <th>{t("Mapping")}</th>
-                    <th>{t("Table")}</th>
-                    <th>{t("Fiches")}</th>
+                    <th>Mapping</th>
+                    <th>Table</th>
+                    <th>Sheet type</th>
                     <th>{t("Dernière synchronisation")}</th>
                     <th />
                   </tr>
@@ -580,14 +621,7 @@ export default function Sources() {
                       </td>
                       <td>{m.concept_type}</td>
                       <td>
-                        {m.last_run_at ? (
-                          <span className={m.last_status === "ok" ? "" : "error-text"}>
-                            {m.last_run_at.slice(0, 16).replace("T", " ")} · {m.last_status}
-                            {m.last_report && typeof m.last_report === "object" && "rows" in m.last_report ? ` · ${(m.last_report as { rows: number }).rows} ${t("lignes")}` : ""}
-                          </span>
-                        ) : (
-                          <span className="muted">{t("jamais")}</span>
-                        )}
+                        <SyncStatus m={m} />
                       </td>
                       <td style={{ whiteSpace: "nowrap" }}>
                         <button className="btn-ghost" onClick={() => run(async () => setPreview({ mapping: m.name, data: await previewMapping(s.id, m.id) }))}>

@@ -48,7 +48,9 @@ pub struct Mapping {
     /// `name_column` says otherwise); several, comma-separated, for a
     /// composite key, joined with `/` in the sheet's name.
     pub key_column: String,
-    /// The column shown as the sheet's name; the key stays a property.
+    /// The column shown as the sheet's name; the key stays a property. A
+    /// name two rows share gets the key after it, `name (key)`, on both:
+    /// a sheet is one name of its type.
     pub name_column: Option<String>,
     /// The column that becomes the description.
     pub description_column: Option<String>,
@@ -119,6 +121,18 @@ pub struct RowSource {
 
 impl RowSource {
     pub fn new(rs: &ResultSet, m: &Mapping, declare_type: bool) -> Result<Self, IngestError> {
+        Self::new_range(rs, m, declare_type, 0..rs.rows.len())
+    }
+
+    /// The records of the rows in `range` — names made unique over the
+    /// whole result, so a sync written by batches names a sheet the same
+    /// whichever batch it is in.
+    pub fn new_range(
+        rs: &ResultSet,
+        m: &Mapping,
+        declare_type: bool,
+        range: std::ops::Range<usize>,
+    ) -> Result<Self, IngestError> {
         let key = columns_of(rs, &m.key_column)?;
         if key.is_empty() {
             return Err(IngestError::Source("a key column is required".into()));
@@ -174,19 +188,42 @@ impl RowSource {
                 }
             }
         }
-        let mut skipped = 0;
-        let mut keys = Vec::with_capacity(rs.rows.len());
+        let named = |row: &Vec<Value>| {
+            name.and_then(|i| row.get(i))
+                .map(text)
+                .filter(|s| !s.trim().is_empty())
+        };
+        // The names that rows of different keys carry, over every row: the
+        // same key again (a re-read, a join's repeat) is the same sheet.
+        let mut first_key: AHashMap<String, String> = AHashMap::new();
+        let mut shared: ahash::AHashSet<String> = ahash::AHashSet::new();
         for row in &rs.rows {
+            if let Some(n) = named(row) {
+                let k = composite(row, &key);
+                match first_key.get(&n) {
+                    Some(seen) if *seen != k => {
+                        shared.insert(n);
+                    }
+                    Some(_) => {}
+                    None => {
+                        first_key.insert(n, k);
+                    }
+                }
+            }
+        }
+        let mut skipped = 0;
+        let mut keys = Vec::with_capacity(range.len());
+        for row in &rs.rows[range] {
             let k = composite(row, &key);
             if k.is_empty() {
                 skipped += 1;
                 continue;
             }
-            let sheet_name = name
-                .and_then(|i| row.get(i))
-                .map(text)
-                .filter(|s| !s.trim().is_empty())
-                .unwrap_or_else(|| k.clone());
+            let sheet_name = match named(row) {
+                Some(n) if shared.contains(&n) => format!("{n} ({k})"),
+                Some(n) => n,
+                None => k.clone(),
+            };
             let mut c = Concept::new(ConceptId(0), m.concept_type.clone(), sheet_name);
             if let Some(d) = description.and_then(|i| row.get(i)) {
                 c.description = text(d);
@@ -354,6 +391,37 @@ mod tests {
             "null is no property"
         );
         assert_eq!(out.len(), 6, "no link without a target value");
+    }
+
+    /// Two rows with the same name: both are named with their key, in
+    /// whichever batch they fall.
+    #[test]
+    fn a_shared_name_is_told_apart_by_the_key() {
+        let mut rs = rs();
+        rs.rows[2][1] = json!("First order");
+        let m = Mapping {
+            concept_type: "Order".into(),
+            key_column: "id".into(),
+            name_column: Some("label".into()),
+            description_column: None,
+            property_columns: vec![],
+            relations: vec![],
+            ns: None,
+            source_tag: "t".into(),
+        };
+        let whole = RowSource::new(&rs, &m, false).unwrap();
+        assert_eq!(whole.keys, ["First order (O-1)", "First order (O-2)"]);
+        // The same key twice is one sheet, not a shared name.
+        let mut again = rs.clone();
+        again.rows[2][0] = json!("O-1");
+        assert_eq!(
+            RowSource::new(&again, &m, false).unwrap().keys,
+            ["First order", "First order"]
+        );
+        // By batches of one row: the same names.
+        let last = RowSource::new_range(&rs, &m, false, 2..3).unwrap();
+        assert_eq!(last.keys, ["First order (O-2)"]);
+        assert_eq!(last.skipped, 0, "the blank-key row is not in this batch");
     }
 
     /// A composite key: the parts joined with `/`, a row with a blank part

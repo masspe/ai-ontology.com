@@ -190,7 +190,8 @@ stored; `sources.json` beside the store), and carries **mappings**:
 a table (or a `SELECT`) becomes sheets of a type — a key column is the
 identity (several, comma-separated, for a composite key: the sheet is
 named by the parts joined with `/`, a row with a blank part is skipped),
-a name column the name, the other columns the properties, and a
+a name column the name (two rows of different keys sharing a name are
+both named `name (key)`: a sheet is one name of its type), the other columns the properties, and a
 foreign-key column becomes a link to a sheet of another type (created as a
 bare sheet when it is not there yet). *Test connection*, browse the tables
 and columns, *Preview* (the first 50 rows and the sheets they would be,

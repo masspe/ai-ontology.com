@@ -967,13 +967,8 @@ pub async fn sync(
             return Err("cancelled".into());
         }
         let end = (done + BATCH).min(total);
-        let page = ontology_io::connect::ResultSet {
-            columns: rs.columns.clone(),
-            rows: rs.rows[done..end].to_vec(),
-            truncated: false,
-        };
-        let mut src =
-            RowSource::new(&page, &mapping, first && !declared).map_err(|e| e.to_string())?;
+        let mut src = RowSource::new_range(&rs, &mapping, first && !declared, done..end)
+            .map_err(|e| e.to_string())?;
         report.skipped += src.skipped;
         seen.extend(src.keys.iter().cloned());
         let stats = {

@@ -63,7 +63,8 @@ describe("Sources page", () => {
     expect(screen.getByText("db.example:1433/erp")).toBeInTheDocument();
     expect(screen.getByText("orders")).toBeInTheDocument();
     expect(screen.getByText(/toutes les 30 min/)).toBeInTheDocument();
-    expect(screen.getByText(/42 lignes/)).toBeInTheDocument();
+    expect(screen.getByText("OK")).toHaveClass("badge-success");
+    expect(screen.getByText(/42 lignes lues : 0 fiches créées/)).toBeInTheDocument();
     // While the engine is asked, the button says so and waits; the result
     // takes its place, beside the button.
     let answer: (v: { ok: boolean; ms?: number; error?: string }) => void = () => {};
@@ -184,6 +185,25 @@ describe("Sources page", () => {
     expect(await screen.findByText("SELECT * FROM tickets WHERE id = '12'")).toBeInTheDocument();
     expect(screen.getByText(/12 \| Printer/)).toBeInTheDocument();
     await waitFor(() => expect(m.tryNamedQuery).toHaveBeenLastCalledWith(1, 1, "ticket 12"));
+  });
+
+  it("says what a failed or stopped sync leaves behind", async () => {
+    m.listSources.mockResolvedValue({
+      sources: [{
+        ...source,
+        mappings: [
+          { ...source.mappings[0], id: 1, name: "bad", last_status: "failed: graph: duplicate concept name `X` for type `T`", last_report: null },
+          { ...source.mappings[0], id: 2, name: "halted", last_status: "cancelled", last_report: null },
+          { ...source.mappings[0], id: 3, name: "partial", last_status: "ok", last_report: { rows: 10, sheets_new: 7, sheets_updated: 1, unchanged: 0, skipped: 2, links: 3 } },
+        ],
+      }],
+    });
+    renderPage(<Sources />);
+    expect(await screen.findByText("Échec")).toHaveClass("badge-danger");
+    expect(screen.getByRole("alert")).toHaveTextContent("graph: duplicate concept name `X` for type `T`");
+    expect(screen.getByText(/lots de 2 000 lignes écrits avant l'échec sont gardés/)).toBeInTheDocument();
+    expect(screen.getByText("Arrêtée")).toHaveClass("badge-warn");
+    expect(screen.getByText(/10 lignes lues : 7 fiches créées, 1 mises à jour, 0 inchangées, 3 liens · 2 lignes sans clé ignorées/)).toBeInTheDocument();
   });
 
   it("shows the listing error and the empty state", async () => {

@@ -8,6 +8,13 @@ All notable changes to this project are listed here. The format follows
 
 ### Fixed
 
+- A sync failed whole on two rows sharing a name (`duplicate concept
+  name`): a sheet is one name of its type. Rows of different keys that
+  share a name are now named `name (key)`, both of them, whichever batch
+  they fall in; the same key read twice stays one sheet. The Sources page
+  says what the last sync did — rows read, sheets created, updated,
+  unchanged, links, rows without a key — and on a failure shows the
+  reason in red with what is kept (the batches written before it).
 - A data source's password hint showed its first three and last four
   characters, as an API key's does — too much of a password. The hint
   now only says one is stored (`••••••••`); the ODBC connection string
