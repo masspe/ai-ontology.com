@@ -64,11 +64,21 @@ describe("Sources page", () => {
     expect(screen.getByText("orders")).toBeInTheDocument();
     expect(screen.getByText(/toutes les 30 min/)).toBeInTheDocument();
     expect(screen.getByText(/42 lignes/)).toBeInTheDocument();
+    // While the engine is asked, the button says so and waits; the result
+    // takes its place, beside the button.
+    let answer: (v: { ok: boolean; ms?: number; error?: string }) => void = () => {};
+    m.testSource.mockImplementationOnce(() => new Promise((r) => { answer = r; }));
     fireEvent.click(screen.getByRole("button", { name: "Tester" }));
-    expect(await screen.findByText("Connexion réussie.")).toBeInTheDocument();
+    expect(await screen.findByText("Test en cours… (jusqu'à 60 s)")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Tester" })).toBeDisabled();
+    answer({ ok: true, ms: 12 });
+    expect(await screen.findByText("Connexion réussie (12 ms)")).toHaveClass("badge-success");
     m.testSource.mockResolvedValue({ ok: false, error: "login failed" });
     fireEvent.click(screen.getByRole("button", { name: "Tester" }));
-    expect(await screen.findByText("login failed")).toBeInTheDocument();
+    expect(await screen.findByText("Échec : login failed")).toHaveClass("badge-danger");
+    m.testSource.mockRejectedValue(new Error("API injoignable"));
+    fireEvent.click(screen.getByRole("button", { name: "Tester" }));
+    expect(await screen.findByText("Échec : API injoignable")).toBeInTheDocument();
   });
 
   it("adds a database by host, the port following the engine", async () => {

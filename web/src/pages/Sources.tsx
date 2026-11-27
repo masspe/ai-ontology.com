@@ -421,6 +421,18 @@ export default function Sources() {
   const [info, setInfo] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [editing, setEditing] = useState<number | null>(null);
+  // The connection test of a source, shown beside its button: running,
+  // or the last result.
+  const [tests, setTests] = useState<Record<number, "busy" | { ok: true; ms: number } | { ok: false; error: string }>>({});
+  const test = async (s: DataSource) => {
+    setTests((x) => ({ ...x, [s.id]: "busy" }));
+    try {
+      const r = await testSource(s.id);
+      setTests((x) => ({ ...x, [s.id]: r.ok ? { ok: true, ms: r.ms ?? 0 } : { ok: false, error: r.error ?? "?" } }));
+    } catch (e: unknown) {
+      setTests((x) => ({ ...x, [s.id]: { ok: false, error: e instanceof Error ? e.message : String(e) } }));
+    }
+  };
   const [mappingFor, setMappingFor] = useState<{ source: DataSource; mapping?: MappingSpec } | null>(null);
   const [preview, setPreview] = useState<{ mapping: string; data: Awaited<ReturnType<typeof previewMapping>> } | null>(null);
   const [queryFor, setQueryFor] = useState<{ source: DataSource; query?: NamedQuery } | null>(null);
@@ -489,11 +501,16 @@ export default function Sources() {
             }
             subtitle={s.kind in PORTS ? `${s.host}:${s.port}/${s.database}` : s.kind === "odbc" && s.dsn ? `DSN ${s.dsn}` : s.kind === "odbc" && s.driver ? `${s.driver} · ${s.host}:${s.port}/${s.database}` : s.location}
             actions={
-              <span style={{ display: "inline-flex", gap: 6 }}>
-                <button className="btn-ghost" onClick={() => run(async () => {
-                  const r = await testSource(s.id);
-                  if (!r.ok) throw new Error(r.error ?? "?");
-                }, t("Connexion réussie."))}>
+              <span style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+                {((r) =>
+                  r === "busy" ? (
+                    <span className="badge" role="status">{t("Test en cours… (jusqu'à {n} s)", { n: s.timeout_secs })}</span>
+                  ) : r?.ok ? (
+                    <span className="badge badge-success" role="status">{t("Connexion réussie ({ms} ms)", { ms: r.ms })}</span>
+                  ) : r ? (
+                    <span className="badge badge-danger" role="status">{t("Échec : {error}", { error: r.error })}</span>
+                  ) : null)(tests[s.id])}
+                <button className="btn-ghost" disabled={tests[s.id] === "busy"} onClick={() => void test(s)}>
                   {t("Tester")}
                 </button>
                 <button className="btn-ghost" onClick={() => setEditing(editing === s.id ? null : s.id)}>
