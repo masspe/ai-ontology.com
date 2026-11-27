@@ -140,14 +140,19 @@ function SourceForm({ initial, onSave, onCancel }: { initial?: DataSource; onSav
             driver setup, untranslated, so each field is found at a glance. */}
         {odbc && (
           <>
+            <p className="field-hint" style={{ gridColumn: "1 / -1" }}>
+              {t("Soit un Data Source Name déjà défini dans l'administrateur ODBC de Windows (sur la machine du serveur), soit un pilote avec l'hôte, le port et la base — comme dans la fenêtre du pilote.")}
+            </p>
             <label className="field">
               <span>Data Source Name</span>
-              <input list="odbc-dsns" value={p.dsn ?? ""} onChange={(e) => set("dsn", e.target.value)} />
+              <input list="odbc-dsns" value={p.dsn ?? ""} onChange={(e) => set("dsn", e.target.value)} placeholder={catalog?.dsns[0]?.name ?? ""} />
             </label>
-            <label className="field">
-              <span>Driver (without a Data Source Name)</span>
-              <input list="odbc-drivers" value={p.driver ?? ""} onChange={(e) => set("driver", e.target.value)} disabled={!!p.dsn} />
-            </label>
+            {!p.dsn && (
+              <label className="field">
+                <span>Driver</span>
+                <input list="odbc-drivers" value={p.driver ?? ""} onChange={(e) => set("driver", e.target.value)} placeholder={catalog?.drivers[0] ?? ""} />
+              </label>
+            )}
             <datalist id="odbc-dsns">
               {catalog?.dsns.map((d) => (
                 <option key={d.name} value={d.name}>
@@ -165,7 +170,7 @@ function SourceForm({ initial, onSave, onCancel }: { initial?: DataSource; onSav
             )}
           </>
         )}
-        {(engine || odbc) && (
+        {(engine || (odbc && !p.dsn)) && (
           <>
             <label className="field">
               <span>{odbc ? "Host Name" : t("Hôte")}</span>
@@ -179,6 +184,10 @@ function SourceForm({ initial, onSave, onCancel }: { initial?: DataSource; onSav
               <span>{odbc ? "Database Name" : t("Base")}</span>
               <input value={p.database ?? ""} onChange={(e) => set("database", e.target.value)} />
             </label>
+          </>
+        )}
+        {(engine || odbc) && (
+          <>
             <label className="field">
               <span>{odbc ? "User ID" : t("Utilisateur (lecture seule)")}</span>
               <input value={p.user ?? ""} onChange={(e) => set("user", e.target.value)} />

@@ -37,6 +37,7 @@ export const pagesB: Record<string, string> = {
   "Fichier CSV (chemin ou URL)": "CSV file (path or URL)",
   "Chemin ou URL HTTPS du fichier": "Path or HTTPS URL of the file",
   "Parcourir…": "Browse…",
+  "Soit un Data Source Name déjà défini dans l'administrateur ODBC de Windows (sur la machine du serveur), soit un pilote avec l'hôte, le port et la base — comme dans la fenêtre du pilote.": "Either a Data Source Name already set up in the Windows ODBC administrator (on the server's machine), or a driver with the host, port and database — as in the driver's window.",
   "Le serveur ne liste aucun pilote ODBC (version sans ODBC, ou pas de gestionnaire de pilotes) : saisissez le nom.": "The server lists no ODBC driver (a build without ODBC, or no driver manager): type the name.",
   "Hôte": "Host",
   "Port": "Port",

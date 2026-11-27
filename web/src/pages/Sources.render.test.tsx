@@ -248,12 +248,14 @@ describe("Sources page", () => {
     await waitFor(() => expect(container.querySelector('#odbc-dsns option[value="erp-live"]')).not.toBeNull());
     expect(container.querySelector('#odbc-drivers option[value="Progress OpenEdge 12.2 Driver"]')).not.toBeNull();
     // The Windows ODBC administrator's names, in its order.
-    const want = ["Data Source Name", "Driver (without a Data Source Name)", "Host Name", "Port Number", "Database Name", "User ID", "Password"];
-    const shown = [...container.querySelectorAll(".source-form label > span")].map((x) => x.textContent ?? "");
-    expect(shown.filter((x) => want.includes(x))).toEqual(want);
+    const want = ["Data Source Name", "Driver", "Host Name", "Port Number", "Database Name", "User ID", "Password"];
+    const labels = () => [...container.querySelectorAll(".source-form label > span")].map((x) => x.textContent ?? "").filter((x) => want.includes(x));
+    expect(labels()).toEqual(want);
     expect(screen.getByLabelText("Port Number")).toHaveValue(null);
+    expect(screen.getByLabelText("Data Source Name")).toHaveAttribute("placeholder", "erp-live");
+    // A Data Source Name carries the driver, host, port and database: only the account is left.
     fireEvent.change(screen.getByLabelText("Data Source Name"), { target: { value: "erp-live" } });
-    expect(screen.getByLabelText("Driver (without a Data Source Name)")).toBeDisabled();
+    expect(labels()).toEqual(["Data Source Name", "User ID", "Password"]);
     fireEvent.change(screen.getByLabelText("User ID"), { target: { value: "reader" } });
     fireEvent.change(screen.getByLabelText("Password"), { target: { value: "pw" } });
     // No TLS switches: the driver or the DSN says how it connects.
